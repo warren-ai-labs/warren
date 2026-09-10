@@ -21,12 +21,22 @@ private struct WarrenProjectFileDialogLabels: ViewModifier {
 }
 
 private struct WarrenWorkspaceCreatorContext: Equatable {
+    let endpointID: String
     let projectID: ProjectID
     let taskID: TaskID?
 }
 
+private enum WarrenEndpointScopedModalError: LocalizedError {
+    case endpointChanged
+
+    var errorDescription: String? {
+        "The endpoint changed while this dialog was open. Choose the resource again."
+    }
+}
+
 struct WarrenCompositionRoot: View {
     @StateObject private var remoteModel: WarrenRemoteApplicationModel
+    @StateObject private var multiHostSidebar: WarrenMultiHostSidebarModel
     @StateObject private var embeddedEditorModel: WarrenEmbeddedEditorModel
     @State private var surfaceManager: TerminalSurfaceManager
     @State private var isProjectImporterPresented = false
@@ -34,8 +44,10 @@ struct WarrenCompositionRoot: View {
     @State private var isSupersetImporting = false
     @State private var workspaceCreatorContext: WarrenWorkspaceCreatorContext?
     @State private var setupScriptProjectID: ProjectID?
+    @State private var setupScriptEndpointID: String?
     @State private var setupScriptValue = ""
     @State private var worktreeImportProjectID: ProjectID?
+    @State private var worktreeImportEndpointID: String?
     @State private var worktreeImportCandidates: [WarrenDesktopWorktreeCandidate] = []
     @State private var worktreeImportLoading = false
     @State private var terminalSearchPresented = false
@@ -67,17 +79,31 @@ struct WarrenCompositionRoot: View {
     private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
     @State private var selectedEndpointID: String
     @State private var endpointCatalog: [WarrenRemoteEndpointConfiguration]
+    @State private var displayConfiguration: WarrenDisplayConfiguration?
     @State private var endpointCatalogError: String?
     @State private var isSSHHostPickerPresented = false
     @State private var localEndpointWaitGeneration: UInt64 = 0
+    @State private var pendingSidebarSelection: WarrenDesktopSidebarResourceSelection?
+    @State private var pendingSidebarOpenWorkspace: WarrenDesktopHostResourceRef<WorkspaceID>?
 
     @MainActor
     init() {
         let surfaceManager = TerminalSurfaceManager()
         _surfaceManager = State(initialValue: surfaceManager)
+        let catalog = WarrenEndpointCatalog.load()
+        let initialNavigationScope: String
+        if let current = catalog.current?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !current.isEmpty,
+           current == "local" || catalog.endpoints.contains(where: { $0.id == current }) {
+            initialNavigationScope = current
+        } else {
+            initialNavigationScope = "local"
+        }
         let remoteModel = WarrenRemoteApplicationModel(
-            surfaceManager: surfaceManager
+            surfaceManager: surfaceManager,
+            initialNavigationScope: initialNavigationScope
         )
+        let multiHostSidebar = WarrenMultiHostSidebarModel()
         let embeddedEditorModel = WarrenEmbeddedEditorModel()
 
         remoteModel.onOpenTerminalURL = { [weak remoteModel, weak embeddedEditorModel] sessionID, urlString, kind, workingDirectory in
@@ -111,13 +137,14 @@ struct WarrenCompositionRoot: View {
         }
 
         _remoteModel = StateObject(wrappedValue: remoteModel)
+        _multiHostSidebar = StateObject(wrappedValue: multiHostSidebar)
         _embeddedEditorModel = StateObject(wrappedValue: embeddedEditorModel)
         // Endpoint configuration is user input, not frame state. Seed the
         // catalog once and refresh it from disk in the background so CLI
         // changes appear without restarting Warren. The catalog's `current`
         // value is authoritative.
-        let catalog = WarrenEndpointCatalog.load()
         _endpointCatalog = State(initialValue: catalog.endpoints)
+        _displayConfiguration = State(initialValue: catalog.display)
         _selectedEndpointID = State(initialValue: catalog.current ?? "local")
         _endpointCatalogError = State(initialValue: nil)
     }
@@ -157,7 +184,15 @@ struct WarrenCompositionRoot: View {
             onNoticeDismiss: { remoteModel.dismissNotice($0) },
             endpointOptions: endpointOptions,
             selectedEndpointID: selectedEndpointID,
-            onSelectEndpoint: selectEndpoint,
+            onSelectEndpoint: { id in selectEndpoint(id) },
+            onSetEndpointSidebarVisibility: setEndpointSidebarVisibility,
+            sidebarHostProjections: multiHostSidebar.projection.hosts,
+            usesSidebarHostSections: displayConfiguration != nil,
+            sidebarResourceSelection: activeSidebarResourceSelection,
+            displayConfigurationError: multiHostSidebar.configurationError,
+            onSelectSidebarResource: selectSidebarResource,
+            onOpenSidebarWorkspace: openSidebarWorkspace,
+            onRetrySidebarHost: retrySidebarHost,
             onAddSSHHost: {
                 // Present immediately with a loading state; parsing a large
                 // Include tree happens inside the picker on a utility task.
@@ -183,6 +218,14 @@ struct WarrenCompositionRoot: View {
             },
             onRelayPairing: { completion in
                 remoteModel.createRelayInvite(completion: completion)
+            },
+            lanPairing: remoteModel.lanPairing,
+            onLANPairing: { enabled, completion in
+                if enabled {
+                    remoteModel.enableLANPairing(completion: completion)
+                } else {
+                    remoteModel.disableLANPairing(completion: completion)
+                }
             },
             relaySettings: remoteModel.relaySettings,
             onResetRelay: { completion in
@@ -305,6 +348,15 @@ struct WarrenCompositionRoot: View {
         }
         .onChange(of: terminalFontFamily) { _ in updateTerminalFont() }
         .onChange(of: terminalFontSize) { _ in updateTerminalFont() }
+        .onChange(of: remoteModel.projection) { _ in
+            refreshMultiHostSidebar()
+        }
+        .onChange(of: remoteModel.connectionError) { _ in
+            refreshMultiHostSidebar()
+        }
+        .onChange(of: displayConfiguration) { _ in
+            refreshMultiHostSidebar()
+        }
         .onReceive(NotificationCenter.default.publisher(for: WebCommand.copySecureURL)) { _ in
             remoteModel.copySecureWebURL()
         }
@@ -348,6 +400,7 @@ struct WarrenCompositionRoot: View {
             hiddenPresets = WarrenDesktopSessionPreset.normalizedHiddenRawValue(hiddenPresets)
             updateTerminalFont()
             restoreEndpointSelection()
+            refreshMultiHostSidebar()
             publishEndpointCapabilities()
             await monitorEndpointConfiguration()
         }
@@ -360,6 +413,13 @@ struct WarrenCompositionRoot: View {
         }
         .onChange(of: selectedEndpointID) { _ in
             embeddedEditorModel.stop()
+            // Resource dialogs capture the current Endpoint. Their IDs are
+            // Host-local, so discard them when the foreground Host changes
+            // instead of allowing a later confirmation to target a different
+            // Host with a colliding UUID.
+            workspaceCreatorContext = nil
+            dismissSetupScript()
+            dismissWorktreeImport()
             if !selectedEndpointCapabilities.canAddProject {
                 isProjectImporterPresented = false
             }
@@ -368,10 +428,12 @@ struct WarrenCompositionRoot: View {
             }
             publishEndpointCapabilities()
             connectSelectedEndpoint()
+            refreshMultiHostSidebar()
         }
         .onDisappear {
             localEndpointWaitGeneration &+= 1
             embeddedEditorModel.stop()
+            multiHostSidebar.stop()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             // A bundled SSH helper is a child process of the Desktop. Stop it
@@ -379,6 +441,7 @@ struct WarrenCompositionRoot: View {
             // the app that owns the endpoint.
             localEndpointWaitGeneration &+= 1
             remoteModel.disconnect()
+            multiHostSidebar.stop()
         }
     }
 
@@ -415,12 +478,16 @@ struct WarrenCompositionRoot: View {
             .onAppear { presentation.present(.sheet) }
             .onDisappear { presentation.dismissTop() }
         } else if let context = workspaceCreatorContext,
+                  context.endpointID == selectedEndpointID,
                   let project = activeProjection.projectGroup(id: context.projectID)?.project {
             WarrenModalSurface {
                 WarrenWorkspaceCreatorView(
                     project: project,
                     onCancel: { workspaceCreatorContext = nil },
                     onCreate: { request in
+                        guard context.endpointID == selectedEndpointID else {
+                            throw WarrenEndpointScopedModalError.endpointChanged
+                        }
                         try await remoteModel.createWorkspace(
                             projectID: context.projectID,
                             taskID: context.taskID,
@@ -433,20 +500,26 @@ struct WarrenCompositionRoot: View {
             .onAppear { presentation.present(.modal) }
             .onDisappear { presentation.dismissTop() }
         } else if let projectID = setupScriptProjectID,
+                  setupScriptEndpointID == selectedEndpointID,
                   let project = activeProjection.projectGroup(id: projectID)?.project {
             WarrenSetupScriptEditorView(
                 project: project,
                 value: $setupScriptValue,
-                onCancel: { setupScriptProjectID = nil },
+                onCancel: dismissSetupScript,
                 onSave: {
+                    guard setupScriptEndpointID == selectedEndpointID else {
+                        dismissSetupScript()
+                        return
+                    }
                     remoteModel.setProjectSetupScript(projectID, script: setupScriptValue)
-                    setupScriptProjectID = nil
+                    dismissSetupScript()
                 }
             )
             .zIndex(WarrenPresentationLayer.modal)
             .onAppear { presentation.present(.modal) }
             .onDisappear { presentation.dismissTop() }
         } else if let projectID = worktreeImportProjectID,
+                  worktreeImportEndpointID == selectedEndpointID,
                   let project = activeProjection.projectGroup(id: projectID)?.project {
             WarrenSheetSurface {
                 WarrenDesktopProjectWorktreeImportView(
@@ -455,6 +528,10 @@ struct WarrenCompositionRoot: View {
                     isLoading: worktreeImportLoading,
                     onCancel: dismissWorktreeImport,
                     onImport: { paths in
+                        guard worktreeImportEndpointID == selectedEndpointID else {
+                            dismissWorktreeImport()
+                            return
+                        }
                         Task { @MainActor in
                             do {
                                 try await remoteModel.importProjectWorktrees(projectID, paths: paths)
@@ -490,12 +567,14 @@ struct WarrenCompositionRoot: View {
             }
         } else if case .requestNewWorkspace(let projectID, let taskID) = action {
             workspaceCreatorContext = WarrenWorkspaceCreatorContext(
+                endpointID: selectedEndpointID,
                 projectID: projectID,
                 taskID: taskID
             )
         } else if case .requestProjectSetupScript(let projectID) = action {
             guard let project = activeProjection.projectGroup(id: projectID)?.project else { return }
             setupScriptValue = project.setupScript ?? ""
+            setupScriptEndpointID = selectedEndpointID
             setupScriptProjectID = projectID
         } else if case .requestProjectWorktreeImport(let projectID) = action {
             presentWorktreeImport(for: projectID)
@@ -575,7 +654,8 @@ struct WarrenCompositionRoot: View {
             detail: Self.endpointDetail(localEndpoint.url),
             probeStatus: localProbe?.message ?? "Checking Host…",
             probeFailed: localProbe?.isFailure ?? false,
-            connectionError: selectedEndpointID == "local" ? remoteModel.connectionError : nil
+            connectionError: selectedEndpointID == "local" ? remoteModel.connectionError : nil,
+            isDisplayedInSidebar: displayConfiguration?.endpoints.contains("local") == true
         )
         let configured = endpointCatalog
             .filter { $0.id != local.id }
@@ -586,7 +666,8 @@ struct WarrenCompositionRoot: View {
                     detail: endpoint.ssh.map { "SSH · \($0)" } ?? Self.endpointDetail(endpoint.url),
                     probeStatus: remoteModel.hostProbes[endpoint]?.message ?? "Checking Host…",
                     probeFailed: remoteModel.hostProbes[endpoint]?.isFailure ?? false,
-                    connectionError: selectedEndpointID == endpoint.id ? remoteModel.connectionError : nil
+                    connectionError: selectedEndpointID == endpoint.id ? remoteModel.connectionError : nil,
+                    isDisplayedInSidebar: displayConfiguration?.endpoints.contains(endpoint.id) == true
                 )
             }
         return [local] + configured
@@ -629,6 +710,25 @@ struct WarrenCompositionRoot: View {
         remoteModel.navigation
     }
 
+    /// Navigation IDs are Host-local. Use the scope held by the interactive
+    /// controller rather than the requested endpoint so a transient switch
+    /// cannot expand a same-ID Project in a different Host section.
+    private var activeSidebarResourceSelection: WarrenDesktopSidebarResourceSelection? {
+        let endpointID = remoteModel.navigationEndpointID
+        switch activeNavigation.selection {
+        case .project(let projectID):
+            return .project(
+                WarrenDesktopHostResourceRef(endpointID: endpointID, id: projectID)
+            )
+        case .workspace(let workspaceID):
+            return .workspace(
+                WarrenDesktopHostResourceRef(endpointID: endpointID, id: workspaceID)
+            )
+        case .terminalGroup, .none:
+            return nil
+        }
+    }
+
     private func handleAgentCompletion(_ event: WarrenAgentCompletionEvent) {
         let selectedSessionID = activeNavigation.selectedTabID.flatMap { tabID in
             activeProjection.tabs.first(where: { $0.id == tabID })?.sessionID
@@ -637,8 +737,15 @@ struct WarrenCompositionRoot: View {
         WarrenDesktopNotificationSound.playAgentCompletionSoundIfEnabled()
     }
 
-    private func selectEndpoint(_ id: String) {
+    private func selectEndpoint(
+        _ id: String,
+        preservingPendingSidebarSelection: Bool = false
+    ) {
         guard endpointOptions.contains(where: { $0.id == id }) else { return }
+        if !preservingPendingSidebarSelection {
+            pendingSidebarSelection = nil
+            pendingSidebarOpenWorkspace = nil
+        }
         WarrenHangDiagnostics.logEndpointSwitch(from: selectedEndpointID, to: id)
         selectedEndpointID = id
         do {
@@ -646,6 +753,134 @@ struct WarrenCompositionRoot: View {
         } catch {
             remoteModel.report(error)
         }
+    }
+
+    private func setEndpointSidebarVisibility(
+        _ endpointID: String,
+        isDisplayed: Bool
+    ) {
+        guard endpointOptions.contains(where: { $0.id == endpointID }) else { return }
+        do {
+            let configURL = WarrenEndpointCatalog.configurationURL()
+            try WarrenEndpointCatalog.setDisplayMembership(
+                endpointID,
+                isDisplayed: isDisplayed,
+                to: configURL
+            )
+            let catalog = try WarrenEndpointCatalog.loadThrowing(from: configURL)
+            endpointCatalog = catalog.endpoints
+            displayConfiguration = catalog.display
+        } catch {
+            remoteModel.report(error)
+        }
+    }
+
+    private func selectSidebarResource(
+        _ selection: WarrenDesktopSidebarResourceSelection
+    ) {
+        guard endpointOptions.contains(where: { $0.id == selection.endpointID }) else {
+            return
+        }
+        // A later single-click supersedes an earlier double-click request.
+        // Otherwise an old pending open could fire after the user promotes a
+        // different Host.
+        pendingSidebarOpenWorkspace = nil
+        if selection.endpointID != selectedEndpointID {
+            pendingSidebarSelection = selection
+            selectEndpoint(
+                selection.endpointID,
+                preservingPendingSidebarSelection: true
+            )
+            return
+        }
+        applySidebarResource(selection)
+    }
+
+    private func applySidebarResource(
+        _ selection: WarrenDesktopSidebarResourceSelection
+    ) {
+        guard selection.endpointID == selectedEndpointID,
+              remoteModel.isReady(for: selection.endpointID) else {
+            return
+        }
+        switch selection {
+        case .project(let reference):
+            guard activeProjection.projectGroup(id: reference.id) != nil else {
+                return
+            }
+            pendingSidebarSelection = nil
+            handle(.selectProject(reference.id))
+        case .workspace(let reference):
+            guard activeProjection.workspace(id: reference.id) != nil else {
+                return
+            }
+            pendingSidebarSelection = nil
+            handle(.selectWorkspace(reference.id))
+        }
+    }
+
+    private func openSidebarWorkspace(
+        _ reference: WarrenDesktopHostResourceRef<WorkspaceID>
+    ) {
+        guard endpointOptions.contains(where: { $0.id == reference.endpointID }) else {
+            return
+        }
+        if reference.endpointID != selectedEndpointID {
+            pendingSidebarSelection = .workspace(reference)
+            pendingSidebarOpenWorkspace = reference
+            selectEndpoint(reference.endpointID, preservingPendingSidebarSelection: true)
+            return
+        }
+        applySidebarWorkspaceOpen(reference)
+    }
+
+    private func applySidebarWorkspaceOpen(
+        _ reference: WarrenDesktopHostResourceRef<WorkspaceID>
+    ) {
+        guard reference.endpointID == selectedEndpointID,
+              remoteModel.isReady(for: reference.endpointID),
+              activeProjection.workspace(id: reference.id) != nil,
+              activeProjection.isConnected else {
+            return
+        }
+        pendingSidebarSelection = nil
+        pendingSidebarOpenWorkspace = nil
+        handle(.openWorkspace(reference.id))
+    }
+
+    private func applyPendingSidebarSelectionIfReady() {
+        guard remoteModel.isReady(for: selectedEndpointID) else { return }
+        if let pendingOpen = pendingSidebarOpenWorkspace,
+           pendingOpen.endpointID == selectedEndpointID {
+            applySidebarWorkspaceOpen(pendingOpen)
+            if pendingSidebarOpenWorkspace != nil {
+                return
+            }
+        }
+        guard let pending = pendingSidebarSelection,
+              pending.endpointID == selectedEndpointID else {
+            return
+        }
+        applySidebarResource(pending)
+    }
+
+    private func retrySidebarHost(_ endpointID: String) {
+        if endpointID == selectedEndpointID {
+            retrySelectedEndpointConnection()
+        } else {
+            multiHostSidebar.retry(endpointID: endpointID)
+        }
+    }
+
+    private func refreshMultiHostSidebar() {
+        multiHostSidebar.configure(
+            display: displayConfiguration,
+            endpoints: endpointCatalog,
+            activeEndpointID: selectedEndpointID,
+            activeProjection: remoteModel.projection,
+            activeConnectionError: remoteModel.connectionError
+        )
+        applyPendingSidebarSelectionIfReady()
     }
 
     private func configureSSHHost(_ host: WarrenSSHHost) {
@@ -706,7 +941,11 @@ struct WarrenCompositionRoot: View {
     private func monitorEndpointConfiguration() async {
         while !Task.isCancelled {
             let previous = endpointCatalog
-            let loadedCatalog: (current: String?, endpoints: [WarrenRemoteEndpointConfiguration])
+            let loadedCatalog: (
+                current: String?,
+                endpoints: [WarrenRemoteEndpointConfiguration],
+                display: WarrenDisplayConfiguration?
+            )
             do {
                 loadedCatalog = try await Task.detached(priority: .utility) {
                     try WarrenEndpointCatalog.loadThrowing(from: WarrenEndpointCatalog.configurationURL())
@@ -727,6 +966,7 @@ struct WarrenCompositionRoot: View {
             }
             endpointCatalogError = nil
             let loaded = loadedCatalog.endpoints
+            let displayChanged = loadedCatalog.display != displayConfiguration
             // A missing `current` is the normal fresh-checkout state.
             let currentChanged: Bool
             if let current = loadedCatalog.current {
@@ -735,15 +975,17 @@ struct WarrenCompositionRoot: View {
                 currentChanged = selectedEndpointID != "local"
                     && !loaded.contains(where: { $0.id == selectedEndpointID })
             }
-            guard loaded != previous || currentChanged else {
+            guard loaded != previous || currentChanged || displayChanged else {
                 try? await Task.sleep(for: .seconds(1))
                 continue
             }
             endpointCatalog = loaded
+            displayConfiguration = loadedCatalog.display
             if let current = loadedCatalog.current,
                current == "local" || loaded.contains(where: { $0.id == current }) {
-                selectedEndpointID = current
+               selectedEndpointID = current
             }
+            refreshMultiHostSidebar()
             guard selectedEndpointID != "local" else {
                 try? await Task.sleep(for: .seconds(1))
                 continue
@@ -840,22 +1082,45 @@ struct WarrenCompositionRoot: View {
     }
 
     private func presentWorktreeImport(for projectID: ProjectID) {
+        let endpointID = selectedEndpointID
+        worktreeImportEndpointID = endpointID
         worktreeImportProjectID = projectID
         worktreeImportCandidates = []
         worktreeImportLoading = true
         Task { @MainActor in
             do {
-                worktreeImportCandidates = try await remoteModel.listProjectWorktrees(projectID)
+                let candidates = try await remoteModel.listProjectWorktrees(projectID)
+                guard selectedEndpointID == endpointID,
+                      worktreeImportEndpointID == endpointID,
+                      worktreeImportProjectID == projectID else {
+                    return
+                }
+                worktreeImportCandidates = candidates
             } catch {
+                guard selectedEndpointID == endpointID,
+                      worktreeImportEndpointID == endpointID,
+                      worktreeImportProjectID == projectID else {
+                    return
+                }
                 remoteModel.report(error)
                 dismissWorktreeImport()
             }
-            worktreeImportLoading = false
+            if selectedEndpointID == endpointID,
+               worktreeImportEndpointID == endpointID,
+               worktreeImportProjectID == projectID {
+                worktreeImportLoading = false
+            }
         }
+    }
+
+    private func dismissSetupScript() {
+        setupScriptProjectID = nil
+        setupScriptEndpointID = nil
     }
 
     private func dismissWorktreeImport() {
         worktreeImportProjectID = nil
+        worktreeImportEndpointID = nil
         worktreeImportCandidates = []
         worktreeImportLoading = false
     }

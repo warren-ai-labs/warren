@@ -395,6 +395,226 @@ func TestEndpointUseAllowsSyntheticLocalEndpoint(t *testing.T) {
 	}
 }
 
+func TestDisplayCommandsReconcileOrderAndCurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(path, config.Config{
+		Current: "dev",
+		Endpoints: map[string]config.Endpoint{
+			"dev":  {Name: "dev", URL: "https://dev", Token: "dev-secret"},
+			"prod": {Name: "prod", URL: "https://prod", Token: "prod-secret"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousPath, previousJSON := configPath, outputJSON
+	configPath, outputJSON = path, false
+	t.Cleanup(func() {
+		configPath, outputJSON = previousPath, previousJSON
+	})
+
+	if err := run([]string{"--config", path, "display", "set", "local", "dev", "prod"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config", path, "display", "move", "local", "--before", "prod"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config", path, "display", "remove", "dev"}); err != nil {
+		t.Fatal(err)
+	}
+
+	value, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Current != "dev" {
+		t.Fatalf("current = %q, want independent dev endpoint after removal", value.Current)
+	}
+	if value.Display == nil || !reflect.DeepEqual(value.Display.Endpoints, []string{"local", "prod"}) {
+		t.Fatalf("display = %#v, want [local prod]", value.Display)
+	}
+	if value.Endpoints["prod"].Token != "prod-secret" {
+		t.Fatal("display mutation changed endpoint credentials")
+	}
+}
+
+func TestEndpointUsePreservesExplicitDisplaySet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(path, config.Config{
+		Current: "local",
+		Endpoints: map[string]config.Endpoint{
+			"dev": {Name: "dev", URL: "https://dev", Token: "dev-secret"},
+		},
+		Display: &config.DisplayConfig{
+			Version:   config.DisplayConfigVersion,
+			Endpoints: []string{"local"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousPath, previousJSON := configPath, outputJSON
+	configPath, outputJSON = path, true
+	t.Cleanup(func() {
+		configPath, outputJSON = previousPath, previousJSON
+	})
+
+	if err := run([]string{"--config", path, "endpoint", "use", "dev"}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Current != "dev" {
+		t.Fatalf("current = %q, want dev", value.Current)
+	}
+	if value.Display == nil || !reflect.DeepEqual(value.Display.Endpoints, []string{"local"}) {
+		t.Fatalf("display = %#v, want unchanged [local]", value.Display)
+	}
+}
+
+func TestDisplayResetRestoresLegacyEffectiveSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(path, config.Config{
+		Current: "prod",
+		Endpoints: map[string]config.Endpoint{
+			"prod": {Name: "prod", URL: "https://prod", Token: "secret"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousPath, previousJSON := configPath, outputJSON
+	configPath, outputJSON = path, true
+	t.Cleanup(func() {
+		configPath, outputJSON = previousPath, previousJSON
+	})
+	if err := run([]string{"--config", path, "display", "set", "local", "prod"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config", path, "display", "reset"}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Display != nil {
+		t.Fatalf("display = %#v, want nil after reset", value.Display)
+	}
+	aliases, err := value.EffectiveDisplay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(aliases, []string{"prod"}) {
+		t.Fatalf("effective aliases = %v, want [prod]", aliases)
+	}
+}
+
+func TestDisplayRemoveRejectsTheLastAlias(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	previousPath, previousJSON := configPath, outputJSON
+	configPath, outputJSON = path, true
+	t.Cleanup(func() {
+		configPath, outputJSON = previousPath, previousJSON
+	})
+	if err := run([]string{"--config", path, "display", "set", "local"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config", path, "display", "remove", "local"}); err == nil ||
+		!strings.Contains(err.Error(), "cannot be empty") {
+		t.Fatalf("remove last alias error = %v", err)
+	}
+}
+
+func TestDisplayMoveToSelfIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(path, config.Config{
+		Current: "local",
+		Endpoints: map[string]config.Endpoint{
+			"dev": {Name: "dev", URL: "https://dev", Token: "dev-secret"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousPath, previousJSON := configPath, outputJSON
+	configPath, outputJSON = path, true
+	t.Cleanup(func() {
+		configPath, outputJSON = previousPath, previousJSON
+	})
+	if err := run([]string{"--config", path, "display", "set", "local", "dev"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config", path, "display", "move", "dev", "--before", "dev"}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Display == nil || !reflect.DeepEqual(value.Display.Endpoints, []string{"local", "dev"}) {
+		t.Fatalf("display after idempotent move = %#v, want [local dev]", value.Display)
+	}
+}
+
+func TestDisplayResetRecoversMalformedDisplay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := []byte(`{"current":"local","endpoints":{},"display":{"version":99,"endpoints":["missing"]}}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousPath, previousJSON := configPath, outputJSON
+	configPath, outputJSON = path, true
+	t.Cleanup(func() {
+		configPath, outputJSON = previousPath, previousJSON
+	})
+	if err := run([]string{"--config", path, "display", "reset"}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Display != nil {
+		t.Fatalf("display after recovery reset = %#v, want nil", value.Display)
+	}
+}
+
+func TestEndpointRemoveUpdatesDisplayAndRejectsMissingEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(path, config.Config{
+		Current: "dev",
+		Endpoints: map[string]config.Endpoint{
+			"dev":  {Name: "dev", URL: "https://dev", Token: "dev-secret"},
+			"prod": {Name: "prod", URL: "https://prod", Token: "prod-secret"},
+		},
+		Display: &config.DisplayConfig{
+			Version:   config.DisplayConfigVersion,
+			Endpoints: []string{"dev", "prod"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousPath, previousJSON := configPath, outputJSON
+	configPath, outputJSON = path, true
+	t.Cleanup(func() {
+		configPath, outputJSON = previousPath, previousJSON
+	})
+	if err := run([]string{"--config", path, "endpoint", "remove", "dev"}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Current != "prod" || value.Display == nil ||
+		!reflect.DeepEqual(value.Display.Endpoints, []string{"prod"}) {
+		t.Fatalf("catalog after endpoint removal = %#v", value)
+	}
+	if err := run([]string{"--config", path, "endpoint", "remove", "missing"}); err == nil ||
+		!strings.Contains(err.Error(), "endpoint not found") {
+		t.Fatalf("missing endpoint error = %v", err)
+	}
+}
+
 func TestSendTerminalTextUsesPlainPTYInput(t *testing.T) {
 	var frames [][]byte
 	input := func(_ context.Context, data []byte) error {

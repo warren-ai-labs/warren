@@ -72,6 +72,8 @@ The Sidebar adds a fixed-height `Terminals` section above `Projects`.
 - Each row represents one Terminal Group, not an individual Session.
 - The section shows at most three rows in its normal height.
 - Additional Groups scroll inside the section and do not move the Projects section.
+- The header can collapse or expand its rows. This device-local preference is
+  scoped per Endpoint, like the other sidebar section disclosure states.
 - A row shows the Group name, running Session count, and aggregate activity.
 - Selecting a Group changes the active Session Context and filters the existing
   top Tab Bar to that Group's Sessions.

@@ -30,6 +30,7 @@ import (
 	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
+	"github.com/abcdlsj/warren/Headless/internal/discovery"
 	"github.com/abcdlsj/warren/Headless/internal/relay"
 	"github.com/abcdlsj/warren/Headless/internal/runtime"
 	"github.com/abcdlsj/warren/Headless/internal/server"
@@ -255,6 +256,34 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	_, rawPort, splitErr := net.SplitHostPort(listener.Addr().String())
+	if splitErr != nil {
+		fatal(fmt.Errorf("resolve listener port: %w", splitErr))
+	}
+	listenerPortNumber, portErr := strconv.Atoi(rawPort)
+	if portErr != nil {
+		fatal(fmt.Errorf("resolve listener port: %w", portErr))
+	}
+	var stopDiscovery func() error
+	if candidates, addressErr := discovery.LocalAddresses(); addressErr != nil {
+		logger.Warn("Warren LAN discovery disabled", "error", addressErr)
+	} else if candidates = discovery.FilterForListener(candidates, listener.Addr().String()); len(candidates) == 0 {
+		logger.Info("Warren LAN discovery disabled", "reason", "listener has no non-loopback candidates")
+	} else if shutdown, discoveryErr := discovery.Start(discovery.Config{
+		HostID:          state.Snapshot().Host.ID,
+		HostName:        state.Snapshot().Host.Name,
+		Protocol:        api.Version,
+		Build:           version,
+		Port:            listenerPortNumber,
+		Candidates:      candidates,
+		PairingOpen:     false,
+		PairingOpenFunc: httpHandler.PairingOpen,
+	}); discoveryErr != nil {
+		logger.Warn("Warren LAN discovery disabled", "error", discoveryErr)
+	} else {
+		stopDiscovery = shutdown
+		logger.Info("warren LAN discovery ready", "service", discovery.ServiceType, "port", listenerPort(listener), "candidates", len(candidates))
+	}
 	relaySupervisor := newRelaySupervisor(service, httpHandler, serviceContext, token, state.Snapshot().Host.Name, strings.TrimSpace(*relayURL), "", logger)
 	service.SetLiveActivityPublisher(func(ctx context.Context, snapshot server.LiveActivitySnapshot) error {
 		return relaySupervisor.PublishLiveActivity(ctx, snapshot)
@@ -316,6 +345,9 @@ func main() {
 	_ = httpServer.Close()
 	if lanHTTPServer != nil {
 		_ = lanHTTPServer.Close()
+	}
+	if stopDiscovery != nil {
+		_ = stopDiscovery()
 	}
 	relaySupervisor.Stop()
 	stopService()

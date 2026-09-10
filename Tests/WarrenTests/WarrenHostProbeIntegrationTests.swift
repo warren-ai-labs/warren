@@ -6,6 +6,40 @@ import WarrenObservation
 @testable import Warren
 
 final class WarrenHostProbeIntegrationTests: XCTestCase {
+    @MainActor
+    func testEndpointSidebarButtonDoesNotSwitchTheExecutionServer() async throws {
+        let recorder = WarrenSemanticRecorder()
+        var selected: String?
+        var visibilityChange: (endpointID: String, isDisplayed: Bool)?
+        let view = WarrenDesktopEndpointPopover(
+            connectionState: .attached,
+            endpoints: [.init(id: "dev", label: "Development")],
+            selectedID: "local",
+            onSelect: { selected = $0 },
+            onSetSidebarVisibility: { endpointID, isDisplayed in
+                visibilityChange = (endpointID, isDisplayed)
+            },
+            onAddSSHHost: {},
+            onRetry: {},
+            onStop: {},
+            onDismiss: {}
+        )
+        .environment(\.colorScheme, .dark)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(x: 0, y: 0, width: 260, height: 260)
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        hosting.layoutSubtreeIfNeeded()
+
+        try recorder.perform(.press, on: "endpoint.dev.sidebar")
+
+        XCTAssertNil(selected)
+        XCTAssertEqual(visibilityChange?.endpointID, "dev")
+        XCTAssertEqual(visibilityChange?.isDisplayed, true)
+    }
+
     /// Opt-in acceptance against a running daemon, without changing its catalog
     /// or sessions. The image is the production popover rendered by AppKit.
     @MainActor
@@ -31,7 +65,11 @@ final class WarrenHostProbeIntegrationTests: XCTestCase {
             endpoints: [.init(id: endpoint.id, label: endpoint.name, detail: "Forwarded Host",
                               probeStatus: result.message, probeFailed: result.isFailure)],
             selectedID: endpoint.id,
-            onSelect: { selected = $0 }, onAddSSHHost: {}, onRetry: {}, onStop: {}, onDismiss: {}
+            onSelect: { selected = $0 },
+            onSetSidebarVisibility: { _, _ in
+                XCTFail("Sidebar membership changed while testing Host probe rendering")
+            },
+            onAddSSHHost: {}, onRetry: {}, onStop: {}, onDismiss: {}
         )
         .environment(\.colorScheme, .dark)
         .environment(\.warrenSemanticRecorder, recorder)

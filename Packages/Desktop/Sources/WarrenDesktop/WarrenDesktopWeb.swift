@@ -65,6 +65,28 @@ public struct WarrenDesktopRelayInvite: Hashable, Sendable {
     }
 }
 
+/// The short-lived LAN pairing window exposed by the selected Host daemon.
+/// The PIN is intentionally held only in memory by the Desktop settings UI;
+/// the daemon expires it automatically and persists only issued token hashes.
+public struct WarrenDesktopLANPairing: Hashable, Sendable {
+    public var enabled: Bool
+    public var pin: String
+    public var expiresAt: Date?
+    public var expiresIn: Int
+
+    public init(
+        enabled: Bool = false,
+        pin: String = "",
+        expiresAt: Date? = nil,
+        expiresIn: Int = 0
+    ) {
+        self.enabled = enabled
+        self.pin = pin
+        self.expiresAt = expiresAt
+        self.expiresIn = expiresIn
+    }
+}
+
 public struct WarrenDesktopWebStatus: Hashable, Sendable {
     public var isRunning: Bool
     public var localURL: URL?

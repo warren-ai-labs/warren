@@ -1912,7 +1912,11 @@ export default function App() {
       if (state.activeSession
         && state.attachedSession === state.activeSession
         && focusedSessionRef.current === state.activeSession) {
-        if (request("session.resize", { cols: next.cols, rows: next.rows })) {
+        if (request("session.resize", {
+          id: state.activeSession,
+          cols: next.cols,
+          rows: next.rows,
+        })) {
           sentTerminalSizeRef.current = next;
         }
       }

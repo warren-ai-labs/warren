@@ -1130,9 +1130,12 @@ func TestOnlyFocusedPeerCanResizeSharedRuntime(t *testing.T) {
 		t.Fatalf("passive attach changed runtime size: %#v", resizes)
 	}
 
-	requestError(t, second, "session.resize", map[string]any{
-		"cols": 77, "rows": 27,
+	passiveResize := requestResult[map[string]bool](t, second, "session.resize", map[string]any{
+		"id": session.ID, "cols": 77, "rows": 27,
 	})
+	if passiveResize["resized"] {
+		t.Fatal("passive explicit resize unexpectedly succeeded")
+	}
 
 	focused := requestResult[map[string]bool](t, second, "session.focus", map[string]any{
 		"id": session.ID, "focused": true, "cols": 77, "rows": 27,
@@ -1142,25 +1145,25 @@ func TestOnlyFocusedPeerCanResizeSharedRuntime(t *testing.T) {
 	}
 
 	oldOwner := requestResult[map[string]bool](t, first, "session.resize", map[string]any{
-		"cols": 101, "rows": 33,
+		"id": session.ID, "cols": 101, "rows": 33,
 	})
 	if oldOwner["resized"] {
 		t.Fatal("previous focus owner resized after handoff")
 	}
 	newOwner := requestResult[map[string]bool](t, second, "session.resize", map[string]any{
-		"cols": 78, "rows": 28,
+		"id": session.ID, "cols": 78, "rows": 28,
 	})
 	if !newOwner["resized"] {
 		t.Fatal("current focus owner resize was ignored")
 	}
 	sameSize := requestResult[map[string]bool](t, second, "session.focus", map[string]any{
-		"focused": true, "cols": 78, "rows": 28,
+		"id": session.ID, "focused": true, "cols": 78, "rows": 28,
 	})
 	if sameSize["resized"] {
 		t.Fatal("same-size focus unexpectedly resized the runtime")
 	}
 	sameSizeResize := requestResult[map[string]bool](t, second, "session.resize", map[string]any{
-		"cols": 78, "rows": 28,
+		"id": session.ID, "cols": 78, "rows": 28,
 	})
 	if sameSizeResize["resized"] {
 		t.Fatal("same-size resize unexpectedly resized the runtime")

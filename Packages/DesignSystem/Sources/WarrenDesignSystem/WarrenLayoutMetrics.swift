@@ -44,6 +44,8 @@ public enum WarrenLayoutMetrics {
     public static let sidebarProjectRowHeight: CGFloat = 32
     public static let sidebarWorkspaceRowHeight: CGFloat = 28
     public static let sidebarSectionLabelHeight: CGFloat = 32
+    /// Host labels are subordinate tree-group controls, not resource rows.
+    public static let sidebarHostHeaderHeight: CGFloat = 24
     public static let sidebarRowIconSlotSize: CGFloat = 18
     public static let sidebarActionButtonSize: CGFloat = 24
     /// `OverflowFadeContainer` uses a 1.5rem edge fade in Superset.

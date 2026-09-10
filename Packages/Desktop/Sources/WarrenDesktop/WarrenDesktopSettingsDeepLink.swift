@@ -14,6 +14,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
     case notifications = "Notifications"
     case externalIDEs = "External IDEs"
     case relay = "Relay"
+    case lanPairing = "LAN Pairing"
     case publicAccess = "Public Access"
 
     public var id: String { rawValue }
@@ -29,6 +30,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case .notifications: "notifications"
         case .externalIDEs: "external-ides"
         case .relay: "relay"
+        case .lanPairing: "lan-pairing"
         case .publicAccess: "public-access"
         }
     }
@@ -44,6 +46,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case "notifications", "notification": self = .notifications
         case "external-ides", "external-ide", "ides": self = .externalIDEs
         case "relay": self = .relay
+        case "lan-pairing", "lan-pairing-window", "pairing": self = .lanPairing
         case "public-access", "publicaccess", "public": self = .publicAccess
         default: return nil
         }

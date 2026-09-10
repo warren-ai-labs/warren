@@ -99,6 +99,7 @@ struct WarrenDesktopEndpointPopover: View {
     let endpoints: [WarrenDesktopEndpointOption]
     let selectedID: String
     let onSelect: (String) -> Void
+    let onSetSidebarVisibility: (String, Bool) -> Void
     let onAddSSHHost: () -> Void
     let onRetry: () -> Void
     let onStop: () -> Void
@@ -115,6 +116,7 @@ struct WarrenDesktopEndpointPopover: View {
                 endpoints: endpoints,
                 selectedID: selectedID,
                 onSelect: onSelect,
+                onSetSidebarVisibility: onSetSidebarVisibility,
                 onAddSSHHost: onAddSSHHost,
                 onRetry: onRetry,
                 onStop: onStop,
@@ -132,6 +134,7 @@ struct WarrenDesktopEndpointPopoverContent: View {
     let endpoints: [WarrenDesktopEndpointOption]
     let selectedID: String
     let onSelect: (String) -> Void
+    let onSetSidebarVisibility: (String, Bool) -> Void
     let onAddSSHHost: () -> Void
     let onRetry: () -> Void
     let onStop: () -> Void
@@ -187,61 +190,7 @@ struct WarrenDesktopEndpointPopoverContent: View {
             }
 
             ForEach(endpoints) { endpoint in
-                Button {
-                    onSelect(endpoint.id)
-                    onDismiss()
-                } label: {
-                    HStack(spacing: WarrenSpacing.compact) {
-                        Image(systemName: endpoint.id == selectedID ? "checkmark.circle.fill" : "circle")
-                            .font(WarrenTypography.popoverMeta)
-                            .foregroundStyle(
-                                endpoint.id == selectedID
-                                    ? tokens.highlight
-                                    : tokens.mutedForeground
-                            )
-                            .frame(width: 16)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(endpoint.label)
-                                .font(WarrenTypography.popoverItem)
-                                .foregroundStyle(tokens.foreground)
-                            if let detail = endpoint.detail {
-                                Text(detail)
-                                    .font(WarrenTypography.popoverMeta)
-                                    .foregroundStyle(tokens.mutedForeground)
-                            }
-                            if let status = endpoint.probeStatus {
-                                Text(status)
-                                    .font(WarrenTypography.popoverMeta)
-                                    .foregroundStyle(endpoint.probeFailed ? tokens.destructive : tokens.mutedForeground)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            if let error = endpoint.connectionError {
-                                Text(error)
-                                    .font(WarrenTypography.popoverMeta)
-                                    .foregroundStyle(tokens.destructive)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, WarrenSpacing.standard)
-                    .padding(.vertical, WarrenSpacing.compact)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(endpoint.label)
-                .accessibilityValue([endpoint.id == selectedID ? "Selected" : nil, endpoint.probeStatus, endpoint.connectionError].compactMap { $0 }.joined(separator: ". "))
-                .warrenSemanticElement(
-                    id: "endpoint.\(endpoint.id)",
-                    role: .button,
-                    label: endpoint.label,
-                    value: [endpoint.probeStatus, endpoint.connectionError].compactMap { $0 }.joined(separator: "\n"),
-                    isSelected: endpoint.id == selectedID,
-                    action: {
-                        onSelect(endpoint.id)
-                        onDismiss()
-                    }
-                )
+                endpointRow(endpoint, tokens: tokens)
             }
 
             Divider()
@@ -285,6 +234,116 @@ struct WarrenDesktopEndpointPopoverContent: View {
         case .warning: tokens.warning
         case .destructive: tokens.destructive
         }
+    }
+
+    private func endpointRow(
+        _ endpoint: WarrenDesktopEndpointOption,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        HStack(alignment: .center, spacing: WarrenSpacing.xs) {
+            Button {
+                onSelect(endpoint.id)
+                onDismiss()
+            } label: {
+                HStack(spacing: WarrenSpacing.compact) {
+                    Image(systemName: endpoint.id == selectedID ? "checkmark.circle.fill" : "circle")
+                        .font(WarrenTypography.popoverMeta)
+                        .foregroundStyle(
+                            endpoint.id == selectedID
+                                ? tokens.highlight
+                                : tokens.mutedForeground
+                        )
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(endpoint.label)
+                            .font(WarrenTypography.popoverItem)
+                            .foregroundStyle(tokens.foreground)
+                        if let detail = endpoint.detail {
+                            Text(detail)
+                                .font(WarrenTypography.popoverMeta)
+                                .foregroundStyle(tokens.mutedForeground)
+                        }
+                        if let status = endpoint.probeStatus {
+                            Text(status)
+                                .font(WarrenTypography.popoverMeta)
+                                .foregroundStyle(endpoint.probeFailed ? tokens.destructive : tokens.mutedForeground)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let error = endpoint.connectionError {
+                            Text(error)
+                                .font(WarrenTypography.popoverMeta)
+                                .foregroundStyle(tokens.destructive)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(endpoint.label)
+            .accessibilityValue([endpoint.id == selectedID ? "Selected" : nil, endpoint.probeStatus, endpoint.connectionError].compactMap { $0 }.joined(separator: ". "))
+            .warrenSemanticElement(
+                id: "endpoint.\(endpoint.id)",
+                role: .button,
+                label: endpoint.label,
+                value: [endpoint.probeStatus, endpoint.connectionError].compactMap { $0 }.joined(separator: "\n"),
+                isSelected: endpoint.id == selectedID,
+                action: {
+                    onSelect(endpoint.id)
+                    onDismiss()
+                }
+            )
+
+            Button {
+                onSetSidebarVisibility(endpoint.id, !endpoint.isDisplayedInSidebar)
+            } label: {
+                Label(
+                    endpoint.isDisplayedInSidebar ? "Sidebar" : "Add",
+                    systemImage: endpoint.isDisplayedInSidebar ? "checkmark" : "plus"
+                )
+                .font(WarrenTypography.popoverMeta.weight(.semibold))
+                .foregroundStyle(
+                    endpoint.isDisplayedInSidebar
+                        ? tokens.highlight
+                        : tokens.mutedForeground
+                )
+                .padding(.horizontal, WarrenSpacing.xs)
+                .padding(.vertical, WarrenSpacing.xxs)
+                .background(
+                    endpoint.isDisplayedInSidebar
+                        ? tokens.highlight.opacity(0.14)
+                        : tokens.border.opacity(0.6),
+                    in: Capsule()
+                )
+            }
+            .buttonStyle(.plain)
+            .help(
+                endpoint.isDisplayedInSidebar
+                    ? "Remove \(endpoint.label) from Sidebar"
+                    : "Add \(endpoint.label) to Sidebar"
+            )
+            .accessibilityLabel(
+                endpoint.isDisplayedInSidebar
+                    ? "Remove \(endpoint.label) from Sidebar"
+                    : "Add \(endpoint.label) to Sidebar"
+            )
+            .accessibilityHint("This does not change the active execution server")
+            .warrenSemanticElement(
+                id: "endpoint.\(endpoint.id).sidebar",
+                role: .button,
+                label: endpoint.isDisplayedInSidebar
+                    ? "Remove \(endpoint.label) from Sidebar"
+                    : "Add \(endpoint.label) to Sidebar",
+                action: {
+                    onSetSidebarVisibility(endpoint.id, !endpoint.isDisplayedInSidebar)
+                }
+            )
+        }
+        .padding(.leading, WarrenSpacing.standard)
+        .padding(.trailing, WarrenSpacing.compact)
+        .padding(.vertical, WarrenSpacing.compact)
     }
 }
 

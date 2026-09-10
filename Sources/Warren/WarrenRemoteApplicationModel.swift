@@ -59,21 +59,75 @@ private struct WarrenLocalGhostlineMigration: Decodable {
     let phase: String?
 }
 
-private struct WarrenEndpointConfigurationFile: Codable {
-    let current: String?
-    let endpoints: [String: WarrenRemoteEndpointConfiguration]
+public struct WarrenDisplayConfiguration: Codable, Equatable, Sendable {
+    public static let currentVersion = 1
 
-    init(
-        current: String?,
-        endpoints: [String: WarrenRemoteEndpointConfiguration]
-    ) {
-        self.current = current
+    public var version: Int
+    public var endpoints: [String]
+
+    public init(version: Int = Self.currentVersion, endpoints: [String]) {
+        self.version = version
         self.endpoints = endpoints
     }
 }
 
+private struct WarrenEndpointConfigurationFile: Codable {
+    let current: String?
+    let endpoints: [String: WarrenRemoteEndpointConfiguration]
+    let display: WarrenDisplayConfiguration?
+
+    private enum CodingKeys: String, CodingKey {
+        case current
+        case endpoints
+        case display
+        case legacySidebar = "sidebar"
+    }
+
+    init(
+        current: String?,
+        endpoints: [String: WarrenRemoteEndpointConfiguration],
+        display: WarrenDisplayConfiguration? = nil
+    ) {
+        self.current = current
+        self.endpoints = endpoints
+        self.display = display
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        current = try container.decodeIfPresent(String.self, forKey: .current)
+        endpoints = try container.decode(
+            [String: WarrenRemoteEndpointConfiguration].self,
+            forKey: .endpoints
+        )
+        let configuredDisplay = try container.decodeIfPresent(
+            WarrenDisplayConfiguration.self,
+            forKey: .display
+        )
+        if let configuredDisplay {
+            display = configuredDisplay
+        } else {
+            display = try container.decodeIfPresent(
+                WarrenDisplayConfiguration.self,
+                forKey: .legacySidebar
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(current, forKey: .current)
+        try container.encode(endpoints, forKey: .endpoints)
+        try container.encodeIfPresent(display, forKey: .display)
+    }
+}
+
 private struct WarrenLoadedEndpointConfiguration {
-    let catalog: (current: String?, endpoints: [WarrenRemoteEndpointConfiguration])
+    let catalog: (
+        current: String?,
+        endpoints: [WarrenRemoteEndpointConfiguration],
+        display: WarrenDisplayConfiguration?
+    )
 }
 
 enum WarrenEndpointCatalog {
@@ -92,19 +146,31 @@ enum WarrenEndpointCatalog {
             .appendingPathComponent(".warren/config.json")
     }
 
-    static func load() -> (current: String?, endpoints: [WarrenRemoteEndpointConfiguration]) {
+    static func load() -> (
+        current: String?,
+        endpoints: [WarrenRemoteEndpointConfiguration],
+        display: WarrenDisplayConfiguration?
+    ) {
         load(from: configurationURL())
     }
 
     static func load(
         from configURL: URL
-    ) -> (current: String?, endpoints: [WarrenRemoteEndpointConfiguration]) {
-        (try? loadThrowing(from: configURL)) ?? (nil, [])
+    ) -> (
+        current: String?,
+        endpoints: [WarrenRemoteEndpointConfiguration],
+        display: WarrenDisplayConfiguration?
+    ) {
+        (try? loadThrowing(from: configURL)) ?? (nil, [], nil)
     }
 
     static func loadThrowing(
         from configURL: URL
-    ) throws -> (current: String?, endpoints: [WarrenRemoteEndpointConfiguration]) {
+    ) throws -> (
+        current: String?,
+        endpoints: [WarrenRemoteEndpointConfiguration],
+        display: WarrenDisplayConfiguration?
+    ) {
         try withLock(configURL) {
             let loaded = try loadUnlocked(from: configURL)
             return loaded.catalog
@@ -114,12 +180,22 @@ enum WarrenEndpointCatalog {
     static func save(
         endpoints: [WarrenRemoteEndpointConfiguration],
         current: String?,
+        display: WarrenDisplayConfiguration? = nil,
         to configURL: URL = configurationURL()
     ) throws {
         try withLock(configURL) {
+            let existing = try? loadUnlocked(from: configURL).catalog
+            let endpointValues = endpointDictionary(endpoints)
+            let requestedDisplay = display ?? existing?.display
+            let normalized = try normalizedCatalogDisplay(
+                requestedDisplay,
+                endpointNames: Set(endpointValues.keys).union(["local"]),
+                current: current
+            )
             let file = WarrenEndpointConfigurationFile(
-                current: current,
-                endpoints: endpointDictionary(endpoints)
+                current: normalized.current,
+                endpoints: endpointValues,
+                display: normalized.display
             )
             try writeUnlocked(file, to: configURL)
         }
@@ -131,10 +207,16 @@ enum WarrenEndpointCatalog {
     ) throws {
         try withLock(configURL) {
             let existing = try loadUnlocked(from: configURL).catalog
+            let normalized = try normalizedCatalogDisplay(
+                existing.display,
+                endpointNames: Set(existing.endpoints.map(\.name)).union(["local"]),
+                current: current
+            )
             try writeUnlocked(
                 WarrenEndpointConfigurationFile(
-                    current: current,
-                    endpoints: endpointDictionary(existing.endpoints)
+                    current: normalized.current,
+                    endpoints: endpointDictionary(existing.endpoints),
+                    display: normalized.display
                 ),
                 to: configURL
             )
@@ -150,14 +232,248 @@ enum WarrenEndpointCatalog {
             let existing = try loadUnlocked(from: configURL).catalog
             var endpoints = endpointDictionary(existing.endpoints)
             endpoints[endpoint.name] = endpoint
+            let requestedCurrent = current ?? existing.current
+            let normalized = try normalizedCatalogDisplay(
+                existing.display,
+                endpointNames: Set(endpoints.keys).union(["local"]),
+                current: requestedCurrent
+            )
             try writeUnlocked(
                 WarrenEndpointConfigurationFile(
-                    current: current ?? existing.current,
-                    endpoints: endpoints
+                    current: normalized.current,
+                    endpoints: endpoints,
+                    display: normalized.display
                 ),
                 to: configURL
             )
         }
+    }
+
+    /// Returns the ordered endpoint aliases visible in the Desktop sidebar.
+    /// A missing section intentionally preserves the legacy single-current
+    /// behavior and falls back to the synthetic local endpoint.
+    static func effectiveDisplay(
+        from catalog: (
+            current: String?,
+            endpoints: [WarrenRemoteEndpointConfiguration],
+            display: WarrenDisplayConfiguration?
+        )
+    ) throws -> [String] {
+        if catalog.display == nil {
+            if let current = catalog.current?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !current.isEmpty {
+                return [current]
+            }
+            return ["local"]
+        }
+        let normalized = try normalizedCatalogDisplay(
+            catalog.display,
+            endpointNames: Set(catalog.endpoints.map(\.name)).union(["local"]),
+            current: catalog.current
+        )
+        return normalized.aliases
+    }
+
+    static func setDisplay(
+        _ aliases: [String],
+        to configURL: URL = configurationURL()
+    ) throws {
+        try withLock(configURL) {
+            let existing = try loadUnlocked(from: configURL).catalog
+            let normalized = try normalizedDisplay(
+                aliases,
+                knownEndpointNames: Set(existing.endpoints.map(\.name)).union(["local"]),
+                current: existing.current
+            )
+            try writeUnlocked(WarrenEndpointConfigurationFile(
+                current: normalized.current,
+                endpoints: endpointDictionary(existing.endpoints),
+                display: WarrenDisplayConfiguration(endpoints: normalized.aliases)
+            ), to: configURL)
+        }
+    }
+
+    /// Atomically changes one endpoint's explicit sidebar membership without
+    /// selecting it as the foreground endpoint. Removing the final explicit
+    /// alias restores the legacy single-current representation.
+    static func setDisplayMembership(
+        _ endpointID: String,
+        isDisplayed: Bool,
+        to configURL: URL = configurationURL()
+    ) throws {
+        try withLock(configURL) {
+            let existing = try loadUnlocked(from: configURL).catalog
+            let endpointNames = Set(existing.endpoints.map(\.name)).union(["local"])
+            guard endpointNames.contains(endpointID) else {
+                throw NSError(
+                    domain: "WarrenEndpointCatalog",
+                    code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: "Endpoint not found: \(endpointID)"]
+                )
+            }
+
+            // A missing display section means the legacy current endpoint is
+            // already visible. The first menu "Add" must retain that Host,
+            // rather than silently replacing it with the newly added one.
+            var aliases = existing.display?.endpoints ?? []
+            if isDisplayed, existing.display == nil {
+                aliases = [
+                    try normalizedCurrent(
+                        existing.current,
+                        endpointNames: endpointNames
+                    ) ?? "local",
+                ]
+            }
+            if isDisplayed {
+                if !aliases.contains(endpointID) {
+                    aliases.append(endpointID)
+                }
+            } else {
+                aliases.removeAll { $0 == endpointID }
+            }
+
+            let display: WarrenDisplayConfiguration?
+            if aliases.isEmpty {
+                display = nil
+            } else {
+                let normalized = try normalizedDisplay(
+                    aliases,
+                    knownEndpointNames: endpointNames,
+                    current: existing.current
+                )
+                display = WarrenDisplayConfiguration(endpoints: normalized.aliases)
+            }
+            try writeUnlocked(WarrenEndpointConfigurationFile(
+                current: try normalizedCurrent(existing.current, endpointNames: endpointNames),
+                endpoints: endpointDictionary(existing.endpoints),
+                display: display
+            ), to: configURL)
+        }
+    }
+
+    static func resetDisplay(to configURL: URL = configurationURL()) throws {
+        try withLock(configURL) {
+            let existing = try loadUnlocked(from: configURL).catalog
+            try writeUnlocked(WarrenEndpointConfigurationFile(
+                current: existing.current,
+                endpoints: endpointDictionary(existing.endpoints),
+                display: nil
+            ), to: configURL)
+        }
+    }
+
+    private static func normalizeDisplayAliases(_ values: [String]) throws -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed == value,
+                  !value.contains("\r"), !value.contains("\n"), !value.contains("\0") else {
+                throw NSError(
+                    domain: "WarrenEndpointCatalog",
+                    code: 6,
+                    userInfo: [NSLocalizedDescriptionKey: "Invalid display endpoint name: \(value)"]
+                )
+            }
+            guard seen.insert(value).inserted else { continue }
+            result.append(value)
+        }
+        return result
+    }
+
+    private static func normalizedDisplay(
+        _ aliases: [String],
+        knownEndpointNames: Set<String>,
+        current: String?
+    ) throws -> (aliases: [String], current: String?) {
+        let normalized = try normalizeDisplayAliases(aliases)
+        guard !normalized.isEmpty else {
+            throw NSError(
+                domain: "WarrenEndpointCatalog",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Display endpoint set cannot be empty"]
+            )
+        }
+        if let unknown = normalized.first(where: { !knownEndpointNames.contains($0) }) {
+            throw NSError(
+                domain: "WarrenEndpointCatalog",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "Display endpoint not found: \(unknown)"]
+            )
+        }
+        return (
+            normalized,
+            try normalizedCurrent(current, endpointNames: knownEndpointNames)
+        )
+    }
+
+    /// Normalizes an optional persisted display while preserving the
+    /// pre-display nil representation. The foreground endpoint remains
+    /// independent from the explicitly chosen sidebar aliases.
+    private static func normalizedCatalogDisplay(
+        _ display: WarrenDisplayConfiguration?,
+        endpointNames: Set<String>,
+        current: String?
+    ) throws -> (
+        display: WarrenDisplayConfiguration?,
+        aliases: [String],
+        current: String?
+    ) {
+        guard let display else {
+            return (
+                nil,
+                [],
+                try normalizedCurrent(current, endpointNames: endpointNames)
+            )
+        }
+        guard display.version == 0 || display.version == WarrenDisplayConfiguration.currentVersion else {
+            throw NSError(
+                domain: "WarrenEndpointCatalog",
+                code: 7,
+                userInfo: [NSLocalizedDescriptionKey: "Unsupported display config version: \(display.version)"]
+            )
+        }
+        let aliases = try normalizeDisplayAliases(display.endpoints)
+        guard !aliases.isEmpty else {
+            throw NSError(
+                domain: "WarrenEndpointCatalog",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Display endpoint set cannot be empty"]
+            )
+        }
+        if let unknown = aliases.first(where: { !endpointNames.contains($0) }) {
+            throw NSError(
+                domain: "WarrenEndpointCatalog",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "Display endpoint not found: \(unknown)"]
+            )
+        }
+        return (
+            WarrenDisplayConfiguration(
+                version: WarrenDisplayConfiguration.currentVersion,
+                endpoints: aliases
+            ),
+            aliases,
+            try normalizedCurrent(current, endpointNames: endpointNames)
+        )
+    }
+
+    private static func normalizedCurrent(
+        _ current: String?,
+        endpointNames: Set<String>
+    ) throws -> String? {
+        guard let current else { return nil }
+        let normalized = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        guard endpointNames.contains(normalized) else {
+            throw NSError(
+                domain: "WarrenEndpointCatalog",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "Endpoint not found: \(normalized)"]
+            )
+        }
+        return normalized
     }
 
     private static func loadUnlocked(
@@ -169,7 +485,7 @@ enum WarrenEndpointCatalog {
         } catch {
             let nsError = error as NSError
             if nsError.code == NSFileReadNoSuchFileError || nsError.code == NSFileNoSuchFileError {
-                return WarrenLoadedEndpointConfiguration(catalog: (nil, []))
+                return WarrenLoadedEndpointConfiguration(catalog: (nil, [], nil))
             }
             throw error
         }
@@ -199,7 +515,7 @@ enum WarrenEndpointCatalog {
             }
         }
         return WarrenLoadedEndpointConfiguration(
-            catalog: (file.current, file.endpoints.values.sorted { $0.name < $1.name })
+            catalog: (file.current, file.endpoints.values.sorted { $0.name < $1.name }, file.display)
         )
     }
 
@@ -220,12 +536,17 @@ enum WarrenEndpointCatalog {
                 type: endpoint.type,
                 hostID: endpoint.hostID,
                 routeID: endpoint.routeID,
-                clientID: endpoint.clientID
+                clientID: endpoint.clientID,
+                refreshToken: endpoint.refreshToken,
+                directURL: endpoint.directURL,
+                relayURL: endpoint.relayURL,
+                routePreference: endpoint.routePreference
             )
         }
         let normalizedFile = WarrenEndpointConfigurationFile(
             current: file.current,
-            endpoints: endpointDictionary(endpoints)
+            endpoints: endpointDictionary(endpoints),
+            display: file.display
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -944,11 +1265,19 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     @Published private(set) var projection = WarrenDesktopProjection
         .empty(host: WarrenDomain.Host(name: "Server"))
         .withConnectionState(.connecting)
+    /// Endpoint alias owning the current window navigation memory. The
+    /// foreground controller is single-Host, but its IDs are not globally
+    /// unique across Hosts, so persistence must follow this scope.
+    private var navigationScope = "local"
+    /// The endpoint scope that owns `navigation`. During an endpoint switch it
+    /// is the only safe scope for presenting a selected sidebar resource.
+    var navigationEndpointID: String { navigationScope }
     @Published private(set) var navigation: WarrenDesktopNavigationState {
         didSet { scheduleNavigationPersistence() }
     }
     private var navigationPersistenceTask: Task<Void, Never>?
     private var pendingNavigationToPersist: WarrenDesktopNavigationState?
+    private var pendingNavigationScope = "local"
     private var terminationObserver: NSObjectProtocol?
     /// Client-local diagnostics and system messages shown by the desktop
     /// notice center. Keep this bounded so repeated failures cannot grow the
@@ -959,6 +1288,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// daemon. The Host Secret remains in the daemon credential store.
     @Published private(set) var relaySettings = WarrenDesktopRelaySettings()
     @Published private(set) var relayDevices: [WarrenDesktopRelayDevice] = []
+    /// The explicit, short-lived Host-side window that accepts an iPhone PIN.
+    /// No pairing state is inferred from discovery; it is returned by the
+    /// authenticated daemon settings projection.
+    @Published private(set) var lanPairing = WarrenDesktopLANPairing()
     /// Default engine for new sessions, owned by the headless daemon.
     @Published private(set) var defaultRuntime: String?
     /// Whether opening an empty workspace creates a default Shell session.
@@ -1075,9 +1408,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         agentCompletionSubject.eraseToAnyPublisher()
     }
 
-    init(surfaceManager: TerminalSurfaceManager = TerminalSurfaceManager()) {
+    init(
+        surfaceManager: TerminalSurfaceManager = TerminalSurfaceManager(),
+        initialNavigationScope: String = "local"
+    ) {
         self.surfaceManager = surfaceManager
-        self.navigation = WarrenDesktopNavigationPersistence.restore()
+        let normalizedScope = initialNavigationScope
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let scope = normalizedScope.isEmpty ? "local" : normalizedScope
+        self.navigationScope = scope
+        self.pendingNavigationScope = scope
+        self.navigation = WarrenDesktopNavigationPersistence.restore(scope: scope)
             ?? WarrenDesktopNavigationState(selection: nil, selectedTabID: nil)
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -1088,7 +1429,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // an asynchronous persistence task gets a chance to run.
             self?.flushNavigationPersistence()
         }
-        let tabOrders = WarrenDesktopNavigationPersistence.restoreTabOrders()
+        let tabOrders = WarrenDesktopNavigationPersistence.restoreTabOrders(scope: scope)
         self.tabOrderByWorkspaceID = tabOrders.workspace.reduce(into: [:]) { result, entry in
             guard let id = WorkspaceID(uuidString: entry.key) else { return }
             result[id] = entry.value
@@ -1104,7 +1445,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         // is allowed to be asynchronous, but termination must not lose the
         // last selection. Synchronous save here is only a few microseconds.
         if let pending = pendingNavigationToPersist {
-            WarrenDesktopNavigationPersistence.save(pending)
+            WarrenDesktopNavigationPersistence.save(pending, scope: pendingNavigationScope)
         }
         navigationPersistenceTask?.cancel()
         hostProbeTask?.cancel()
@@ -1112,8 +1453,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     private func scheduleNavigationPersistence() {
         pendingNavigationToPersist = navigation
+        pendingNavigationScope = navigationScope
         navigationPersistenceTask?.cancel()
         let pending = navigation
+        let scope = navigationScope
         navigationPersistenceTask = Task { @MainActor [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(50))
@@ -1121,8 +1464,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             guard let self else { return }
             // Coalesce rapid closes: only the latest navigation is persisted.
             // Flush is also triggered on termination (see flushNavigationPersistence).
-            WarrenDesktopNavigationPersistence.save(pending)
-            if self.pendingNavigationToPersist == pending {
+            WarrenDesktopNavigationPersistence.save(pending, scope: scope)
+            if self.pendingNavigationToPersist == pending,
+               self.pendingNavigationScope == scope {
                 self.pendingNavigationToPersist = nil
             }
             self.navigationPersistenceTask = nil
@@ -1133,10 +1477,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         navigationPersistenceTask?.cancel()
         navigationPersistenceTask = nil
         if let pending = pendingNavigationToPersist {
-            WarrenDesktopNavigationPersistence.save(pending)
+            WarrenDesktopNavigationPersistence.save(pending, scope: pendingNavigationScope)
             pendingNavigationToPersist = nil
         } else {
-            WarrenDesktopNavigationPersistence.save(navigation)
+            WarrenDesktopNavigationPersistence.save(navigation, scope: navigationScope)
         }
     }
 
@@ -1200,7 +1544,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         connectionGeneration &+= 1
         let generation = connectionGeneration
         cancelTransientConnectionIssue()
-        restorePersistedTabOrders()
+        switchNavigationScope(to: isLocal ? "local" : resolvedConfiguration.name)
         endpointConfiguration = resolvedConfiguration
         activeEndpointConfiguration = nil
         isLocalEndpoint = isLocal
@@ -1212,6 +1556,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         openAIModel = ""
         openAITitleEnabled = false
         relaySettings = WarrenDesktopRelaySettings()
+        lanPairing = WarrenDesktopLANPairing()
         isMigratingRuntimeSessions = isLocal
             && WarrenRemoteEndpointConfiguration.localDaemonMigrationInProgress()
         if resolvedConfiguration.url.hasPrefix("http://127.0.0.1:8789"),
@@ -1280,6 +1625,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         resetAttachmentState()
         webStatus = WarrenDesktopWebStatus()
         relaySettings = WarrenDesktopRelaySettings()
+        lanPairing = WarrenDesktopLANPairing()
         publishProjectionIfChanged(projection.withConnectionState(.disconnected))
         let ms = Int(Date().timeIntervalSince(disconnectStart) * 1000)
         TerminalDiagnostics.log("remote_disconnect_end", ["endpoint": prevEndpoint, "duration_ms": String(ms)])
@@ -1334,6 +1680,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         endpointConfiguration == configuration && eventTask != nil
     }
 
+    /// Returns true only after the foreground transport for the requested
+    /// Endpoint has produced an attached projection. A stale projection from
+    /// the previously selected Host may briefly remain available while an
+    /// endpoint switch is being reconciled, so callers must not use
+    /// `projection.isConnected` alone for scoped activation.
+    func isReady(for endpointID: String) -> Bool {
+        let normalized = endpointID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expected = normalized.isEmpty ? "local" : normalized
+        guard projection.isConnected, eventTask != nil, let endpointConfiguration else {
+            return false
+        }
+        if isLocalEndpoint {
+            return expected == "local"
+        }
+        return endpointConfiguration.name == expected
+    }
+
     /// Keeps the endpoint alive across daemon restarts and transient network
     /// failures. A fresh wire is created per attempt; the old wire's event
     /// stream is finished by `close()` so it can never be reused.
@@ -1383,19 +1746,30 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 return
             }
             activeEndpointConfiguration = wireConfiguration
-            let persistedConfiguration = wireConfiguration
+            let isSSHEndpoint = configuration.ssh?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty == false
+            let isSyntheticLocal = isLocalEndpoint
+            // SSH helpers provide an ephemeral loopback URL and token. Keep
+            // refresh callbacks anchored to the durable alias so a token
+            // rotation cannot replace SSH metadata with that runtime route.
+            let persistedConfiguration = isSSHEndpoint
+                ? configuration
+                : wireConfiguration
             let wire = WarrenRemoteClient(
                 configuration: wireConfiguration,
                 terminalStateFormats: [WarrenRemoteClient.snapshotTerminalStateFormat],
                 tokenUpdateHandler: { accessToken, refreshToken in
+                    guard !isSyntheticLocal else { return }
                     let updated = persistedConfiguration.withTokens(
                         token: accessToken,
                         refreshToken: refreshToken
                     )
-                    try? WarrenEndpointCatalog.upsert(
-                        updated,
-                        current: persistedConfiguration.name
-                    )
+                    // Token rotation updates endpoint metadata only. Do not
+                    // rewrite `current`: this callback can finish after the
+                    // user has switched Hosts, and selecting the old alias
+                    // would race the shared catalog monitor.
+                    try? WarrenEndpointCatalog.upsert(updated)
                 }
             )
             self.wire = wire
@@ -1747,6 +2121,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             relaySettings = Self.relaySettings(from: relay)
             loadRelayDevices()
         }
+        if let pairing = result["pairing"] as? [String: Any] {
+            lanPairing = Self.lanPairing(from: pairing)
+        }
     }
 
     private static func relaySettings(from value: [String: Any]) -> WarrenDesktopRelaySettings {
@@ -1758,6 +2135,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             relayKeyID: (value["relayKeyID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
             relayPublicKey: (value["relayKey"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
             lastError: (value["lastError"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    private static func lanPairing(from value: [String: Any]) -> WarrenDesktopLANPairing {
+        let expiresIn: Int
+        if let number = value["expiresIn"] as? NSNumber {
+            expiresIn = number.intValue
+        } else if let integer = value["expiresIn"] as? Int {
+            expiresIn = integer
+        } else {
+            expiresIn = 0
+        }
+        return WarrenDesktopLANPairing(
+            enabled: value["enabled"] as? Bool ?? false,
+            pin: (value["pin"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            expiresAt: parseISO8601Date(value["expiresAt"] as? String),
+            expiresIn: max(0, expiresIn)
         )
     }
 
@@ -1793,6 +2187,53 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 self?.autoStartAI = enabled
             } catch {
                 self?.present(error)
+            }
+        }
+    }
+
+    func enableLANPairing(
+        completion: @escaping (Result<WarrenDesktopLANPairing, Error>) -> Void = { _ in }
+    ) {
+        updateLANPairing(method: "pairing.enable", completion: completion)
+    }
+
+    func disableLANPairing(
+        completion: @escaping (Result<WarrenDesktopLANPairing, Error>) -> Void = { _ in }
+    ) {
+        updateLANPairing(method: "pairing.disable", completion: completion)
+    }
+
+    func refreshLANPairing(
+        completion: @escaping (Result<WarrenDesktopLANPairing, Error>) -> Void = { _ in }
+    ) {
+        updateLANPairing(method: "pairing.status", completion: completion)
+    }
+
+    private func updateLANPairing(
+        method: String,
+        completion: @escaping (Result<WarrenDesktopLANPairing, Error>) -> Void
+    ) {
+        guard let wire else {
+            let error = NSError(domain: "WarrenRemote", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The selected daemon is not connected.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        Task { @MainActor [weak self] in
+            do {
+                let data = try await wire.request(method)
+                guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw NSError(domain: "WarrenRemote", code: 14, userInfo: [
+                        NSLocalizedDescriptionKey: "The daemon returned an invalid LAN pairing status.",
+                    ])
+                }
+                let pairing = Self.lanPairing(from: value)
+                self?.lanPairing = pairing
+                completion(.success(pairing))
+            } catch {
+                self?.present(error)
+                completion(.failure(error))
             }
         }
     }
@@ -3102,10 +3543,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 "rows": String(size.rows),
             ])
             do {
-                _ = try await wire.request("session.resize", params: [
-                    "cols": String(size.columns),
-                    "rows": String(size.rows),
-                ])
+                _ = try await wire.resize(
+                    sessionID: sessionID.description,
+                    size: size
+                )
             } catch {
                 guard !Task.isCancelled,
                       selectedSessionID == sessionID,
@@ -3161,19 +3602,20 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         focusTask = Task { @MainActor [weak self, generation] in
             guard let self else { return }
             do {
-                var params = ["focused": focused ? "true" : "false"]
-                if focused, let size {
-                    params["cols"] = String(size.columns)
-                    params["rows"] = String(size.rows)
-                }
-                let data = try await wire.request("session.focus", params: params)
-                let result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                // A passive subscription does not populate the daemon's
+                // legacy attached pointer. Always include the target session
+                // when promoting or releasing its control lease.
+                let result = try await wire.focus(
+                    sessionID: sessionID.description,
+                    focused: focused,
+                    size: focused ? size : nil
+                )
                 guard self.focusClaimGeneration == generation,
                       self.selectedSessionID == sessionID,
                       self.attachedSessionID == sessionID else { return }
                 self.focusClaimInFlight = false
                 if focused {
-                    self.focusedSessionID = (result?["focused"] as? Bool == true) ? sessionID : nil
+                    self.focusedSessionID = result.focused ? sessionID : nil
                     if let pending = self.pendingFocusResizeSize {
                         self.pendingFocusResizeSize = nil
                         self.resize(columns: pending.columns, rows: pending.rows)
@@ -5326,8 +5768,26 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         navigation = nextNavigation
     }
 
-    private func restorePersistedTabOrders() {
-        let orders = WarrenDesktopNavigationPersistence.restoreTabOrders()
+    private func switchNavigationScope(to rawScope: String) {
+        let scope = rawScope.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "local"
+            : rawScope.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard navigationScope != scope else {
+            restorePersistedTabOrders(scope: scope)
+            return
+        }
+        // Persist the old Host before replacing the in-memory state. This is
+        // intentionally synchronous because endpoint switches can happen
+        // while the normal 50ms navigation debounce is pending.
+        flushNavigationPersistence()
+        navigationScope = scope
+        navigation = WarrenDesktopNavigationPersistence.restore(scope: scope)
+            ?? WarrenDesktopNavigationState(selection: nil, selectedTabID: nil)
+        restorePersistedTabOrders(scope: scope)
+    }
+
+    private func restorePersistedTabOrders(scope: String) {
+        let orders = WarrenDesktopNavigationPersistence.restoreTabOrders(scope: scope)
         tabOrderByWorkspaceID = orders.workspace.reduce(into: [:]) { result, entry in
             guard let id = WorkspaceID(uuidString: entry.key) else { return }
             result[id] = entry.value
@@ -5346,7 +5806,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             terminalGroup: Dictionary(uniqueKeysWithValues: tabOrderByTerminalGroupID.map {
                 ($0.key.description, $0.value)
             })
-        ))
+        ), scope: navigationScope)
     }
     private static func terminalGroupDate(_ rawValue: String?) -> Date {
         parseISO8601Date(rawValue) ?? .distantPast

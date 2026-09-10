@@ -465,7 +465,7 @@ func (p *qoderParser) parseQoder(line []byte) []api.AgentEvent {
 		return nil
 	}
 	timestamp := parseTimestamp(record.Timestamp)
-	if structured := projectStructuredAgentEvent(qoderProvider, record.Type, line, timestamp); structured != nil {
+	if structured := projectStructuredAgentEventWithLimit(qoderProvider, record.Type, line, timestamp, p.contentLimit); structured != nil {
 		if structured.ID == "" {
 			structured.ID = record.UUID
 		}
@@ -496,29 +496,37 @@ func (p *qoderParser) parseQoder(line []byte) []api.AgentEvent {
 		}
 		return nil
 	case "attachment":
-		var att struct {
-			Type         string `json:"type"`
-			PlanFilePath string `json:"planFilePath"`
-			Content      string `json:"content"`
-			Prompt       string `json:"prompt"`
-		}
+		var att map[string]any
 		if json.Unmarshal(record.Attachment, &att) == nil {
-			if att.PlanFilePath != "" || att.Type == "plan" {
+			attType := strings.ToLower(stringValue(att["type"]))
+			planFile := firstNonEmpty(
+				stringValue(att["planFilePath"]),
+				stringValue(att["plan_file_path"]),
+				stringValue(att["file"]),
+				stringValue(att["filePath"]),
+			)
+			if planFile != "" || attType == "plan" {
+				planID := firstNonEmpty(stringValue(att["planId"]), stringValue(att["plan_id"]), record.UUID, "qoder-plan")
+				payload := normalizeStructuredPlanPayload(att, planID, p.contentLimit)
+				payload["planId"] = planID
+				if planFile != "" {
+					payload["file"] = planFile
+				}
+				if summary := firstNonEmpty(stringValue(payload["summary"]), structuredTextValue(att["content"], p.contentLimit), planFile); summary != "" {
+					payload["summary"] = summary
+				}
+				summary := stringValue(payload["summary"])
 				return []api.AgentEvent{{
-					Provider: qoderProvider,
-					ID:       firstNonEmpty(record.UUID, "qoder-plan"),
-					Type:     "plan",
-					Payload: map[string]any{
-						"planId": firstNonEmpty(record.UUID, "qoder-plan"),
-						"title":  "Plan",
-						"file":   att.PlanFilePath,
-						"state":  "in_progress",
-					},
+					Provider:  qoderProvider,
+					ID:        planID,
+					Type:      "plan",
+					Content:   summary,
+					Payload:   payload,
 					Timestamp: timestamp,
 				}}
 			}
-			if att.Type == "queued_command" {
-				prompt := firstNonEmpty(att.Prompt, att.Content)
+			if attType == "queued_command" {
+				prompt := firstNonEmpty(structuredTextValue(att["prompt"], p.contentLimit), structuredTextValue(att["content"], p.contentLimit))
 				payload := map[string]any{
 					"action":  "enqueue",
 					"content": prompt,
@@ -567,15 +575,16 @@ func (p *qoderParser) parseQoderUser(record qoderRecord, message qoderMessage, t
 		return nil
 	}
 	if isCompactionContext(content) {
+		summary := compactionSummaryText(content)
 		return []api.AgentEvent{{
-			Provider:  qoderProvider,
-			ID:        record.UUID,
-			Type:      "compaction",
-			Role:      "system",
-			Content:   "History compacted",
+			Provider: qoderProvider,
+			ID:       record.UUID,
+			Type:     "compaction",
+			Role:     "system",
+			Content:  "History compacted",
 			Payload: map[string]any{
 				"compactionId": record.UUID,
-				"summary":      "History compacted",
+				"summary":      p.clip(summary),
 			},
 			Timestamp: timestamp,
 		}}
@@ -613,6 +622,12 @@ func (p *qoderParser) parseQoderToolResults(record qoderRecord, blocks []qoderCo
 		}
 		if kind := p.qoderInteractions[block.ToolUseID]; kind != "" {
 			delete(p.qoderInteractions, block.ToolUseID)
+			if kind == "todo" || kind == "plan" {
+				// Plan/Todo tool results are provider bookkeeping. The assistant
+				// tool call already emitted the structured snapshot consumed by
+				// clients, so do not leak a duplicate text/tool-output card.
+				continue
+			}
 			p.tracker.MarkAttention("", "", "", time.Time{})
 			title := "Question"
 			if kind == "permission" {
@@ -787,7 +802,22 @@ func (p *qoderParser) parseQoderAssistant(record qoderRecord, message qoderMessa
 			input, _ := rawToAny(blocks[0].Input, p.contentLimit).(map[string]any)
 			event.Type = "todo"
 			event.ID = "qoder-todos"
-			event.Payload = claudeTodoPayload(input)
+			event.Payload = claudeTodoPayloadWithLimit(input, p.contentLimit)
+			event.Content = stringValue(event.Payload["summary"])
+			if callID != "" {
+				p.qoderInteractions[callID] = "todo"
+			}
+			return []api.AgentEvent{event}
+		}
+		if toolName == "update_plan" || toolName == "plan" {
+			input, _ := rawToAny(blocks[0].Input, p.contentLimit).(map[string]any)
+			event.Type = "plan"
+			event.Payload = normalizeStructuredPlanPayload(input, "qoder-plan", p.contentLimit)
+			event.ID = stringValue(event.Payload["planId"])
+			event.Content = stringValue(event.Payload["summary"])
+			if callID != "" {
+				p.qoderInteractions[callID] = "plan"
+			}
 			return []api.AgentEvent{event}
 		}
 		if toolName == "" {

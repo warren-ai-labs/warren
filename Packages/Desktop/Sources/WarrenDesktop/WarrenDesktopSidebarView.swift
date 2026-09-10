@@ -65,6 +65,23 @@ struct WarrenDesktopSidebar: View {
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
     let onRequestTerminalGroupCreate: () -> Void
     let onRequestTerminalGroupEdit: (TerminalGroup) -> Void
+    let activeEndpointID: String
+    let displayConfigurationError: String?
+    /// Optional ordered Host sections. When present, the Projects/Workspaces
+    /// portion uses the endpoint-scoped read model while the footer and
+    /// current-host controls remain unchanged.
+    let sidebarHostProjections: [WarrenDesktopSidebarHostProjection]?
+    /// An explicit display configuration uses the Host-scoped tree even for
+    /// one Host. A missing configuration retains the legacy current-Host
+    /// sidebar instead.
+    let usesSidebarHostSections: Bool
+    /// Selection with the endpoint scope owned by the navigation controller.
+    /// It is supplied separately from `activeEndpointID` because a Host switch
+    /// can briefly render the old navigation state under a new requested Host.
+    let sidebarResourceSelection: WarrenDesktopSidebarResourceSelection?
+    let onSelectSidebarResource: (WarrenDesktopSidebarResourceSelection) -> Void
+    let onOpenSidebarWorkspace: (WarrenDesktopHostResourceRef<WorkspaceID>) -> Void
+    let onRetrySidebarHost: (String) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -82,60 +99,166 @@ struct WarrenDesktopSidebar: View {
                 showsActiveOnly: sidebarTree.showsActiveOnly,
                 onToggleActiveOnly: toggleActiveOnly
             )
+            if let displayConfigurationError {
+                displayConfigurationNotice(displayConfigurationError, tokens: tokens)
+            }
             ScrollViewReader { proxy in
                 WarrenOverflowFadeScrollView(
                     .vertical,
                     fadeLength: WarrenLayoutMetrics.sidebarScrollFadeLength,
                     surface: tokens.sidebarSurface
                 ) {
-                    WarrenDesktopSidebarRows(
-                        taskGroups: projection.taskGroups,
-                        groups: projection.groups,
-                        terminalGroups: projection.terminalGroups.map {
-                            WarrenDesktopTerminalGroup(
-                                group: $0,
-                                sessions: projection.sessions(in: $0.id)
-                            )
-                        },
-                        workspaceActivitySummaries: projection.workspaceActivitySummaries,
-                        activeWorkspaceIDs: projection.activeWorkspaceIDs,
-                        // Active Sessions lives in the dedicated shortcut
-                        // switcher; the sidebar stays focused on navigation.
-                        showsActiveSessions: false,
-                        showsTasks: showsTasks,
-                        tree: $sidebarTree,
-                        isCollapsed: sidebarState.isCollapsed,
-                        selection: selection,
-                        selectedTabID: selectedTabID,
-                        deletingProjectIDs: deletingProjectIDs,
-                        deletingWorkspaceIDs: deletingWorkspaceIDs,
-                        endpointCapabilities: endpointCapabilities,
-                        isInteractionDisabled: !projection.isConnected,
-                        onAddProject: { onAction(.addProject) },
-                        onRequestTaskCreate: onRequestTaskCreate,
-                        onFocusTask: { taskID in
-                            Self.revealTask(taskID, in: &sidebarTree)
-                            DispatchQueue.main.async {
-                                withAnimation(WarrenMotion.animation(
-                                    .stateChange,
-                                    reduceMotion: reduceMotion
-                                )) {
-                                    proxy.scrollTo(
-                                        "task.\(taskID.description)"
-                                    )
-                                }
+                    Group {
+                        if let sidebarHostProjections, usesSidebarHostSections {
+                            VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                                // Tasks and Terminal Groups remain current-host
+                                // features in the first multi-host release. Reuse
+                                // the existing rows for those sections while the
+                                // scoped Host view owns only Projects/Workspaces.
+                                WarrenDesktopSidebarRows(
+                                    taskGroups: projection.taskGroups,
+                                    groups: projection.groups,
+                                    terminalGroups: projection.terminalGroups.map {
+                                        WarrenDesktopTerminalGroup(
+                                            group: $0,
+                                            sessions: projection.sessions(in: $0.id)
+                                        )
+                                    },
+                                    workspaceActivitySummaries: projection.workspaceActivitySummaries,
+                                    activeWorkspaceIDs: projection.activeWorkspaceIDs,
+                                    // Active Sessions lives in the dedicated shortcut
+                                    // switcher; the sidebar stays focused on navigation.
+                                    showsActiveSessions: false,
+                                    showsTasks: showsTasks,
+                                    showsProjects: false,
+                                    tree: $sidebarTree,
+                                    isCollapsed: sidebarState.isCollapsed,
+                                    selection: selection,
+                                    selectedTabID: selectedTabID,
+                                    deletingProjectIDs: deletingProjectIDs,
+                                    deletingWorkspaceIDs: deletingWorkspaceIDs,
+                                    endpointCapabilities: endpointCapabilities,
+                                    isInteractionDisabled: !projection.isConnected,
+                                    onAddProject: { onAction(.addProject) },
+                                    onRequestTaskCreate: onRequestTaskCreate,
+                                    onFocusTask: { taskID in
+                                        Self.revealTask(taskID, in: &sidebarTree)
+                                        DispatchQueue.main.async {
+                                            withAnimation(WarrenMotion.animation(
+                                                .stateChange,
+                                                reduceMotion: reduceMotion
+                                            )) {
+                                                proxy.scrollTo("task.\(taskID.description)")
+                                            }
+                                        }
+                                    },
+                                    onRequestTerminalGroupCreate: onRequestTerminalGroupCreate,
+                                    onRequestTerminalGroupEdit: onRequestTerminalGroupEdit,
+                                    onAction: onAction,
+                                    onRequestRename: onRequestRename,
+                                    onRequestDeletion: onRequestDeletion
+                                )
+                                WarrenDesktopSidebarHostRows(
+                                    hosts: sidebarHostProjections,
+                                    showsActiveOnly: sidebarTree.showsActiveOnly,
+                                    isCollapsed: sidebarState.isCollapsed,
+                                    selection: sidebarResourceSelection,
+                                    activeEndpointID: activeEndpointID,
+                                    deletingProjectIDs: deletingProjectIDs,
+                                    deletingWorkspaceIDs: deletingWorkspaceIDs,
+                                    onAction: onAction,
+                                    onRequestRename: onRequestRename,
+                                    onRequestDeletion: onRequestDeletion,
+                                    onSelect: onSelectSidebarResource,
+                                    onOpenWorkspace: onOpenSidebarWorkspace,
+                                    onFocusTask: { taskID in
+                                        Self.revealTask(taskID, in: &sidebarTree)
+                                        DispatchQueue.main.async {
+                                            withAnimation(WarrenMotion.animation(
+                                                .stateChange,
+                                                reduceMotion: reduceMotion
+                                            )) {
+                                                proxy.scrollTo("task.\(taskID.description)")
+                                            }
+                                        }
+                                    },
+                                    onRetry: onRetrySidebarHost
+                                )
                             }
-                        },
-                        onRequestTerminalGroupCreate: onRequestTerminalGroupCreate,
-                        onRequestTerminalGroupEdit: onRequestTerminalGroupEdit,
-                        onAction: onAction,
-                        onRequestRename: onRequestRename,
-                        onRequestDeletion: onRequestDeletion
-                    )
+                        } else {
+                            WarrenDesktopSidebarRows(
+                            taskGroups: projection.taskGroups,
+                            groups: projection.groups,
+                            terminalGroups: projection.terminalGroups.map {
+                                WarrenDesktopTerminalGroup(
+                                    group: $0,
+                                    sessions: projection.sessions(in: $0.id)
+                                )
+                            },
+                            workspaceActivitySummaries: projection.workspaceActivitySummaries,
+                            activeWorkspaceIDs: projection.activeWorkspaceIDs,
+                            // Active Sessions lives in the dedicated shortcut
+                            // switcher; the sidebar stays focused on navigation.
+                            showsActiveSessions: false,
+                            showsTasks: showsTasks,
+                            tree: $sidebarTree,
+                            isCollapsed: sidebarState.isCollapsed,
+                            selection: selection,
+                            selectedTabID: selectedTabID,
+                            deletingProjectIDs: deletingProjectIDs,
+                            deletingWorkspaceIDs: deletingWorkspaceIDs,
+                            endpointCapabilities: endpointCapabilities,
+                            isInteractionDisabled: !projection.isConnected,
+                            onAddProject: { onAction(.addProject) },
+                            onRequestTaskCreate: onRequestTaskCreate,
+                            onFocusTask: { taskID in
+                                Self.revealTask(taskID, in: &sidebarTree)
+                                DispatchQueue.main.async {
+                                    withAnimation(WarrenMotion.animation(
+                                        .stateChange,
+                                        reduceMotion: reduceMotion
+                                    )) {
+                                        proxy.scrollTo(
+                                            "task.\(taskID.description)"
+                                        )
+                                    }
+                                }
+                            },
+                            onRequestTerminalGroupCreate: onRequestTerminalGroupCreate,
+                            onRequestTerminalGroupEdit: onRequestTerminalGroupEdit,
+                            onAction: onAction,
+                            onRequestRename: onRequestRename,
+                            onRequestDeletion: onRequestDeletion
+                            )
+                        }
+                    }
                     .padding(.vertical, WarrenSpacing.compact)
                 }
+                .onChange(of: sidebarResourceSelection) { newSelection in
+                    guard usesSidebarHostSections,
+                          case let .workspace(reference)? = newSelection else {
+                        return
+                    }
+                    // A nil anchor asks ScrollViewReader to make an off-screen
+                    // row visible with the smallest required movement. It
+                    // leaves an already visible row where it is instead of
+                    // recentering the sidebar for every selection change.
+                    DispatchQueue.main.async {
+                        withAnimation(WarrenMotion.animation(
+                            .stateChange,
+                            reduceMotion: reduceMotion
+                        )) {
+                            proxy.scrollTo(
+                                "host.\(reference.endpointID).workspace.\(reference.id.description)"
+                            )
+                        }
+                    }
+                }
                 .onChange(of: selection) { newSelection in
-                    guard case let .workspace(workspaceID)? = newSelection else { return }
+                    guard !usesSidebarHostSections,
+                          case let .workspace(workspaceID)? = newSelection else {
+                        return
+                    }
                     let workspace = projection.groups
                         .flatMap(\.workspaces)
                         .first(where: { $0.id == workspaceID })
@@ -164,6 +287,40 @@ struct WarrenDesktopSidebar: View {
                 .fill(tokens.chromeDivider)
                 .frame(width: WarrenSpacing.hairline)
                 .zIndex(2)
+        }
+    }
+
+    @ViewBuilder
+    private func displayConfigurationNotice(
+        _ message: String,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        if sidebarState.isCollapsed {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(tokens.warning)
+                .frame(width: 32, height: 28)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .help(message)
+                .accessibilityLabel("Display configuration warning")
+                .accessibilityValue(message)
+        } else {
+            HStack(alignment: .top, spacing: WarrenSpacing.xs) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(tokens.warning)
+                    .accessibilityHidden(true)
+                Text(message)
+                    .font(WarrenTypography.navigationMeta)
+                    .foregroundStyle(tokens.warning)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, WarrenSpacing.compact)
+            .padding(.vertical, WarrenSpacing.xs)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Display configuration warning")
+            .accessibilityValue(message)
         }
     }
 

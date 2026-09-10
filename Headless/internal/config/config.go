@@ -23,10 +23,167 @@ type Endpoint struct {
 	Type      string `json:"type,omitempty"`
 	HostID    string `json:"host_id,omitempty"`
 	RouteID   string `json:"route_id,omitempty"`
+	ClientID  string `json:"client_id,omitempty"`
+	// RefreshToken and the route fields are persisted by native clients. Keep
+	// them in the shared Go model so CLI display writes cannot discard metadata
+	// it does not otherwise interpret.
+	RefreshToken    string `json:"refresh_token,omitempty"`
+	DirectURL       string `json:"direct_url,omitempty"`
+	RelayURL        string `json:"relay_url,omitempty"`
+	RoutePreference string `json:"route_preference,omitempty"`
 }
+
+// DisplayConfig is the client-local, ordered set of endpoint aliases shown
+// together by the Desktop. It intentionally stores aliases only;
+// endpoint credentials and route metadata remain in Config.Endpoints.
+type DisplayConfig struct {
+	Version   int      `json:"version"`
+	Endpoints []string `json:"endpoints"`
+}
+
 type Config struct {
 	Current   string              `json:"current"`
 	Endpoints map[string]Endpoint `json:"endpoints"`
+	Display   *DisplayConfig      `json:"display,omitempty"`
+}
+
+// UnmarshalJSON accepts the preview sidebar field as a read-only migration
+// path. Writes use Config.Display and therefore emit only the public display
+// field.
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type configWire struct {
+		Current       string              `json:"current"`
+		Endpoints     map[string]Endpoint `json:"endpoints"`
+		Display       *DisplayConfig      `json:"display"`
+		LegacySidebar *DisplayConfig      `json:"sidebar"`
+	}
+	var wire configWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	c.Current = wire.Current
+	c.Endpoints = wire.Endpoints
+	c.Display = wire.Display
+	if c.Display == nil {
+		c.Display = wire.LegacySidebar
+	}
+	return nil
+}
+
+const DisplayConfigVersion = 1
+
+// EffectiveDisplay returns the ordered aliases that should be visible to a
+// client. A missing display section preserves the pre-display single-current
+// behavior. The synthetic local alias is always valid, even when it has no
+// explicit row in Endpoints.
+func (c Config) EffectiveDisplay() ([]string, error) {
+	if c.Display == nil {
+		current := strings.TrimSpace(c.Current)
+		if current == "" {
+			current = "local"
+		}
+		return []string{current}, nil
+	}
+	if c.Display.Version != 0 && c.Display.Version != DisplayConfigVersion {
+		return nil, fmt.Errorf("unsupported display config version: %d", c.Display.Version)
+	}
+	aliases, err := normalizeDisplayAliases(c.Display.Endpoints)
+	if err != nil {
+		return nil, err
+	}
+	if len(aliases) == 0 {
+		return nil, errors.New("display endpoint set cannot be empty")
+	}
+	for _, alias := range aliases {
+		if alias != "local" {
+			if _, ok := c.Endpoints[alias]; !ok {
+				return nil, fmt.Errorf("display endpoint not found: %s", alias)
+			}
+		}
+	}
+	return aliases, nil
+}
+
+// NormalizeDisplay validates and canonicalizes an explicitly configured
+// display set. Current remains an independent foreground-connection choice;
+// switching it must never add an alias to Display.
+func (c *Config) NormalizeDisplay() error {
+	if c.Endpoints == nil {
+		c.Endpoints = map[string]Endpoint{}
+	}
+	if c.Display == nil {
+		if strings.TrimSpace(c.Current) == "" {
+			c.Current = "local"
+		}
+		return nil
+	}
+	if c.Display.Version == 0 {
+		c.Display.Version = DisplayConfigVersion
+	}
+	if c.Display.Version != DisplayConfigVersion {
+		return fmt.Errorf("unsupported display config version: %d", c.Display.Version)
+	}
+	aliases, err := normalizeDisplayAliases(c.Display.Endpoints)
+	if err != nil {
+		return err
+	}
+	if len(aliases) == 0 {
+		return errors.New("display endpoint set cannot be empty")
+	}
+	for _, alias := range aliases {
+		if alias != "local" {
+			if _, ok := c.Endpoints[alias]; !ok {
+				return fmt.Errorf("display endpoint not found: %s", alias)
+			}
+		}
+	}
+	c.Display.Endpoints = aliases
+	current := strings.TrimSpace(c.Current)
+	if current == "" {
+		current = "local"
+	}
+	if current != "local" {
+		if _, ok := c.Endpoints[current]; !ok {
+			return fmt.Errorf("endpoint not found: %s", current)
+		}
+	}
+	// Keep the persisted marker canonical even when an older caller passed
+	// surrounding whitespace. Display aliases are validated independently, so
+	// a valid current endpoint does not need to appear in that list.
+	c.Current = current
+	return nil
+}
+
+func normalizeDisplayAliases(values []string) ([]string, error) {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, raw := range values {
+		alias := strings.TrimSpace(raw)
+		if alias == "" {
+			return nil, errors.New("display endpoint name cannot be empty")
+		}
+		if alias != raw {
+			return nil, fmt.Errorf("display endpoint name must not have surrounding whitespace: %q", raw)
+		}
+		if strings.ContainsAny(alias, "\r\n\x00") {
+			return nil, fmt.Errorf("invalid display endpoint name: %q", alias)
+		}
+		if _, exists := seen[alias]; exists {
+			continue
+		}
+		seen[alias] = struct{}{}
+		result = append(result, alias)
+	}
+	return result, nil
+}
+
+func containsDisplayAlias(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func DefaultPath() string {
@@ -79,6 +236,11 @@ func saveUnlocked(path string, value Config) error {
 	}
 	if value.Endpoints == nil {
 		value.Endpoints = map[string]Endpoint{}
+	}
+	if value.Display != nil {
+		if err := value.NormalizeDisplay(); err != nil {
+			return err
+		}
 	}
 	if len(value.Endpoints) > 0 {
 		endpoints := make(map[string]Endpoint, len(value.Endpoints))

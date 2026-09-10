@@ -37,7 +37,7 @@ const (
 	// recovery.
 	openCodeCacheCompactionLines = 64
 	openCodeCacheCompactionBytes = 2 * 1024 * 1024
-	openCodeInitialPollLimit   = 64
+	openCodeInitialPollLimit     = 64
 )
 
 var openCodeSessionReuseFlags = map[string]bool{
@@ -1352,12 +1352,13 @@ type openCodeMessageSnapshot struct {
 }
 
 type openCodePartSnapshot struct {
-	Type        string
-	Text        string
-	CallID      string
-	Tool        string
-	State       openCodeToolState
-	CallEmitted bool
+	Type                  string
+	Text                  string
+	CallID                string
+	Tool                  string
+	State                 openCodeToolState
+	CallEmitted           bool
+	StructuredFingerprint string
 }
 
 type openCodeParser struct {
@@ -1402,7 +1403,14 @@ func (p *openCodeParser) parseOpenCode(line []byte) []api.AgentEvent {
 		if part.ID == "" {
 			continue
 		}
-		current.Parts[part.ID] = openCodePartSnapshot{Type: part.Type, Text: part.Text, CallID: part.CallID, Tool: part.Tool, State: part.State}
+		current.Parts[part.ID] = openCodePartSnapshot{
+			Type:                  part.Type,
+			Text:                  part.Text,
+			CallID:                part.CallID,
+			Tool:                  part.Tool,
+			State:                 part.State,
+			StructuredFingerprint: openCodeStructuredFingerprint(part.State.Input),
+		}
 	}
 	current.Error = openCodeErrorContent(envelope.Error, p.contentLimit)
 	model := envelope.ModelID
@@ -1506,19 +1514,45 @@ func (p *openCodeParser) parseOpenCode(line []byte) []api.AgentEvent {
 			}
 
 			if toolName == "todowrite" {
-				if !callEmitted && (strings.ToLower(part.State.Status) != "pending" || openCodeToolInputPresent(part.State.Input)) {
+				structuredChanged := !existed || old.StructuredFingerprint != openCodeStructuredFingerprint(part.State.Input)
+				if (!callEmitted || structuredChanged) && (strings.ToLower(part.State.Status) != "pending" || openCodeToolInputPresent(part.State.Input)) {
 					input, _ := rawToAny(part.State.Input, p.contentLimit).(map[string]any)
+					payload := claudeTodoPayloadWithLimit(input, p.contentLimit)
 					events = append(events, api.AgentEvent{
 						Provider:  openCodeProvider,
 						ID:        "opencode-todos",
 						Type:      "todo",
 						CallID:    callID,
-						Payload:   claudeTodoPayload(input),
+						Content:   stringValue(payload["summary"]),
+						Payload:   payload,
 						Timestamp: timestamp,
 					})
 					callEmitted = true
 				}
 				currentPart.CallEmitted = callEmitted
+				currentPart.StructuredFingerprint = openCodeStructuredFingerprint(part.State.Input)
+				current.Parts[part.ID] = currentPart
+				continue
+			}
+
+			if toolName == "update_plan" || toolName == "plan" {
+				structuredChanged := !existed || old.StructuredFingerprint != openCodeStructuredFingerprint(part.State.Input)
+				if (!callEmitted || structuredChanged) && (strings.ToLower(part.State.Status) != "pending" || openCodeToolInputPresent(part.State.Input)) {
+					input, _ := rawToAny(part.State.Input, p.contentLimit).(map[string]any)
+					payload := normalizeStructuredPlanPayload(input, "opencode-plan", p.contentLimit)
+					events = append(events, api.AgentEvent{
+						Provider:  openCodeProvider,
+						ID:        stringValue(payload["planId"]),
+						Type:      "plan",
+						CallID:    callID,
+						Content:   stringValue(payload["summary"]),
+						Payload:   payload,
+						Timestamp: timestamp,
+					})
+					callEmitted = true
+				}
+				currentPart.CallEmitted = callEmitted
+				currentPart.StructuredFingerprint = openCodeStructuredFingerprint(part.State.Input)
 				current.Parts[part.ID] = currentPart
 				continue
 			}
@@ -1677,6 +1711,14 @@ func openCodeToolInputPresent(raw json.RawMessage) bool {
 		return parsed != nil
 	}
 	return true
+}
+
+func openCodeStructuredFingerprint(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	hash := sha256.Sum256(raw)
+	return hex.EncodeToString(hash[:])
 }
 
 func openCodeFinishReason(finish string) (string, bool) {

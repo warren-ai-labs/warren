@@ -8,6 +8,7 @@ import WarrenDomain
 public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
     public var expandedTaskIDs: Set<TaskID>
     public var expandedProjectIDs: Set<ProjectID>
+    public var terminalGroupsCollapsed: Bool
     public var tasksCollapsed: Bool
     public var projectsCollapsed: Bool
     public var activeSessionsCollapsed: Bool
@@ -16,6 +17,7 @@ public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
     public init(
         expandedTaskIDs: Set<TaskID> = [],
         expandedProjectIDs: Set<ProjectID> = [],
+        terminalGroupsCollapsed: Bool = false,
         tasksCollapsed: Bool = false,
         projectsCollapsed: Bool = false,
         activeSessionsCollapsed: Bool = false,
@@ -23,6 +25,7 @@ public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
     ) {
         self.expandedTaskIDs = expandedTaskIDs
         self.expandedProjectIDs = expandedProjectIDs
+        self.terminalGroupsCollapsed = terminalGroupsCollapsed
         self.tasksCollapsed = tasksCollapsed
         self.projectsCollapsed = projectsCollapsed
         self.activeSessionsCollapsed = activeSessionsCollapsed
@@ -45,6 +48,7 @@ public enum WarrenDesktopSidebarTreePersistence {
         return WarrenDesktopSidebarTreeState(
             expandedTaskIDs: Set(expandedTasks),
             expandedProjectIDs: Set(expanded),
+            terminalGroupsCollapsed: defaults.bool(forKey: base + ".terminal-groups.collapsed"),
             tasksCollapsed: defaults.bool(forKey: base + ".tasks.collapsed"),
             projectsCollapsed: defaults.bool(forKey: base + ".collapsed"),
             activeSessionsCollapsed: defaults.bool(forKey: base + ".active-sessions.collapsed"),
@@ -67,6 +71,10 @@ public enum WarrenDesktopSidebarTreePersistence {
                 .map(\.description)
                 .sorted(),
             forKey: base + ".expanded"
+        )
+        defaults.set(
+            state.terminalGroupsCollapsed,
+            forKey: base + ".terminal-groups.collapsed"
         )
         defaults.set(state.tasksCollapsed, forKey: base + ".tasks.collapsed")
         defaults.set(

@@ -123,6 +123,77 @@ warren session send SESSION_ID "Run a shell command"
 warren session read SESSION_ID --timeout 8s
 ```
 
+### Multi-host Desktop sidebar
+
+The macOS Desktop can show Project and Workspace rosters from several
+configured Endpoints in one sidebar. This is an opt-in, client-local view; the
+Host daemon remains the authority for every Project, Workspace, Session, and
+Host-local ordering. Web and iOS clients continue to use their existing
+single-Endpoint behavior.
+
+The optional `display` section in `~/.warren/config.json` stores only an
+ordered list of Endpoint aliases:
+
+```json
+{
+  "current": "local",
+  "endpoints": {
+    "build-vps": {
+      "name": "build-vps",
+      "url": "https://build.example.test:8789",
+      "token": "..."
+    }
+  },
+  "display": {
+    "version": 1,
+    "endpoints": ["local", "build-vps"]
+  }
+}
+```
+
+URLs, bearer tokens, SSH metadata, and Relay credentials stay in the Endpoint
+catalog and are never duplicated in `display`. A missing section preserves the
+legacy single-current view. `local` is the synthetic local-daemon alias and is
+valid even when it is not present in `endpoints`. The current Endpoint is
+independent from the explicit set: switching or connecting to an Endpoint does
+not add it to the sidebar. An explicit set cannot be empty.
+
+Manage the set with local configuration commands (these commands do not open a
+Host connection):
+
+```sh
+warren display list
+warren display add staging --before build-vps
+warren display remove staging
+warren display move build-vps --before local
+warren display set local build-vps staging
+warren display reset
+```
+
+Use `--json` for an object containing the ordered `endpoints`, `current`, and
+configuration `version`; `--quiet` prints one alias per line. `reset` removes
+the explicit section and returns to the compatible single-current behavior.
+Removing an Endpoint also removes its display alias and selects a remaining
+Endpoint when necessary. Endpoint and display writes use the same sidecar lock,
+temporary file, and `0600` permissions, so concurrent CLI and Desktop updates
+do not overwrite each other's catalog fields.
+
+The Desktop execution-server menu has an `Add` / `Sidebar` control for each
+Endpoint. It adds or removes that Endpoint without switching the foreground
+connection. Use the CLI when the sidebar order needs to change.
+
+When the set contains multiple aliases, the macOS Desktop keeps its existing
+interactive connection for the current Endpoint and up to seven roster-only
+background Endpoints (an eight-connection soft limit). Background connections
+consume roster snapshots and deltas only: they never call `session.subscribe`,
+`session.focus`, or `session.resize`, create a terminal surface, or claim a
+control lease. A failed Host keeps its last in-memory Project/Workspace roster
+when available and shows a bounded error with a retry action; other Host
+sections remain usable. Clicking a background Project or Workspace first
+promotes its Endpoint, then uses the normal foreground terminal flow.
+Project/Workspace writes are sent only after that Endpoint is active; Host order
+is changed with the CLI rather than by dragging rows in the Desktop.
+
 ### Owned Relay
 
 The daemon token is the Host Secret for an enrolled Relay Host. The Relay
@@ -319,6 +390,16 @@ Host also shows the actual WebSocket connection error. Protocol versions must
 match exactly; different build versions alone do not imply incompatibility.
 An explicit protocol or terminal-format incompatibility stops automatic retries.
 Update the incompatible client or Host, then choose **Retry connection**.
+
+Headless also advertises each reachable Host on the local link as the
+`_warren._tcp` DNS-SD service. The TXT record contains the Host ID, display
+name, protocol/build metadata, pairing state, and non-loopback address
+candidates; it never contains the daemon token or workspace paths. The iOS
+client browses this service and races the advertised candidates with
+`GET /healthz`, updating a known Host's direct address after the response's
+Host ID matches. Discovery is best-effort, is disabled automatically when the
+machine has no usable network interface, and is not advertised when the daemon
+is bound only to a loopback listener.
 
 The Web UI and `/v1/ws` share port 8789; the local browser uses `http://127.0.0.1:8789/#t=<token>` and LAN devices use `https://<host-LAN-IP>:8788/#t=<token>` after trusting the local CA (see "LAN HTTPS"). Public Access is managed by the daemon through the same Relay route API used by owner access: `GET /v1/public-access` reports the Relay URL, Host ID, route state, and credential-free Public Endpoint; `POST /v1/public-access/test` validates route metadata without changing the enabled intent; `POST /v1/public-access/enable` and `/disable` configure the Relay route. `POST /v1/public-access/reset` disables the route and clears local route metadata while retaining Host enrollment. Empty-workspace entry defaults are host settings: `autoOpenShell` and `autoStartAI` both default to `false`. Git worktree import is project-scoped: `Project.autoImportGitWorktrees` is opt-in, and `project.worktrees` plus `project.worktrees.import` expose the one-time selector path; `project.autoImportGitWorktrees` enables immediate, non-interactive import of all currently existing external worktrees for that project.
 

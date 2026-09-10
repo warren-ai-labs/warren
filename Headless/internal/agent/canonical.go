@@ -176,9 +176,9 @@ func canonicalToolName(provider, raw string) string {
 		return "ask_user_question"
 	case "permissionrequest", "permission_request":
 		return "permission_request"
-	case "update_plan":
+	case "update_plan", "updateplan", "plan_update", "planupdate":
 		return "update_plan"
-	case "todowrite":
+	case "todowrite", "todo_write", "write_todos", "update_todos":
 		return "todowrite"
 	}
 	if name == "apply_patch" {
@@ -240,57 +240,119 @@ func eventIsRenderable(e api.AgentEvent) bool {
 
 // isCompactionContext reports whether content represents an agent history compaction or checkpoint.
 func isCompactionContext(content string) bool {
-	trimmed := strings.TrimSpace(content)
-	if strings.HasPrefix(trimmed, "# Resuming from a compaction") {
+	trimmed := strings.TrimSpace(strings.TrimPrefix(content, "\ufeff"))
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "# resuming from a compaction") {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "{{ CHECKPOINT") || strings.Contains(trimmed, "The earlier parts of this conversation have been truncated") {
+	if strings.HasPrefix(lower, "{{ checkpoint") || strings.Contains(lower, "the earlier parts of this conversation have been truncated") {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "<summary>") || strings.HasPrefix(trimmed, "<compact>") || strings.HasPrefix(trimmed, "<compaction>") {
+	if strings.HasPrefix(lower, "<summary>") || strings.HasPrefix(lower, "<compact>") || strings.HasPrefix(lower, "<compaction>") {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "<CONTEXT_SUMMARY>") || strings.HasPrefix(trimmed, "<context_summary>") {
+	if strings.HasPrefix(lower, "<context_summary>") {
 		return true
 	}
 	return false
 }
 
+// isInterruptionContext reports provider sentinel text that marks a turn as
+// aborted. It is deliberately separate from system-injected context because
+// the mobile timeline should show a small interruption marker rather than hide
+// the row as generic instructions.
+func isInterruptionContext(content string) bool {
+	trimmed := strings.TrimSpace(strings.TrimPrefix(content, "\ufeff"))
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "[request interrupted") || strings.Contains(lower, "<turn_aborted>")
+}
+
+// compactionSummaryText removes provider wrapper tags while preserving the
+// actual context text. The wrapper is transport markup, not useful content for
+// a collapsed summary card.
+func compactionSummaryText(content string) string {
+	value := strings.TrimSpace(strings.TrimPrefix(content, "\ufeff"))
+	lower := strings.ToLower(value)
+	for _, tag := range []string{"context_summary", "summary", "compact", "compaction"} {
+		open := "<" + tag + ">"
+		close := "</" + tag + ">"
+		if !strings.HasPrefix(lower, open) {
+			continue
+		}
+		if end := strings.Index(lower, close); end >= len(open) {
+			if inner := strings.TrimSpace(value[len(open):end]); inner != "" {
+				return inner
+			}
+		}
+	}
+	// Antigravity can put the context summary before a user request in one
+	// envelope. Prefer that bounded section over the following prompt.
+	if start := strings.Index(lower, "<context_summary>"); start >= 0 {
+		start += len("<context_summary>")
+		if end := strings.Index(lower[start:], "</context_summary>"); end >= 0 {
+			if inner := strings.TrimSpace(value[start : start+end]); inner != "" {
+				return inner
+			}
+		}
+	}
+	return value
+}
+
 // isSystemInjectedUserContext reports whether a message marked with user role
 // was actually injected by the CLI, environment, or system rather than authored by the user.
 func isSystemInjectedUserContext(content string) bool {
-	trimmed := strings.TrimSpace(content)
+	trimmed := strings.TrimSpace(strings.TrimPrefix(content, "\ufeff"))
+	lower := strings.ToLower(trimmed)
 	if isCompactionContext(trimmed) {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "<environment_context>") || strings.HasPrefix(trimmed, "<environment_context") {
+	if strings.HasPrefix(lower, "<environment_context>") || strings.HasPrefix(lower, "<environment_context") {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "# AGENTS.md") || strings.HasPrefix(trimmed, "<RULE[") {
+	if strings.HasPrefix(lower, "# agents.md") || strings.HasPrefix(lower, "<rule[") {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "<collaboration_mode>") || strings.HasPrefix(trimmed, "<collaboration_mode") {
+	if strings.HasPrefix(lower, "<collaboration_mode>") || strings.HasPrefix(lower, "<collaboration_mode") {
 		return true
 	}
-	if strings.Contains(trimmed, "<permissions instructions>") || strings.Contains(trimmed, "<permissions_instructions>") {
+	if strings.Contains(lower, "<permissions instructions>") || strings.Contains(lower, "<permissions_instructions>") {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "<skill>") || strings.HasPrefix(trimmed, "<skill ") || strings.HasPrefix(trimmed, "<skills>") || strings.HasPrefix(trimmed, "<skills_instructions>") {
+	if strings.HasPrefix(lower, "<skill>") || strings.HasPrefix(lower, "<skill ") || strings.HasPrefix(lower, "<skills>") || strings.HasPrefix(lower, "<skills_instructions>") {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "<turn_aborted>") || strings.Contains(trimmed, "<turn_aborted>") {
+	if isInterruptionContext(trimmed) {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "<user_instructions>") || strings.HasPrefix(trimmed, "<system_instructions>") || strings.HasPrefix(trimmed, "<system_message>") {
+	if strings.HasPrefix(lower, "<user_instructions>") || strings.HasPrefix(lower, "<system_instructions>") || strings.HasPrefix(lower, "<system_message>") {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "<identity>") || strings.HasPrefix(trimmed, "<user_information>") || strings.HasPrefix(trimmed, "<user_rules>") {
+	if strings.HasPrefix(lower, "<identity>") || strings.HasPrefix(lower, "<user_information>") || strings.HasPrefix(lower, "<user_rules>") {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "The following is a <SYSTEM_MESSAGE>") {
+	if strings.HasPrefix(lower, "the following is a <system_message>") {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "[Request interrupted") {
+	if strings.HasPrefix(lower, "[request interrupted") {
+		return true
+	}
+	// Claude Code records several provider-generated command and reminder
+	// envelopes as user-role text. They are protocol metadata, not authored
+	// conversation, and must not become a mobile user bubble.
+	for _, prefix := range []string{
+		"<local-command-",
+		"<command-name>",
+		"<command-message>",
+		"<command-stdout>",
+		"<system-reminder",
+		"<task-notification",
+		"<ide_",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	if strings.HasPrefix(lower, "<user_request>") || strings.Contains(lower, "<additional_metadata>") {
 		return true
 	}
 	return false
@@ -301,16 +363,29 @@ func canonicalizeAgentEvent(e *api.AgentEvent) {
 	if e == nil {
 		return
 	}
+	if isInterruptionContext(e.Content) {
+		e.Type = "system"
+		e.Role = "system"
+		e.StopReason = "interrupted"
+		return
+	}
 	if e.Type == "user" {
 		if isCompactionContext(e.Content) {
+			summary := compactionSummaryText(e.Content)
+			if summary == "" {
+				summary = "History compacted"
+			}
 			e.Type = "compaction"
 			e.Role = "system"
 			e.Content = "History compacted"
 			if e.Payload == nil {
-				e.Payload = map[string]any{
-					"compactionId": firstNonEmpty(e.ID, "compaction"),
-					"summary":      "History compacted",
-				}
+				e.Payload = make(map[string]any)
+			}
+			if _, ok := e.Payload["compactionId"]; !ok {
+				e.Payload["compactionId"] = firstNonEmpty(e.ID, "compaction")
+			}
+			if raw, ok := e.Payload["summary"].(string); !ok || strings.TrimSpace(raw) == "" || strings.EqualFold(strings.TrimSpace(raw), "History compacted") {
+				e.Payload["summary"] = summary
 			}
 		} else if isSystemInjectedUserContext(e.Content) {
 			e.Type = "system_instructions"
@@ -331,4 +406,3 @@ func compactRenderable(events []api.AgentEvent) []api.AgentEvent {
 	}
 	return out
 }
-

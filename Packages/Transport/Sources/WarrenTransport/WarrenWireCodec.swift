@@ -70,6 +70,18 @@ public struct WarrenWireCodec: Sendable {
     public let maxPayload: Int
     public let maxAtomicStatePayload: Int
 
+    /// The largest complete DENB envelope accepted by this codec. URLSession
+    /// uses this value as its binary WebSocket message budget so the transport
+    /// still admits a legal atomic-state snapshot without leaving a generous
+    /// 128 MiB allocation window.
+    public var maximumEnvelopeBytes: Int {
+        let payloadLimit = max(maxPayload, maxAtomicStatePayload)
+        let (headerAndPrefix, headerOverflow) = Self.binaryPrefixLength.addingReportingOverflow(maxHeader)
+        let (total, payloadOverflow) = headerAndPrefix.addingReportingOverflow(payloadLimit)
+        guard !headerOverflow, !payloadOverflow else { return Int.max }
+        return total
+    }
+
     public init(
         maxHeader: Int = WarrenWireCodec.defaultMaxHeader,
         maxPayload: Int = WarrenWireCodec.defaultMaxPayload,

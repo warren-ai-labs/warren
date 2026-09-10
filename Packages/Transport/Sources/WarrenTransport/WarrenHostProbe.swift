@@ -4,23 +4,31 @@ import Foundation
 public struct WarrenHostProbe: Equatable, Sendable {
     public let message: String
     public let isFailure: Bool
+    public let hostID: String?
 
-    public init(message: String, isFailure: Bool = false) {
+    public init(message: String, isFailure: Bool = false, hostID: String? = nil) {
         self.message = message
         self.isFailure = isFailure
+        self.hostID = hostID
     }
 
     public static func check(
         _ endpoint: WarrenRemoteEndpointConfiguration,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        expectedHostID: String? = nil,
+        timeout: TimeInterval = 5,
+        clientID: String? = nil
     ) async -> Self {
         guard !endpoint.isRelay, endpoint.ssh == nil,
               var url = URLComponents(string: endpoint.url) else {
             return Self(message: "Health probe unavailable for this route")
         }
-        if url.scheme == "ws" { url.scheme = "http" }
-        if url.scheme == "wss" { url.scheme = "https" }
-        guard ["http", "https"].contains(url.scheme), url.host != nil else {
+        switch url.scheme?.lowercased() {
+        case "ws": url.scheme = "http"
+        case "wss": url.scheme = "https"
+        default: break
+        }
+        guard ["http", "https"].contains(url.scheme?.lowercased()), url.host != nil else {
             return Self(message: "Invalid Host URL", isFailure: true)
         }
         // /healthz is public. Do not send catalog credentials or URL tokens.
@@ -34,8 +42,14 @@ public struct WarrenHostProbe: Equatable, Sendable {
             return Self(message: "Invalid Host URL", isFailure: true)
         }
         var request = URLRequest(url: healthURL, cachePolicy: .reloadIgnoringLocalCacheData)
-        request.timeoutInterval = 5
+        request.timeoutInterval = timeout
         request.httpShouldHandleCookies = false
+        if let clientID {
+            let value = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty {
+                request.setValue(value, forHTTPHeaderField: "X-Warren-Client-ID")
+            }
+        }
         do {
             let (data, response) = try await session.data(for: request)
             guard let response = response as? HTTPURLResponse else {
@@ -44,7 +58,7 @@ public struct WarrenHostProbe: Equatable, Sendable {
             guard response.statusCode == 200 else {
                 return Self(message: "Health probe: HTTP \(response.statusCode)", isFailure: true)
             }
-            return try decode(data)
+            return try decode(data, expectedHostID: expectedHostID)
         } catch let error as URLError where error.code == .timedOut {
             return Self(message: "Health probe timed out", isFailure: true)
         } catch is DecodingError {
@@ -55,17 +69,28 @@ public struct WarrenHostProbe: Equatable, Sendable {
         }
     }
 
-    static func decode(_ data: Data) throws -> Self {
+    static func decode(_ data: Data, expectedHostID: String? = nil) throws -> Self {
         struct Health: Decodable {
             let ok: Bool
             let ready: Bool?
             let version: String?
             let build: String?
+            let hostID: String?
+
+            enum CodingKeys: String, CodingKey {
+                case ok, ready, version, build
+                case hostID = "host_id"
+            }
         }
         let health = try JSONDecoder().decode(Health.self, from: data)
         let client = WarrenRemoteClient.protocolVersion
         let version = health.version ?? "unknown"
         let build = health.build ?? "unknown"
+        let expected = expectedHostID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hostID = health.hostID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let expected, !expected.isEmpty, hostID?.caseInsensitiveCompare(expected) != .orderedSame {
+            return Self(message: "Host identity mismatch", isFailure: true, hostID: hostID)
+        }
         let mismatch = health.version.map { !WarrenRemoteClient.compatibleProtocolVersion($0, with: client) } ?? false
         let status: String
         if mismatch {
@@ -75,6 +100,10 @@ public struct WarrenHostProbe: Equatable, Sendable {
         } else {
             status = "Host reachable · protocol \(version)"
         }
-        return Self(message: "\(status)\nHeadless \(build)", isFailure: mismatch || !health.ok || health.ready == false)
+        return Self(
+            message: "\(status)\nHeadless \(build)",
+            isFailure: mismatch || !health.ok || health.ready == false,
+            hostID: hostID
+        )
     }
 }

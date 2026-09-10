@@ -37,6 +37,49 @@ private struct TabBarTestHarness: View {
 }
 
 @MainActor
+private final class SidebarHostRowsTestState: ObservableObject {
+    @Published var hosts: [WarrenDesktopSidebarHostProjection]
+    let selection: WarrenDesktopSidebarResourceSelection?
+    @Published private(set) var selectedResources: [WarrenDesktopSidebarResourceSelection] = []
+
+    init(
+        hosts: [WarrenDesktopSidebarHostProjection],
+        selection: WarrenDesktopSidebarResourceSelection?
+    ) {
+        self.hosts = hosts
+        self.selection = selection
+    }
+
+    func recordSelection(_ selection: WarrenDesktopSidebarResourceSelection) {
+        selectedResources.append(selection)
+    }
+}
+
+private struct SidebarHostRowsTestHarness: View {
+    @ObservedObject var state: SidebarHostRowsTestState
+    let activeEndpointID: String
+
+    var body: some View {
+        WarrenDesktopSidebarHostRows(
+            hosts: state.hosts,
+            showsActiveOnly: false,
+            isCollapsed: false,
+            selection: state.selection,
+            activeEndpointID: activeEndpointID,
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            onAction: { _ in },
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in },
+            onSelect: { state.recordSelection($0) },
+            onOpenWorkspace: { _ in },
+            onFocusTask: { _ in },
+            onRetry: { _ in }
+        )
+    }
+}
+
+@MainActor
 private func makeTabBar(
     tabs: [ClientTab],
     selectedTabID: String?
@@ -160,6 +203,434 @@ final class WarrenDesktopTests: XCTestCase {
         )
 
         XCTAssertNotEqual(localColor, remoteColor)
+    }
+
+    func testHostResourceReferencesKeepEndpointScopeInIdentityAndNavigation() {
+        let projectID = ProjectID()
+        let local = WarrenDesktopHostResourceRef(endpointID: "local", id: projectID)
+        let remote = WarrenDesktopHostResourceRef(endpointID: "prod", id: projectID)
+
+        XCTAssertNotEqual(local, remote)
+        XCTAssertNotEqual(local.navigationKey, remote.navigationKey)
+        XCTAssertEqual(local.navigationKey, "local:\(projectID.description)")
+        XCTAssertEqual(remote.navigationKey, "prod:\(projectID.description)")
+    }
+
+    @MainActor
+    func testMultiHostSidebarScopesSelectionAndExpansionWhenIDsCollide() throws {
+        let sharedProjectID = ProjectID()
+        let sharedWorkspaceID = WorkspaceID()
+        let localHost = Host(name: "Local Mac")
+        let remoteHost = Host(name: "Build VPS")
+        let localProject = Project(
+            id: sharedProjectID,
+            hostID: localHost.id,
+            name: "Local Project",
+            rootPath: "/tmp/local"
+        )
+        let remoteProject = Project(
+            id: sharedProjectID,
+            hostID: remoteHost.id,
+            name: "Remote Project",
+            rootPath: "/tmp/remote"
+        )
+        let localWorkspace = Workspace(
+            id: sharedWorkspaceID,
+            projectID: sharedProjectID,
+            name: "Local Workspace",
+            path: "/tmp/local"
+        )
+        let remoteWorkspace = Workspace(
+            id: sharedWorkspaceID,
+            projectID: sharedProjectID,
+            name: "Remote Workspace",
+            path: "/tmp/remote"
+        )
+        let localGroup = WarrenDesktopProjectGroup(
+            project: localProject,
+            workspaces: [localWorkspace]
+        )
+        let remoteGroup = WarrenDesktopProjectGroup(
+            project: remoteProject,
+            workspaces: [remoteWorkspace]
+        )
+        let scopedSelection = WarrenDesktopSidebarResourceSelection.project(
+            WarrenDesktopHostResourceRef(endpointID: "local", id: sharedProjectID)
+        )
+        let recorder = WarrenSemanticRecorder()
+        let root = WarrenDesktopRoot(
+            projection: WarrenDesktopProjection(
+                host: remoteHost,
+                groups: [remoteGroup],
+                connectionState: .attached
+            ),
+            navigation: WarrenDesktopNavigationState(selection: .project(sharedProjectID)),
+            endpointOptions: [
+                .init(id: "local", label: "Local", isLocal: true),
+                .init(id: "remote", label: "Remote"),
+            ],
+            selectedEndpointID: "remote",
+            sidebarHostProjections: [
+                WarrenDesktopSidebarHostProjection(
+                    endpointID: "local",
+                    endpointLabel: "Local",
+                    host: localHost,
+                    connectionState: .attached,
+                    projectGroups: [localGroup]
+                ),
+                WarrenDesktopSidebarHostProjection(
+                    endpointID: "remote",
+                    endpointLabel: "Remote",
+                    host: remoteHost,
+                    connectionState: .attached,
+                    projectGroups: [remoteGroup]
+                ),
+            ],
+            usesSidebarHostSections: true,
+            sidebarResourceSelection: scopedSelection,
+            persistenceEnabled: false
+        ) { context in
+            TestTerminalSurface(context: context)
+        }
+        .environment(\.colorScheme, .dark)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_280, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        let localID = "project.host.local.\(sharedProjectID.description)"
+        let remoteID = "project.host.remote.\(sharedProjectID.description)"
+        let localWorkspaceID = "workspace.host.local.\(sharedWorkspaceID.description)"
+        let remoteWorkspaceID = "workspace.host.remote.\(sharedWorkspaceID.description)"
+        let initialSnapshot = recorder.snapshot()
+        XCTAssertEqual(initialSnapshot.node(id: "sidebar.projects.hosts")?.value, "2 hosts")
+        guard let projectsHeader = initialSnapshot.node(id: "sidebar.projects.hosts"),
+              let localHostHeader = initialSnapshot.node(id: "host.local.toggle") else {
+            XCTFail("Multi-host sidebar must expose its Projects and Host headers")
+            return
+        }
+        XCTAssertEqual(
+            localHostHeader.frame.height,
+            Double(WarrenLayoutMetrics.sidebarHostHeaderHeight),
+            accuracy: 0.01
+        )
+        XCTAssertEqual(
+            localHostHeader.frame.y,
+            projectsHeader.frame.y + projectsHeader.frame.height + Double(WarrenSpacing.xxs),
+            accuracy: 0.01
+        )
+        XCTAssertTrue(initialSnapshot.node(id: localID)?.value?.contains("Expanded") == true)
+        XCTAssertTrue(initialSnapshot.node(id: remoteID)?.value?.contains("Collapsed") == true)
+        XCTAssertNotNil(initialSnapshot.node(id: localWorkspaceID))
+        XCTAssertNil(initialSnapshot.node(id: remoteWorkspaceID))
+
+        try recorder.perform(.press, on: "\(remoteID).toggle")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+        let expandedSnapshot = recorder.snapshot()
+        XCTAssertNotNil(expandedSnapshot.node(id: localWorkspaceID))
+        XCTAssertNotNil(expandedSnapshot.node(id: remoteWorkspaceID))
+
+        try recorder.perform(.press, on: "\(localID).toggle")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+        let collapsedSnapshot = recorder.snapshot()
+        XCTAssertNil(collapsedSnapshot.node(id: localWorkspaceID))
+        XCTAssertNotNil(collapsedSnapshot.node(id: remoteWorkspaceID))
+
+        try recorder.perform(.press, on: "host.local.toggle")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(recorder.snapshot().node(id: "host.local.toggle")?.value, "Collapsed")
+    }
+
+    @MainActor
+    func testMultiHostProjectPrimaryActionOnlyTogglesDisclosure() throws {
+        let localHost = Host(name: "Local Mac")
+        let remoteHost = Host(name: "Build VPS")
+        let project = Project(
+            hostID: localHost.id,
+            name: "Project",
+            rootPath: "/tmp/project"
+        )
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "Workspace",
+            path: "/tmp/project"
+        )
+        let group = WarrenDesktopProjectGroup(project: project, workspaces: [workspace])
+        let state = SidebarHostRowsTestState(
+            hosts: [
+                WarrenDesktopSidebarHostProjection(
+                    endpointID: "local",
+                    endpointLabel: "Local",
+                    host: localHost,
+                    connectionState: .attached,
+                    projectGroups: [group]
+                ),
+                WarrenDesktopSidebarHostProjection(
+                    endpointID: "remote",
+                    endpointLabel: "Remote",
+                    host: remoteHost,
+                    connectionState: .attached
+                ),
+            ],
+            selection: nil
+        )
+        let recorder = WarrenSemanticRecorder()
+        let root = SidebarHostRowsTestHarness(
+            state: state,
+            activeEndpointID: "local"
+        )
+        .environment(\.colorScheme, .dark)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .warrenSemanticObservationRoot(recorder: recorder)
+
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 320, height: 640)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        let projectID = "project.host.local.\(project.id.description)"
+        let workspaceID = "workspace.host.local.\(workspace.id.description)"
+        XCTAssertNil(recorder.snapshot().node(id: workspaceID))
+
+        try recorder.perform(.press, on: projectID)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        let snapshot = recorder.snapshot()
+        XCTAssertTrue(state.selectedResources.isEmpty)
+        XCTAssertTrue(snapshot.node(id: projectID)?.value?.contains("Expanded") == true)
+        XCTAssertNotNil(snapshot.node(id: workspaceID))
+    }
+
+    @MainActor
+    func testMultiHostSidebarRevealsTheScopedSelectionWhenItsRosterArrives() {
+        let sharedProjectID = ProjectID()
+        let sharedWorkspaceID = WorkspaceID()
+        let localHost = Host(name: "Local Mac")
+        let remoteHost = Host(name: "Build VPS")
+        let localProject = Project(
+            id: sharedProjectID,
+            hostID: localHost.id,
+            name: "Local Project",
+            rootPath: "/tmp/local"
+        )
+        let remoteProject = Project(
+            id: sharedProjectID,
+            hostID: remoteHost.id,
+            name: "Remote Project",
+            rootPath: "/tmp/remote"
+        )
+        let localGroup = WarrenDesktopProjectGroup(
+            project: localProject,
+            workspaces: [
+                Workspace(
+                    id: sharedWorkspaceID,
+                    projectID: sharedProjectID,
+                    name: "Local Workspace",
+                    path: "/tmp/local"
+                ),
+            ]
+        )
+        let remoteGroup = WarrenDesktopProjectGroup(
+            project: remoteProject,
+            workspaces: [
+                Workspace(
+                    id: sharedWorkspaceID,
+                    projectID: sharedProjectID,
+                    name: "Remote Workspace",
+                    path: "/tmp/remote"
+                ),
+            ]
+        )
+        let localEmpty = WarrenDesktopSidebarHostProjection(
+            endpointID: "local",
+            endpointLabel: "Local",
+            host: localHost,
+            connectionState: .attached
+        )
+        let remoteProjection = WarrenDesktopSidebarHostProjection(
+            endpointID: "remote",
+            endpointLabel: "Remote",
+            host: remoteHost,
+            connectionState: .attached,
+            projectGroups: [remoteGroup]
+        )
+        let state = SidebarHostRowsTestState(
+            hosts: [localEmpty, remoteProjection],
+            selection: .project(
+                WarrenDesktopHostResourceRef(
+                    endpointID: "local",
+                    id: sharedProjectID
+                )
+            )
+        )
+        let recorder = WarrenSemanticRecorder()
+        let root = SidebarHostRowsTestHarness(
+            state: state,
+            activeEndpointID: "local"
+        )
+        .environment(\.colorScheme, .dark)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .warrenSemanticObservationRoot(recorder: recorder)
+
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 320, height: 640)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        let localWorkspaceID = "workspace.host.local.\(sharedWorkspaceID.description)"
+        let remoteWorkspaceID = "workspace.host.remote.\(sharedWorkspaceID.description)"
+        let localProjectID = "project.host.local.\(sharedProjectID.description)"
+        XCTAssertNil(recorder.snapshot().node(id: localWorkspaceID))
+        XCTAssertNil(recorder.snapshot().node(id: remoteWorkspaceID))
+
+        state.hosts = [
+            WarrenDesktopSidebarHostProjection(
+                endpointID: "local",
+                endpointLabel: "Local",
+                host: localHost,
+                connectionState: .attached,
+                projectGroups: [localGroup]
+            ),
+            remoteProjection,
+        ]
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        let snapshot = recorder.snapshot()
+        XCTAssertTrue(snapshot.node(id: localProjectID)?.value?.contains("Expanded") == true)
+        XCTAssertNotNil(snapshot.node(id: localWorkspaceID))
+        XCTAssertNil(snapshot.node(id: remoteWorkspaceID))
+    }
+
+    @MainActor
+    func testSingleSidebarHostUsesLegacyProjectPresentation() throws {
+        let host = Host(name: "Local Mac")
+        let project = Project(
+            hostID: host.id,
+            name: "Project",
+            rootPath: "/tmp/project"
+        )
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "Workspace",
+            path: "/tmp/project"
+        )
+        let group = WarrenDesktopProjectGroup(
+            project: project,
+            workspaces: [workspace]
+        )
+        let recorder = WarrenSemanticRecorder()
+        let root = WarrenDesktopRoot(
+            projection: WarrenDesktopProjection(
+                host: host,
+                groups: [group],
+                connectionState: .attached
+            ),
+            navigation: WarrenDesktopNavigationState(selection: nil, selectedTabID: nil),
+            endpointOptions: [
+                .init(id: "local", label: "Local", isLocal: true),
+            ],
+            selectedEndpointID: "local",
+            sidebarHostProjections: [
+                WarrenDesktopSidebarHostProjection(
+                    endpointID: "local",
+                    endpointLabel: "Local",
+                    host: host,
+                    connectionState: .attached,
+                    projectGroups: [group]
+                ),
+            ],
+            usesSidebarHostSections: true,
+            persistenceEnabled: false
+        ) { context in
+            TestTerminalSurface(context: context)
+        }
+        .environment(\.colorScheme, .dark)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_280, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        let projectID = "project.host.local.\(project.id.description)"
+        let workspaceID = "workspace.host.local.\(workspace.id.description)"
+        let initialSnapshot = recorder.snapshot()
+        XCTAssertNil(initialSnapshot.node(id: "sidebar.projects.hosts"))
+        XCTAssertNil(initialSnapshot.node(id: "host.local.toggle"))
+        XCTAssertTrue(initialSnapshot.node(id: projectID)?.value?.contains("Collapsed") == true)
+        XCTAssertNil(initialSnapshot.node(id: workspaceID))
+
+        try recorder.perform(.press, on: "\(projectID).toggle")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        hostingView.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(recorder.snapshot().node(id: workspaceID))
+    }
+
+    func testMultiHostProjectsHeaderShowsTheCountOnHover() {
+        XCTAssertEqual(
+            WarrenDesktopSidebarHostsSectionPresentation.title(
+                hostCount: 2,
+                isHovered: false
+            ),
+            "PROJECTS · HOSTS"
+        )
+        XCTAssertEqual(
+            WarrenDesktopSidebarHostsSectionPresentation.title(
+                hostCount: 2,
+                isHovered: true
+            ),
+            "PROJECTS · 2"
+        )
+    }
+
+    func testHostTintAssignmentIsStableAcrossOrderAndResolvesCollisions() {
+        let aliases = (0..<64).map { "host-\($0)" }
+        let paletteCount = WarrenColorTokens.dark.hostSectionTints.count
+        let first = WarrenDesktopHostTint.indices(for: aliases, count: paletteCount)
+        let reordered = WarrenDesktopHostTint.indices(
+            for: aliases.reversed(),
+            count: paletteCount
+        )
+
+        XCTAssertEqual(first, reordered)
+        var pair: (String, String)?
+        for left in aliases {
+            for right in aliases where left < right {
+                guard WarrenDesktopHostTint.index(for: left, count: paletteCount)
+                        == WarrenDesktopHostTint.index(for: right, count: paletteCount) else {
+                    continue
+                }
+                pair = (left, right)
+                break
+            }
+            if pair != nil { break }
+        }
+        guard let pair else {
+            XCTFail("test aliases did not produce a palette collision")
+            return
+        }
+        let collisionAssignments = WarrenDesktopHostTint.indices(
+            for: [pair.0, pair.1],
+            count: paletteCount
+        )
+        XCTAssertNotEqual(collisionAssignments[pair.0], collisionAssignments[pair.1])
     }
 
     func testEndpointOptionsDefaultCapabilitiesFollowEndpointOwnership() {
@@ -3421,6 +3892,106 @@ final class WarrenDesktopTests: XCTestCase {
         )
     }
 
+    func testNavigationPersistenceIsolatedPerEndpointScope() throws {
+        let suiteName = "WarrenDesktopTests.navigation.scoped.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let sharedProjectID = ProjectID(rawValue: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!)
+        let sharedWorkspaceID = WorkspaceID(rawValue: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!)
+        let localState = WarrenDesktopNavigationState(
+            selection: .project(sharedProjectID),
+            selectedTabID: "local-tab",
+            memory: WarrenDesktopNavigationMemory(
+                workspaceByProjectID: [sharedProjectID.description: sharedWorkspaceID.description]
+            )
+        )
+        let remoteState = WarrenDesktopNavigationState(
+            selection: .workspace(sharedWorkspaceID),
+            selectedTabID: "remote-tab"
+        )
+
+        WarrenDesktopNavigationPersistence.save(localState, scope: "local", to: defaults)
+        WarrenDesktopNavigationPersistence.save(remoteState, scope: "prod", to: defaults)
+
+        XCTAssertEqual(
+            WarrenDesktopNavigationPersistence.restore(scope: "local", from: defaults),
+            localState
+        )
+        XCTAssertEqual(
+            WarrenDesktopNavigationPersistence.restore(scope: "prod", from: defaults),
+            remoteState
+        )
+        XCTAssertNotEqual(
+            WarrenDesktopNavigationPersistence.restore(scope: "local", from: defaults),
+            remoteState
+        )
+    }
+
+    func testTabOrdersAreIsolatedPerEndpointScope() throws {
+        let suiteName = "WarrenDesktopTests.navigation.scoped-tabs.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let workspaceKey = "00000000-0000-4000-8000-000000000003"
+        let localOrders = WarrenDesktopTabOrders(
+            workspace: [workspaceKey: ["local-a", "local-b"]]
+        )
+        let remoteOrders = WarrenDesktopTabOrders(
+            workspace: [workspaceKey: ["remote-a", "remote-b"]]
+        )
+
+        WarrenDesktopNavigationPersistence.saveTabOrders(localOrders, scope: "local", to: defaults)
+        WarrenDesktopNavigationPersistence.saveTabOrders(remoteOrders, scope: "prod", to: defaults)
+
+        XCTAssertEqual(
+            WarrenDesktopNavigationPersistence.restoreTabOrders(scope: "local", from: defaults),
+            localOrders
+        )
+        XCTAssertEqual(
+            WarrenDesktopNavigationPersistence.restoreTabOrders(scope: "prod", from: defaults),
+            remoteOrders
+        )
+    }
+
+    func testLegacyNavigationPersistenceMigratesToFirstRequestedScope() throws {
+        let suiteName = "WarrenDesktopTests.navigation.legacy-migration.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let projectID = ProjectID()
+        let state = WarrenDesktopNavigationState(
+            selection: .project(projectID),
+            selectedTabID: "legacy-tab",
+            memory: WarrenDesktopNavigationMemory(
+                workspaceByProjectID: [projectID.description: "workspace"]
+            )
+        )
+
+        WarrenDesktopNavigationPersistence.save(state, to: defaults)
+
+        XCTAssertEqual(
+            WarrenDesktopNavigationPersistence.restore(scope: "prod", from: defaults),
+            state
+        )
+        XCTAssertNil(
+            WarrenDesktopNavigationPersistence.restore(scope: "local", from: defaults)
+        )
+    }
+
+    func testHostTintAllocatorPreservesVisibleAssignmentsWhenAliasIsAdded() {
+        let allocator = WarrenDesktopHostTintAllocator()
+        let paletteCount = WarrenColorTokens.dark.hostSectionTints.count
+
+        allocator.update(endpointIDs: ["dev", "prod"], paletteCount: paletteCount)
+        let initial = allocator.assignments
+        allocator.update(
+            endpointIDs: ["dev", "prod", "staging"],
+            paletteCount: paletteCount
+        )
+
+        XCTAssertEqual(allocator.assignments["dev"], initial["dev"])
+        XCTAssertEqual(allocator.assignments["prod"], initial["prod"])
+        XCTAssertNotNil(allocator.assignments["staging"])
+    }
+
     func testSidebarTreePersistenceIsPerScopeAndRoundTrips() throws {
         let suiteName = "WarrenDesktopTests.sidebarTree.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -3428,6 +3999,7 @@ final class WarrenDesktopTests: XCTestCase {
         let state = WarrenDesktopSidebarTreeState(
             expandedTaskIDs: [TaskID(), TaskID()],
             expandedProjectIDs: [ProjectID(), ProjectID()],
+            terminalGroupsCollapsed: true,
             tasksCollapsed: true,
             projectsCollapsed: true,
             activeSessionsCollapsed: true,
@@ -3444,6 +4016,53 @@ final class WarrenDesktopTests: XCTestCase {
             WarrenDesktopSidebarTreePersistence.restore(scope: "server", defaults: defaults),
             WarrenDesktopSidebarTreeState()
         )
+    }
+
+    @MainActor
+    func testTerminalGroupsSectionHidesRowsWhenCollapsed() {
+        let host = WarrenDomain.Host(name: "Terminal Host")
+        let terminalGroup = TerminalGroup(hostID: host.id, name: "Operations")
+        let group = WarrenDesktopTerminalGroup(group: terminalGroup)
+
+        func snapshot(terminalGroupsCollapsed: Bool) -> WarrenSemanticSnapshot {
+            let recorder = WarrenSemanticRecorder()
+            let rows = WarrenDesktopSidebarRows(
+                taskGroups: [],
+                groups: [],
+                terminalGroups: [group],
+                workspaceActivitySummaries: [:],
+                tree: .constant(WarrenDesktopSidebarTreeState(
+                    terminalGroupsCollapsed: terminalGroupsCollapsed
+                )),
+                isCollapsed: false,
+                selection: nil,
+                deletingProjectIDs: [],
+                deletingWorkspaceIDs: [],
+                endpointCapabilities: .local,
+                isInteractionDisabled: false,
+                onAddProject: {},
+                onRequestTaskCreate: {},
+                onFocusTask: { _ in },
+                onRequestTerminalGroupCreate: {},
+                onRequestTerminalGroupEdit: { _ in },
+                onAction: { _ in },
+                onRequestRename: { _ in },
+                onRequestDeletion: { _ in }
+            )
+            .frame(width: 420, height: 500)
+            .warrenSemanticObservationRoot(recorder: recorder)
+            .environment(\.warrenSemanticRecorder, recorder)
+
+            let hostingView = NSHostingView(rootView: rows)
+            hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+            hostingView.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            return recorder.snapshot()
+        }
+
+        let terminalGroupID = "terminal-group.\(terminalGroup.id.description)"
+        XCTAssertNotNil(snapshot(terminalGroupsCollapsed: false).node(id: terminalGroupID))
+        XCTAssertNil(snapshot(terminalGroupsCollapsed: true).node(id: terminalGroupID))
     }
 
     func testProjectionActiveWorkspaceIDs() {

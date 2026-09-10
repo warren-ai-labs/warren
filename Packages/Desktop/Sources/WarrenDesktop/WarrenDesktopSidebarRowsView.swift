@@ -23,6 +23,10 @@ struct WarrenDesktopSidebarRows: View {
     /// dedicated Active Sessions switcher.
     let showsActiveSessions: Bool
     let showsTasks: Bool
+    /// Controls whether the current-host Projects/Workspaces tree is shown.
+    /// Multi-host mode reuses this view for current-host-only sections (Tasks
+    /// and Terminal Groups) and renders the scoped project tree separately.
+    let showsProjects: Bool
     @Binding var tree: WarrenDesktopSidebarTreeState
     let isCollapsed: Bool
     let selection: WarrenDesktopSidebarSelection?
@@ -49,6 +53,7 @@ struct WarrenDesktopSidebarRows: View {
         activeAgentGroups: [WarrenDesktopActiveAgentGroup] = [],
         showsActiveSessions: Bool = true,
         showsTasks: Bool = true,
+        showsProjects: Bool = true,
         tree: Binding<WarrenDesktopSidebarTreeState>,
         isCollapsed: Bool,
         selection: WarrenDesktopSidebarSelection?,
@@ -74,6 +79,7 @@ struct WarrenDesktopSidebarRows: View {
         self.activeAgentGroups = activeAgentGroups
         self.showsActiveSessions = showsActiveSessions
         self.showsTasks = showsTasks
+        self.showsProjects = showsProjects
         self._tree = tree
         self.isCollapsed = isCollapsed
         self.selection = selection
@@ -113,30 +119,32 @@ struct WarrenDesktopSidebarRows: View {
             if showsActiveSessions {
                 activeSessionsSection
             }
-            if !isCollapsed {
-                projectsSectionHeader
-            }
-            if groups.isEmpty && !isCollapsed {
-                noProjectsMessage
-            } else if tree.showsActiveOnly && visibleProjectGroups.isEmpty && !isCollapsed {
-                noActiveWorkspacesMessage
-            }
-            if isCollapsed || !tree.projectsCollapsed || hasPendingProjectDeletion {
-                ForEach(visibleProjectGroups) { group in
-                    projectRow(for: group)
-                    if isCollapsed
-                        || isProjectExpanded(group.project.id)
-                        || hasDeletingWorkspace(in: group.project.id) {
-                        ForEach(group.workspaces) { workspace in
-                            workspaceRow(
-                                workspace,
-                                in: group,
-                                taskName: taskName(for: workspace)
-                            )
+            if showsProjects {
+                if !isCollapsed {
+                    projectsSectionHeader
+                }
+                if groups.isEmpty && !isCollapsed {
+                    noProjectsMessage
+                } else if tree.showsActiveOnly && visibleProjectGroups.isEmpty && !isCollapsed {
+                    noActiveWorkspacesMessage
+                }
+                if isCollapsed || !tree.projectsCollapsed || hasPendingProjectDeletion {
+                    ForEach(visibleProjectGroups) { group in
+                        projectRow(for: group)
+                        if isCollapsed
+                            || isProjectExpanded(group.project.id)
+                            || hasDeletingWorkspace(in: group.project.id) {
+                            ForEach(group.workspaces) { workspace in
+                                workspaceRow(
+                                    workspace,
+                                    in: group,
+                                    taskName: taskName(for: workspace)
+                                )
+                            }
                         }
                     }
+                    .transition(.opacity)
                 }
-                .transition(.opacity)
             }
         }
         .coordinateSpace(name: WarrenSidebarRowsDragCoordinateSpace.name)
@@ -491,49 +499,53 @@ struct WarrenDesktopSidebarRows: View {
                     if !isCollapsed {
                         WarrenDesktopSidebarSectionHeader(
                             title: "Terminals",
+                            disclosureExpanded: !tree.terminalGroupsCollapsed,
                             actionImage: "plus",
                             actionLabel: "New terminal group",
                             actionEnabled: !isInteractionDisabled,
+                            onToggle: toggleTerminalGroups,
                             onAction: onRequestTerminalGroupCreate,
                             additionalActions: []
                         )
                     }
-                    if visibleTerminalGroups.isEmpty {
-                        if !isCollapsed {
-                            Text("No terminal groups")
-                                .font(WarrenTypography.supporting)
-                                .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
-                                .padding(.horizontal, WarrenSpacing.standard)
-                                .padding(.bottom, WarrenSpacing.compact)
-                        }
-                    } else {
-                        ScrollView(.vertical, showsIndicators: visibleTerminalGroups.count > 3) {
-                            LazyVStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                                ForEach(visibleTerminalGroups) { group in
-                                    WarrenDesktopTerminalGroupRow(
-                                        group: group,
-                                        isCollapsed: isCollapsed,
-                                        isSelected: selection == .terminalGroup(group.id),
-                                        isInteractionDisabled: isInteractionDisabled,
-                                        onSelect: { onAction(.selectTerminalGroup(group.id)) },
-                                        onRename: { onRequestTerminalGroupEdit(group.group) },
-                                        onSetHome: { onRequestTerminalGroupEdit(group.group) },
-                                        onDelete: {
-                                            onRequestDeletion(.terminalGroup(
-                                                group.group,
-                                                sessionCount: group.sessions.count
-                                            ))
-                                        }
-                                    )
+                    if !tree.terminalGroupsCollapsed || isCollapsed {
+                        if visibleTerminalGroups.isEmpty {
+                            if !isCollapsed {
+                                Text("No terminal groups")
+                                    .font(WarrenTypography.supporting)
+                                    .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
+                                    .padding(.horizontal, WarrenSpacing.standard)
+                                    .padding(.bottom, WarrenSpacing.compact)
+                            }
+                        } else {
+                            ScrollView(.vertical, showsIndicators: visibleTerminalGroups.count > 3) {
+                                LazyVStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                                    ForEach(visibleTerminalGroups) { group in
+                                        WarrenDesktopTerminalGroupRow(
+                                            group: group,
+                                            isCollapsed: isCollapsed,
+                                            isSelected: selection == .terminalGroup(group.id),
+                                            isInteractionDisabled: isInteractionDisabled,
+                                            onSelect: { onAction(.selectTerminalGroup(group.id)) },
+                                            onRename: { onRequestTerminalGroupEdit(group.group) },
+                                            onSetHome: { onRequestTerminalGroupEdit(group.group) },
+                                            onDelete: {
+                                                onRequestDeletion(.terminalGroup(
+                                                    group.group,
+                                                    sessionCount: group.sessions.count
+                                                ))
+                                            }
+                                        )
+                                    }
                                 }
                             }
+                            .frame(
+                                maxHeight: (isCollapsed
+                                    ? WarrenLayoutMetrics.sidebarHeaderRowHeight
+                                    : WarrenLayoutMetrics.sidebarProjectRowHeight) * 3
+                                    + WarrenSpacing.xxs * 2
+                            )
                         }
-                        .frame(
-                            maxHeight: (isCollapsed
-                                ? WarrenLayoutMetrics.sidebarHeaderRowHeight
-                                : WarrenLayoutMetrics.sidebarProjectRowHeight) * 3
-                                + WarrenSpacing.xxs * 2
-                        )
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -665,6 +677,13 @@ struct WarrenDesktopSidebarRows: View {
         guard !isInteractionDisabled else { return }
         withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
             tree.activeSessionsCollapsed.toggle()
+        }
+    }
+
+    private func toggleTerminalGroups() {
+        guard !isInteractionDisabled else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            tree.terminalGroupsCollapsed.toggle()
         }
     }
 
@@ -804,6 +823,7 @@ struct WarrenDesktopSidebarRows: View {
                 isPinned: workspace.pinned,
                 isDeleting: isDeleting,
                 isInteractionDisabled: isInteractionDisabled || isProjectDeleting || isDeleting,
+                isMutationDisabled: false,
                 isSelectionDisabled: isSelectionDisabled,
                 taskName: taskName,
                 taskID: workspace.taskID,
@@ -1151,7 +1171,7 @@ private struct WarrenDesktopActiveAgentRow: View {
     }
 }
 
-private struct WarrenDesktopSidebarSectionAction: Identifiable {
+struct WarrenDesktopSidebarSectionAction: Identifiable {
     let id: String
     let image: String
     let label: String
@@ -1159,7 +1179,7 @@ private struct WarrenDesktopSidebarSectionAction: Identifiable {
     let action: () -> Void
 }
 
-private struct WarrenDesktopSidebarSectionHeader: View {
+struct WarrenDesktopSidebarSectionHeader: View {
     let title: String
     var disclosureExpanded: Bool? = nil
     var actionImage: String? = nil
@@ -1188,9 +1208,9 @@ private struct WarrenDesktopSidebarSectionHeader: View {
                 .disabled(!actionEnabled)
                 .focused($isToggleFocused)
             } else {
-                // Sections without a disclosure control (e.g. Terminals) keep
-                // the same label styling as collapsible sections instead of
-                // rendering a disabled, dimmed button.
+                // Sections without a disclosure control keep the same label
+                // styling as collapsible sections instead of rendering a
+                // disabled, dimmed button.
                 titleLabel
             }
 

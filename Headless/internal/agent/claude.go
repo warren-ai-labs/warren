@@ -58,6 +58,8 @@ type claudeRecord struct {
 	ToolName   string          `json:"tool_name"`
 	ToolInput  json.RawMessage `json:"tool_input"`
 	ToolOutput json.RawMessage `json:"tool_output"`
+	ToolUseID  string          `json:"tool_use_id"`
+	CallID     string          `json:"call_id"`
 	Attachment struct {
 		Type      string          `json:"type"`
 		HookName  string          `json:"hookName"`
@@ -86,7 +88,7 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 		return nil
 	}
 	timestamp := parseTimestamp(record.Timestamp)
-	if structured := projectStructuredAgentEvent("claude", record.Type, line, timestamp); structured != nil {
+	if structured := projectStructuredAgentEventWithLimit("claude", record.Type, line, timestamp, p.contentLimit); structured != nil {
 		if structured.ID == "" {
 			structured.ID = record.UUID
 		}
@@ -206,23 +208,23 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 		}
 		if record.IsCompactSummary || isCompactionContext(content) {
 			return []api.AgentEvent{{
-				Provider:  "claude",
-				ID:        record.UUID,
-				Type:      "compaction",
-				Role:      "system",
-				Content:   p.clip(content),
+				Provider: "claude",
+				ID:       record.UUID,
+				Type:     "compaction",
+				Role:     "system",
+				Content:  p.clip(content),
 				Payload: map[string]any{
 					"compactionId": record.UUID,
-					"summary":      "History compacted",
+					"summary":      compactionSummaryText(p.clip(content)),
 				},
 				Timestamp: timestamp,
 			}}
 		}
-		if record.IsMeta || strings.HasPrefix(strings.TrimSpace(content), "<") || isSystemInjectedUserContext(content) {
+		if record.IsMeta || isSystemInjectedUserContext(content) {
 			return []api.AgentEvent{{
 				Provider:  "claude",
 				ID:        record.UUID,
-				Type:      "system",
+				Type:      "system_instructions",
 				Role:      "system",
 				Content:   p.clip(content),
 				Timestamp: timestamp,
@@ -307,9 +309,19 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)
 					event.Type = "todo"
 					event.ID = "claude-todos"
-					event.Payload = claudeTodoPayload(input)
+					event.Payload = claudeTodoPayloadWithLimit(input, p.contentLimit)
+					event.Content = stringValue(event.Payload["summary"])
 					if block.ID != "" {
 						p.claudeInteractions[block.ID] = "todo"
+					}
+				case "update_plan", "plan":
+					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)
+					event.Type = "plan"
+					event.Payload = normalizeStructuredPlanPayload(input, "claude-plan", p.contentLimit)
+					event.ID = stringValue(event.Payload["planId"])
+					event.Content = stringValue(event.Payload["summary"])
+					if block.ID != "" {
+						p.claudeInteractions[block.ID] = "plan"
 					}
 				default:
 					event.Type = "tool_call"
@@ -411,6 +423,36 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 	case "tool_use":
 		canonicalName := canonicalToolName("claude", record.ToolName)
 		input, _ := rawToAny(record.ToolInput, p.contentLimit).(map[string]any)
+		if canonicalName == "todowrite" {
+			payload := claudeTodoPayloadWithLimit(input, p.contentLimit)
+			callID := firstNonEmpty(record.ToolUseID, record.CallID, record.UUID)
+			if callID != "" {
+				p.claudeInteractions[callID] = "todo"
+			}
+			return []api.AgentEvent{{
+				Provider:  "claude",
+				ID:        "claude-todos",
+				Type:      "todo",
+				Content:   stringValue(payload["summary"]),
+				Payload:   payload,
+				Timestamp: timestamp,
+			}}
+		}
+		if canonicalName == "update_plan" || canonicalName == "plan" {
+			payload := normalizeStructuredPlanPayload(input, "claude-plan", p.contentLimit)
+			callID := firstNonEmpty(record.ToolUseID, record.CallID, record.UUID)
+			if callID != "" {
+				p.claudeInteractions[callID] = "plan"
+			}
+			return []api.AgentEvent{{
+				Provider:  "claude",
+				ID:        stringValue(payload["planId"]),
+				Type:      "plan",
+				Content:   stringValue(payload["summary"]),
+				Payload:   payload,
+				Timestamp: timestamp,
+			}}
+		}
 		event := api.AgentEvent{
 			Provider:   "claude",
 			ID:         record.UUID,
@@ -427,6 +469,11 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 		}
 		return []api.AgentEvent{event}
 	case "tool_result":
+		callID := firstNonEmpty(record.ToolUseID, record.CallID)
+		if kind := p.claudeInteractions[callID]; (kind == "todo" || kind == "plan") && callID != "" {
+			delete(p.claudeInteractions, callID)
+			return nil
+		}
 		var to map[string]any
 		_ = json.Unmarshal(record.ToolOutput, &to)
 		canonicalName := canonicalToolName("claude", record.ToolName)
@@ -590,33 +637,19 @@ func claudePermissionPayload(requestID string, input map[string]any) map[string]
 }
 
 func claudeTodoPayload(input map[string]any) map[string]any {
-	items := make([]any, 0)
-	if raw, ok := input["todos"].([]any); ok {
-		for _, item := range raw {
-			todo, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			state := strings.ToLower(firstNonEmpty(stringValue(todo["status"]), "pending"))
-			items = append(items, map[string]any{
-				"label": stringValue(todo["content"]),
-				"state": state,
-			})
+	return claudeTodoPayloadWithLimit(input, maxEventContent)
+}
+
+func claudeTodoPayloadWithLimit(input map[string]any, limit int) map[string]any {
+	payload := normalizeStructuredTodoPayload(input, "claude-todos", limit)
+	// Keep the legacy []any shape for provider-local callers while ensuring
+	// every item has the same id/title/label/state fields as Plan items.
+	if normalized, ok := payload["items"].([]map[string]any); ok {
+		items := make([]any, len(normalized))
+		for index := range normalized {
+			items[index] = normalized[index]
 		}
+		payload["items"] = items
 	}
-	overall := "completed"
-	for _, item := range items {
-		if todo, ok := item.(map[string]any); ok {
-			if state := stringValue(todo["state"]); state != "completed" && state != "cancelled" {
-				overall = "in_progress"
-				break
-			}
-		}
-	}
-	return map[string]any{
-		"todoId": "claude-todos",
-		"title":  "Todos",
-		"items":  items,
-		"state":  overall,
-	}
+	return payload
 }

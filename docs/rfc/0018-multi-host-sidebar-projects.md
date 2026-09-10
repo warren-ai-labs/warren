@@ -15,9 +15,10 @@ Warren currently displays the Project and Workspace tree for one selected
 Endpoint. Users who work across several machines must switch the Endpoint
 selector before they can discover the Projects on another Host.
 
-This RFC adds an explicit, CLI-managed sidebar Host set. The Desktop keeps a
-roster connection for each Endpoint in that set and renders the resulting
-Project and Workspace trees under separate Host sections. A click on a row
+This RFC adds an explicit display set. The Desktop keeps a roster connection
+for each Endpoint in that set and renders the resulting Project and Workspace
+trees under separate Host sections. The execution-server menu adds or removes
+an Endpoint from the set, while the CLI controls its order. A click on a row
 activates that Host and then uses the existing terminal and mutation flows.
 
 The feature is deliberately client-side:
@@ -25,12 +26,13 @@ The feature is deliberately client-side:
 - the Host remains the authority for its own Projects, Workspaces, Sessions,
   and ordering;
 - `~/.warren/config.json` remains the authority for the local Endpoint catalog,
-  current Endpoint, and sidebar Host set;
+  current Endpoint, and display set;
 - the Warren wire protocol and Relay service do not need a cross-Host API;
 - only one Host is active for terminal content in the first release.
 
-The feature is opt-in. A configuration without the new `sidebar` field keeps
-the current single-Endpoint behavior.
+The feature is opt-in. A configuration without the new `display` field keeps
+the current single-Endpoint behavior. This version is Desktop-only; Web and
+iOS retain their existing single-Endpoint behavior.
 
 ## 2. Motivation and Current Boundary
 
@@ -62,7 +64,7 @@ action.
   may intentionally reach the same Host through different routes or scopes.
 - **Current Endpoint**: the one Endpoint that owns the foreground terminal,
   Tab, Agent, settings, and write operations.
-- **Sidebar Endpoint set**: the ordered, client-local allowlist of Endpoints
+- **Display set**: the ordered, client-local allowlist of Endpoints
   whose Project and Workspace rosters are visible.
 - **Host-local resource**: a Project, Workspace, Task, Terminal Group, or
   Session remains owned by the Host that created it. This feature never moves
@@ -70,17 +72,16 @@ action.
 
 The following invariants are required:
 
-1. The current Endpoint is always a member of the effective sidebar set. If a
-   CLI operation would remove it, the operation selects the first remaining
-   Endpoint as current in the same atomic update.
-2. The sidebar set contains at least one valid Endpoint. `local` is a valid
+1. The current Endpoint and the explicit display set are independent. Switching
+   or connecting to an Endpoint must not change sidebar membership.
+2. An explicit display set contains at least one valid Endpoint. `local` is a valid
    synthetic Endpoint even though it is not stored in `endpoints`.
 3. A row identity and a navigation key contain its Endpoint scope. A raw
    `ProjectID` or `WorkspaceID` is never used as the sole cross-Host identity.
 4. A mutation is sent only through the connection that owns the row. The
    Desktop must not infer ownership from a display name or from the current
    selection after an asynchronous operation has started.
-5. Host order in the sidebar is client configuration. Project and Workspace
+5. Host order in the sidebar is display configuration. Project and Workspace
    order inside a Host remains Host state and is changed through the existing
    Host APIs.
 
@@ -104,23 +105,25 @@ The following invariants are required:
       "ssh": "prod"
     }
   },
-  "sidebar": {
+  "display": {
     "version": 1,
     "endpoints": ["local", "dev", "prod"]
   }
 }
 ```
 
-`sidebar` is optional for backward compatibility. When absent, its effective
+`display` is optional for backward compatibility. When absent, its effective
 value is `[current]`, or `[local]` when no current Endpoint exists. The CLI
-normalizes duplicates, validates Endpoint names, and rejects an empty result.
-The section contains aliases only; it never duplicates URLs, tokens, SSH
-metadata, or Relay credentials.
+normalizes duplicates, validates Endpoint names, and rejects an empty explicit
+result. The current Endpoint remains independent from `display`, so selecting
+or connecting to an Endpoint never adds it to the sidebar. The section contains
+aliases only; it never duplicates URLs, tokens, SSH metadata, or Relay
+credentials.
 
 Both the Go config model and the Swift `WarrenEndpointCatalog` model must
 decode and write this field. Existing sidecar locks, `0600` permissions,
 temporary-file writes, and atomic replacement remain mandatory. Endpoint
-mutations must preserve the sidebar section, and sidebar mutations must
+mutations must preserve the display section, and display mutations must
 preserve Endpoint credentials and route metadata.
 
 ### 4.2 Commands
@@ -129,21 +132,21 @@ The commands are local configuration operations and do not use `--endpoint`,
 `--server`, or `--token`:
 
 ```text
-warren sidebar hosts list
-warren sidebar hosts add NAME [--before NAME]
-warren sidebar hosts remove NAME
-warren sidebar hosts move NAME --before NAME
-warren sidebar hosts set NAME [NAME ...]
-warren sidebar hosts reset
+warren display list
+warren display add NAME [--before NAME]
+warren display remove NAME
+warren display move NAME --before NAME
+warren display set NAME [NAME ...]
+warren display reset
 ```
 
 Examples:
 
 ```bash
-warren sidebar hosts set local dev prod
-warren sidebar hosts add staging --before prod
-warren sidebar hosts remove dev
-warren sidebar hosts reset
+warren display set local dev prod
+warren display add staging --before prod
+warren display remove dev
+warren display reset
 ```
 
 The commands follow the existing `--json`, `--quiet`, and `--config` output
@@ -151,9 +154,12 @@ and configuration conventions. `list --json` returns the ordered aliases,
 the current alias, and the effective configuration version. Human-readable
 output shows order and the current marker, but never prints tokens.
 
-`reset` removes the explicit `sidebar` section and returns to the compatible
+`reset` removes the explicit `display` section and returns to the compatible
 single-current behavior. `endpoint remove NAME` also removes `NAME` from the
-sidebar set and chooses a new current Endpoint when necessary.
+display set and chooses a new current Endpoint only when the removed Endpoint
+was current. The Desktop execution-server menu provides an add/remove sidebar
+control for each Endpoint; it changes membership without changing `current`.
+The CLI remains the editor for display order.
 
 ## 5. Runtime Architecture
 
@@ -189,7 +195,7 @@ while retaining the same public behavior.
 
 ### 5.2 Configuration monitoring
 
-The existing background catalog monitor must also read the effective sidebar
+The existing background catalog monitor must also read the effective display
 set. On each change it computes a diff:
 
 - new aliases start roster connections;
@@ -262,24 +268,31 @@ additive boundary, allowing the active workspace column to migrate separately.
 The first release aggregates Project and Workspace rows only:
 
 ```text
-Projects
-▾ Local Mac · Connected
+Local Mac
     repository-a
       main
-▾ Build VPS · Connected
+Build VPS
     repository-a
       release/test
-▾ Production · Offline
+Production · Offline
     repository-b
 ```
 
 ### 7.1 Host visual identity
 
-Every visible Host receives a stable, low-saturation background tint for its
-entire Projects/Workspaces section. The tint is a quiet grouping surface, not
-an accent applied to individual rows. Host titles, Project/Workspace names,
-icons, metadata, and connection/status labels keep the existing foreground and
-semantic color tokens.
+When more than one Host is visible, every Host receives a stable,
+low-saturation background tint for its entire Projects/Workspaces section. The
+tint is a quiet grouping surface, not an accent applied to individual rows.
+Host titles, Project/Workspace names, metadata, and connection/status labels
+keep the existing foreground and semantic color tokens. Host headers begin at
+the same leading edge as the sidebar section labels and do not use a server
+glyph. A one-Host display set retains the legacy Projects presentation, with
+no Host title, grouping tint, or `PROJECTS · HOSTS` label.
+
+Multi-Host sections are compact tree groups rather than padded cards: a 24pt
+Host subheading immediately precedes its Project rows, and the tint covers the
+subheading and children without extra vertical inset. Project and Workspace row
+heights remain unchanged so their interaction targets stay consistent.
 
 The tint must be extremely faint: target four percent opacity over the existing
 sidebar surface, with an eight percent hard maximum pending visual validation.
@@ -306,8 +319,17 @@ Behavior:
 
 - Host sections follow the CLI order and show the configured alias plus the
   reported Host name when available.
+- A one-Host display set uses the ordinary collapsible `PROJECTS` tree while
+  retaining endpoint-scoped row identity and routing.
+- A Host header uses the same disclosure behavior as `Projects`; collapsing it
+  hides that Host's Project and Workspace rows.
+- An attached Host has no visible `Connected` label. Connecting and reconnecting
+  states use a spinner without status text; disconnected and failed Hosts keep
+  their actionable error and retry affordance.
 - Equal Project names are allowed because their Host sections disambiguate
   them.
+- In the expanded sidebar, a Project row only expands or collapses its
+  Workspace children.
 - Selecting or double-clicking a Workspace first activates its Endpoint, then
   applies the existing Workspace navigation and terminal behavior.
 - The existing active-only filter can be calculated per Host from each roster;
@@ -318,7 +340,7 @@ Behavior:
 - Add Project remains a current-Endpoint operation. Remote filesystem paths
   continue to be added through the CLI on the remote Host.
 - Host order is not draggable in the Desktop; it is changed with
-  `warren sidebar hosts move`.
+  `warren display move`.
 - Host-local Project/Workspace order may continue to use existing Host APIs,
   but a drag source and destination must have the same Endpoint scope.
 
@@ -350,7 +372,7 @@ No Host protocol change is required. Each connection still uses Warren
 protocol 4.0 and receives the normal Host-scoped roster. No Relay-side
 cross-Host aggregation endpoint is introduced.
 
-The sidebar set is not an authorization boundary. A token still determines
+The display set is not an authorization boundary. A token still determines
 which Projects a Host exposes; the CLI merely opts the local Desktop into
 showing those already-authorized rosters together. Diagnostics must log aliases
 and state only, never bearer tokens, URLs containing credentials, or Project
@@ -364,13 +386,15 @@ must not delay the first usable section from another Host.
 
 ## 10. Compatibility and Migration
 
-- Existing `config.json` files without `sidebar` behave exactly as they do
+- Existing `config.json` files without `display` behave exactly as they do
   today.
+- The preview `sidebar` field is accepted on read and rewritten as `display`
+  by the next catalog update.
 - Existing Endpoint aliases, tokens, SSH metadata, Relay metadata, and
   `current` semantics remain unchanged.
 - Existing navigation keys are migrated by treating them as belonging to the
   current Endpoint. New writes include the Endpoint prefix.
-- If the Desktop cannot decode the optional sidebar section, it falls back to
+- If the Desktop cannot decode the optional display section, it falls back to
   the effective current Endpoint and presents a visible configuration notice;
   it does not erase the file.
 - A malformed or unknown Endpoint name is rejected by the CLI. The Desktop
@@ -379,8 +403,9 @@ must not delay the first usable section from another Host.
 ## 11. Implementation Plan
 
 1. **Config and CLI**
-   - Add the optional `SidebarConfig` to Go and Swift catalog models.
-   - Implement `warren sidebar hosts` commands and atomic current-selection
+   - Add the optional `DisplayConfig` to Go and `WarrenDisplayConfiguration`
+     to Swift catalog models.
+   - Implement `warren display` commands and atomic current-selection
      reconciliation.
    - Add Go/Swift round-trip, locking, migration, and endpoint-removal tests.
 2. **Roster coordinator**
@@ -406,8 +431,8 @@ must not delay the first usable section from another Host.
 
 ## 12. Acceptance Criteria
 
-1. A fresh configuration without `sidebar` shows only the current Endpoint.
-2. `warren sidebar hosts set local dev prod` causes the Desktop to show all
+1. A fresh configuration without `display` shows only the current Endpoint.
+2. `warren display set local dev prod` causes the Desktop to show all
    three Host sections without restarting the app.
 3. A Project and Workspace with the same display name on two Hosts remain
    distinct and selectable.
@@ -420,13 +445,13 @@ must not delay the first usable section from another Host.
    shows a bounded error/retry state.
 7. A Project/Workspace mutation is routed to its owner Endpoint, even if the
    user switches Hosts before the asynchronous response completes.
-8. Removing an Endpoint or sidebar alias cancels its background connection and
+8. Removing an Endpoint or display alias cancels its background connection and
    does not remove the Endpoint's credentials unless `endpoint remove` was
    explicitly requested.
 9. Existing Host-local order, Task membership, Session ownership, terminal
    recovery, and Relay/SSH credential boundaries remain unchanged.
 10. The CLI and Desktop can concurrently update `config.json` without losing
-   either the Endpoint catalog or the sidebar set.
+   either the Endpoint catalog or the display set.
 
 ## 13. Non-Goals
 
@@ -435,7 +460,7 @@ must not delay the first usable section from another Host.
 - cross-Host drag-and-drop;
 - simultaneous terminal panes or active Tabs from multiple Hosts;
 - a Host or Relay server-side aggregate API;
-- a GUI editor for the sidebar Host set;
+- a full GUI editor for display ordering;
 - persistent local roster caching in the first release;
 - aggregating Tasks, Terminal Groups, or Active Sessions in the first release.
 

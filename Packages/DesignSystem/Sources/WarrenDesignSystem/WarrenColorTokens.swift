@@ -33,6 +33,10 @@ public struct WarrenColorTokens: Sendable {
     public let popoverSurface: Color
     /// Surface for text inputs and other editable controls.
     public let inputSurface: Color
+    /// Dedicated, low-saturation colors for client-local Host section washes.
+    /// Callers apply these with a very small opacity; they are not status
+    /// colors and must never be used for row foregrounds or selection states.
+    public let hostSectionTints: [Color]
 
     /// Foreground-derived washes preserve Superset's contrast relationships.
     public let fillHover: Color
@@ -59,6 +63,7 @@ public struct WarrenColorTokens: Sendable {
         sidebarSurface: Color,
         popoverSurface: Color,
         inputSurface: Color,
+        hostSectionTints: [Color],
         fillHover: Color,
         fillSelected: Color,
         tertiaryWash: Color
@@ -82,6 +87,7 @@ public struct WarrenColorTokens: Sendable {
         self.sidebarSurface = sidebarSurface
         self.popoverSurface = popoverSurface
         self.inputSurface = inputSurface
+        self.hostSectionTints = hostSectionTints
         self.fillHover = fillHover
         self.fillSelected = fillSelected
         self.tertiaryWash = tertiaryWash
@@ -170,6 +176,16 @@ public struct WarrenColorTokens: Sendable {
             ),
             popoverSurface: Color(red: 32 / 255, green: 30 / 255, blue: 28 / 255), // #201e1c
             inputSurface: Color(red: 24 / 255, green: 22 / 255, blue: 21 / 255),
+            hostSectionTints: [
+                Color(red: 104 / 255, green: 157 / 255, blue: 188 / 255),
+                Color(red: 178 / 255, green: 128 / 255, blue: 173 / 255),
+                Color(red: 137 / 255, green: 174 / 255, blue: 126 / 255),
+                Color(red: 198 / 255, green: 157 / 255, blue: 106 / 255),
+                Color(red: 145 / 255, green: 137 / 255, blue: 190 / 255),
+                Color(red: 105 / 255, green: 177 / 255, blue: 168 / 255),
+                Color(red: 187 / 255, green: 133 / 255, blue: 124 / 255),
+                Color(red: 145 / 255, green: 160 / 255, blue: 111 / 255),
+            ],
             fillHover: foreground.opacity(hoverOpacity),
             fillSelected: foreground.opacity(selectedOpacity),
             tertiaryWash: foreground.opacity(tertiaryOpacity)
