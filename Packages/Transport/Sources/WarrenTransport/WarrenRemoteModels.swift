@@ -44,38 +44,47 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
     public let directURL: String?
     public let relayURL: String?
     public let routePreference: String? // "auto", "direct", "relay"
+    /// When enabled, LAN discovery may promote a healthy direct candidate to
+    /// the active route. Discovery and path health remain visible while this
+    /// is false; only the active endpoint is kept unchanged.
+    public let lanAutoRoutingEnabled: Bool
 
     /// Returns a copy with a rotated Relay capability. Native clients use
     /// this when restoring a persisted endpoint after an app reinstall.
     public func withTokens(token: String, refreshToken: String?) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
              type: type, hostID: hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
-             directURL: directURL, relayURL: relayURL, routePreference: routePreference)
+             directURL: directURL, relayURL: relayURL, routePreference: routePreference,
+             lanAutoRoutingEnabled: lanAutoRoutingEnabled)
     }
 
     public func withActiveRoute(url: String, type: String, token: String) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
              type: type, hostID: hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
-             directURL: directURL, relayURL: relayURL, routePreference: routePreference)
+             directURL: directURL, relayURL: relayURL, routePreference: routePreference,
+             lanAutoRoutingEnabled: lanAutoRoutingEnabled)
     }
 
     public func withClientID(_ clientID: String?) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
              type: type, hostID: hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
-             directURL: directURL, relayURL: relayURL, routePreference: routePreference)
+             directURL: directURL, relayURL: relayURL, routePreference: routePreference,
+             lanAutoRoutingEnabled: lanAutoRoutingEnabled)
     }
 
     public func withRouteDetails(
         directURL: String? = nil,
         relayURL: String? = nil,
         routePreference: String? = nil,
-        hostID: String? = nil
+        hostID: String? = nil,
+        lanAutoRoutingEnabled: Bool? = nil
     ) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
              type: type, hostID: hostID ?? self.hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
              directURL: directURL ?? self.directURL,
              relayURL: relayURL ?? self.relayURL,
-             routePreference: routePreference ?? self.routePreference)
+             routePreference: routePreference ?? self.routePreference,
+             lanAutoRoutingEnabled: lanAutoRoutingEnabled ?? self.lanAutoRoutingEnabled)
     }
     
     public init(
@@ -91,7 +100,8 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         refreshToken: String? = nil,
         directURL: String? = nil,
         relayURL: String? = nil,
-        routePreference: String? = nil
+        routePreference: String? = nil,
+        lanAutoRoutingEnabled: Bool = false
     ) {
         self.name = name
         self.url = url
@@ -106,6 +116,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         self.directURL = directURL
         self.relayURL = relayURL
         self.routePreference = routePreference
+        self.lanAutoRoutingEnabled = lanAutoRoutingEnabled
     }
 
     public var id: String { name }
@@ -203,6 +214,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         case directURL = "direct_url"
         case relayURL = "relay_url"
         case routePreference = "route_preference"
+        case lanAutoRoutingEnabled = "lan_auto_routing_enabled"
     }
 
     public init(from decoder: Decoder) throws {
@@ -220,7 +232,8 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
             refreshToken: try values.decodeIfPresent(String.self, forKey: .refreshToken),
             directURL: try values.decodeIfPresent(String.self, forKey: .directURL),
             relayURL: try values.decodeIfPresent(String.self, forKey: .relayURL),
-            routePreference: try values.decodeIfPresent(String.self, forKey: .routePreference)
+            routePreference: try values.decodeIfPresent(String.self, forKey: .routePreference),
+            lanAutoRoutingEnabled: try values.decodeIfPresent(Bool.self, forKey: .lanAutoRoutingEnabled) ?? false
         )
     }
 }

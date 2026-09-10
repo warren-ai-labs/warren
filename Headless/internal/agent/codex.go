@@ -162,6 +162,11 @@ type codexRecord struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
+type codexPlanStep struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
+}
+
 type codexPayload struct {
 	ID        string          `json:"id"`
 	Type      string          `json:"type"`
@@ -179,10 +184,7 @@ type codexPayload struct {
 		Queries []string `json:"queries"`
 		URL     string   `json:"url"`
 	} `json:"action"`
-	Plan []struct {
-		Step   string `json:"step"`
-		Status string `json:"status"`
-	} `json:"plan"`
+	Plan    []codexPlanStep `json:"plan"`
 	Output  json.RawMessage `json:"output"`
 	Summary json.RawMessage `json:"summary"`
 	Text    string          `json:"text"`
@@ -198,6 +200,224 @@ type codexPayload struct {
 		LastTokenUsage  json.RawMessage `json:"last_token_usage"`
 		TotalTokenUsage json.RawMessage `json:"total_token_usage"`
 	} `json:"info"`
+}
+
+// codexPlanEvent normalizes the native response_item/event_msg Plan shape.
+// Older Codex rollouts expose only an output-text content block, while newer
+// ones may include explicit plan/steps/items arrays. Keep both forms as a
+// provider-neutral Plan event so clients never need to parse the transcript.
+func codexPlanEvent(payload codexPayload, raw json.RawMessage, event api.AgentEvent, contentLimit int) *api.AgentEvent {
+	var projected *api.AgentEvent
+	if structured := projectStructuredAgentEventWithLimit("codex", payload.Type, raw, event.Timestamp, contentLimit); structured != nil {
+		projected = structured
+	} else {
+		projected = &api.AgentEvent{
+			Provider:  event.Provider,
+			Timestamp: event.Timestamp,
+		}
+	}
+
+	if projected.Provider == "" {
+		projected.Provider = event.Provider
+	}
+	if projected.Timestamp.IsZero() {
+		projected.Timestamp = event.Timestamp
+	}
+	projected.Type = "plan"
+
+	var source map[string]any
+	_ = json.Unmarshal(raw, &source)
+	if source == nil {
+		source = map[string]any{}
+	}
+	if projected.Payload == nil {
+		projected.Payload = make(map[string]any)
+	}
+
+	planID := firstNonEmpty(
+		stringValue(projected.Payload["planId"]),
+		stringValue(projected.Payload["plan_id"]),
+		stringValue(source["planId"]),
+		stringValue(source["plan_id"]),
+		payload.ID,
+		event.ID,
+		"codex-plan",
+	)
+	projected.ID = firstNonEmpty(projected.ID, event.ID, planID)
+	projected.Payload["planId"] = planID
+	if stringValue(projected.Payload["title"]) == "" {
+		projected.Payload["title"] = firstNonEmpty(stringValue(source["title"]), "Plan")
+	}
+
+	items := codexPlanItemsFromValue(source["items"])
+	if len(items) == 0 {
+		items = codexPlanItemsFromValue(source["steps"])
+	}
+	if len(items) == 0 {
+		items = codexPlanItemsFromValue(source["plan"])
+	}
+	if len(items) == 0 {
+		items = codexPlanItemsFromValue(projected.Payload["items"])
+	}
+	if len(items) == 0 {
+		items = codexPlanItemsFromValue(projected.Payload["steps"])
+	}
+	if len(items) == 0 {
+		items = codexPlanItemsFromSteps(payload.Plan)
+	}
+	if len(items) > 0 {
+		projected.Payload["items"] = items
+	} else if _, ok := projected.Payload["items"]; !ok {
+		projected.Payload["items"] = []map[string]any{}
+	}
+
+	summary := firstNonEmpty(
+		stringValue(projected.Payload["summary"]),
+		stringValue(source["summary"]),
+		stringValue(source["description"]),
+		stringValue(source["objective"]),
+		contentStringLimit(payload.Content, contentLimit),
+		contentStringLimit(payload.Summary, contentLimit),
+		payload.Text,
+		payload.Message,
+	)
+	if summary != "" {
+		projected.Payload["summary"] = truncate(summary, contentLimit)
+		if projected.Content == "" {
+			projected.Content = truncate(summary, contentLimit)
+		}
+	}
+
+	state := firstNonEmpty(
+		stringValue(projected.Payload["state"]),
+		stringValue(source["state"]),
+		stringValue(source["status"]),
+		payload.Status,
+	)
+	if state == "" {
+		if len(items) > 0 {
+			state = calculatePlanState(items)
+		} else {
+			state = "in_progress"
+		}
+	} else {
+		state = canonicalStepStatus(state)
+	}
+	projected.Payload["state"] = state
+
+	return projected
+}
+
+func codexPlanItemsFromSteps(steps []codexPlanStep) []map[string]any {
+	items := make([]map[string]any, 0, len(steps))
+	for index, step := range steps {
+		items = append(items, map[string]any{
+			"id":    fmt.Sprintf("step-%d", index),
+			"title": step.Step,
+			"label": step.Step,
+			"state": canonicalStepStatus(step.Status),
+		})
+	}
+	return items
+}
+
+func codexPlanItemsFromValue(value any) []map[string]any {
+	var values []any
+	switch typed := value.(type) {
+	case []any:
+		values = typed
+	case []map[string]any:
+		values = make([]any, len(typed))
+		for index := range typed {
+			values[index] = typed[index]
+		}
+	case []string:
+		values = make([]any, len(typed))
+		for index := range typed {
+			values[index] = typed[index]
+		}
+	case []codexPlanStep:
+		return codexPlanItemsFromSteps(typed)
+	default:
+		return nil
+	}
+
+	items := make([]map[string]any, 0, len(values))
+	for index, value := range values {
+		if label, ok := value.(string); ok {
+			label = strings.TrimSpace(label)
+			if label == "" {
+				continue
+			}
+			items = append(items, map[string]any{
+				"id":    fmt.Sprintf("step-%d", index),
+				"title": label,
+				"label": label,
+				"state": "pending",
+			})
+			continue
+		}
+		object, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		label := firstNonEmpty(
+			stringValue(object["label"]),
+			stringValue(object["title"]),
+			stringValue(object["step"]),
+			stringValue(object["prompt"]),
+			stringValue(object["description"]),
+			stringValue(object["content"]),
+			stringValue(object["text"]),
+		)
+		if label == "" {
+			continue
+		}
+		id := firstNonEmpty(
+			stringValue(object["id"]),
+			stringValue(object["stepId"]),
+			stringValue(object["step_id"]),
+			fmt.Sprintf("step-%d", index),
+		)
+		state := canonicalStepStatus(firstNonEmpty(stringValue(object["state"]), stringValue(object["status"])))
+		items = append(items, map[string]any{
+			"id":    id,
+			"title": label,
+			"label": label,
+			"state": state,
+		})
+	}
+	return items
+}
+
+// codexCompactionPayload keeps the provider's context summary in the
+// structured event. The visible content remains a short lifecycle label; the
+// iOS client can then put the real summary behind a disclosure instead of
+// rendering it as an ordinary conversation message.
+func codexCompactionPayload(raw json.RawMessage, fallback, eventID string, limit int) map[string]any {
+	payload := map[string]any{
+		"compactionId": firstNonEmpty(eventID, "codex-compaction"),
+	}
+	var source map[string]json.RawMessage
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &source)
+	}
+	for _, key := range []string{"compactionId", "compaction_id", "id"} {
+		if value := strings.TrimSpace(contentStringLimit(source[key], 0)); value != "" {
+			payload["compactionId"] = value
+			break
+		}
+	}
+	for _, key := range []string{"summary", "content", "message", "text", "detail"} {
+		if value := compactionSummaryText(contentStringLimit(source[key], limit)); strings.TrimSpace(value) != "" {
+			payload["summary"] = value
+			return payload
+		}
+	}
+	if value := strings.TrimSpace(fallback); value != "" {
+		payload["summary"] = compactionSummaryText(truncate(value, limit))
+	}
+	return payload
 }
 
 func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
@@ -252,12 +472,7 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 		event.Type = "compaction"
 		event.Role = "system"
 		event.Content = "History compacted"
-		if event.Payload == nil {
-			event.Payload = map[string]any{
-				"compactionId": firstNonEmpty(event.ID, "codex-compaction"),
-				"summary":      "History compacted",
-			}
-		}
+		event.Payload = codexCompactionPayload(record.Payload, event.Content, event.ID, p.contentLimit)
 		return []api.AgentEvent{event}
 	case "response_item":
 		var payload codexPayload
@@ -266,7 +481,12 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			event.Content = p.clip(string(record.Payload))
 			return []api.AgentEvent{event}
 		}
-		if structured := projectStructuredAgentEvent("codex", payload.Type, record.Payload, event.Timestamp); structured != nil {
+		if strings.EqualFold(strings.TrimSpace(payload.Type), "plan") {
+			if plan := codexPlanEvent(payload, record.Payload, event, p.contentLimit); plan != nil {
+				return []api.AgentEvent{*plan}
+			}
+		}
+		if structured := projectStructuredAgentEventWithLimit("codex", payload.Type, record.Payload, event.Timestamp, p.contentLimit); structured != nil {
 			return []api.AgentEvent{*structured}
 		}
 		switch payload.Type {
@@ -293,15 +513,11 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			}
 			if event.Type == "user" {
 				if isCompactionContext(event.Content) {
+					compactionSummary := event.Content
 					event.Type = "compaction"
 					event.Role = "system"
 					event.Content = "History compacted"
-					if event.Payload == nil {
-						event.Payload = map[string]any{
-							"compactionId": firstNonEmpty(event.ID, "codex-compaction"),
-							"summary":      "History compacted",
-						}
-					}
+					event.Payload = codexCompactionPayload(nil, compactionSummary, event.ID, p.contentLimit)
 				} else if isSystemInjectedUserContext(event.Content) {
 					event.Type = "system_instructions"
 					event.Role = "system"
@@ -363,21 +579,10 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			}
 			if payload.Name == "update_plan" {
 				var planArgs struct {
-					Plan []struct {
-						Step   string `json:"step"`
-						Status string `json:"status"`
-					} `json:"plan"`
+					Plan []codexPlanStep `json:"plan"`
 				}
 				if json.Unmarshal([]byte(payload.Arguments), &planArgs) == nil && len(planArgs.Plan) > 0 {
-					items := make([]map[string]any, len(planArgs.Plan))
-					for i, item := range planArgs.Plan {
-						items[i] = map[string]any{
-							"id":    fmt.Sprintf("step-%d", i),
-							"title": item.Step,
-							"label": item.Step,
-							"state": canonicalStepStatus(item.Status),
-						}
-					}
+					items := codexPlanItemsFromSteps(planArgs.Plan)
 					event.ID = "codex-plan"
 					event.Type = "plan"
 					event.Payload = map[string]any{
@@ -556,25 +761,11 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 		if json.Unmarshal(record.Payload, &payload) != nil {
 			return nil
 		}
-		if len(payload.Plan) > 0 {
-			items := make([]map[string]any, len(payload.Plan))
-			for i, item := range payload.Plan {
-				items[i] = map[string]any{
-					"id":    fmt.Sprintf("step-%d", i),
-					"title": item.Step,
-					"label": item.Step,
-					"state": canonicalStepStatus(item.Status),
-				}
-			}
+		if len(payload.Plan) > 0 || strings.EqualFold(strings.TrimSpace(payload.Type), "plan") {
 			event.ID = "codex-plan"
-			event.Type = "plan"
-			event.Payload = map[string]any{
-				"planId": "codex-plan",
-				"title":  "Plan",
-				"state":  calculatePlanState(items),
-				"items":  items,
+			if plan := codexPlanEvent(payload, record.Payload, event, p.contentLimit); plan != nil {
+				return []api.AgentEvent{*plan}
 			}
-			return []api.AgentEvent{event}
 		}
 		switch payload.Type {
 		case "thread_goal_updated":
@@ -727,10 +918,7 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 					event.Type = "compaction"
 					event.Role = "system"
 					event.Content = "History compacted"
-					event.Payload = map[string]any{
-						"compactionId": firstNonEmpty(event.ID, "codex-compaction"),
-						"summary":      "History compacted",
-					}
+					event.Payload = codexCompactionPayload(nil, content, event.ID, p.contentLimit)
 					p.lastEventType = "compaction"
 					return []api.AgentEvent{event}
 				}

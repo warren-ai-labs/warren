@@ -338,7 +338,7 @@ func TestAntigravityParser_CheckpointAndCompaction(t *testing.T) {
 	if events[0].Content != "History compacted" {
 		t.Errorf("got content %q, want 'History compacted'", events[0].Content)
 	}
-	if events[0].Payload["summary"] != "History compacted" {
+	if events[0].Payload["summary"] != "# Resuming from a compaction\n\nYou are continuing work on the task..." {
 		t.Errorf("unexpected payload: %+v", events[0].Payload)
 	}
 }
@@ -366,11 +366,14 @@ func TestAntigravityParser_SystemInjectedUserInput(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
-	if events[0].Type != "system_instructions" {
-		t.Errorf("got type %q, want system_instructions", events[0].Type)
+	if events[0].Type != "system" {
+		t.Errorf("got type %q, want system interruption", events[0].Type)
 	}
 	if events[0].Role != "system" {
 		t.Errorf("got role %q, want system", events[0].Role)
+	}
+	if events[0].StopReason != "interrupted" {
+		t.Errorf("got stop reason %q, want interrupted", events[0].StopReason)
 	}
 }
 
@@ -420,4 +423,3 @@ func TestSystemInjectedContextAcrossProviders(t *testing.T) {
 		}
 	}
 }
-

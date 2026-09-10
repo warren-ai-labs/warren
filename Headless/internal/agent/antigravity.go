@@ -461,28 +461,34 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 	}
 	switch strings.ToUpper(record.Type) {
 	case "PLAN":
+		summary := p.clip(record.Content)
 		return []api.AgentEvent{{
-			Provider:  antigravityProvider,
-			Type:      "plan",
-			ID:        "antigravity-plan",
+			Provider: antigravityProvider,
+			Type:     "plan",
+			ID:       "antigravity-plan",
+			Content:  summary,
 			Payload: map[string]any{
 				"planId":  "antigravity-plan",
 				"title":   "Plan",
+				"items":   []map[string]any{},
 				"state":   canonicalStepStatus(record.Status),
-				"summary": p.clip(record.Content),
+				"summary": summary,
 			},
 			Timestamp: timestamp,
 		}}
 
 	case "CHECKPOINT":
 		compactionID := fmt.Sprintf("checkpoint_%d", record.StepIndex)
-		summary := "History compacted"
+		summary := compactionSummaryText(p.clip(record.Content))
+		if summary == "" {
+			summary = "History compacted"
+		}
 		return []api.AgentEvent{{
-			Provider:  antigravityProvider,
-			ID:        compactionID,
-			Type:      "compaction",
-			Role:      "system",
-			Content:   summary,
+			Provider: antigravityProvider,
+			ID:       compactionID,
+			Type:     "compaction",
+			Role:     "system",
+			Content:  "History compacted",
 			Payload: map[string]any{
 				"compactionId": compactionID,
 				"summary":      summary,
@@ -511,15 +517,19 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 		}
 		if isCompactionContext(cleaned) || isCompactionContext(record.Content) {
 			compactionID := fmt.Sprintf("checkpoint_%d", record.StepIndex)
+			summary := compactionSummaryText(record.Content)
+			if summary == "" {
+				summary = "History compacted"
+			}
 			return []api.AgentEvent{{
-				Provider:  antigravityProvider,
-				ID:        compactionID,
-				Type:      "compaction",
-				Role:      "system",
-				Content:   "History compacted",
+				Provider: antigravityProvider,
+				ID:       compactionID,
+				Type:     "compaction",
+				Role:     "system",
+				Content:  "History compacted",
 				Payload: map[string]any{
 					"compactionId": compactionID,
-					"summary":      "History compacted",
+					"summary":      p.clip(summary),
 				},
 				Timestamp: timestamp,
 			}}
@@ -597,10 +607,10 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 					summary = subagentArgs.Subagents[0].Prompt
 				}
 				events = append(events, api.AgentEvent{
-					Provider:  antigravityProvider,
-					ID:        callID,
-					Type:      "subagent",
-					CallID:    callID,
+					Provider: antigravityProvider,
+					ID:       callID,
+					Type:     "subagent",
+					CallID:   callID,
 					Payload: map[string]any{
 						"subagentId": callID,
 						"title":      label,
@@ -705,7 +715,7 @@ func (p *antigravityParser) parseAntigravity(line []byte) []api.AgentEvent {
 		return nil
 
 	default:
-		if structured := projectStructuredAgentEvent(antigravityProvider, record.Type, line, timestamp); structured != nil {
+		if structured := projectStructuredAgentEventWithLimit(antigravityProvider, record.Type, line, timestamp, p.contentLimit); structured != nil {
 			if structured.ID == "" {
 				structured.ID = fmt.Sprintf("step_%d", record.StepIndex)
 			}

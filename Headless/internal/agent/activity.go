@@ -53,6 +53,10 @@ func (t *ActivityTracker) Observe(event api.AgentEvent) {
 	if event.Sidechain {
 		return
 	}
+	if isInterruptedStopReason(event.StopReason) {
+		t.TurnInterrupted()
+		return
+	}
 	switch event.Type {
 	case "user":
 		t.TurnStarted()
@@ -87,6 +91,15 @@ func (t *ActivityTracker) Observe(event api.AgentEvent) {
 		} else if completed {
 			t.TurnComplete()
 		}
+	}
+}
+
+func isInterruptedStopReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "interrupted", "aborted", "cancelled", "canceled":
+		return true
+	default:
+		return false
 	}
 }
 

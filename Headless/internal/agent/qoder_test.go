@@ -364,6 +364,17 @@ func TestReadQoderTranscriptProjectsConversation(t *testing.T) {
 	}
 }
 
+func TestQoderCompactionPreservesProviderSummary(t *testing.T) {
+	parser := newQoderParser(1024)
+	events := parser.Parse([]byte(`{"type":"user","uuid":"cmp-1","message":{"role":"user","content":"<CONTEXT_SUMMARY>\nRetained Qoder context\n</CONTEXT_SUMMARY>"}}`))
+	if len(events) != 1 || events[0].Type != "compaction" {
+		t.Fatalf("compaction = %#v", events)
+	}
+	if got := events[0].Payload["summary"]; got != "Retained Qoder context" {
+		t.Fatalf("compaction summary = %v", got)
+	}
+}
+
 func TestReadQoderTranscriptErrorToolResult(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "qoder-session.jsonl")
 	writeReadLines(t, path,

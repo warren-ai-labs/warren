@@ -13,6 +13,7 @@ public enum WarrenRemoteClientError: Error, Equatable, Sendable, LocalizedError 
     case incompatibleProtocol(expected: String, received: String)
     case upgradeRequired(String)
     case unsupportedTerminalStateFormat(String)
+    case messageTooLarge(kind: String, actual: Int, limit: Int)
     case invalidResponse
     case requestTimedOut(String)
 
@@ -38,6 +39,8 @@ public enum WarrenRemoteClientError: Error, Equatable, Sendable, LocalizedError 
             return "Warren Host upgrade required: \(message)"
         case .unsupportedTerminalStateFormat(let format):
             return "Warren Host sent an unsupported terminal state format: \(format)."
+        case .messageTooLarge(let kind, let actual, let limit):
+            return "Warren Host sent an oversized \(kind) message (\(actual) bytes; limit \(limit))."
         case .invalidResponse:
             return "Warren Host returned an invalid response."
         case .requestTimedOut(let method):
@@ -80,7 +83,6 @@ private actor WarrenRemoteSocket {
     private static let connectTimeout: Duration = .seconds(30)
     private static let requestTimeout: Duration = .seconds(15)
     private static let heartbeatInterval: Duration = .seconds(20)
-    private static let maximumWebSocketMessageBytes = 128 * 1024 * 1024
     private let terminalStateFormats: Set<String>
 
     let events: AsyncThrowingStream<WarrenRemoteSocketEvent, Error>
@@ -119,10 +121,11 @@ private actor WarrenRemoteSocket {
 
     static func adapter(
         url: URL,
-        session: URLSession
+        session: URLSession,
+        maximumMessageSize: Int
     ) -> any WarrenWebSocketTaskAdapter {
         let task = session.webSocketTask(with: url)
-        task.maximumMessageSize = maximumWebSocketMessageBytes
+        task.maximumMessageSize = maximumMessageSize
         return URLSessionWebSocketTaskAdapter(task: task)
     }
 
@@ -156,6 +159,14 @@ private actor WarrenRemoteSocket {
             auth["token"] = token
         }
         let authPayload = Self.json(auth)
+        let authByteCount = authPayload.utf8.count
+        guard authByteCount <= WarrenRemoteClient.maximumJSONMessageBytes else {
+            throw WarrenRemoteClientError.messageTooLarge(
+                kind: "JSON auth",
+                actual: authByteCount,
+                limit: WarrenRemoteClient.maximumJSONMessageBytes
+            )
+        }
         // URLSession's async send can remain suspended while a daemon is
         // replacing its listener during a Ghostline handoff. Run it as an
         // unstructured task so the welcome timeout below remains a hard
@@ -258,6 +269,13 @@ private actor WarrenRemoteSocket {
 
 	func request(_ method: String, paramsData: Data) async throws -> Data {
         guard !isClosed else { throw WarrenRemoteClientError.closed }
+        guard paramsData.count <= WarrenRemoteClient.maximumJSONMessageBytes else {
+            throw WarrenRemoteClientError.messageTooLarge(
+                kind: "JSON request parameters",
+                actual: paramsData.count,
+                limit: WarrenRemoteClient.maximumJSONMessageBytes
+            )
+        }
         let id = UUID().uuidString.lowercased()
         let text = Self.json([
             "t": "request",
@@ -265,6 +283,14 @@ private actor WarrenRemoteSocket {
             "method": method,
             "params": (try? JSONSerialization.jsonObject(with: paramsData)) ?? [:],
         ])
+        let textByteCount = text.utf8.count
+        guard textByteCount <= WarrenRemoteClient.maximumJSONMessageBytes else {
+            throw WarrenRemoteClientError.messageTooLarge(
+                kind: "JSON request",
+                actual: textByteCount,
+                limit: WarrenRemoteClient.maximumJSONMessageBytes
+            )
+        }
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 requests[id] = continuation
@@ -291,6 +317,13 @@ private actor WarrenRemoteSocket {
 
     func sendBinary(_ bytes: [UInt8]) async throws {
         guard !isClosed else { throw WarrenRemoteClientError.closed }
+        guard bytes.count <= codec.maximumEnvelopeBytes else {
+            throw WarrenRemoteClientError.messageTooLarge(
+                kind: "DENB",
+                actual: bytes.count,
+                limit: codec.maximumEnvelopeBytes
+            )
+        }
         do {
             try await adapter.send(.binary(bytes))
         } catch {
@@ -346,6 +379,13 @@ private actor WarrenRemoteSocket {
                 let message = try await adapter.receive()
                 switch message {
                 case .binary(let bytes):
+                    guard bytes.count <= codec.maximumEnvelopeBytes else {
+                        throw WarrenRemoteClientError.messageTooLarge(
+                            kind: "DENB",
+                            actual: bytes.count,
+                            limit: codec.maximumEnvelopeBytes
+                        )
+                    }
                     let decoded = try codec.decodeFrame(bytes)
                     switch decoded {
                     case .output(let frame):
@@ -375,7 +415,15 @@ private actor WarrenRemoteSocket {
                     case .input:
                         throw WarrenRemoteClientError.invalidResponse
                     }
-        case .text(let text):
+                case .text(let text):
+                    let byteCount = text.utf8.count
+                    guard byteCount <= WarrenRemoteClient.maximumJSONMessageBytes else {
+                        throw WarrenRemoteClientError.messageTooLarge(
+                            kind: "JSON",
+                            actual: byteCount,
+                            limit: WarrenRemoteClient.maximumJSONMessageBytes
+                        )
+                    }
                     try await handleText(Data(text.utf8))
                 }
             }
@@ -387,6 +435,13 @@ private actor WarrenRemoteSocket {
     }
 
     private func handleText(_ data: Data) async throws {
+        guard data.count <= WarrenRemoteClient.maximumJSONMessageBytes else {
+            throw WarrenRemoteClientError.messageTooLarge(
+                kind: "JSON",
+                actual: data.count,
+                limit: WarrenRemoteClient.maximumJSONMessageBytes
+            )
+        }
         if let message = try? JSONDecoder().decode(WarrenRemoteRoster.StreamMessage.self, from: data) {
             if message.type == "roster", let state = message.state {
                 _ = continuation?.yield(.roster(state))
@@ -503,6 +558,20 @@ private actor WarrenRemoteSocket {
                   !executionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw WarrenRemoteClientError.invalidResponse
             }
+            guard data.count <= WarrenRemoteClient.maximumAgentEventBatchBytes else {
+                throw WarrenRemoteClientError.messageTooLarge(
+                    kind: "Agent event batch",
+                    actual: data.count,
+                    limit: WarrenRemoteClient.maximumAgentEventBatchBytes
+                )
+            }
+            guard rawEvents.count <= WarrenRemoteClient.maximumAgentEventCount else {
+                throw WarrenRemoteClientError.messageTooLarge(
+                    kind: "Agent event batch",
+                    actual: rawEvents.count,
+                    limit: WarrenRemoteClient.maximumAgentEventCount
+                )
+            }
             // Canonical event decoding is strict: a malformed row invalidates
             // the batch because sequence continuity is part of the contract.
             let events: [WarrenRemoteAgentEvent]
@@ -512,8 +581,18 @@ private actor WarrenRemoteSocket {
                         throw WarrenRemoteClientError.invalidResponse
                     }
                     let encoded = try JSONSerialization.data(withJSONObject: value)
+                    guard encoded.count <= WarrenRemoteClient.maximumAgentEventBytes else {
+                        throw WarrenRemoteClientError.messageTooLarge(
+                            kind: "Agent event",
+                            actual: encoded.count,
+                            limit: WarrenRemoteClient.maximumAgentEventBytes
+                        )
+                    }
                     return try JSONDecoder().decode(WarrenRemoteAgentEvent.self, from: encoded)
                 }
+            } catch let error as WarrenRemoteClientError {
+                if case .messageTooLarge = error { throw error }
+                throw WarrenRemoteClientError.invalidResponse
             } catch {
                 // A malformed batch cannot be sequence-repaired safely. Fail
                 // the socket so the connection loop closes this replica and
@@ -555,6 +634,14 @@ public actor WarrenRemoteClient {
     public static let replayTerminalStateFormat = "ghostline-vt-replay-v1"
     public static let snapshotTerminalStateFormat = "ghostty-vt-snapshot-v1"
     public static let protocolVersion = "4.0"
+    /// Control JSON is deliberately smaller than the largest binary DENB
+    /// snapshot. These limits are enforced before JSON decoding and again at
+    /// the Agent event boundary so a malformed peer cannot grow one batch or
+    /// one event without bound.
+    public static let maximumJSONMessageBytes = 8 * 1024 * 1024
+    public static let maximumAgentEventBatchBytes = 8 * 1024 * 1024
+    public static let maximumAgentEventCount = 512
+    public static let maximumAgentEventBytes = 1 * 1024 * 1024
 
     private struct Subscription: Sendable {
         let size: TerminalSize?
@@ -1031,10 +1118,14 @@ public actor WarrenRemoteClient {
     }
 
     @discardableResult
-    public func resize(_ size: TerminalSize) async throws -> Bool {
+    public func resize(sessionID: String, size: TerminalSize) async throws -> Bool {
         let result = try await request(
             "session.resize",
-            params: ["cols": String(size.columns), "rows": String(size.rows)],
+            params: [
+                "id": sessionID,
+                "cols": String(size.columns),
+                "rows": String(size.rows),
+            ],
             decoding: [String: Bool].self
         )
         return result["resized"] ?? false
@@ -1168,6 +1259,30 @@ public actor WarrenRemoteClient {
 
     // MARK: - Canonical Agent API
 
+    private static func validateAgentEventBatch(
+        _ events: [WarrenRemoteAgentEvent]
+    ) throws {
+        guard events.count <= maximumAgentEventCount else {
+            throw WarrenRemoteClientError.messageTooLarge(
+                kind: "Agent event batch",
+                actual: events.count,
+                limit: maximumAgentEventCount
+            )
+        }
+        for event in events {
+            guard let encoded = try? JSONEncoder().encode(event) else {
+                throw WarrenRemoteClientError.invalidResponse
+            }
+            guard encoded.count <= maximumAgentEventBytes else {
+                throw WarrenRemoteClientError.messageTooLarge(
+                    kind: "Agent event",
+                    actual: encoded.count,
+                    limit: maximumAgentEventBytes
+                )
+            }
+        }
+    }
+
     public func agentExecution(
         executionID: String
     ) async throws -> WarrenRemoteAgentExecution {
@@ -1187,11 +1302,13 @@ public actor WarrenRemoteClient {
         var params: [String: Any] = ["streamId": streamID, "limit": limit]
         if let afterSequence { params["afterSequence"] = afterSequence }
         if let beforeSequence { params["beforeSequence"] = beforeSequence }
-        return try await request(
+        let result: WarrenRemoteAgentEventsHistoryResult = try await request(
             "agent.events.history",
             jsonParams: params,
             decoding: WarrenRemoteAgentEventsHistoryResult.self
         )
+        try Self.validateAgentEventBatch(result.events)
+        return result
     }
 
     public func subscribeAgentEvents(
@@ -1199,7 +1316,7 @@ public actor WarrenRemoteClient {
         afterSequence: UInt64 = 0,
         limit: Int = 200
     ) async throws -> WarrenRemoteAgentEventsSubscriptionResult {
-        try await request(
+        let result: WarrenRemoteAgentEventsSubscriptionResult = try await request(
             "agent.events.subscribe",
             jsonParams: [
                 "streamId": streamID,
@@ -1208,6 +1325,8 @@ public actor WarrenRemoteClient {
             ],
             decoding: WarrenRemoteAgentEventsSubscriptionResult.self
         )
+        try Self.validateAgentEventBatch(result.events)
+        return result
     }
 
     public func resumeAgentExecution(
@@ -1400,7 +1519,11 @@ public actor WarrenRemoteClient {
                 adapter = injectedTask
                 self.injectedTask = nil
             } else {
-                adapter = WarrenRemoteSocket.adapter(url: url, session: urlSession)
+                adapter = WarrenRemoteSocket.adapter(
+                    url: url,
+                    session: urlSession,
+                    maximumMessageSize: max(codec.maximumEnvelopeBytes, Self.maximumJSONMessageBytes)
+                )
             }
             let socket = WarrenRemoteSocket(
                 adapter: adapter,

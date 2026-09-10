@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Runtime kinds supported by the headless daemon.
@@ -47,6 +48,20 @@ type Settings struct {
 	OpenAIModel        string `json:"openaiModel,omitempty"`
 	OpenAIKey          string `json:"openaiKey,omitempty"`
 	OpenAITitleEnabled bool   `json:"openaiTitleEnabled"`
+	// PairedClients contains metadata for explicitly paired native clients.
+	// Only a SHA-256 token hash is persisted; bearer tokens are returned once
+	// over the temporary LAN pairing exchange and remain on the client.
+	PairedClients []PairedClient `json:"pairedClients,omitempty"`
+}
+
+// PairedClient is a scoped client credential issued by the Host pairing
+// window. ClientID is stable for the device, while TokenHash is never sent to
+// clients or included in discovery metadata.
+type PairedClient struct {
+	ClientID  string    `json:"clientID"`
+	Name      string    `json:"name,omitempty"`
+	TokenHash string    `json:"tokenHash"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 var reservedRuntimeEnvKeys = map[string]struct{}{

@@ -74,6 +74,138 @@ final class WarrenRemoteClientTests: XCTestCase {
         XCTAssertFalse(WarrenRemoteClient.compatibleProtocolVersion("3.0", with: "4.0"))
     }
 
+    func testOversizedJSONMessageClosesTheSocketWithStructuredReason() async throws {
+        let task = ScriptedWebSocketTask()
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\"},\"accessScopeId\":\"scope-owner\"}"))
+        await task.enqueue(.text(String(repeating: "x", count: WarrenRemoteClient.maximumJSONMessageBytes + 1)))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        await client.start()
+
+        try await waitUntil {
+            await recorder.contains { event in
+                if case .disconnected(let reason) = event {
+                    return reason.contains("oversized JSON message")
+                }
+                return false
+            }
+        }
+        let cancelCount = await task.cancelCallCount
+        XCTAssertGreaterThan(cancelCount, 0)
+        await client.stop()
+        consuming.cancel()
+    }
+
+    func testOversizedDENBMessageUsesCodecEnvelopeBudget() async throws {
+        let codec = WarrenWireCodec(maxHeader: 0, maxPayload: 0, maxAtomicStatePayload: 0)
+        let task = ScriptedWebSocketTask()
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\"},\"accessScopeId\":\"scope-owner\"}"))
+        await task.enqueue(.binary([UInt8](repeating: 0, count: codec.maximumEnvelopeBytes + 1)))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task,
+            codec: codec
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        await client.start()
+
+        try await waitUntil {
+            await recorder.contains { event in
+                if case .disconnected(let reason) = event {
+                    return reason.contains("oversized DENB message")
+                }
+                return false
+            }
+        }
+        await client.stop()
+        consuming.cancel()
+    }
+
+    func testOversizedAgentBatchAndEventAreRejectedBeforeProjection() async throws {
+        let task = ScriptedWebSocketTask()
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\"},\"accessScopeId\":\"scope-owner\"}"))
+        let events = (1...WarrenRemoteClient.maximumAgentEventCount + 1).map { sequence in
+            [
+                "sequence": sequence,
+                "eventId": "event-\(sequence)",
+                "streamId": "stream-1",
+                "executionId": "stream-1",
+                "type": "message.created",
+                "occurredAt": "2026-01-01T00:00:00Z",
+                "recordedAt": "2026-01-01T00:00:00Z",
+                "origin": ["kind": "host", "confidence": "native"],
+                "payload": ["content": "hello"]
+            ] as [String: Any]
+        }
+        let batch = try JSONSerialization.data(withJSONObject: [
+            "t": "agent.events",
+            "streamId": "stream-1",
+            "executionId": "stream-1",
+            "events": events,
+        ])
+        await task.enqueue(.text(String(decoding: batch, as: UTF8.self)))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        await client.start()
+        try await waitUntil {
+            await recorder.contains { event in
+                if case .disconnected(let reason) = event {
+                    return reason.contains("oversized Agent event batch")
+                }
+                return false
+            }
+        }
+        await client.stop()
+        consuming.cancel()
+
+        let singleTask = ScriptedWebSocketTask()
+        await singleTask.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\"},\"accessScopeId\":\"scope-owner\"}"))
+        let oversizedEvent: [String: Any] = [
+            "t": "agent.events",
+            "streamId": "stream-1",
+            "executionId": "stream-1",
+            "events": [[
+                "sequence": 1,
+                "eventId": "event-1",
+                "streamId": "stream-1",
+                "executionId": "stream-1",
+                "type": "message.created",
+                "occurredAt": "2026-01-01T00:00:00Z",
+                "recordedAt": "2026-01-01T00:00:00Z",
+                "origin": ["kind": "host", "confidence": "native"],
+                "payload": ["content": String(repeating: "x", count: WarrenRemoteClient.maximumAgentEventBytes + 1)]
+            ]]
+        ]
+        let oversizedEventData = try JSONSerialization.data(withJSONObject: oversizedEvent)
+        await singleTask.enqueue(.text(String(decoding: oversizedEventData, as: UTF8.self)))
+        let singleClient = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: singleTask
+        )
+        let singleRecorder = EventRecorder()
+        let singleConsuming = recordEvents(from: singleClient.events(), into: singleRecorder)
+        await singleClient.start()
+        try await waitUntil {
+            await singleRecorder.contains { event in
+                if case .disconnected(let reason) = event {
+                    return reason.contains("oversized Agent event message")
+                }
+                return false
+            }
+        }
+        await singleClient.stop()
+        singleConsuming.cancel()
+    }
+
     func testRelayAuthUsesAccessTokenAndHostScopedEndpoint() async throws {
         let task = ScriptedWebSocketTask()
         await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
@@ -383,6 +515,72 @@ final class WarrenRemoteClientTests: XCTestCase {
         await task.enqueue(.text("{\"t\":\"response\",\"id\":\"\(unsubscribeID)\",\"ok\":true,\"result\":{\"unsubscribed\":true}}"))
         let unsubscribed = try await unsubscribe.value
         XCTAssertTrue(unsubscribed)
+        await client.stop()
+        consuming.cancel()
+    }
+
+    func testFocusCarriesExplicitSessionIDAndViewport() async throws {
+        let (client, task, consuming, _) = try await connectedClient()
+        let sessionID = sessionUUID.uuidString.lowercased()
+        let focus = Task {
+            try await client.focus(
+                sessionID: sessionID,
+                focused: true,
+                size: TerminalSize(columns: 120, rows: 40)
+            )
+        }
+
+        let messages = await waitForSentMessages(task, count: 2)
+        guard case .text(let text) = messages[1],
+              let object = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+              let params = object["params"] as? [String: Any],
+              let requestID = object["id"] as? String else {
+            XCTFail("focus request is malformed")
+            return
+        }
+        XCTAssertEqual(params["id"] as? String, sessionID)
+        XCTAssertEqual(params["focused"] as? String, "true")
+        XCTAssertEqual(params["cols"] as? String, "120")
+        XCTAssertEqual(params["rows"] as? String, "40")
+
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"\(requestID)\",\"ok\":true,\"result\":{\"focused\":true,\"resized\":true}}"
+        ))
+        let result = try await focus.value
+        XCTAssertTrue(result.focused)
+        XCTAssertTrue(result.resized)
+        await client.stop()
+        consuming.cancel()
+    }
+
+    func testResizeCarriesExplicitSessionID() async throws {
+        let (client, task, consuming, _) = try await connectedClient()
+        let sessionID = sessionUUID.uuidString.lowercased()
+        let size = try XCTUnwrap(TerminalSize(columns: 120, rows: 40))
+        let resize = Task {
+            try await client.resize(
+                sessionID: sessionID,
+                size: size
+            )
+        }
+
+        let messages = await waitForSentMessages(task, count: 2)
+        guard case .text(let text) = messages[1],
+              let object = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+              let params = object["params"] as? [String: Any],
+              let requestID = object["id"] as? String else {
+            XCTFail("resize request is malformed")
+            return
+        }
+        XCTAssertEqual(params["id"] as? String, sessionID)
+        XCTAssertEqual(params["cols"] as? String, "120")
+        XCTAssertEqual(params["rows"] as? String, "40")
+
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"\(requestID)\",\"ok\":true,\"result\":{\"resized\":true}}"
+        ))
+        let resized = try await resize.value
+        XCTAssertTrue(resized)
         await client.stop()
         consuming.cancel()
     }

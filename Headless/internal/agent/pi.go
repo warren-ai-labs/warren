@@ -30,13 +30,13 @@ const piProvider = "pi"
 // that resumes, forks, or selects an existing session would detach the Agent
 // tab from that conversation (and --no-session leaves no transcript to tail).
 var piSessionReuseFlags = map[string]bool{
-	"--continue": true,
-	"-c":         true,
-	"--resume":   true,
-	"-r":         true,
-	"--session":  true,
+	"--continue":   true,
+	"-c":           true,
+	"--resume":     true,
+	"-r":           true,
+	"--session":    true,
 	"--session-id": true,
-	"--fork":     true,
+	"--fork":       true,
 	"--no-session": true,
 }
 
@@ -356,13 +356,15 @@ type piUsage struct {
 
 type piParser struct {
 	baseParser
-	piModel  string
-	piEffort string
+	piModel           string
+	piEffort          string
+	piStructuredTools map[string]string
 }
 
 func newPiParser(contentLimit int) *piParser {
 	return &piParser{
-		baseParser: newBaseParser(contentLimit),
+		baseParser:        newBaseParser(contentLimit),
+		piStructuredTools: make(map[string]string),
 	}
 }
 
@@ -382,7 +384,7 @@ func (p *piParser) parsePi(line []byte) []api.AgentEvent {
 	timestamp := parseTimestamp(record.Timestamp)
 	provider := piProvider
 	model := ""
-	if structured := projectStructuredAgentEvent(provider, record.Type, line, timestamp); structured != nil {
+	if structured := projectStructuredAgentEventWithLimit(provider, record.Type, line, timestamp, p.contentLimit); structured != nil {
 		if structured.ID == "" {
 			structured.ID = record.ID
 		}
@@ -397,9 +399,9 @@ func (p *piParser) parsePi(line []byte) []api.AgentEvent {
 		if newModel != "" && newModel != p.piModel {
 			p.piModel = newModel
 			return []api.AgentEvent{{
-				Provider:  provider,
-				ID:        firstNonEmpty(record.ID, "config"),
-				Type:      "config",
+				Provider: provider,
+				ID:       firstNonEmpty(record.ID, "config"),
+				Type:     "config",
 				Payload: map[string]any{
 					"model":           newModel,
 					"reasoningEffort": p.piEffort,
@@ -413,9 +415,9 @@ func (p *piParser) parsePi(line []byte) []api.AgentEvent {
 		if newEffort != "" && newEffort != p.piEffort {
 			p.piEffort = newEffort
 			return []api.AgentEvent{{
-				Provider:  provider,
-				ID:        firstNonEmpty(record.ID, "config"),
-				Type:      "config",
+				Provider: provider,
+				ID:       firstNonEmpty(record.ID, "config"),
+				Type:     "config",
 				Payload: map[string]any{
 					"model":           p.piModel,
 					"reasoningEffort": newEffort,
@@ -425,13 +427,18 @@ func (p *piParser) parsePi(line []byte) []api.AgentEvent {
 		}
 		return nil
 	case "compaction":
+		summary := compactionSummaryText(record.Summary)
+		if summary == "" {
+			summary = "History compacted"
+		}
 		return []api.AgentEvent{{
-			Provider:  provider,
-			ID:        firstNonEmpty(record.ID, "compaction"),
-			Type:      "compaction",
-			Content:   "History compacted",
+			Provider: provider,
+			ID:       firstNonEmpty(record.ID, "compaction"),
+			Type:     "compaction",
+			Content:  "History compacted",
 			Payload: map[string]any{
-				"summary": "History compacted",
+				"compactionId": firstNonEmpty(record.ID, "compaction"),
+				"summary":      p.clip(summary),
 			},
 			Timestamp: timestamp,
 		}}
@@ -477,15 +484,16 @@ func (p *piParser) parsePi(line []byte) []api.AgentEvent {
 			return nil
 		}
 		if isCompactionContext(content) {
+			summary := compactionSummaryText(content)
 			return []api.AgentEvent{{
-				Provider:  provider,
-				ID:        firstNonEmpty(record.ID, "compaction"),
-				Type:      "compaction",
-				Role:      "system",
-				Content:   "History compacted",
+				Provider: provider,
+				ID:       firstNonEmpty(record.ID, "compaction"),
+				Type:     "compaction",
+				Role:     "system",
+				Content:  "History compacted",
 				Payload: map[string]any{
 					"compactionId": firstNonEmpty(record.ID, "compaction"),
-					"summary":      "History compacted",
+					"summary":      p.clip(summary),
 				},
 				Timestamp: timestamp,
 			}}
@@ -586,6 +594,32 @@ func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model st
 			if callID == "" {
 				callID = record.ID
 			}
+			canonicalName := canonicalToolName(piProvider, toolName)
+			if canonicalName == "todowrite" {
+				input, _ := rawToAny(block.Arguments, p.contentLimit).(map[string]any)
+				event.Type = "todo"
+				event.ID = "pi-todos"
+				event.Payload = claudeTodoPayloadWithLimit(input, p.contentLimit)
+				event.Content = stringValue(event.Payload["summary"])
+				if callID != "" {
+					p.piStructuredTools[callID] = "todo"
+				}
+				events = append(events, event)
+				continue
+			}
+			if canonicalName == "update_plan" || canonicalName == "plan" {
+				input, _ := rawToAny(block.Arguments, p.contentLimit).(map[string]any)
+				payload := normalizeStructuredPlanPayload(input, "pi-plan", p.contentLimit)
+				event.Type = "plan"
+				event.ID = stringValue(payload["planId"])
+				event.Payload = payload
+				event.Content = stringValue(payload["summary"])
+				if callID != "" {
+					p.piStructuredTools[callID] = "plan"
+				}
+				events = append(events, event)
+				continue
+			}
 			event.Type = "tool_call"
 			event.ToolName = toolName
 			event.CallID = callID
@@ -644,6 +678,17 @@ func (p *piParser) parsePiToolResult(record piRecord, message piMessage, model s
 	callID := message.ToolCallID
 	if callID == "" {
 		callID = record.ID
+	}
+	if kind := p.piStructuredTools[callID]; kind == "todo" || kind == "plan" {
+		delete(p.piStructuredTools, callID)
+		return nil
+	}
+	// Structured planning tools are represented by the Plan/Todo event emitted
+	// from the assistant call. Their tool result is provider bookkeeping, not a
+	// second output card.
+	switch canonicalToolName(piProvider, message.ToolName) {
+	case "todowrite", "update_plan", "plan":
+		return nil
 	}
 	output := p.content(message.Content)
 	if output == "" {

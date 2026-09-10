@@ -35,6 +35,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let selectedEndpointID: String
     private let endpointCapabilities: WarrenDesktopEndpointCapabilities
     private let onSelectEndpoint: (String) -> Void
+    private let onSetEndpointSidebarVisibility: (String, Bool) -> Void
+    private let sidebarHostProjections: [WarrenDesktopSidebarHostProjection]?
+    private let usesSidebarHostSections: Bool
+    /// The endpoint-scoped counterpart to the active navigation selection.
+    /// The composition layer supplies the scope from the controller that owns
+    /// the navigation state, which can briefly differ from the requested
+    /// endpoint while a Host switch is in flight.
+    private let sidebarResourceSelection: WarrenDesktopSidebarResourceSelection?
+    private let displayConfigurationError: String?
+    private let onSelectSidebarResource: (WarrenDesktopSidebarResourceSelection) -> Void
+    private let onOpenSidebarWorkspace: (WarrenDesktopHostResourceRef<WorkspaceID>) -> Void
+    private let onRetrySidebarHost: (String) -> Void
     private let onAddSSHHost: () -> Void
     private let onRetryConnection: () -> Void
     private let onStopConnection: () -> Void
@@ -48,6 +60,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onWebReset: (() -> Void)?
     private let onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
     private let onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)?
+    private let lanPairing: WarrenDesktopLANPairing
+    private let onLANPairing: ((Bool, @escaping (Result<WarrenDesktopLANPairing, Error>) -> Void) -> Void)?
     private let relaySettings: WarrenDesktopRelaySettings
     private let onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     private let relayDevices: [WarrenDesktopRelayDevice]
@@ -83,9 +97,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var chromePopover: WarrenDesktopChromePopover?
     @State private var webDismissalNonce = 0
     @State private var pendingRename: WarrenDesktopRenameRequest?
+    /// Resource dialogs capture the Endpoint that owned their row. A dialog
+    /// opened on one Host must never submit its bare ID after the user
+    /// switches to another Host that may issue the same UUID.
+    @State private var pendingRenameEndpointID: String?
     @State private var isTaskCreatorPresented = false
+    @State private var taskCreatorEndpointID: String?
     @State private var renameValue = ""
     @State private var pendingTerminalGroupEditor: WarrenDesktopTerminalGroupEditorMode?
+    @State private var pendingTerminalGroupEditorEndpointID: String?
     @State private var terminalGroupName = ""
     @State private var terminalGroupHome = ""
     @State private var pendingDeletion: WarrenDesktopDeletionRequest?
@@ -145,6 +165,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         selectedEndpointID: String = "local",
         endpointCapabilities: WarrenDesktopEndpointCapabilities? = nil,
         onSelectEndpoint: @escaping (String) -> Void = { _ in },
+        onSetEndpointSidebarVisibility: @escaping (String, Bool) -> Void = { _, _ in },
+        sidebarHostProjections: [WarrenDesktopSidebarHostProjection]? = nil,
+        usesSidebarHostSections: Bool = false,
+        sidebarResourceSelection: WarrenDesktopSidebarResourceSelection? = nil,
+        displayConfigurationError: String? = nil,
+        onSelectSidebarResource: @escaping (WarrenDesktopSidebarResourceSelection) -> Void = { _ in },
+        onOpenSidebarWorkspace: @escaping (WarrenDesktopHostResourceRef<WorkspaceID>) -> Void = { _ in },
+        onRetrySidebarHost: @escaping (String) -> Void = { _ in },
         onAddSSHHost: @escaping () -> Void = {},
         onRetryConnection: @escaping () -> Void = {},
         onStopConnection: @escaping () -> Void = {},
@@ -154,6 +182,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onWebReset: (() -> Void)? = nil,
         onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)? = nil,
+        lanPairing: WarrenDesktopLANPairing = .init(),
+        onLANPairing: ((Bool, @escaping (Result<WarrenDesktopLANPairing, Error>) -> Void) -> Void)? = nil,
         relaySettings: WarrenDesktopRelaySettings = .init(),
         onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         relayDevices: [WarrenDesktopRelayDevice] = [],
@@ -206,6 +236,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             ?? (selectedEndpointID == "local" ? .local : .remote)
         self.endpointCapabilities = resolvedEndpointCapabilities
         self.onSelectEndpoint = onSelectEndpoint
+        self.onSetEndpointSidebarVisibility = onSetEndpointSidebarVisibility
+        self.sidebarHostProjections = sidebarHostProjections
+        self.usesSidebarHostSections = usesSidebarHostSections
+        self.sidebarResourceSelection = sidebarResourceSelection
+            ?? Self.scopedSidebarSelection(
+                self.navigation.selection,
+                endpointID: selectedEndpointID
+            )
+        self.displayConfigurationError = displayConfigurationError
+        self.onSelectSidebarResource = onSelectSidebarResource
+        self.onOpenSidebarWorkspace = onOpenSidebarWorkspace
+        self.onRetrySidebarHost = onRetrySidebarHost
         self.onAddSSHHost = onAddSSHHost
         self.onRetryConnection = onRetryConnection
         self.onStopConnection = onStopConnection
@@ -218,6 +260,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onWebReset = onWebReset
         self.onRelayEnroll = onRelayEnroll
         self.onRelayPairing = onRelayPairing
+        self.lanPairing = lanPairing
+        self.onLANPairing = onLANPairing
         self.relaySettings = relaySettings
         self.onResetRelay = onResetRelay
         self.relayDevices = relayDevices
@@ -334,7 +378,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             onRequestRename: presentRename,
             onRequestDeletion: presentDeletion,
             onRequestTerminalGroupCreate: presentTerminalGroupCreate,
-            onRequestTerminalGroupEdit: presentTerminalGroupEdit
+            onRequestTerminalGroupEdit: presentTerminalGroupEdit,
+            activeEndpointID: selectedEndpointID,
+            displayConfigurationError: displayConfigurationError,
+            sidebarHostProjections: sidebarHostProjections,
+            usesSidebarHostSections: usesSidebarHostSections,
+            sidebarResourceSelection: sidebarResourceSelection,
+            onSelectSidebarResource: onSelectSidebarResource,
+            onOpenSidebarWorkspace: onOpenSidebarWorkspace,
+            onRetrySidebarHost: onRetrySidebarHost
         )
         .frame(width: sidebarState.renderedWidth)
         let workspaceColumn = makeWorkspaceColumn(
@@ -395,6 +447,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             if !endpointCapabilities.canOpenExternalIDE {
                 chromePopover = nil
             }
+            // Tasks, terminal groups, and rename dialogs are current-Host
+            // interactions. Close them when the owner changes so a later
+            // confirmation cannot route a bare resource ID to this Host.
+            pendingRename = nil
+            pendingRenameEndpointID = nil
+            pendingTerminalGroupEditor = nil
+            pendingTerminalGroupEditorEndpointID = nil
+            isTaskCreatorPresented = false
+            taskCreatorEndpointID = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.commandPalette)) { _ in
             presentCommandPalette()
@@ -497,6 +558,26 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         .warrenSemanticObservationRoot(recorder: semanticRecorder)
     }
 
+    private static func scopedSidebarSelection(
+        _ selection: WarrenDesktopSidebarSelection?,
+        endpointID: String
+    ) -> WarrenDesktopSidebarResourceSelection? {
+        let scope = endpointID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !scope.isEmpty, let selection else { return nil }
+        switch selection {
+        case .project(let projectID):
+            return .project(
+                WarrenDesktopHostResourceRef(endpointID: scope, id: projectID)
+            )
+        case .workspace(let workspaceID):
+            return .workspace(
+                WarrenDesktopHostResourceRef(endpointID: scope, id: workspaceID)
+            )
+        case .terminalGroup:
+            return nil
+        }
+    }
+
     private var selectedEndpointIsLocal: Bool {
         endpointOptions.first { $0.id == selectedEndpointID }?.isLocal == true
     }
@@ -565,6 +646,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         endpoints: endpointOptions,
                         selectedID: selectedEndpointID,
                         onSelect: onSelectEndpoint,
+                        onSetSidebarVisibility: onSetEndpointSidebarVisibility,
                         onAddSSHHost: onAddSSHHost,
                         onRetry: onRetryConnection,
                         onStop: onStopConnection,
@@ -885,6 +967,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onWebReset: onWebReset,
                 onRelayEnroll: onRelayEnroll,
                 onRelayPairing: onRelayPairing,
+                lanPairing: lanPairing,
+                onLANPairing: onLANPairing,
                 relaySettings: relaySettings,
                 onResetRelay: onResetRelay,
                 relayDevices: relayDevices,
@@ -1159,6 +1243,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         onSelectEndpoint(endpointID)
                         onBack()
                     },
+                    onSetSidebarVisibility: onSetEndpointSidebarVisibility,
                     onAddSSHHost: {
                         onAddSSHHost()
                         onBack()
@@ -1383,12 +1468,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func presentRename(_ request: WarrenDesktopRenameRequest) {
         renameValue = request.initialValue
+        pendingRenameEndpointID = selectedEndpointID
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
             pendingRename = request
         }
     }
 
     private func dismissRename() {
+        pendingRenameEndpointID = nil
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
             pendingRename = nil
         }
@@ -1396,6 +1483,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func confirmRename() {
         guard let pendingRename else { return }
+        guard pendingRenameEndpointID == selectedEndpointID else {
+            dismissRename()
+            return
+        }
         switch pendingRename {
         case .task(let id, _):
             dispatch(.renameTask(id, renameValue))
@@ -1412,6 +1503,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private func presentTerminalGroupCreate() {
         terminalGroupName = ""
         terminalGroupHome = ""
+        pendingTerminalGroupEditorEndpointID = selectedEndpointID
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
             pendingTerminalGroupEditor = .create
         }
@@ -1420,12 +1512,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private func presentTerminalGroupEdit(_ group: TerminalGroup) {
         terminalGroupName = group.name
         terminalGroupHome = group.home ?? ""
+        pendingTerminalGroupEditorEndpointID = selectedEndpointID
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
             pendingTerminalGroupEditor = .edit(group.id)
         }
     }
 
     private func dismissTerminalGroupEditor() {
+        pendingTerminalGroupEditorEndpointID = nil
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
             pendingTerminalGroupEditor = nil
         }
@@ -1433,6 +1527,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func confirmTerminalGroupEditor() {
         guard let pendingTerminalGroupEditor else { return }
+        guard pendingTerminalGroupEditorEndpointID == selectedEndpointID else {
+            dismissTerminalGroupEditor()
+            return
+        }
         let name = terminalGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
         let home = normalizedTerminalGroupHome(terminalGroupHome)
@@ -1448,12 +1546,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func presentTaskCreator() {
         guard projection.isConnected else { return }
+        taskCreatorEndpointID = selectedEndpointID
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
             isTaskCreatorPresented = true
         }
     }
 
     private func dismissTaskCreator() {
+        taskCreatorEndpointID = nil
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
             isTaskCreatorPresented = false
         }
@@ -1461,7 +1561,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     @ViewBuilder
     private var taskCreatorDialog: some View {
-        if isTaskCreatorPresented {
+        if isTaskCreatorPresented, taskCreatorEndpointID == selectedEndpointID {
             WarrenModalSurface {
                 WarrenDesktopTaskCreatorView(
                     onCancel: dismissTaskCreator,

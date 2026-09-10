@@ -22,6 +22,8 @@ final class WarrenEmbeddedSSHTunnel {
     private var readyContinuation: CheckedContinuation<Event, Error>?
     private static let readyTimeout: Duration = .seconds(30)
 
+    var isRunning: Bool { process?.isRunning == true }
+
     func start(
         name: String,
         target: String,

@@ -124,7 +124,10 @@ var structuredAgentEventTypes = map[string]struct{}{
 }
 
 func structuredAgentEventType(source string) string {
-	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(source, "-", "_")))
+	normalized := strings.ToLower(strings.TrimSpace(strings.NewReplacer("-", "_", ".", "_").Replace(source)))
+	if normalized == "task" || normalized == "tasks" || normalized == "task_list" || normalized == "tasklist" || normalized == "task_updated" || normalized == "tasks_updated" || normalized == "task_list_updated" || normalized == "tasklist_updated" || normalized == "todo_list_updated" || normalized == "checklist" || normalized == "checklists" || strings.HasPrefix(normalized, "checklist_") {
+		return "todo"
+	}
 	for _, candidate := range []string{"question", "permission", "plan", "todo", "goal", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue"} {
 		if normalized == candidate || strings.HasPrefix(normalized, candidate+"_") {
 			return candidate
@@ -133,27 +136,343 @@ func structuredAgentEventType(source string) string {
 	return ""
 }
 
+// structuredEventSummary extracts display text without exposing provider
+// content blocks or raw JSON to clients. Plan/Todo records commonly use a
+// string, an OpenAI-style text block array, or a nested content object.
+func structuredEventSummary(source map[string]any, limit int) string {
+	for _, key := range []string{"summary", "description", "objective", "content", "text", "detail", "body", "message"} {
+		if value, ok := source[key]; ok {
+			if text := structuredTextValue(value, limit); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func structuredEventSummaryMap(value any, limit int) string {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return structuredEventSummary(object, limit)
+}
+
+func structuredTextValue(value any, limit int) string {
+	switch typed := value.(type) {
+	case string:
+		return truncate(strings.TrimSpace(typed), limit)
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := structuredTextValue(item, limit); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return truncate(strings.Join(parts, "\n"), limit)
+	case []string:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := strings.TrimSpace(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return truncate(strings.Join(parts, "\n"), limit)
+	case map[string]any:
+		for _, key := range []string{"text", "output_text", "input_text", "value", "content", "summary", "description", "body", "message", "parts", "blocks", "children", "title"} {
+			if nested, ok := typed[key]; ok {
+				if text := structuredTextValue(nested, limit); text != "" {
+					return text
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func structuredObjectID(value any) string {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return firstNonEmpty(
+		stringValue(object["planId"]),
+		stringValue(object["plan_id"]),
+		stringValue(object["todoId"]),
+		stringValue(object["todo_id"]),
+		stringValue(object["taskListId"]),
+		stringValue(object["task_list_id"]),
+		stringValue(object["id"]),
+	)
+}
+
+func structuredNestedString(value any, keys ...string) string {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	for _, key := range keys {
+		if text := stringValue(object[key]); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func structuredItemsFromFields(source map[string]any, limit int, fields ...string) []map[string]any {
+	for _, field := range fields {
+		if value, ok := source[field]; ok {
+			if items := structuredItemsFromValue(value, limit); len(items) > 0 {
+				return items
+			}
+		}
+	}
+	return nil
+}
+
+func structuredItemsFromValue(value any, limit int) []map[string]any {
+	switch typed := value.(type) {
+	case []any:
+		items := make([]map[string]any, 0, len(typed))
+		for index, item := range typed {
+			if normalized := normalizeStructuredItem(item, index, limit); normalized != nil {
+				items = append(items, normalized)
+			}
+		}
+		return items
+	case []map[string]any:
+		items := make([]map[string]any, 0, len(typed))
+		for index, item := range typed {
+			if normalized := normalizeStructuredItem(item, index, limit); normalized != nil {
+				items = append(items, normalized)
+			}
+		}
+		return items
+	case []string:
+		items := make([]map[string]any, 0, len(typed))
+		for index, item := range typed {
+			if normalized := normalizeStructuredItem(item, index, limit); normalized != nil {
+				items = append(items, normalized)
+			}
+		}
+		return items
+	case map[string]any:
+		for _, field := range []string{"items", "steps", "plan", "todos", "tasks", "entries"} {
+			if nested, ok := typed[field]; ok {
+				if items := structuredItemsFromValue(nested, limit); len(items) > 0 {
+					return items
+				}
+			}
+		}
+		if item := normalizeStructuredItem(typed, 0, limit); item != nil {
+			return []map[string]any{item}
+		}
+	}
+	return nil
+}
+
+func normalizeStructuredItem(value any, index, limit int) map[string]any {
+	object, isObject := value.(map[string]any)
+	label := ""
+	state := ""
+	id := ""
+	if isObject {
+		label = firstNonEmpty(
+			structuredTextValue(object["label"], limit),
+			structuredTextValue(object["title"], limit),
+			structuredTextValue(object["step"], limit),
+			structuredTextValue(object["task"], limit),
+			structuredTextValue(object["todo"], limit),
+			structuredTextValue(object["content"], limit),
+			structuredTextValue(object["text"], limit),
+			structuredTextValue(object["prompt"], limit),
+			structuredTextValue(object["description"], limit),
+			structuredTextValue(object["summary"], limit),
+			structuredTextValue(object["activeForm"], limit),
+			structuredTextValue(object["active_form"], limit),
+			structuredTextValue(object["name"], limit),
+		)
+		id = firstNonEmpty(
+			stringValue(object["id"]),
+			stringValue(object["itemId"]),
+			stringValue(object["item_id"]),
+			stringValue(object["stepId"]),
+			stringValue(object["step_id"]),
+			stringValue(object["todoId"]),
+			stringValue(object["todo_id"]),
+			stringValue(object["taskId"]),
+			stringValue(object["task_id"]),
+			stringValue(object["taskID"]),
+			stringValue(object["todoID"]),
+		)
+		state = firstNonEmpty(stringValue(object["state"]), stringValue(object["status"]))
+		if state == "" {
+			completed := asBool(object["completed"]) || asBool(object["isCompleted"]) || asBool(object["done"]) || asBool(object["checked"])
+			if _, present := object["completed"]; present || object["isCompleted"] != nil || object["done"] != nil || object["checked"] != nil {
+				if completed {
+					state = "completed"
+				} else {
+					state = "pending"
+				}
+			}
+		}
+	} else if text, ok := value.(string); ok {
+		label = strings.TrimSpace(text)
+	}
+	if label == "" {
+		return nil
+	}
+	if id == "" {
+		id = fmt.Sprintf("item-%d", index)
+	}
+	return map[string]any{
+		"id":    id,
+		"title": label,
+		"label": label,
+		"state": canonicalStepStatus(state),
+	}
+}
+
+func normalizeStructuredPlanPayload(source map[string]any, fallbackID string, limit int) map[string]any {
+	planObject := source["plan"]
+	payload := map[string]any{
+		"planId": firstNonEmpty(
+			stringValue(source["planId"]),
+			stringValue(source["plan_id"]),
+			structuredObjectID(source["plan"]),
+			stringValue(source["id"]),
+			fallbackID,
+			"plan",
+		),
+		"title": truncate(firstNonEmpty(stringValue(source["title"]), structuredNestedString(planObject, "title", "name"), "Plan"), limit),
+	}
+	items := structuredItemsFromFields(source, limit, "items", "steps", "plan", "tasks", "todos")
+	if items == nil {
+		items = []map[string]any{}
+	}
+	payload["items"] = items
+	if summary := firstNonEmpty(structuredEventSummary(source, limit), structuredEventSummaryMap(planObject, limit)); summary != "" {
+		payload["summary"] = summary
+	}
+	state := firstNonEmpty(stringValue(source["state"]), stringValue(source["status"]), structuredNestedString(planObject, "state", "status"))
+	if state == "" {
+		if items, ok := payload["items"].([]map[string]any); ok && len(items) > 0 {
+			state = calculatePlanState(items)
+		} else {
+			state = "in_progress"
+		}
+	}
+	payload["state"] = canonicalStepStatus(state)
+	return payload
+}
+
+func normalizeStructuredTodoPayload(source map[string]any, fallbackID string, limit int) map[string]any {
+	todoObject := source["todo"]
+	payload := map[string]any{
+		"todoId": firstNonEmpty(
+			stringValue(source["todoId"]),
+			stringValue(source["todo_id"]),
+			stringValue(source["taskListId"]),
+			stringValue(source["task_list_id"]),
+			structuredObjectID(source["todo"]),
+			stringValue(source["id"]),
+			fallbackID,
+			"todos",
+		),
+		"title": truncate(firstNonEmpty(stringValue(source["title"]), structuredNestedString(todoObject, "title", "name"), "Todos"), limit),
+	}
+	items := structuredItemsFromFields(source, limit, "items", "todos", "tasks", "steps", "plan")
+	if items == nil {
+		items = []map[string]any{}
+	}
+	payload["items"] = items
+	if summary := firstNonEmpty(structuredEventSummary(source, limit), structuredEventSummaryMap(todoObject, limit)); summary != "" {
+		payload["summary"] = summary
+	}
+	state := firstNonEmpty(stringValue(source["state"]), stringValue(source["status"]), structuredNestedString(todoObject, "state", "status"))
+	if state == "" {
+		if items, ok := payload["items"].([]map[string]any); ok && len(items) > 0 {
+			state = calculatePlanState(items)
+		} else {
+			// An empty TodoWrite list is the provider's explicit clear operation.
+			state = "completed"
+		}
+	}
+	payload["state"] = canonicalStepStatus(state)
+	return payload
+}
+
+func mergeStructuredSource(primary, nested map[string]any) map[string]any {
+	merged := make(map[string]any, len(primary)+len(nested))
+	for key, value := range primary {
+		merged[key] = value
+	}
+	for key, value := range nested {
+		merged[key] = value
+	}
+	return merged
+}
+
 // projectStructuredAgentEvent turns provider-native structured records into
 // the small, provider-neutral payload understood by Agent View.
 func projectStructuredAgentEvent(provider string, fallbackType string, raw json.RawMessage, timestamp time.Time) *api.AgentEvent {
+	return projectStructuredAgentEventWithLimit(provider, fallbackType, raw, timestamp, maxEventContent)
+}
+
+func projectStructuredAgentEventWithLimit(provider string, fallbackType string, raw json.RawMessage, timestamp time.Time, contentLimit int) *api.AgentEvent {
 	var object map[string]any
 	if len(raw) == 0 || json.Unmarshal(raw, &object) != nil {
 		return nil
 	}
-	outerType := firstStringValue(object["type"], object["eventType"], fallbackType)
+	outerType := firstStringValue(object["type"], object["eventType"], object["customType"], fallbackType)
+	outerID := firstStringValue(object["id"], object["eventId"], object["event_id"], object["uuid"])
 	source := object
 	if nested, ok := object["payload"].(map[string]any); ok {
 		source = nested
 	}
-	rawType := firstStringValue(source["type"], source["eventType"], outerType)
-	normalized := strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimSpace(rawType)))
-	kind := normalized
-	for _, candidate := range []string{"question", "permission", "plan", "todo", "goal", "activity", "plugin", "subagent", "attachment", "config", "compaction", "diff", "diagnostics", "queue"} {
-		if normalized == candidate || strings.HasPrefix(normalized, candidate+"_") {
-			kind = candidate
-			break
+	// Pi extensions and a few provider bridges put the structured record under
+	// data/event rather than payload. Preserve the outer discriminator while
+	// merging nested fields, because nested objects often omit their own type.
+	for _, key := range []string{"data", "event"} {
+		if nested, ok := source[key].(map[string]any); ok {
+			candidate := firstStringValue(nested["type"], nested["eventType"], nested["kind"], nested["customType"])
+			currentType := firstStringValue(source["type"], source["eventType"], source["customType"], source["kind"], outerType)
+			if structuredAgentEventType(candidate) != "" || structuredAgentEventType(currentType) != "" {
+				if structuredAgentEventType(candidate) == "" {
+					// A structured outer envelope can wrap an ordinary provider
+					// record in data. Keep the outer plan/todo discriminator.
+					fields := make(map[string]any, len(nested))
+					for nestedKey, nestedValue := range nested {
+						if nestedKey != "type" && nestedKey != "eventType" && nestedKey != "customType" && nestedKey != "kind" {
+							fields[nestedKey] = nestedValue
+						}
+					}
+					source = mergeStructuredSource(source, fields)
+				} else {
+					source = mergeStructuredSource(source, nested)
+				}
+				if candidate != "" {
+					outerType = candidate
+				}
+			}
 		}
 	}
+	rawType := firstStringValue(source["type"], source["eventType"], outerType)
+	if structuredAgentEventType(rawType) == "" {
+		// A custom record may use `customType` as its discriminator while the
+		// top-level type remains `custom` or `custom_message`.
+		customType := firstStringValue(source["customType"], source["kind"], object["customType"], object["kind"])
+		if structuredAgentEventType(customType) != "" {
+			rawType = customType
+			if nested, ok := object["data"].(map[string]any); ok {
+				source = mergeStructuredSource(source, nested)
+			}
+		} else {
+			rawType = firstNonEmpty(customType, rawType)
+		}
+	}
+	normalized := strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimSpace(rawType)))
+	kind := structuredAgentEventType(normalized)
 	if _, ok := structuredAgentEventTypes[kind]; !ok {
 		return nil
 	}
@@ -171,7 +490,7 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 	}
 	copyStructuredField(payload, source, "options", "options")
 	copyStructuredField(payload, source, "planId", "planId", "plan_id")
-	copyStructuredField(payload, source, "todoId", "todoId", "todo_id")
+	copyStructuredField(payload, source, "todoId", "todoId", "todo_id", "taskListId", "task_list_id")
 	copyStructuredField(payload, source, "goalId", "goalId", "goal_id")
 	copyStructuredField(payload, source, "objective", "objective")
 	copyStructuredField(payload, source, "steps", "steps")
@@ -199,6 +518,80 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 	}
 	copyStructuredField(payload, source, "model", "model")
 	copyStructuredField(payload, source, "reasoningEffort", "reasoningEffort", "reasoning_effort", "effort")
+
+	var content string
+	switch kind {
+	case "plan":
+		planObject := source["plan"]
+		if title := stringValue(payload["title"]); title != "" {
+			payload["title"] = truncate(title, contentLimit)
+		}
+		planID := firstNonEmpty(
+			stringValue(payload["planId"]),
+			stringValue(source["planId"]),
+			stringValue(source["plan_id"]),
+			structuredObjectID(source["plan"]),
+			stringValue(source["id"]),
+			outerID,
+			"plan",
+		)
+		payload["planId"] = planID
+		if stringValue(payload["title"]) == "" {
+			payload["title"] = truncate(firstNonEmpty(stringValue(source["title"]), structuredNestedString(planObject, "title", "name"), "Plan"), contentLimit)
+		}
+		items := structuredItemsFromFields(source, contentLimit, "items", "steps", "plan", "tasks", "todos")
+		if items == nil {
+			items = []map[string]any{}
+		}
+		payload["items"] = items
+		content = firstNonEmpty(structuredEventSummary(source, contentLimit), structuredEventSummaryMap(planObject, contentLimit))
+		if content != "" {
+			payload["summary"] = content
+		}
+		if _, ok := payload["state"]; !ok {
+			if items, ok := payload["items"].([]map[string]any); ok && len(items) > 0 {
+				payload["state"] = calculatePlanState(items)
+			} else {
+				payload["state"] = "in_progress"
+			}
+		}
+	case "todo":
+		todoObject := source["todo"]
+		if title := stringValue(payload["title"]); title != "" {
+			payload["title"] = truncate(title, contentLimit)
+		}
+		todoID := firstNonEmpty(
+			stringValue(payload["todoId"]),
+			stringValue(source["todoId"]),
+			stringValue(source["todo_id"]),
+			stringValue(source["taskListId"]),
+			stringValue(source["task_list_id"]),
+			structuredObjectID(source["todo"]),
+			stringValue(source["id"]),
+			outerID,
+			"todos",
+		)
+		payload["todoId"] = todoID
+		if stringValue(payload["title"]) == "" {
+			payload["title"] = truncate(firstNonEmpty(stringValue(source["title"]), structuredNestedString(todoObject, "title", "name"), "Todos"), contentLimit)
+		}
+		items := structuredItemsFromFields(source, contentLimit, "items", "todos", "tasks", "steps", "plan")
+		if items == nil {
+			items = []map[string]any{}
+		}
+		payload["items"] = items
+		content = firstNonEmpty(structuredEventSummary(source, contentLimit), structuredEventSummaryMap(todoObject, contentLimit))
+		if content != "" {
+			payload["summary"] = content
+		}
+		if _, ok := payload["state"]; !ok {
+			if items, ok := payload["items"].([]map[string]any); ok && len(items) > 0 {
+				payload["state"] = calculatePlanState(items)
+			} else {
+				payload["state"] = "completed"
+			}
+		}
+	}
 	if len(payload) == 0 {
 		return nil
 	}
@@ -221,7 +614,17 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 		}
 	}
 	requestID := stringValue(payload["requestId"])
-	id := firstStringValue(source["id"], source["eventId"], source["event_id"])
+	id := firstStringValue(source["id"], source["eventId"], source["event_id"], outerID)
+	// Plan/Todo updates are snapshots. Their provider event id can differ
+	// from the stable object identity, so prefer the normalized payload key
+	// whenever one is present. This keeps timeline coalescing stable across
+	// providers that emit a fresh envelope id for every update.
+	switch kind {
+	case "plan":
+		id = firstNonEmpty(stringValue(payload["planId"]), id)
+	case "todo":
+		id = firstNonEmpty(stringValue(payload["todoId"]), id)
+	}
 	if id == "" {
 		switch kind {
 		case "question", "permission":
@@ -260,24 +663,28 @@ func projectStructuredAgentEvent(provider string, fallbackType string, raw json.
 			}
 		}
 	}
+	if (kind == "plan" || kind == "todo") && content != "" {
+		return &api.AgentEvent{Provider: provider, ID: id, Type: kind, Content: content, Payload: payload, Timestamp: timestamp}
+	}
 	return &api.AgentEvent{Provider: provider, ID: id, Type: kind, Payload: payload, Timestamp: timestamp}
 }
 
 func canonicalStepStatus(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "completed", "done", "finished", "success":
+	normalized := strings.ToLower(strings.TrimSpace(strings.NewReplacer("-", "_", " ", "_").Replace(raw)))
+	switch normalized {
+	case "completed", "complete", "done", "finished", "success":
 		return "completed"
-	case "in_progress", "in-progress", "running", "working":
+	case "in_progress", "inprogress", "running", "working", "active", "started":
 		return "in_progress"
 	case "failed", "error", "cancelled", "canceled", "aborted":
 		return "cancelled"
-	case "pending", "todo", "not_started":
+	case "pending", "todo", "not_started", "notstarted":
 		return "pending"
 	default:
-		if raw == "" {
+		if normalized == "" {
 			return "pending"
 		}
-		return strings.ToLower(strings.TrimSpace(raw))
+		return normalized
 	}
 }
 

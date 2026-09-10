@@ -2951,6 +2951,7 @@ func (s *Service) SettingsSnapshot() settings.Settings {
 		value.DefaultRuntime = s.DefaultRuntime
 	}
 	value.RuntimeEnv = cloneStringMap(value.RuntimeEnv)
+	value.PairedClients = clonePairedClients(value.PairedClients)
 	return value
 }
 
@@ -2963,6 +2964,32 @@ func cloneStringMap(value map[string]string) map[string]string {
 		copy[key] = item
 	}
 	return copy
+}
+
+// PairedClientsSnapshot returns detached pairing metadata. Token hashes are
+// kept inside the Host service and are never projected to remote clients.
+func (s *Service) PairedClientsSnapshot() []settings.PairedClient {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return clonePairedClients(s.Settings.PairedClients)
+}
+
+// UpdatePairedClients persists the current set of explicitly paired clients.
+func (s *Service) UpdatePairedClients(values []settings.PairedClient) error {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	s.Settings.PairedClients = clonePairedClients(values)
+	if s.SettingsPath != "" {
+		return settings.Save(s.SettingsPath, s.Settings)
+	}
+	return nil
+}
+
+func clonePairedClients(values []settings.PairedClient) []settings.PairedClient {
+	if values == nil {
+		return nil
+	}
+	return append([]settings.PairedClient(nil), values...)
 }
 
 // RelaySettingsSnapshot and PublicTunnelSettingsSnapshot are the lifecycle

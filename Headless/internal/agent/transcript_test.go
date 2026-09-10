@@ -177,7 +177,7 @@ func TestCodexWebSearchAndStreamingMessagesNormalize(t *testing.T) {
 	for _, event := range events {
 		kinds = append(kinds, event.Type)
 	}
-	if got, want := strings.Join(kinds, ","), "tool_call,tool_call,assistant,reasoning,unknown"; got != want {
+	if got, want := strings.Join(kinds, ","), "tool_call,tool_call,assistant,reasoning,plan"; got != want {
 		t.Fatalf("event kinds = %q, want %q", got, want)
 	}
 	if events[0].ToolName != "web_search" || events[0].ToolStatus != "success" {
@@ -189,8 +189,32 @@ func TestCodexWebSearchAndStreamingMessagesNormalize(t *testing.T) {
 	if events[2].Content != "Let me look at that file" || events[3].Content != "Checking read scope" {
 		t.Fatalf("streaming events = %#v", events[2:4])
 	}
-	if events[4].Content != "Proposed plan" {
-		t.Fatalf("unknown fallback should extract inner text, got %q", events[4].Content)
+	if events[4].ID != "plan-1" || events[4].Payload["planId"] != "plan-1" {
+		t.Fatalf("plan identity = %#v", events[4])
+	}
+	if events[4].Content != "Proposed plan" || events[4].Payload["summary"] != "Proposed plan" {
+		t.Fatalf("plan summary = %#v", events[4])
+	}
+	if events[4].Payload["state"] != "in_progress" {
+		t.Fatalf("plan state = %#v", events[4].Payload["state"])
+	}
+}
+
+func TestCodexPlanResponseItemNormalizesStructuredSteps(t *testing.T) {
+	line := []byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"response_item","payload":{"type":"plan","id":"plan-steps","plan":[{"step":"Inspect the stream","status":"in_progress"},{"step":"Render the card","status":"pending"}]}}`)
+	events := newParser("codex").Parse(line)
+	if len(events) != 1 || events[0].Type != "plan" {
+		t.Fatalf("expected one plan event, got %#v", events)
+	}
+	items, ok := events[0].Payload["items"].([]map[string]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("plan items = %#v", events[0].Payload["items"])
+	}
+	if items[0]["label"] != "Inspect the stream" || items[0]["state"] != "in_progress" {
+		t.Fatalf("first plan item = %#v", items[0])
+	}
+	if events[0].Payload["state"] != "in_progress" {
+		t.Fatalf("plan state = %#v", events[0].Payload["state"])
 	}
 }
 
@@ -607,6 +631,17 @@ func TestClaudeUserInterruptSetsStopReason(t *testing.T) {
 	}
 }
 
+func TestCanonicalTurnAbortedMarkupBecomesInterruptedSystemEvent(t *testing.T) {
+	parser := newParser("qoder")
+	events := parser.parse([]byte(`{"type":"user","uuid":"u-abort","message":{"role":"user","content":"<turn_aborted>"}}`))
+	if len(events) != 1 || events[0].Type != "system" || events[0].StopReason != "interrupted" {
+		t.Fatalf("turn aborted event = %#v, want system interruption", events)
+	}
+	if got := parser.Activity(); got != api.AgentActivityReady {
+		t.Fatalf("activity after turn aborted = %q, want ready", got)
+	}
+}
+
 func TestCodexTaskCompleteErrorBecomesErrorEvent(t *testing.T) {
 	parser := newParser("codex")
 	parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"event_msg","payload":{"type":"task_started"}}`))
@@ -873,6 +908,53 @@ func TestCodexCompactedEventPromotedToCompaction(t *testing.T) {
 	}
 }
 
+func TestCodexCompactionPreservesSummaryForCollapsedClients(t *testing.T) {
+	parser := newParser("codex")
+	events := parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"compacted","payload":{"compaction_id":"cmp-1","summary":"Keep this context summary"}}`))
+	if len(events) != 1 || events[0].Type != "compaction" {
+		t.Fatalf("compacted event = %#v, want one compaction event", events)
+	}
+	if got := events[0].Payload["compactionId"]; got != "cmp-1" {
+		t.Fatalf("compaction id = %v, want cmp-1", got)
+	}
+	if got := events[0].Payload["summary"]; got != "Keep this context summary" {
+		t.Fatalf("summary = %v, want preserved provider summary", got)
+	}
+
+	messageEvents := parser.parse([]byte(`{"timestamp":"2026-08-16T10:00:01Z","type":"response_item","payload":{"type":"message","id":"m-1","role":"user","content":[{"type":"input_text","text":"# Resuming from a compaction\n\nRestored context details"}]}}`))
+	if len(messageEvents) != 1 || messageEvents[0].Type != "compaction" {
+		t.Fatalf("message compaction = %#v, want one compaction event", messageEvents)
+	}
+	if got := messageEvents[0].Payload["summary"]; got != "# Resuming from a compaction\n\nRestored context details" {
+		t.Fatalf("message summary = %v, want original context summary", got)
+	}
+}
+
+func TestCanonicalCompactionPreservesInjectedSummary(t *testing.T) {
+	event := api.AgentEvent{
+		Provider: "unknown",
+		ID:       "cmp-legacy",
+		Type:     "user",
+		Role:     "user",
+		Content:  "<CONTEXT_SUMMARY>\nKeep this context\n</CONTEXT_SUMMARY>",
+	}
+	events := (&baseParser{}).observe([]api.AgentEvent{event})
+	if len(events) != 1 || events[0].Type != "compaction" {
+		t.Fatalf("canonical compaction = %#v", events)
+	}
+	if got := events[0].Payload["summary"]; got != "Keep this context" {
+		t.Fatalf("summary = %v, want wrapper-free context", got)
+	}
+}
+
+func TestClaudeMarkupIsSystemInstructions(t *testing.T) {
+	parser := newParser("claude")
+	events := parser.parse([]byte(`{"type":"user","uuid":"markup-1","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>Use the project rules</system-reminder>"}]}}`))
+	if len(events) != 1 || events[0].Type != "system_instructions" || events[0].Role != "system" {
+		t.Fatalf("markup event = %#v, want system_instructions", events)
+	}
+}
+
 func TestClaudeAskUserQuestionProjectsToRFC0010Question(t *testing.T) {
 	parser := newParser("claude")
 	events := parser.parse([]byte(`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which database?","header":"DB","options":[{"label":"Postgres","description":"sql"},{"label":"MySQL","description":"sql too"}],"multiSelect":false}]}}]}}`))
@@ -1043,6 +1125,67 @@ func TestClaudeTodoWriteToolResultIsSuppressed(t *testing.T) {
 	events := parser.parse([]byte(`{"type":"user","uuid":"u1","timestamp":"2026-08-16T10:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_t1","content":"success"}]}}`))
 	if len(events) != 0 {
 		t.Fatalf("events = %#v, want no events for TodoWrite result", events)
+	}
+}
+
+func TestStructuredPlanAliasesNormalizeForNonCodexProviders(t *testing.T) {
+	line := []byte(`{"type":"plan.updated","id":"plan-claude","status":"running","content":[{"type":"output_text","text":"Inspect and render"}],"steps":[{"step":"Inspect parser","status":"done"},{"task":"Render card","done":false}]}`)
+	for _, provider := range []string{"claude", "pi", "qoder"} {
+		events := newParser(provider).Parse(line)
+		if len(events) != 1 || events[0].Type != "plan" {
+			t.Fatalf("%s plan events = %#v, want one plan", provider, events)
+		}
+		event := events[0]
+		if event.ID != "plan-claude" || event.Payload["planId"] != "plan-claude" {
+			t.Fatalf("%s plan identity = %#v", provider, event)
+		}
+		if event.Content != "Inspect and render" || event.Payload["summary"] != "Inspect and render" {
+			t.Fatalf("%s plan summary = %#v", provider, event)
+		}
+		items, ok := event.Payload["items"].([]map[string]any)
+		if !ok || len(items) != 2 || items[0]["state"] != "completed" || items[1]["state"] != "pending" {
+			t.Fatalf("%s plan items = %#v", provider, event.Payload["items"])
+		}
+		if event.Payload["state"] != "in_progress" {
+			t.Fatalf("%s plan state = %#v", provider, event.Payload["state"])
+		}
+	}
+}
+
+func TestPiCustomStructuredPlanAndPlanToolNormalize(t *testing.T) {
+	parser := newParser("pi")
+	custom := []byte(`{"type":"custom","id":"custom-plan","customType":"plan","data":{"summary":"Custom plan","items":[{"id":"one","content":"First step","completed":true}]}}`)
+	events := parser.Parse(custom)
+	if len(events) != 1 || events[0].Type != "plan" || events[0].Payload["summary"] != "Custom plan" {
+		t.Fatalf("custom Pi plan = %#v", events)
+	}
+	tool := []byte(`{"type":"message","id":"m-plan","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-plan","name":"update_plan","arguments":{"plan":[{"step":"Run tests","status":"pending"}]}}]}}`)
+	events = parser.Parse(tool)
+	if len(events) != 1 || events[0].Type != "plan" {
+		t.Fatalf("Pi update_plan = %#v", events)
+	}
+	if events[0].Payload["planId"] != "pi-plan" {
+		t.Fatalf("Pi update_plan identity = %#v", events[0].Payload)
+	}
+	result := []byte(`{"type":"toolResult","id":"r-plan","timestamp":"2026-08-16T10:00:01Z","message":{"role":"toolResult","toolCallId":"call-plan","toolName":"update_plan","content":"success"}}`)
+	if events := parser.Parse(result); len(events) != 0 {
+		t.Fatalf("Pi update_plan result = %#v, want no bookkeeping event", events)
+	}
+}
+
+func TestStructuredPlanNestedDataUsesStablePlanIdentity(t *testing.T) {
+	line := []byte(`{"type":"plan.updated","id":"event-17","data":{"planId":"plan-17","summary":"Nested plan","steps":[{"title":"Nested step","status":"pending"}]}}`)
+	for _, provider := range []string{"claude", "pi", "qoder", "antigravity"} {
+		events := newParser(provider).Parse(line)
+		if len(events) != 1 || events[0].Type != "plan" {
+			t.Fatalf("%s nested plan = %#v, want one plan", provider, events)
+		}
+		if events[0].ID != "plan-17" || events[0].Payload["planId"] != "plan-17" {
+			t.Fatalf("%s nested identity = %#v", provider, events[0])
+		}
+		if events[0].Content != "Nested plan" || events[0].Payload["summary"] != "Nested plan" {
+			t.Fatalf("%s nested summary = %#v", provider, events[0])
+		}
 	}
 }
 
@@ -1477,6 +1620,30 @@ func TestQoderRuntimeConfigAndPlanAttachment(t *testing.T) {
 	if events[0].Payload["file"] != ".qoder/plans/setup.md" {
 		t.Fatalf("unexpected plan payload: %#v", events[0].Payload)
 	}
+	if events[0].Content != ".qoder/plans/setup.md" || events[0].Payload["summary"] != ".qoder/plans/setup.md" {
+		t.Fatalf("plan attachment summary = %#v", events[0])
+	}
+}
+
+func TestQoderPlanAndTodoToolResultsAreSuppressed(t *testing.T) {
+	p := newParser("qoder")
+	planCall := []byte(`{"type":"assistant","uuid":"a-plan","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-plan","name":"update_plan","input":{"plan":[{"step":"Inspect","status":"in_progress"}]}}]}}`)
+	if events := p.Parse(planCall); len(events) != 1 || events[0].Type != "plan" {
+		t.Fatalf("plan call = %#v, want one plan event", events)
+	}
+	planResult := []byte(`{"type":"user","uuid":"u-plan","timestamp":"2026-08-16T10:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-plan","content":"success"}]}}`)
+	if events := p.Parse(planResult); len(events) != 0 {
+		t.Fatalf("plan result = %#v, want no bookkeeping event", events)
+	}
+
+	todoCall := []byte(`{"type":"assistant","uuid":"a-todo","timestamp":"2026-08-16T10:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-todo","name":"TodoWrite","input":{"todos":[{"content":"Inspect","status":"pending"}]}}]}}`)
+	if events := p.Parse(todoCall); len(events) != 1 || events[0].Type != "todo" {
+		t.Fatalf("todo call = %#v, want one todo event", events)
+	}
+	todoResult := []byte(`{"type":"user","uuid":"u-todo","timestamp":"2026-08-16T10:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-todo","content":"success"}]}}`)
+	if events := p.Parse(todoResult); len(events) != 0 {
+		t.Fatalf("todo result = %#v, want no bookkeeping event", events)
+	}
 }
 
 func TestOpenCodeQuestionTodoAndSubagent(t *testing.T) {
@@ -1511,6 +1678,22 @@ func TestOpenCodeQuestionTodoAndSubagent(t *testing.T) {
 	}
 	if events[0].Payload["state"] != "in_progress" {
 		t.Fatalf("expected todo state in_progress, got %v", events[0].Payload["state"])
+	}
+
+	// Update plan
+	planLine := []byte(`{"messageID":"m-plan","role":"assistant","parts":[{"id":"p_plan","type":"tool","callID":"call_plan","tool":"update_plan","state":{"status":"completed","input":{"plan":[{"step":"Inspect","status":"pending"}]}}}]}`)
+	events = p.Parse(planLine)
+	if len(events) != 1 || events[0].Type != "plan" || events[0].Payload["planId"] != "opencode-plan" {
+		t.Fatalf("expected normalized OpenCode plan, got %#v", events)
+	}
+	planUpdate := []byte(`{"messageID":"m-plan","role":"assistant","parts":[{"id":"p_plan","type":"tool","callID":"call_plan","tool":"update_plan","state":{"status":"completed","input":{"plan":[{"step":"Inspect","status":"completed"},{"step":"Render","status":"in_progress"}]}}}]}`)
+	events = p.Parse(planUpdate)
+	if len(events) != 1 || events[0].Type != "plan" {
+		t.Fatalf("expected changed OpenCode plan snapshot, got %#v", events)
+	}
+	items, ok := events[0].Payload["items"].([]map[string]any)
+	if !ok || len(items) != 2 || items[0]["state"] != "completed" {
+		t.Fatalf("unexpected changed OpenCode plan payload: %#v", events[0].Payload)
 	}
 
 	// Subagent (call_omo_agent)

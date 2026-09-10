@@ -177,4 +177,201 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         let catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
         XCTAssertEqual(catalog.endpoints.first?.clientID, "desktop-client-1")
     }
+
+    func testDisplayRoundTripsAndPreservesEndpointMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: "prod",
+            url: "https://prod.example",
+            token: "prod-secret",
+            type: "relay",
+            hostID: "host-1",
+            routeID: "route-1",
+            clientID: "client-1"
+        )
+
+        try WarrenEndpointCatalog.save(
+            endpoints: [endpoint],
+            current: endpoint.name,
+            display: WarrenDisplayConfiguration(endpoints: ["local", "prod"]),
+            to: url
+        )
+
+        let catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(catalog.current, "prod")
+        XCTAssertEqual(catalog.display, WarrenDisplayConfiguration(endpoints: ["local", "prod"]))
+        XCTAssertEqual(catalog.endpoints, [endpoint])
+        XCTAssertEqual(
+            try WarrenEndpointCatalog.effectiveDisplay(from: catalog),
+            ["local", "prod"]
+        )
+    }
+
+    func testLegacySidebarMigratesToDisplayOnWrite() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let legacy = """
+        {
+          "current": "dev",
+          "endpoints": {
+            "dev": {"name": "dev", "url": "https://dev.example", "token": "secret"}
+          },
+          "sidebar": {"version": 1, "endpoints": ["local", "dev"]}
+        }
+        """
+        try Data(legacy.utf8).write(to: url)
+
+        let catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(
+            catalog.display,
+            WarrenDisplayConfiguration(endpoints: ["local", "dev"])
+        )
+
+        try WarrenEndpointCatalog.setCurrent("dev", to: url)
+        let data = try Data(contentsOf: url)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertNotNil(object["display"])
+        XCTAssertNil(object["sidebar"])
+    }
+
+    func testSetCurrentPreservesAnExplicitDisplay() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let dev = WarrenRemoteEndpointConfiguration(
+            name: "dev",
+            url: "https://dev.example",
+            token: "dev-secret"
+        )
+        let prod = WarrenRemoteEndpointConfiguration(
+            name: "prod",
+            url: "https://prod.example",
+            token: "prod-secret"
+        )
+        try WarrenEndpointCatalog.save(
+            endpoints: [dev, prod],
+            current: "dev",
+            display: WarrenDisplayConfiguration(endpoints: ["dev"]),
+            to: url
+        )
+
+        try WarrenEndpointCatalog.setCurrent("prod", to: url)
+
+        let catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(catalog.current, "prod")
+        XCTAssertEqual(catalog.display?.endpoints, ["dev"])
+        XCTAssertEqual(try WarrenEndpointCatalog.effectiveDisplay(from: catalog), ["dev"])
+    }
+
+    func testDisplayMembershipIsExplicitAndKeepsCurrentEndpoint() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let dev = WarrenRemoteEndpointConfiguration(
+            name: "dev",
+            url: "https://dev.example",
+            token: "dev-secret"
+        )
+        let prod = WarrenRemoteEndpointConfiguration(
+            name: "prod",
+            url: "https://prod.example",
+            token: "prod-secret"
+        )
+        try WarrenEndpointCatalog.save(
+            endpoints: [dev, prod],
+            current: "dev",
+            to: url
+        )
+
+        try WarrenEndpointCatalog.setDisplayMembership("prod", isDisplayed: true, to: url)
+        var catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(catalog.current, "dev")
+        XCTAssertEqual(catalog.display?.endpoints, ["dev", "prod"])
+
+        try WarrenEndpointCatalog.setDisplayMembership("prod", isDisplayed: false, to: url)
+        catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(catalog.current, "dev")
+        XCTAssertEqual(catalog.display?.endpoints, ["dev"])
+
+        try WarrenEndpointCatalog.setDisplayMembership("dev", isDisplayed: false, to: url)
+        catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertNil(catalog.display)
+    }
+
+    func testUpsertPreservesDisplayAndResetRestoresLegacyRepresentation() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let dev = WarrenRemoteEndpointConfiguration(
+            name: "dev",
+            url: "https://dev.example",
+            token: "dev-secret"
+        )
+        try WarrenEndpointCatalog.save(
+            endpoints: [dev],
+            current: "dev",
+            display: WarrenDisplayConfiguration(endpoints: ["local", "dev"]),
+            to: url
+        )
+
+        let updated = WarrenRemoteEndpointConfiguration(
+            name: "dev",
+            url: "https://dev-new.example",
+            token: "new-secret"
+        )
+        try WarrenEndpointCatalog.upsert(updated, to: url)
+        var catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(catalog.display?.endpoints, ["local", "dev"])
+        XCTAssertEqual(catalog.endpoints.first?.url, "https://dev-new.example")
+
+        try WarrenEndpointCatalog.resetDisplay(to: url)
+        catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertNil(catalog.display)
+        XCTAssertEqual(try WarrenEndpointCatalog.effectiveDisplay(from: catalog), ["dev"])
+    }
+
+    func testDisplayCatalogRejectsEmptyUnknownAndFutureVersions() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: "dev",
+            url: "https://dev.example",
+            token: "secret"
+        )
+        try WarrenEndpointCatalog.save(endpoints: [endpoint], current: "dev", to: url)
+
+        XCTAssertThrowsError(try WarrenEndpointCatalog.setDisplay([], to: url))
+        XCTAssertThrowsError(try WarrenEndpointCatalog.setDisplay(["missing"], to: url))
+
+        let future = """
+        {
+          "current": "dev",
+          "endpoints": {
+            "dev": {"name": "dev", "url": "https://dev.example", "token": "secret"}
+          },
+          "display": {"version": 99, "endpoints": ["dev"]}
+        }
+        """
+        try Data(future.utf8).write(to: url)
+        let catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertThrowsError(try WarrenEndpointCatalog.effectiveDisplay(from: catalog))
+    }
 }

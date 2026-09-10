@@ -250,6 +250,22 @@ func TestReadPiTranscriptErrorAndAbort(t *testing.T) {
 	// matters for live sessions and is covered by the watcher test.
 }
 
+func TestPiCompactionAndBranchSummaryPreserveProviderText(t *testing.T) {
+	parser := newPiParser(1024)
+	compaction := parser.Parse([]byte(`{"type":"compaction","id":"cmp-1","summary":"Retained context from the previous branch"}`))
+	if len(compaction) != 1 || compaction[0].Type != "compaction" {
+		t.Fatalf("compaction = %#v", compaction)
+	}
+	if got := compaction[0].Payload["summary"]; got != "Retained context from the previous branch" {
+		t.Fatalf("compaction summary = %v", got)
+	}
+
+	branch := parser.Parse([]byte(`{"type":"branch_summary","id":"branch-1","summary":"Files changed on the branch"}`))
+	if len(branch) != 1 || branch[0].Type != "system" || branch[0].Content != "Branch summary: Files changed on the branch" {
+		t.Fatalf("branch summary = %#v", branch)
+	}
+}
+
 func TestParsePiBashExecutionProjection(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "2026-09-01T10-00-00-000Z_pi-test.jsonl")
 	lines := []string{

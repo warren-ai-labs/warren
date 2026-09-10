@@ -379,7 +379,8 @@ func TestSubscribeFeedsMultipleSessionsIndependently(t *testing.T) {
 
 func TestSubscribeDoesNotClaimFocus(t *testing.T) {
 	const sessionID = "subscribe-passive"
-	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, sessionID)
+	const otherSessionID = "subscribe-other"
+	service, runtime, httpServer := newMemoryOutputServiceWithSessions(t, sessionID, otherSessionID)
 	writeMemoryOutput(t, runtime, sessionID, "seed\r\n")
 
 	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
@@ -390,15 +391,21 @@ func TestSubscribeDoesNotClaimFocus(t *testing.T) {
 		t.Fatal("subscribe must never claim focus ownership")
 	}
 
-	// A subscriber holds no control lease, so its resize requests cannot
-	// mutate the shared runtime; the daemon rejects them outright instead of
-	// letting stale viewport callbacks fight the focused endpoint.
-	requestError(t, connection, "session.resize", map[string]any{
-		"cols": 120, "rows": 40,
+	// A subscriber holds no control lease, so an explicit resize target cannot
+	// mutate the shared runtime; it is answered as a no-op instead of letting
+	// stale viewport callbacks fight the focused endpoint.
+	resized := requestResult[map[string]bool](t, connection, "session.resize", map[string]any{
+		"id": sessionID, "cols": 120, "rows": 40,
 	})
+	if resized["resized"] {
+		t.Fatal("unfocused explicit resize unexpectedly succeeded")
+	}
 	if got := len(runtime.snapshotResizes()); got != 0 {
 		t.Fatalf("unfocused resize mutated runtime: %d calls", got)
 	}
+	requestError(t, connection, "session.resize", map[string]any{
+		"id": otherSessionID, "cols": 120, "rows": 40,
+	})
 }
 
 func TestPassiveSubscriptionCanPromoteExplicitFocus(t *testing.T) {
@@ -434,9 +441,12 @@ func TestPassiveSubscriptionCanPromoteExplicitFocus(t *testing.T) {
 	if unfocused["focused"] {
 		t.Fatalf("explicit blur result = %#v", unfocused)
 	}
-	requestResult[map[string]bool](t, connection, "session.resize", map[string]any{
-		"cols": 122, "rows": 42,
+	resized := requestResult[map[string]bool](t, connection, "session.resize", map[string]any{
+		"id": sessionID, "cols": 122, "rows": 42,
 	})
+	if resized["resized"] {
+		t.Fatal("resize after explicit blur unexpectedly succeeded")
+	}
 	if got := len(runtime.snapshotResizes()); got != 1 {
 		t.Fatalf("resize after explicit blur mutated runtime: %d calls", got)
 	}

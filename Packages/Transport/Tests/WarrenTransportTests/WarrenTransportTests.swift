@@ -127,6 +127,21 @@ final class WarrenWireCodecTests: XCTestCase {
         ))
     }
 
+    func testMaximumEnvelopeBytesIncludesAtomicStateBudget() {
+        let codec = WarrenWireCodec()
+        XCTAssertEqual(
+            codec.maximumEnvelopeBytes,
+            WarrenWireCodec.binaryPrefixLength
+                + WarrenWireCodec.defaultMaxHeader
+                + WarrenWireCodec.defaultMaxAtomicStatePayload
+        )
+        let ordinaryOnly = WarrenWireCodec(maxHeader: 32, maxPayload: 64, maxAtomicStatePayload: 16)
+        XCTAssertEqual(
+            ordinaryOnly.maximumEnvelopeBytes,
+            WarrenWireCodec.binaryPrefixLength + 32 + 64
+        )
+    }
+
     func testBinaryErrorMatrixRejectsMalformedEnvelope() throws {
         let codec = WarrenWireCodec()
         let wire = try codec.encodeOutput(header: header(payloadLength: 2), payload: Data([1, 2]))

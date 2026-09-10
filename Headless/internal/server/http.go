@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -14,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -44,7 +46,13 @@ const (
 	outboundWriteTimeout         = 30 * time.Second
 	slowMutationTimeout          = 30 * time.Second
 	rosterDeltaBatchDelay        = 75 * time.Millisecond
+	lanPairingWindowTTL          = 60 * time.Second
 )
+
+type lanPairingWindow struct {
+	pin       string
+	expiresAt time.Time
+}
 
 type HTTPServer struct {
 	Service *Service
@@ -95,6 +103,11 @@ type HTTPServer struct {
 	relayPeersMu sync.Mutex
 	relayPeers   map[relay.ConnectionID]*relayControlPeer
 	publicAccess *PublicAccessService
+	// pairingMu protects the short-lived in-memory LAN pairing window. The
+	// window is deliberately not persisted, so a daemon restart always closes
+	// pairing and requires an explicit Host-side action again.
+	pairingMu     sync.Mutex
+	pairingWindow *lanPairingWindow
 }
 
 type rosterMessage struct {
@@ -245,6 +258,10 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/ws", s.handleWebSocket)
 	mux.HandleFunc("GET /v1/settings", s.handleSettings)
 	mux.HandleFunc("PUT /v1/settings", s.handleSettings)
+	mux.HandleFunc("POST /v1/pairing/enable", s.handlePairingEnable)
+	mux.HandleFunc("GET /v1/pairing/status", s.handlePairingStatus)
+	mux.HandleFunc("POST /v1/pairing/disable", s.handlePairingDisable)
+	mux.HandleFunc("POST /v1/pairing/request", s.handlePairingRequest)
 	mux.HandleFunc("POST /v1/relay/join", s.handleRelayJoin)
 	mux.HandleFunc("POST /v1/relay/pairing", s.handleRelayPairing)
 	mux.HandleFunc("POST /v1/maintenance", s.handleMaintenance)
@@ -264,6 +281,212 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /apple-touch-icon.png", s.handleWebAsset)
 	mux.HandleFunc("GET /tls/ca.pem", s.handleCACert)
 	return gzipMiddleware(mux)
+}
+
+type lanPairingStatus struct {
+	Enabled   bool      `json:"enabled"`
+	PIN       string    `json:"pin,omitempty"`
+	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+	ExpiresIn int       `json:"expiresIn,omitempty"`
+}
+
+// PairingOpen reports whether the explicit Host-side pairing window is armed.
+// Discovery uses this callback to update the non-secret `pair` TXT flag.
+func (s *HTTPServer) PairingOpen() bool {
+	s.pairingMu.Lock()
+	defer s.pairingMu.Unlock()
+	return s.pairingWindow != nil && time.Now().Before(s.pairingWindow.expiresAt)
+}
+
+func (s *HTTPServer) pairingStatusLocked(now time.Time) lanPairingStatus {
+	if s.pairingWindow == nil || !now.Before(s.pairingWindow.expiresAt) {
+		s.pairingWindow = nil
+		return lanPairingStatus{}
+	}
+	seconds := int(s.pairingWindow.expiresAt.Sub(now).Round(time.Second) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return lanPairingStatus{
+		Enabled:   true,
+		PIN:       s.pairingWindow.pin,
+		ExpiresAt: s.pairingWindow.expiresAt,
+		ExpiresIn: seconds,
+	}
+}
+
+func (s *HTTPServer) writePairingStatus(writer http.ResponseWriter, status lanPairingStatus) {
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(writer).Encode(status)
+}
+
+// handlePairingEnable arms one short-lived PIN window. It is intentionally
+// authenticated with the Host token and never enabled from discovery.
+func (s *HTTPServer) handlePairingEnable(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	status, err := s.armPairing()
+	if err != nil {
+		http.Error(writer, "unable to create pairing PIN", http.StatusInternalServerError)
+		return
+	}
+	s.writePairingStatus(writer, status)
+}
+
+func (s *HTTPServer) handlePairingStatus(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	s.pairingMu.Lock()
+	status := s.pairingStatusLocked(time.Now())
+	s.pairingMu.Unlock()
+	s.writePairingStatus(writer, status)
+}
+
+func (s *HTTPServer) handlePairingDisable(writer http.ResponseWriter, request *http.Request) {
+	if !s.authorized(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")) {
+		http.Error(writer, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	s.disarmPairing()
+	s.writePairingStatus(writer, lanPairingStatus{})
+}
+
+func (s *HTTPServer) armPairing() (lanPairingStatus, error) {
+	pin, err := newLANPairingPIN()
+	if err != nil {
+		return lanPairingStatus{}, err
+	}
+	s.pairingMu.Lock()
+	s.pairingWindow = &lanPairingWindow{pin: pin, expiresAt: time.Now().Add(lanPairingWindowTTL)}
+	status := s.pairingStatusLocked(time.Now())
+	s.pairingMu.Unlock()
+	return status, nil
+}
+
+func (s *HTTPServer) disarmPairing() {
+	s.pairingMu.Lock()
+	s.pairingWindow = nil
+	s.pairingMu.Unlock()
+}
+
+// handlePairingRequest is the only unauthenticated endpoint in the pairing
+// flow. It accepts a PIN solely while the Host-side window is armed, then
+// returns a new scoped bearer token once. The token hash is the only value
+// persisted by the Host.
+func (s *HTTPServer) handlePairingRequest(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		HostID     string `json:"host_id"`
+		ClientID   string `json:"client_id"`
+		ClientName string `json:"client_name"`
+		PIN        string `json:"pin"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		http.Error(writer, "invalid pairing request", http.StatusBadRequest)
+		return
+	}
+	hostID := strings.TrimSpace(body.HostID)
+	clientID := strings.TrimSpace(body.ClientID)
+	clientName := strings.TrimSpace(body.ClientName)
+	pin := strings.TrimSpace(body.PIN)
+	if hostID == "" || clientID == "" || len(clientID) > 256 || len(pin) != 6 || !allASCIIDigits(pin) {
+		http.Error(writer, "invalid pairing request", http.StatusBadRequest)
+		return
+	}
+	if s.Service == nil || s.Service.Store == nil {
+		http.Error(writer, "Host is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if expected := strings.TrimSpace(s.Service.Store.Snapshot().Host.ID); expected == "" || !strings.EqualFold(expected, hostID) {
+		http.Error(writer, "unknown Host", http.StatusNotFound)
+		return
+	}
+
+	// Serialize validation and issuance so two simultaneous requests cannot
+	// race a window expiry or replace the same client credential unexpectedly.
+	s.pairingMu.Lock()
+	status := s.pairingStatusLocked(time.Now())
+	if !status.Enabled || subtle.ConstantTimeCompare([]byte(pin), []byte(status.PIN)) != 1 {
+		s.pairingMu.Unlock()
+		http.Error(writer, "pairing is closed or the PIN is invalid", http.StatusConflict)
+		return
+	}
+	token, err := newLANPairingToken()
+	if err != nil {
+		s.pairingMu.Unlock()
+		http.Error(writer, "unable to create pairing token", http.StatusInternalServerError)
+		return
+	}
+	hash := hashLANPairingToken(token)
+	clients := s.Service.PairedClientsSnapshot()
+	updated := false
+	for index := range clients {
+		if clients[index].ClientID == clientID {
+			clients[index] = settings.PairedClient{
+				ClientID: clientID, Name: clientName, TokenHash: hash, CreatedAt: time.Now().UTC(),
+			}
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		clients = append(clients, settings.PairedClient{
+			ClientID: clientID, Name: clientName, TokenHash: hash, CreatedAt: time.Now().UTC(),
+		})
+	}
+	if err := s.Service.UpdatePairedClients(clients); err != nil {
+		s.pairingMu.Unlock()
+		http.Error(writer, "unable to persist pairing", http.StatusInternalServerError)
+		return
+	}
+	s.pairingMu.Unlock()
+
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"paired":    true,
+		"host_id":   hostID,
+		"client_id": clientID,
+		"token":     token,
+	})
+}
+
+func allASCIIDigits(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] < '0' || value[index] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func newLANPairingPIN() (string, error) {
+	value, err := cryptorand.Int(cryptorand.Reader, big.NewInt(1_000_000))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%06d", value.Int64()), nil
+}
+
+func newLANPairingToken() (string, error) {
+	value := make([]byte, 32)
+	if _, err := cryptorand.Read(value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+func hashLANPairingToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
 }
 
 var gzipWriterPool = sync.Pool{
@@ -698,6 +921,9 @@ func (s *HTTPServer) resetRelayEnrollment(ctx context.Context) error {
 
 func (s *HTTPServer) settingsProjection() map[string]any {
 	value := s.Service.SettingsSnapshot()
+	s.pairingMu.Lock()
+	pairing := s.pairingStatusLocked(time.Now())
+	s.pairingMu.Unlock()
 	return map[string]any{
 		"defaultRuntime":     value.DefaultRuntime,
 		"runtimeEnv":         value.RuntimeEnv,
@@ -708,6 +934,7 @@ func (s *HTTPServer) settingsProjection() map[string]any {
 		"openaiTitleEnabled": value.OpenAITitleEnabled,
 		"relay":              value.Relay,
 		"publicTunnel":       value.PublicTunnel,
+		"pairing":            pairing,
 	}
 }
 
@@ -885,13 +1112,23 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 	_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
 	var envelope api.Envelope
 	publicRelayWebSocket := relay.IsPublicRoute(request.Context()) && request.URL.Path == "/v1/ws"
-	if err := connection.ReadJSON(&envelope); err != nil || envelope.Type != "auth" ||
-		(!s.authorized(envelope.Token) && !(publicRelayWebSocket && strings.TrimSpace(envelope.Token) == "")) {
+	if err := connection.ReadJSON(&envelope); err != nil || envelope.Type != "auth" {
+		closeReason = "auth_rejected"
+		_ = peer.writeJSON(api.Response{Type: "error", OK: false, Error: "unauthorized"})
+		return
+	}
+	clientID, authenticated := s.authenticatedClient(envelope.Token)
+	if !authenticated && !(publicRelayWebSocket && strings.TrimSpace(envelope.Token) == "") {
 		closeReason = "auth_rejected"
 		_ = peer.writeJSON(api.Response{Type: "error", OK: false, Error: "unauthorized"})
 		return
 	}
 	s.registerPeer(peer)
+	peer.clientID = clientID
+	// A public Relay route may intentionally arrive without a bearer token.
+	// That anonymous transport is never an owner session, even though its
+	// client ID is empty just like the static Host token's client ID.
+	peer.ownerAuthenticated = authenticated && clientID == ""
 	// Protocol 4 changes terminal recovery from a replayable byte stream to an
 	// atomically installable terminal state.  A missing version is therefore not
 	// an older-but-compatible client: it is an unauthenticated protocol shape
@@ -914,7 +1151,7 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 		return
 	}
 	_ = connection.SetReadDeadline(time.Time{})
-	peer.accessScopeID = s.accessScopeID("")
+	peer.accessScopeID = s.accessScopeID(clientID)
 	peer.setCapabilities(api.NegotiateCapabilities(s.Service.AgentViewCapabilities(), envelope.Capabilities))
 	state, revision := s.Service.RosterVersion(request.Context())
 	state = projectRosterCapabilities(state, peer.capabilitiesList())
@@ -1070,6 +1307,10 @@ func (s *HTTPServer) HandleRelayControl(
 		entry.authenticated = true
 		entry.stateMu.Unlock()
 		s.registerPeer(peer)
+		peer.clientID = auth.ClientID
+		// Relay control already carries a capability minted by the Host/Relay
+		// trust boundary. Preserve its historical settings access.
+		peer.ownerAuthenticated = true
 		peer.accessScopeID = s.accessScopeID(auth.ClientID)
 		peer.setCapabilities(api.NegotiateCapabilities(s.Service.AgentViewCapabilities(), auth.Capabilities))
 		state, revision := s.Service.RosterVersion(ctx)
@@ -1269,6 +1510,38 @@ func (s *HTTPServer) authorized(value string) bool {
 	return value != "" && subtle.ConstantTimeCompare([]byte(value), []byte(s.Token)) == 1
 }
 
+// authenticatedClient accepts either the daemon's owner token or one of the
+// scoped tokens issued by the temporary LAN pairing window. The empty client
+// ID identifies the owner token; paired clients receive their own access
+// scope and are intentionally not treated as Host administrators.
+func (s *HTTPServer) authenticatedClient(value string) (clientID string, ok bool) {
+	if s.authorized(value) {
+		return "", true
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || s.Service == nil {
+		return "", false
+	}
+	hash := hashLANPairingToken(trimmed)
+	for _, client := range s.Service.PairedClientsSnapshot() {
+		if client.TokenHash == "" || subtle.ConstantTimeCompare([]byte(hash), []byte(client.TokenHash)) != 1 {
+			continue
+		}
+		if strings.TrimSpace(client.ClientID) == "" {
+			continue
+		}
+		return client.ClientID, true
+	}
+	return "", false
+}
+
+func (p *wsPeer) requireOwner() error {
+	if !p.ownerAuthenticated {
+		return errors.New("Host owner authentication is required")
+	}
+	return nil
+}
+
 func (s *HTTPServer) accessScopeID(clientID string) string {
 	if strings.TrimSpace(clientID) == "" {
 		if value := strings.TrimSpace(s.AccessScopeID); value != "" {
@@ -1293,6 +1566,10 @@ type wsPeer struct {
 	server        *HTTPServer
 	connection    *websocket.Conn
 	accessScopeID string
+	clientID      string
+	// ownerAuthenticated is true for the daemon's static Host token. Scoped
+	// pairing clients may operate the Host but cannot mutate Host settings.
+	ownerAuthenticated bool
 	// outbound is the bounded terminal-output lane. Text/control traffic uses
 	// controlOutbound so a burst of binary output cannot delay a response,
 	// heartbeat, or recovery marker.
@@ -2074,6 +2351,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 	case "agent.attachment.abort":
 		return p.handleCanonicalAttachmentAbort(ctx, command)
 	case "relay.pairing":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
 		if p.server.RelayPairing == nil {
 			return errors.New("Relay pairing is unavailable")
 		}
@@ -2083,6 +2363,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, value)
 	case "relay.devices.list":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
 		if p.server.RelayRouteClient == nil {
 			return errors.New("Relay device management is unavailable")
 		}
@@ -2096,6 +2379,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, map[string]any{"devices": devices})
 	case "relay.devices.revoke":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
 		if p.server.RelayRouteClient == nil {
 			return errors.New("Relay device management is unavailable")
 		}
@@ -2107,8 +2393,37 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, map[string]bool{"revoked": true})
+	case "pairing.enable":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
+		value, err := p.server.armPairing()
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
+	case "pairing.status":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
+		p.server.pairingMu.Lock()
+		value := p.server.pairingStatusLocked(time.Now())
+		p.server.pairingMu.Unlock()
+		return p.writeResult(command.ID, value)
+	case "pairing.disable":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
+		p.server.disarmPairing()
+		return p.writeResult(command.ID, lanPairingStatus{})
 	case "settings.get":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
 		value := p.server.Service.SettingsSnapshot()
+		p.server.pairingMu.Lock()
+		pairing := p.server.pairingStatusLocked(time.Now())
+		p.server.pairingMu.Unlock()
 		return p.writeResult(command.ID, map[string]any{
 			"defaultRuntime":     value.DefaultRuntime,
 			"runtimeEnv":         value.RuntimeEnv,
@@ -2119,18 +2434,29 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"openaiTitleEnabled": value.OpenAITitleEnabled,
 			"relay":              value.Relay,
 			"publicTunnel":       value.PublicTunnel,
+			"pairing":            pairing,
 		})
 	case "relay.reset":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
 		if err := p.server.resetRelayEnrollment(ctx); err != nil {
 			return err
 		}
 		value := p.server.Service.SettingsSnapshot()
+		p.server.pairingMu.Lock()
+		pairing := p.server.pairingStatusLocked(time.Now())
+		p.server.pairingMu.Unlock()
 		return p.writeResult(command.ID, map[string]any{
 			"reset":        true,
 			"relay":        value.Relay,
 			"publicTunnel": value.PublicTunnel,
+			"pairing":      pairing,
 		})
 	case "public-access.status", "public-access.enable", "public-access.test", "public-access.disable", "public-access.reset", "public-access.restart":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
 		action := strings.TrimPrefix(command.Method, "public-access.")
 		value, err := p.server.publicAccessRPC(ctx, action, stringParam(params, "publicHostname"), stringParam(params, "pathPrefix"))
 		if err != nil {
@@ -2138,6 +2464,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, value)
 	case "settings.testOpenAI":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
 		if err := p.server.Service.TestOpenAITitle(
 			ctx,
 			stringParam(params, "openaiBaseURL"),
@@ -2148,6 +2477,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, map[string]bool{"ok": true})
 	case "settings.put":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
 		current := p.server.Service.SettingsSnapshot()
 		runtimeEnv := stringMapParam(params, "runtimeEnv")
 		if runtimeEnv == nil {
@@ -2209,6 +2541,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		value := p.server.Service.SettingsSnapshot()
+		p.server.pairingMu.Lock()
+		pairing := p.server.pairingStatusLocked(time.Now())
+		p.server.pairingMu.Unlock()
 		return p.writeResult(command.ID, map[string]any{
 			"defaultRuntime":     value.DefaultRuntime,
 			"runtimeEnv":         value.RuntimeEnv,
@@ -2219,6 +2554,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"openaiTitleEnabled": value.OpenAITitleEnabled,
 			"relay":              value.Relay,
 			"publicTunnel":       value.PublicTunnel,
+			"pairing":            pairing,
 		})
 	case "project.add":
 		value, err := p.server.Service.AddProjectWithOptions(
@@ -2711,7 +3047,29 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"resized": resized,
 		})
 	case "session.resize":
-		attached, ok := p.attachedSession()
+		// New clients identify the target explicitly. This keeps resize tied to
+		// the same session identity as focus and prevents a stale attached
+		// pointer from routing a viewport update to another subscription. Keep
+		// the implicit path for older clients until the protocol version moves.
+		requestedSessionID := stringParam(params, "id")
+		var attached api.Session
+		var ok bool
+		if requestedSessionID != "" {
+			var found bool
+			attached, found = p.server.Service.Session(requestedSessionID)
+			if !found {
+				return fmt.Errorf("session not found: %s", requestedSessionID)
+			}
+			if attached.Lifecycle != "running" {
+				return fmt.Errorf("session is not running: %s", requestedSessionID)
+			}
+			if !p.hasOutput(requestedSessionID) {
+				return fmt.Errorf("session is not subscribed: %s", requestedSessionID)
+			}
+			ok = true
+		} else {
+			attached, ok = p.attachedSession()
+		}
 		if !ok {
 			return fmt.Errorf("no attached session")
 		}

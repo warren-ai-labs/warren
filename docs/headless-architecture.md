@@ -31,13 +31,50 @@ same WebSocket API.
 
 | State | Authority | Behavior after disconnect |
 | --- | --- | --- |
-| Projects, Workspaces, Sessions, sidebar order | Headless daemon | Retained |
+| Projects, Workspaces, Sessions, Host-local project/workspace order | Headless daemon | Retained |
+| Desktop display set | Local Desktop/CLI config | Retained |
 | Ghostline Runtime | Headless daemon | Keeps running |
 | Current endpoint | Local Desktop/CLI config | Retained |
 | Desktop selection and renderer | Local Desktop | Rebuildable |
 | SSH tunnel | CLI process or bundled Desktop helper | Closed when its owner exits or switches endpoints |
 
 Local and Server are two independent Host resource trees. Switching endpoints only switches the projection and renderer; it does not migrate, copy, or terminate Sessions on the other end.
+
+## Multi-host Desktop sidebar
+
+The macOS Desktop optionally aggregates Project and Workspace rosters from an
+ordered set of Endpoint aliases in `~/.warren/config.json`. The `display`
+section is client-local and stores aliases only; Endpoint URLs, tokens, SSH
+route metadata, and Relay credentials remain in the catalog. A configuration
+without that section keeps the legacy single-current behavior. Web and iOS do
+not consume this Desktop-only projection. The foreground `current` Endpoint is
+independent from the explicit `display` aliases, so connecting or switching
+Endpoints never changes sidebar membership. The Desktop execution-server menu
+adds or removes a Host; `warren display move` controls its order.
+
+The foreground Endpoint owns the existing terminal controller, subscriptions,
+focus lease, resize path, Agent projection, and write operations. Each other
+visible Endpoint has an independent roster-only connection that consumes
+`roster` and `roster.delta` but never sends `session.subscribe`,
+`session.focus`, or `session.resize`, creates a terminal surface, or claims a
+control lease. The coordinator keeps the current Endpoint plus at most seven
+background connections (eight total), and gives each SSH Endpoint its own
+tunnel owner. A failed background Host is isolated: its last in-memory roster
+and a bounded reconnect/error state do not block healthy sections, and no
+disk-backed roster cache is written.
+
+Every aggregated Project/Workspace identity and navigation key is prefixed by
+its Endpoint scope. In the expanded sidebar, a Project row only expands or
+collapses its Workspace children. Selecting a background Workspace row
+promotes that Endpoint before the existing terminal flow runs; mutations are
+routed through the owning active connection. Host section order is changed by
+`warren display move`, while
+Project and Workspace order remains Host state. When more than one Host is
+visible, a faint presentation-only Host tint groups each section without
+changing row foregrounds or selection colors. Those Host headers align with
+the sidebar section labels, can be collapsed, show no success label while
+connected, and use only a spinner while connecting or reconnecting. A one-Host
+display set uses the legacy `PROJECTS` tree without a Host header or tint.
 
 ## Security
 

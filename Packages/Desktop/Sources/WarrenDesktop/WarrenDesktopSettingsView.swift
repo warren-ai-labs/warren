@@ -55,6 +55,7 @@ private extension WarrenDesktopSettingsSection {
         case .notifications: "bell"
         case .externalIDEs: "macwindow"
         case .relay: "point.3.connected.trianglepath.dotted"
+        case .lanPairing: "lock.shield"
         case .publicAccess: "globe"
         }
     }
@@ -70,6 +71,7 @@ private extension WarrenDesktopSettingsSection {
         case .notifications: "Choose how Warren alerts you when background Agents finish."
         case .externalIDEs: "Choose the IDE button default and manage workspace editors."
         case .relay: "Connect once and share with iPhone."
+        case .lanPairing: "Arm a temporary PIN window for a trusted iPhone."
         case .publicAccess: "Publish this Host's Web UI through the enrolled Relay."
         }
     }
@@ -85,12 +87,13 @@ private extension WarrenDesktopSettingsSection {
         case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
         case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
         case .relay: [rawValue, detail, "relay", "connect", "enrollment", "ticket", "host", "remote", "iphone", "qr"]
+        case .lanPairing: [rawValue, detail, "pairing", "pin", "lan", "bonjour", "iphone", "mobile", "discovery", "security"]
         case .publicAccess: [rawValue, detail, "relay", "route", "hostname", "path", "endpoint", "tunnel", "internet"]
         }
     }
 
     var isTerminalSection: Bool {
-        self != .notifications && self != .relay && self != .publicAccess
+        self != .notifications && self != .relay && self != .lanPairing && self != .publicAccess
     }
 }
 
@@ -106,6 +109,8 @@ struct WarrenDesktopSettingsView: View {
     let onWebReset: (() -> Void)?
     let onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?
     let onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)?
+    let lanPairing: WarrenDesktopLANPairing
+    let onLANPairing: ((Bool, @escaping (Result<WarrenDesktopLANPairing, Error>) -> Void) -> Void)?
     let relaySettings: WarrenDesktopRelaySettings
     let onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     let relayDevices: [WarrenDesktopRelayDevice]
@@ -175,6 +180,8 @@ struct WarrenDesktopSettingsView: View {
     @State private var relayInviteBusy = false
     @State private var relayInviteError: String?
     @State private var relayInviteQRPresented = false
+    @State private var lanPairingBusy = false
+    @State private var lanPairingError: String?
     @State private var copiedSettingsSection: WarrenDesktopSettingsSection?
     @Environment(\.colorScheme) private var colorScheme
 
@@ -215,6 +222,8 @@ struct WarrenDesktopSettingsView: View {
         onWebReset: (() -> Void)?,
         onRelayEnroll: ((String, String, @escaping (Result<Void, Error>) -> Void) -> Void)?,
         onRelayPairing: ((@escaping (Result<WarrenDesktopRelayInvite, Error>) -> Void) -> Void)? = nil,
+        lanPairing: WarrenDesktopLANPairing = .init(),
+        onLANPairing: ((Bool, @escaping (Result<WarrenDesktopLANPairing, Error>) -> Void) -> Void)? = nil,
         relaySettings: WarrenDesktopRelaySettings = .init(),
         onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         relayDevices: [WarrenDesktopRelayDevice] = [],
@@ -245,6 +254,8 @@ struct WarrenDesktopSettingsView: View {
         self.onWebReset = onWebReset
         self.onRelayEnroll = onRelayEnroll
         self.onRelayPairing = onRelayPairing
+        self.lanPairing = lanPairing
+        self.onLANPairing = onLANPairing
         self.relaySettings = relaySettings
         self.onResetRelay = onResetRelay
         self.relayDevices = relayDevices
@@ -329,7 +340,9 @@ struct WarrenDesktopSettingsView: View {
     private func navigationPanel(tokens: WarrenColorTokens) -> some View {
         let terminalSections = visibleSections.filter(\.isTerminalSection)
         let notificationSections = visibleSections.filter { $0 == .notifications }
-        let webSections = visibleSections.filter { $0 == .relay || $0 == .publicAccess }
+        let webSections = visibleSections.filter {
+            $0 == .relay || $0 == .lanPairing || $0 == .publicAccess
+        }
         return VStack(alignment: .leading, spacing: 0) {
             Button(action: onBack) {
                 HStack(spacing: WarrenSpacing.small) {
@@ -502,6 +515,8 @@ struct WarrenDesktopSettingsView: View {
                     externalIDEsSection(tokens: tokens)
                 case .relay:
                     relaySection(tokens: tokens)
+                case .lanPairing:
+                    lanPairingSection(tokens: tokens)
                 case .publicAccess:
                     publicAccessSection(tokens: tokens)
                 }
@@ -1222,6 +1237,150 @@ struct WarrenDesktopSettingsView: View {
         .onChange(of: relaySettings) { _ in seedRelayFields() }
         .popover(isPresented: $relayInviteQRPresented) {
             relayInviteQRPopover()
+        }
+    }
+
+    private func lanPairingSection(tokens: WarrenColorTokens) -> some View {
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            let isOpen = lanPairingIsOpen(at: timeline.date)
+            settingsSection("LAN pairing", section: .lanPairing, tokens: tokens) {
+                Text(
+                    "Pairing is off by default. Enable this short window only when an iPhone is ready to pair from its Hosts page. "
+                        + "The six-digit PIN expires automatically after 60 seconds and can be disabled here at any time."
+                )
+                .font(WarrenTypography.settingsBody)
+                .foregroundStyle(tokens.foreground)
+                .fixedSize(horizontal: false, vertical: true)
+
+                VStack(alignment: .leading, spacing: WarrenSpacing.large) {
+                    HStack(spacing: WarrenSpacing.small) {
+                        WarrenStatusIndicator(
+                            color: isOpen ? tokens.success : tokens.mutedForeground,
+                            isActive: lanPairingBusy,
+                            accessibilityLabel: isOpen ? "Pairing window open" : "Pairing window closed"
+                        )
+                        VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+                            Text(isOpen ? "Pairing window open" : "Pairing window closed")
+                                .font(WarrenTypography.settingsSectionTitle)
+                                .foregroundStyle(tokens.foreground)
+                            Text(isOpen
+                                ? "Enter the PIN on iPhone now. This window is not enabled by discovery."
+                                : "No iPhone can pair until you explicitly open a window.")
+                                .font(WarrenTypography.settingsSupporting)
+                                .foregroundStyle(tokens.mutedForeground)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                    }
+
+                    if isOpen {
+                        VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                            Text("Pairing PIN")
+                                .font(WarrenTypography.settingsBody)
+                                .foregroundStyle(tokens.mutedForeground)
+                            Text(lanPairing.pin.isEmpty ? "------" : lanPairing.pin)
+                                .font(.system(size: 34, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(tokens.foreground)
+                                .textSelection(.enabled)
+                                .accessibilityLabel("Pairing PIN \(lanPairing.pin)")
+                                .accessibilityIdentifier("settings.lan-pairing.pin")
+                            Text(lanPairingExpiryText(at: timeline.date))
+                                .font(WarrenTypography.settingsSupporting)
+                                .foregroundStyle(tokens.mutedForeground)
+                        }
+                        .padding(WarrenSpacing.large)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(tokens.fillHover)
+                        .clipShape(.rect(cornerRadius: WarrenRadius.medium))
+                    }
+
+                    HStack(spacing: WarrenSpacing.compact) {
+                        Button(isOpen ? "Regenerate PIN" : "Enable LAN pairing") {
+                            setLANPairing(enabled: true)
+                        }
+                        .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
+                        .disabled(lanPairingBusy || onLANPairing == nil)
+                        .accessibilityIdentifier("settings.lan-pairing.enable")
+
+                        if isOpen {
+                            Button("Disable pairing", role: .destructive) {
+                                setLANPairing(enabled: false)
+                            }
+                            .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
+                            .disabled(lanPairingBusy || onLANPairing == nil)
+                            .accessibilityIdentifier("settings.lan-pairing.disable")
+                        }
+
+                        if lanPairingBusy {
+                            WarrenStatusIndicator(
+                                color: tokens.info,
+                                isActive: true,
+                                accessibilityLabel: "Updating LAN pairing"
+                            )
+                        }
+                    }
+
+                    Text(
+                        "The PIN is shown only in this Desktop settings window. Pairing issues a scoped iPhone token; it does not expose the Host token or open pairing automatically."
+                    )
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    if let lanPairingError, !lanPairingError.isEmpty {
+                        Text(lanPairingError)
+                            .font(WarrenTypography.settingsSupporting)
+                            .foregroundStyle(tokens.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel("LAN pairing error: \(lanPairingError)")
+                    }
+                }
+                .warrenSemanticElement(
+                    id: "settings.lan-pairing",
+                    role: .group,
+                    label: "LAN pairing"
+                )
+            }
+        }
+    }
+
+    private func lanPairingIsOpen(at date: Date) -> Bool {
+        guard lanPairing.enabled else { return false }
+        if let expiresAt = lanPairing.expiresAt {
+            return expiresAt > date
+        }
+        return lanPairing.expiresIn > 0
+    }
+
+    private func lanPairingExpiryText(at date: Date) -> String {
+        if let expiresAt = lanPairing.expiresAt {
+            guard expiresAt > date else { return "Expired" }
+            return "Expires \(expiresAt.formatted(date: .omitted, time: .standard))"
+        }
+        if lanPairing.expiresIn > 0 {
+            return "Expires in \(formatPairingTTL(lanPairing.expiresIn))"
+        }
+        return "Expires soon"
+    }
+
+    private func formatPairingTTL(_ seconds: Int) -> String {
+        if seconds >= 60 {
+            return "\(max(1, seconds / 60)) min"
+        }
+        return "\(max(1, seconds)) sec"
+    }
+
+    private func setLANPairing(enabled: Bool) {
+        guard !lanPairingBusy, let onLANPairing else { return }
+        lanPairingBusy = true
+        lanPairingError = nil
+        onLANPairing(enabled) { result in
+            Task { @MainActor in
+                lanPairingBusy = false
+                if case let .failure(error) = result {
+                    lanPairingError = error.localizedDescription
+                }
+            }
         }
     }
 

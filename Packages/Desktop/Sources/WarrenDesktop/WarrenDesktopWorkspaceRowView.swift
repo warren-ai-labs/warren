@@ -16,6 +16,9 @@ struct WarrenDesktopWorkspaceRow: View {
     let isPinned: Bool
     let isDeleting: Bool
     let isInteractionDisabled: Bool
+    /// Disables Host mutations while retaining selection and double-click
+    /// navigation for a connected background Host.
+    let isMutationDisabled: Bool
     /// Project-list copies of Task workspaces remain visible for context but
     /// are not navigation targets; the Task-list copy owns selection.
     let isSelectionDisabled: Bool
@@ -101,7 +104,7 @@ struct WarrenDesktopWorkspaceRow: View {
             if !isInteractionDisabled && !isSelectionDisabled { onDoubleClick() }
         })
         .contextMenu {
-            if !isInteractionDisabled {
+            if !isInteractionDisabled && !isMutationDisabled {
                 WarrenDesktopContextMenu(contextMenuActions)
             }
         }
@@ -190,7 +193,7 @@ struct WarrenDesktopWorkspaceRow: View {
                 .padding(.trailing, WarrenSpacing.compact)
         }
         .contextMenu {
-            if !isInteractionDisabled {
+            if !isInteractionDisabled && !isMutationDisabled {
                 WarrenDesktopContextMenu(contextMenuActions)
             }
         }
@@ -225,7 +228,7 @@ struct WarrenDesktopWorkspaceRow: View {
         if let taskID, let taskName {
             let tokens = WarrenColorTokens.resolved(for: colorScheme)
             Button {
-                guard !isInteractionDisabled else { return }
+                guard !isInteractionDisabled, !isMutationDisabled else { return }
                 onSelectTask(taskID)
             } label: {
                 Text("Task")
@@ -235,7 +238,7 @@ struct WarrenDesktopWorkspaceRow: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .disabled(isInteractionDisabled)
+            .disabled(isInteractionDisabled || isMutationDisabled)
             .accessibilityLabel("Task \(taskName)")
             .accessibilityValue("Open task")
             .warrenSemanticElement(
@@ -243,8 +246,12 @@ struct WarrenDesktopWorkspaceRow: View {
                 role: .button,
                 label: "Task \(taskName)",
                 value: "Open task",
-                isEnabled: !isInteractionDisabled,
-                action: { if !isInteractionDisabled { onSelectTask(taskID) } }
+                isEnabled: !isInteractionDisabled && !isMutationDisabled,
+                action: {
+                    if !isInteractionDisabled && !isMutationDisabled {
+                        onSelectTask(taskID)
+                    }
+                }
             )
         }
     }

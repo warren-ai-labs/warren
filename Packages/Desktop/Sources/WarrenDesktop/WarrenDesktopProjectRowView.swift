@@ -21,6 +21,9 @@ enum WarrenDesktopProjectDeletionKind: Equatable {
 /// hover or keyboard focus.
 struct WarrenDesktopProjectRow: View {
     let project: Project
+    /// Optional endpoint scope used by the aggregated sidebar. The legacy
+    /// single-host rows keep their historical semantic IDs when this is nil.
+    let semanticScope: String?
     let workspaceCount: Int
     let isCollapsed: Bool
     let isSelected: Bool
@@ -28,6 +31,9 @@ struct WarrenDesktopProjectRow: View {
     let isPinned: Bool
     let deletionKind: WarrenDesktopProjectDeletionKind?
     let isInteractionDisabled: Bool
+    /// Disables writes while keeping a connected background Host selectable
+    /// and expandable. The aggregated sidebar uses this for non-current Hosts.
+    let isMutationDisabled: Bool
     let onSelect: () -> Void
     let onToggleExpansion: () -> Void
     let onAddWorkspace: () -> Void
@@ -37,6 +43,55 @@ struct WarrenDesktopProjectRow: View {
     let onRename: () -> Void
     let onTogglePin: () -> Void
     let onDelete: () -> Void
+
+    init(
+        project: Project,
+        semanticScope: String? = nil,
+        workspaceCount: Int,
+        isCollapsed: Bool,
+        isSelected: Bool,
+        isExpanded: Bool,
+        isPinned: Bool,
+        deletionKind: WarrenDesktopProjectDeletionKind?,
+        isInteractionDisabled: Bool,
+        isMutationDisabled: Bool = false,
+        onSelect: @escaping () -> Void,
+        onToggleExpansion: @escaping () -> Void,
+        onAddWorkspace: @escaping () -> Void,
+        onImportWorktrees: @escaping () -> Void,
+        onConfigureSetupScript: @escaping () -> Void,
+        onToggleAutoImportWorktrees: @escaping () -> Void,
+        onRename: @escaping () -> Void,
+        onTogglePin: @escaping () -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.project = project
+        self.semanticScope = semanticScope
+        self.workspaceCount = workspaceCount
+        self.isCollapsed = isCollapsed
+        self.isSelected = isSelected
+        self.isExpanded = isExpanded
+        self.isPinned = isPinned
+        self.deletionKind = deletionKind
+        self.isInteractionDisabled = isInteractionDisabled
+        self.isMutationDisabled = isMutationDisabled
+        self.onSelect = onSelect
+        self.onToggleExpansion = onToggleExpansion
+        self.onAddWorkspace = onAddWorkspace
+        self.onImportWorktrees = onImportWorktrees
+        self.onConfigureSetupScript = onConfigureSetupScript
+        self.onToggleAutoImportWorktrees = onToggleAutoImportWorktrees
+        self.onRename = onRename
+        self.onTogglePin = onTogglePin
+        self.onDelete = onDelete
+    }
+
+    private var semanticID: String {
+        if let semanticScope, !semanticScope.isEmpty {
+            return "project.\(semanticScope).\(project.id.description)"
+        }
+        return "project.\(project.id.description)"
+    }
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenForceHover) private var forceHover
@@ -77,7 +132,7 @@ struct WarrenDesktopProjectRow: View {
         .accessibilityValue(projectAccessibilityValue())
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .warrenSemanticElement(
-            id: "project.\(project.id.description)",
+            id: semanticID,
             role: .button,
             label: "Project \(project.name)",
             value: projectAccessibilityValue(),
@@ -87,7 +142,7 @@ struct WarrenDesktopProjectRow: View {
         )
         .focused($isFocused)
         .contextMenu {
-            if !isInteractionDisabled {
+            if !isInteractionDisabled && !isMutationDisabled {
                 WarrenDesktopContextMenu([
                     .button(title: isPinned ? "Unpin Project" : "Pin Project", action: onTogglePin),
                     .button(title: "Rename Project", action: onRename),
@@ -159,7 +214,7 @@ struct WarrenDesktopProjectRow: View {
             .accessibilityValue(projectAccessibilityValue(isExpanded: isExpanded))
             .accessibilityAddTraits(isSelected ? .isSelected : [])
             .warrenSemanticElement(
-                id: "project.\(project.id.description)",
+                id: semanticID,
                 role: .button,
                 label: "Project \(project.name)",
                 value: projectAccessibilityValue(isExpanded: isExpanded),
@@ -176,7 +231,7 @@ struct WarrenDesktopProjectRow: View {
                         .accessibilityHidden(true)
                 }
                 .buttonStyle(WarrenChromeButtonStyle(isFocused: isAddFocused))
-                .disabled(isInteractionDisabled)
+                .disabled(isInteractionDisabled || isMutationDisabled)
                 .frame(width: compactActionSize, height: compactActionSize)
                 .contentShape(.rect)
                 .opacity(isHovered || isAddFocused ? 1 : 0)
@@ -184,11 +239,15 @@ struct WarrenDesktopProjectRow: View {
                 .accessibilityLabel("New workspace in \(project.name)")
                 .help("New workspace")
                 .warrenSemanticElement(
-                    id: "project.\(project.id.description).new-workspace",
+                    id: "\(semanticID).new-workspace",
                     role: .button,
                     label: "New workspace in \(project.name)",
-                    isEnabled: !isInteractionDisabled,
-                    action: { if !isInteractionDisabled { onAddWorkspace() } }
+                    isEnabled: !isInteractionDisabled && !isMutationDisabled,
+                    action: {
+                        if !isInteractionDisabled && !isMutationDisabled {
+                            onAddWorkspace()
+                        }
+                    }
                 )
             }
             .padding(.trailing, WarrenSpacing.xs)
@@ -211,7 +270,7 @@ struct WarrenDesktopProjectRow: View {
             .padding(.leading, WarrenSpacing.compact)
             .accessibilityLabel(isExpanded ? "Collapse project \(project.name)" : "Expand project \(project.name)")
             .warrenSemanticElement(
-                id: "project.\(project.id.description).toggle",
+                id: "\(semanticID).toggle",
                 role: .button,
                 label: isExpanded ? "Collapse project \(project.name)" : "Expand project \(project.name)",
                 isEnabled: !isInteractionDisabled,
@@ -230,7 +289,7 @@ struct WarrenDesktopProjectRow: View {
         .contentShape(.rect)
         .onHover { isHovered = $0 }
         .contextMenu {
-            if !isInteractionDisabled {
+            if !isInteractionDisabled && !isMutationDisabled {
                 WarrenDesktopContextMenu([
                     .button(title: isPinned ? "Unpin Project" : "Pin Project", action: onTogglePin),
                     .button(title: "Rename Project", action: onRename),

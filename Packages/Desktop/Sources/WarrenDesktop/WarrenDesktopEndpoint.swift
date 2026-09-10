@@ -65,6 +65,10 @@ public struct WarrenDesktopEndpointOption: Identifiable, Hashable, Sendable {
     public let probeStatus: String?
     public let probeFailed: Bool
     public let connectionError: String?
+    /// Whether this endpoint was explicitly added to the Desktop sidebar
+    /// display set. The selected foreground endpoint is intentionally
+    /// independent from this opt-in state.
+    public let isDisplayedInSidebar: Bool
     public let capabilities: WarrenDesktopEndpointCapabilities
 
     public init(
@@ -75,6 +79,7 @@ public struct WarrenDesktopEndpointOption: Identifiable, Hashable, Sendable {
         probeStatus: String? = nil,
         probeFailed: Bool = false,
         connectionError: String? = nil,
+        isDisplayedInSidebar: Bool = false,
         capabilities: WarrenDesktopEndpointCapabilities? = nil
     ) {
         self.id = id
@@ -84,6 +89,7 @@ public struct WarrenDesktopEndpointOption: Identifiable, Hashable, Sendable {
         self.probeStatus = probeStatus
         self.probeFailed = probeFailed
         self.connectionError = connectionError
+        self.isDisplayedInSidebar = isDisplayedInSidebar
         self.capabilities = capabilities ?? (isLocal ? .local : .remote)
     }
 }

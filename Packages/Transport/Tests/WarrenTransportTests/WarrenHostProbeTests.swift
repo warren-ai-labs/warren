@@ -29,10 +29,34 @@ final class WarrenHostProbeTests: XCTestCase {
         XCTAssertTrue(result.message.contains("responding, not ready"))
     }
 
+    func testExpectedHostIdentityRejectsAnotherHost() throws {
+        let result = try WarrenHostProbe.decode(
+            Data(#"{"ok":true,"ready":true,"version":"4.0","host_id":"other"}"#.utf8),
+            expectedHostID: "expected"
+        )
+        XCTAssertTrue(result.isFailure)
+        XCTAssertEqual(result.hostID, "other")
+        XCTAssertEqual(result.message, "Host identity mismatch")
+    }
+
+    func testExpectedHostIdentityRequiresAnAdvertisedIdentity() throws {
+        let result = try WarrenHostProbe.decode(
+            Data(#"{"ok":true,"ready":true,"version":"4.0"}"#.utf8),
+            expectedHostID: "expected"
+        )
+        XCTAssertTrue(result.isFailure)
+        XCTAssertNil(result.hostID)
+    }
+
     func testProbeUsesForwardedPortAndStripsCredentials() async {
         let result = await check("ws://user:password@probe.test:8790/prefix?token=secret#t=secret", token: "secret")
         XCTAssertFalse(result.isFailure)
         XCTAssertTrue(result.message.contains("Headless test-build"))
+    }
+
+    func testProbeAddsNonSecretClientIdentityHeader() async {
+        let result = await check("http://probe.test/client-id", clientID: "device-1")
+        XCTAssertFalse(result.isFailure)
     }
 
     func testHTTPTimeoutUnreachableAndInvalidResponsesRemainDistinct() async {
@@ -54,12 +78,16 @@ final class WarrenHostProbeTests: XCTestCase {
         XCTAssertEqual(result.message, "Health probe unavailable for this route")
     }
 
-    private func check(_ url: String, token: String = "") async -> WarrenHostProbe {
+    private func check(_ url: String, token: String = "", clientID: String? = nil) async -> WarrenHostProbe {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [HostProbeURLProtocol.self]
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
-        return await WarrenHostProbe.check(.init(name: "Host", url: url, token: token), session: session)
+        return await WarrenHostProbe.check(
+            .init(name: "Host", url: url, token: token),
+            session: session,
+            clientID: clientID
+        )
     }
 }
 
@@ -69,6 +97,9 @@ private final class HostProbeURLProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         let url = request.url!
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        if url.path == "/client-id/healthz" {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Warren-Client-ID"), "device-1")
+        }
         XCTAssertNil(url.user)
         XCTAssertNil(url.password)
         XCTAssertNil(url.query)
