@@ -1058,6 +1058,14 @@ func TestClaudePermissionRequestProjectsToRFC0010Permission(t *testing.T) {
 	}
 }
 
+func TestClaudePermissionModeDoesNotBecomePermissionInteraction(t *testing.T) {
+	parser := newParser("claude")
+	events := parser.parse([]byte(`{"type":"permission-mode","permissionMode":"bypassPermissions","sessionId":"claude-1"}`))
+	if len(events) != 0 {
+		t.Fatalf("permission-mode events = %#v, want no interaction", events)
+	}
+}
+
 func TestClaudeQuestionResolvesOnAnswer(t *testing.T) {
 	parser := newParser("claude")
 	pending := parser.parse([]byte(`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_q1","name":"AskUserQuestion","input":{"questions":[{"question":"Which database?","options":[{"label":"Postgres"}]}]}}]}}`))

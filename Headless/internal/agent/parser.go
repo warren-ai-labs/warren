@@ -125,6 +125,13 @@ var structuredAgentEventTypes = map[string]struct{}{
 
 func structuredAgentEventType(source string) string {
 	normalized := strings.ToLower(strings.TrimSpace(strings.NewReplacer("-", "_", ".", "_").Replace(source)))
+	// Claude records permission-mode changes (for example
+	// `bypassPermissions`) as control-plane rows. They are not permission
+	// interactions; treating the generic `permission_` prefix as one creates a
+	// phantom approval card in clients.
+	if normalized == "permission_mode" {
+		return ""
+	}
 	if normalized == "task" || normalized == "tasks" || normalized == "task_list" || normalized == "tasklist" || normalized == "task_updated" || normalized == "tasks_updated" || normalized == "task_list_updated" || normalized == "tasklist_updated" || normalized == "todo_list_updated" || normalized == "checklist" || normalized == "checklists" || strings.HasPrefix(normalized, "checklist_") {
 		return "todo"
 	}
