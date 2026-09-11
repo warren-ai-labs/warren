@@ -1248,7 +1248,7 @@ struct WarrenDesktopSidebarSectionHeader: View {
         }
         .foregroundStyle(tokens.mutedForeground)
         .frame(height: WarrenLayoutMetrics.sidebarSectionLabelHeight)
-        .padding(.leading, WarrenSpacing.standard)
+        .padding(.leading, WarrenDesktopSidebarIndent.section)
         .padding(.trailing, WarrenSpacing.compact)
         .onHover { isHovered = $0 }
     }

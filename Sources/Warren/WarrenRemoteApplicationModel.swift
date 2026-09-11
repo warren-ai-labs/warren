@@ -26,7 +26,7 @@ extension WarrenRemoteEndpointConfiguration {
         }
         let token = (try? String(contentsOf: tokenURL, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return Self(name: "Local", url: "http://127.0.0.1:8789", token: token, ssh: nil)
+        return Self(name: "local", url: "http://127.0.0.1:8789", token: token, ssh: nil)
     }
 
     /// The daemon records the Ghostline handoff phase before it starts the
@@ -64,10 +64,50 @@ public struct WarrenDisplayConfiguration: Codable, Equatable, Sendable {
 
     public var version: Int
     public var endpoints: [String]
+    /// Optional client-local labels keyed by canonical endpoint alias. The
+    /// alias remains the routing identity; this map only changes presentation.
+    public var names: [String: String]
 
-    public init(version: Int = Self.currentVersion, endpoints: [String]) {
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case endpoints
+        case names
+    }
+
+    public init(
+        version: Int = Self.currentVersion,
+        endpoints: [String],
+        names: [String: String] = [:]
+    ) {
         self.version = version
         self.endpoints = endpoints
+        self.names = names
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        endpoints = try container.decode([String].self, forKey: .endpoints)
+        names = try container.decodeIfPresent([String: String].self, forKey: .names) ?? [:]
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(endpoints, forKey: .endpoints)
+        if !names.isEmpty {
+            try container.encode(names, forKey: .names)
+        }
+    }
+
+    /// Resolves the user-facing label without changing the endpoint alias.
+    public func displayName(for endpointID: String, fallback: String) -> String {
+        if let value = names[endpointID]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !value.isEmpty {
+            return value
+        }
+        return fallback
     }
 }
 
@@ -284,12 +324,86 @@ enum WarrenEndpointCatalog {
             let normalized = try normalizedDisplay(
                 aliases,
                 knownEndpointNames: Set(existing.endpoints.map(\.name)).union(["local"]),
-                current: existing.current
+                current: existing.current,
+                names: existing.display?.names ?? [:]
             )
             try writeUnlocked(WarrenEndpointConfigurationFile(
                 current: normalized.current,
                 endpoints: endpointDictionary(existing.endpoints),
-                display: WarrenDisplayConfiguration(endpoints: normalized.aliases)
+                display: WarrenDisplayConfiguration(
+                    endpoints: normalized.aliases,
+                    names: normalized.names
+                )
+            ), to: configURL)
+        }
+    }
+
+    /// Persists a client-local label for one endpoint without changing its
+    /// canonical alias, connection route, or sidebar membership.
+    static func setDisplayName(
+        _ endpointID: String,
+        name: String?,
+        to configURL: URL = configurationURL()
+    ) throws {
+        try withLock(configURL) {
+            let existing = try loadUnlocked(from: configURL).catalog
+            let endpointNames = Set(existing.endpoints.map(\.name)).union(["local"])
+            guard endpointNames.contains(endpointID) else {
+                throw NSError(
+                    domain: "WarrenEndpointCatalog",
+                    code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: "Endpoint not found: \(endpointID)"]
+                )
+            }
+
+            let aliases: [String]
+            if let display = existing.display {
+                aliases = try normalizedCatalogDisplay(
+                    display,
+                    endpointNames: endpointNames,
+                    current: existing.current
+                ).aliases
+            } else {
+                aliases = [
+                    try normalizedCurrent(
+                        existing.current,
+                        endpointNames: endpointNames
+                    ) ?? "local",
+                ]
+            }
+
+            var names = existing.display?.names ?? [:]
+            if let name {
+                let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !normalizedName.isEmpty,
+                      normalizedName == name,
+                      !name.contains("\r"),
+                      !name.contains("\n"),
+                      !name.contains("\0") else {
+                    throw NSError(
+                        domain: "WarrenEndpointCatalog",
+                        code: 6,
+                        userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint display name: \(name)"]
+                    )
+                }
+                names[endpointID] = normalizedName
+            } else {
+                names.removeValue(forKey: endpointID)
+            }
+
+            let normalized = try normalizedDisplay(
+                aliases,
+                knownEndpointNames: endpointNames,
+                current: existing.current,
+                names: names
+            )
+            try writeUnlocked(WarrenEndpointConfigurationFile(
+                current: normalized.current,
+                endpoints: endpointDictionary(existing.endpoints),
+                display: WarrenDisplayConfiguration(
+                    endpoints: normalized.aliases,
+                    names: normalized.names
+                )
             ), to: configURL)
         }
     }
@@ -340,9 +454,13 @@ enum WarrenEndpointCatalog {
                 let normalized = try normalizedDisplay(
                     aliases,
                     knownEndpointNames: endpointNames,
-                    current: existing.current
+                    current: existing.current,
+                    names: existing.display?.names ?? [:]
                 )
-                display = WarrenDisplayConfiguration(endpoints: normalized.aliases)
+                display = WarrenDisplayConfiguration(
+                    endpoints: normalized.aliases,
+                    names: normalized.names
+                )
             }
             try writeUnlocked(WarrenEndpointConfigurationFile(
                 current: try normalizedCurrent(existing.current, endpointNames: endpointNames),
@@ -385,8 +503,9 @@ enum WarrenEndpointCatalog {
     private static func normalizedDisplay(
         _ aliases: [String],
         knownEndpointNames: Set<String>,
-        current: String?
-    ) throws -> (aliases: [String], current: String?) {
+        current: String?,
+        names: [String: String] = [:]
+    ) throws -> (aliases: [String], current: String?, names: [String: String]) {
         let normalized = try normalizeDisplayAliases(aliases)
         guard !normalized.isEmpty else {
             throw NSError(
@@ -404,7 +523,8 @@ enum WarrenEndpointCatalog {
         }
         return (
             normalized,
-            try normalizedCurrent(current, endpointNames: knownEndpointNames)
+            try normalizedCurrent(current, endpointNames: knownEndpointNames),
+            try normalizeDisplayNames(names, knownEndpointNames: knownEndpointNames)
         )
     }
 
@@ -449,14 +569,46 @@ enum WarrenEndpointCatalog {
                 userInfo: [NSLocalizedDescriptionKey: "Display endpoint not found: \(unknown)"]
             )
         }
+        let names = try normalizeDisplayNames(
+            display.names,
+            knownEndpointNames: endpointNames
+        )
         return (
             WarrenDisplayConfiguration(
                 version: WarrenDisplayConfiguration.currentVersion,
-                endpoints: aliases
+                endpoints: aliases,
+                names: names
             ),
             aliases,
             try normalizedCurrent(current, endpointNames: endpointNames)
         )
+    }
+
+    private static func normalizeDisplayNames(
+        _ names: [String: String],
+        knownEndpointNames: Set<String>
+    ) throws -> [String: String] {
+        var normalized: [String: String] = [:]
+        for (endpointID, rawName) in names {
+            // A removed endpoint may leave stale presentation metadata behind;
+            // dropping that entry keeps the catalog usable and avoids making a
+            // display-only field block unrelated endpoint operations.
+            guard knownEndpointNames.contains(endpointID) else { continue }
+            let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty,
+                  name == rawName,
+                  !rawName.contains("\r"),
+                  !rawName.contains("\n"),
+                  !rawName.contains("\0") else {
+                throw NSError(
+                    domain: "WarrenEndpointCatalog",
+                    code: 6,
+                    userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint display name: \(rawName)"]
+                )
+            }
+            normalized[endpointID] = name
+        }
+        return normalized
     }
 
     private static func normalizedCurrent(
@@ -1576,7 +1728,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         publishProjectionIfChanged(
             WarrenDesktopProjection
-                .empty(host: WarrenDomain.Host(name: resolvedConfiguration.name))
+                .empty(host: WarrenDomain.Host(name: isLocal ? "Local" : resolvedConfiguration.name))
                 .withConnectionState(.connecting)
         )
         eventTask = Task { @MainActor [weak self] in

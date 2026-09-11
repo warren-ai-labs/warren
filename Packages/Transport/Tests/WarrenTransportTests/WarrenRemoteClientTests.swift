@@ -585,6 +585,138 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
+    func testReconnectReclaimsControlOnlyForTheSessionThatStillHoldsIt() async throws {
+        let first = ScriptedWebSocketTask()
+        let second = ScriptedWebSocketTask()
+        for task in [first, second] {
+            await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
+            await task.enqueue(.text(rosterJSON(revision: 1)))
+        }
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            tasks: [first, second]
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        let size = try XCTUnwrap(TerminalSize(columns: 152, rows: 47))
+        let background = sessionUUID.uuidString.lowercased()
+        let selected = UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!
+            .uuidString.lowercased()
+
+        // Both Sessions were selected in turn, so both recorded a control claim.
+        // Only the second one still owns the lease.
+        var sentCount = 1
+        for sessionID in [background, selected] {
+            let subscribe = Task {
+                try await client.subscribe(
+                    sessionID: sessionID,
+                    size: size,
+                    claimControl: true
+                )
+            }
+            sentCount += 1
+            let messages = await waitForSentMessages(first, count: sentCount)
+            let id = try requestID(from: try XCTUnwrap(messages.last))
+            await first.enqueue(.text("{\"t\":\"response\",\"id\":\"\(id)\",\"ok\":true,\"result\":{\"subscribed\":true,\"attachmentId\":\"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA\"}}"))
+            _ = try await subscribe.value
+        }
+
+        await first.failReceive()
+        try await waitUntil(timeout: .seconds(5)) { await client.state() == .connected }
+
+        // The replacement socket carries an auth frame followed by one restore
+        // per retained subscription. They are issued sequentially, so each has
+        // to be answered before the next one is sent.
+        var requests: [String: [String: Any]] = [:]
+        for index in 0..<2 {
+            let restored = await waitForSentMessages(
+                second,
+                count: index + 2,
+                timeout: .seconds(5)
+            )
+            guard case .text(let text) = try XCTUnwrap(restored.last),
+                  let object = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+                  object["method"] as? String == "session.subscribe",
+                  let params = object["params"] as? [String: Any],
+                  let sessionID = params["id"] as? String,
+                  let id = object["id"] as? String else {
+                XCTFail("restore request \(index) is malformed")
+                return
+            }
+            requests[sessionID] = params
+            await second.enqueue(.text("{\"t\":\"response\",\"id\":\"\(id)\",\"ok\":true,\"result\":{\"subscribed\":true,\"attachmentId\":\"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA\"}}"))
+        }
+
+        let backgroundParams = try XCTUnwrap(requests[background])
+        XCTAssertEqual(backgroundParams["claim"] as? String, "false")
+        XCTAssertNil(backgroundParams["cols"])
+        XCTAssertNil(backgroundParams["rows"])
+
+        let selectedParams = try XCTUnwrap(requests[selected])
+        XCTAssertEqual(selectedParams["claim"] as? String, "true")
+        XCTAssertEqual(selectedParams["cols"] as? String, "152")
+        XCTAssertEqual(selectedParams["rows"] as? String, "47")
+
+        await client.stop()
+        consuming.cancel()
+    }
+
+    func testReleasingFocusStopsTheNextReconnectFromReclaimingControl() async throws {
+        let first = ScriptedWebSocketTask()
+        let second = ScriptedWebSocketTask()
+        for task in [first, second] {
+            await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
+            await task.enqueue(.text(rosterJSON(revision: 1)))
+        }
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            tasks: [first, second]
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        let sessionID = sessionUUID.uuidString.lowercased()
+        let size = try XCTUnwrap(TerminalSize(columns: 152, rows: 47))
+        let subscribe = Task {
+            try await client.subscribe(sessionID: sessionID, size: size, claimControl: true)
+        }
+        let subscribeMessages = await waitForSentMessages(first, count: 2)
+        let subscribeID = try requestID(from: try XCTUnwrap(subscribeMessages.last))
+        await first.enqueue(.text("{\"t\":\"response\",\"id\":\"\(subscribeID)\",\"ok\":true,\"result\":{\"subscribed\":true,\"attachmentId\":\"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA\"}}"))
+        _ = try await subscribe.value
+
+        // The window lost key focus: the lease was released, so a reconnect must
+        // not resize the shared runtime on this client's behalf.
+        let blur = Task { try await client.focus(sessionID: sessionID, focused: false) }
+        let blurMessages = await waitForSentMessages(first, count: 3)
+        let blurID = try requestID(from: try XCTUnwrap(blurMessages.last))
+        await first.enqueue(.text("{\"t\":\"response\",\"id\":\"\(blurID)\",\"ok\":true,\"result\":{\"focused\":false,\"resized\":false}}"))
+        _ = try await blur.value
+
+        await first.failReceive()
+        try await waitUntil(timeout: .seconds(5)) { await client.state() == .connected }
+
+        let restored = await waitForSentMessages(second, count: 2, timeout: .seconds(5))
+        guard case .text(let text) = try XCTUnwrap(restored.last),
+              let object = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+              let params = object["params"] as? [String: Any] else {
+            XCTFail("restore request is malformed")
+            return
+        }
+        XCTAssertEqual(object["method"] as? String, "session.subscribe")
+        XCTAssertEqual(params["id"] as? String, sessionID)
+        XCTAssertEqual(params["claim"] as? String, "false")
+        XCTAssertNil(params["cols"])
+
+        await client.stop()
+        consuming.cancel()
+    }
+
     func testAgentEventsHistoryUsesCanonicalCursors() async throws {
         let (client, task, consuming, _) = try await connectedClient()
         let request = Task {

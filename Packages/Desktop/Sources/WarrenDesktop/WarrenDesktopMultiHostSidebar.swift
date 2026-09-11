@@ -138,10 +138,15 @@ public struct WarrenDesktopSidebarProjection: Equatable, Sendable {
 ///
 /// The assignment is keyed by endpoint alias, never by array position. The
 /// palette is intentionally low-saturation and is applied by the sidebar as a
-/// four-percent wash; it is not persisted in the endpoint catalog.
+/// leading rule down the Host's subtree; it is not persisted in the endpoint
+/// catalog.
 public enum WarrenDesktopHostTint {
-    public static let maximumOpacity = 0.08
-    public static let targetOpacity = 0.04
+    /// A rule is a thin shape rather than a large wash, so it carries the tint
+    /// at a much higher opacity: the same hue that vanished as a 4% background
+    /// is clearly visible as a 2pt line, and it identifies the Host without
+    /// tinting the rows themselves.
+    public static let ruleWidth: CGFloat = 2
+    public static let ruleOpacity = 0.55
 
     public static func color(
         for endpointID: String,

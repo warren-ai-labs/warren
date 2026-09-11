@@ -10,8 +10,15 @@ The public onboarding site for Warren, served from a Cloudflare Worker.
 - Built-in English / Simplified Chinese i18n
 - Chinese display type: ZCOOL XiaoWei (站酷小薇) + MiSans (小米)
 
-The Download button resolves the latest GitHub release through the Worker's
-`/api/latest-release` endpoint and starts the installer download directly.
+The Download button resolves the latest GitHub release through the Worker and
+starts the installer download directly. It uses `/api/download`, which records
+an anonymous download-start event in the `warren_onboarding_downloads` Workers
+Analytics Engine dataset before returning the same release snapshot. The event
+contains a random, first-party browser identifier cookie plus coarse country,
+colo, browser, OS, device, language, referrer-origin, release, and asset
+dimensions; it never stores a raw IP address. See
+[`docs/onboarding-download-analytics.md`](../docs/onboarding-download-analytics.md)
+for the schema and example queries.
 The desktop updater uses the same Worker snapshot through
 `/api/update/latest`.
 

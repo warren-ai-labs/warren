@@ -204,6 +204,13 @@ public extension WarrenColorTokens {
     /// The regular border token is intentionally softer for cards and fields.
     var chromeDivider: Color { mutedForeground.opacity(0.20) }
 
+    /// The active tab's selection rule.
+    ///
+    /// Deliberately neutral rather than `highlight`: the accent already means
+    /// "agent activity" in this very row (the working dot sits beside the tab
+    /// title), so spending it on selection would put two meanings on one color.
+    var activeTabIndicator: Color { foreground.opacity(0.55) }
+
     /// Sidebar text hierarchy from brightest to most muted. Projects are the
     /// top-level navigation and read whitest; the selected workspace sits one
     /// step below; idle workspaces use the muted foreground.

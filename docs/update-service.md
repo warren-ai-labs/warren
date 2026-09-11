@@ -36,6 +36,13 @@ The existing `/api/latest-release` onboarding endpoint uses the same response,
 so the site and desktop client share one release snapshot without breaking the
 download button.
 
+The onboarding button uses `GET /api/download`. It reads the same snapshot,
+records one anonymous `download_started` event in Workers Analytics Engine, and
+returns the release JSON for the browser to open on GitHub. Desktop checks use
+`/api/update/latest` and are not included in the web-download metric. See
+[`onboarding-download-analytics.md`](onboarding-download-analytics.md) for the
+event schema and private SQL queries.
+
 ## Rate-limit policy
 
 The Worker must never make an unauthenticated request to the GitHub Releases

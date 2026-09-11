@@ -3,6 +3,10 @@ import XCTest
 @testable import Warren
 
 final class WarrenEndpointCatalogTests: XCTestCase {
+    func testLocalDaemonUsesCanonicalLowercaseAlias() {
+        XCTAssertEqual(WarrenRemoteEndpointConfiguration.localDaemon().name, "local")
+    }
+
     func testRejectsRemovedSSHRuntimeFields() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
@@ -197,18 +201,56 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         try WarrenEndpointCatalog.save(
             endpoints: [endpoint],
             current: endpoint.name,
-            display: WarrenDisplayConfiguration(endpoints: ["local", "prod"]),
+            display: WarrenDisplayConfiguration(
+                endpoints: ["local", "prod"],
+                names: ["local": "My Mac", "prod": "Production"]
+            ),
             to: url
         )
 
         let catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
         XCTAssertEqual(catalog.current, "prod")
-        XCTAssertEqual(catalog.display, WarrenDisplayConfiguration(endpoints: ["local", "prod"]))
+        XCTAssertEqual(
+            catalog.display,
+            WarrenDisplayConfiguration(
+                endpoints: ["local", "prod"],
+                names: ["local": "My Mac", "prod": "Production"]
+            )
+        )
         XCTAssertEqual(catalog.endpoints, [endpoint])
         XCTAssertEqual(
             try WarrenEndpointCatalog.effectiveDisplay(from: catalog),
             ["local", "prod"]
         )
+    }
+
+    func testSetDisplayNamePreservesAliasesAndCurrentEndpoint() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: "prod",
+            url: "https://prod.example",
+            token: "prod-secret"
+        )
+        try WarrenEndpointCatalog.save(
+            endpoints: [endpoint],
+            current: endpoint.name,
+            display: WarrenDisplayConfiguration(endpoints: ["local", "prod"]),
+            to: url
+        )
+
+        try WarrenEndpointCatalog.setDisplayName("local", name: "Office Mac", to: url)
+        var catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(catalog.current, "prod")
+        XCTAssertEqual(catalog.display?.endpoints, ["local", "prod"])
+        XCTAssertEqual(catalog.display?.names, ["local": "Office Mac"])
+
+        try WarrenEndpointCatalog.setDisplayName("local", name: nil, to: url)
+        catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(catalog.display?.names, [:])
     }
 
     func testLegacySidebarMigratesToDisplayOnWrite() throws {

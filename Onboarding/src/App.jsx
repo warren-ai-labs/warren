@@ -92,7 +92,10 @@ function Hero() {
     if (downloadState !== "idle") return;
     setDownloadState("loading");
     try {
-      const response = await fetch("/api/latest-release");
+      const response = await fetch("/api/download", {
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
       if (!response.ok) throw new Error(`release API ${response.status}`);
       const release = await response.json();
       if (!release?.url) throw new Error("no release url");

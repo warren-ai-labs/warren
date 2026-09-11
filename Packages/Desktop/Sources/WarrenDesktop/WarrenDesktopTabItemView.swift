@@ -205,11 +205,17 @@ struct WarrenDesktopTabItem: View {
                 .frame(width: WarrenSpacing.hairline)
         }
         .overlay(alignment: .bottom) {
-            // Active tabs flow into pane content by covering the bar's bottom
-            // border. Inactive tabs keep the unbroken 1px separator.
+            // The active tab carries a neutral selection rule. Its background
+            // differs from the chrome surface by only a few units of 255, which
+            // is too little to answer "which tab is live" at a glance. Inactive
+            // tabs keep the unbroken 1px separator.
             Rectangle()
-                .fill(isSelected ? tokens.background : tokens.border)
-                .frame(height: WarrenSpacing.hairline)
+                .fill(isSelected ? tokens.activeTabIndicator : tokens.border)
+                .frame(
+                    height: isSelected
+                        ? WarrenLayoutMetrics.activeTabIndicatorHeight
+                        : WarrenSpacing.hairline
+                )
         }
         .contentShape(.rect)
         .dropDestination(for: String.self) { tabIDs, _ in
@@ -349,8 +355,12 @@ struct WarrenDesktopEditorTabItem: View {
         }
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(isSelected ? tokens.background : tokens.border)
-                .frame(height: WarrenSpacing.hairline)
+                .fill(isSelected ? tokens.activeTabIndicator : tokens.border)
+                .frame(
+                    height: isSelected
+                        ? WarrenLayoutMetrics.activeTabIndicatorHeight
+                        : WarrenSpacing.hairline
+                )
         }
         .contentShape(.rect)
         .onHover { isHovered = $0 }

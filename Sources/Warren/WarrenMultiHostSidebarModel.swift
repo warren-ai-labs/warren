@@ -85,9 +85,13 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
         nextConfigurations["local"] = .localDaemon()
         configurations = nextConfigurations
         labels = nextConfigurations.reduce(into: [String: String]()) { result, entry in
-            result[entry.key] = entry.key == "local" ? "Local" : entry.value.name
+            let fallback = entry.key == "local" ? "Local" : entry.value.name
+            result[entry.key] = display?.displayName(
+                for: entry.key,
+                fallback: fallback
+            ) ?? fallback
         }
-        labels["local"] = "Local"
+        labels["local"] = display?.displayName(for: "local", fallback: "Local") ?? "Local"
 
         let unknownAlias = resolvedAliases.aliases.first {
             nextConfigurations[$0] == nil

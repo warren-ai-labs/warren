@@ -182,7 +182,24 @@ public final class TerminalSurfaceManager {
         viewportSize: .zero,
         wantsTerminalFocus: false
     )
+    /// Why a reconciliation turn was requested. Recorded with every AppKit
+    /// first-responder change so a focus loss can be attributed to the event
+    /// that caused it instead of being inferred from the code paths.
+    private enum ReconcileReason: String {
+        /// A new intent from SwiftUI: tab/session selection or focus intent.
+        case intent
+        /// Viewport size changed (window resize, sidebar toggle, pane chrome).
+        case geometry
+        case surfaceInserted
+        case recoveryReady
+        case presentDeferred
+        case recoveryPrepare
+        case attachRetry
+        case unknown
+    }
+
     private var reconcileScheduled = false
+    private var pendingReconcileReason: ReconcileReason?
     private var transitionGeneration: UInt64 = 0
     private var staleCommandCancellationCount: UInt64 = 0
     private var surfaceCreationCount: UInt64 = 0
@@ -297,13 +314,13 @@ public final class TerminalSurfaceManager {
     @discardableResult
     public func prepareForRecovery(_ sessionID: TerminalSessionID) -> Bool {
         guard let entry = entries[sessionID], policy.activeSessionID == sessionID else {
-            scheduleReconciliation()
+            scheduleReconciliation(.recoveryPrepare)
             return false
         }
         if entry.view.window != nil {
             entry.view.fitToSize()
         } else {
-            scheduleReconciliation()
+            scheduleReconciliation(.recoveryPrepare)
         }
         return isReadyForRecovery(sessionID)
     }
@@ -339,7 +356,7 @@ public final class TerminalSurfaceManager {
         entry.recoveryPhase = recoveryGated ? .recovering : .ready
         entries[surface.id] = entry
         surfaceCreationCount &+= 1
-        scheduleReconciliation()
+        scheduleReconciliation(.surfaceInserted)
     }
 
     public func remove(_ sessionID: TerminalSessionID) {
@@ -384,14 +401,20 @@ public final class TerminalSurfaceManager {
         onFocused: @escaping (TerminalSessionID, TerminalSize?) -> Void,
         onBlurred: @escaping (TerminalSessionID) -> Void
     ) {
-        let needsReconciliation = self.host !== host || latestIntent != intent
+        // The host's layout callback is the authoritative source for viewport
+        // changes. Treating the size carried by every NSViewRepresentable
+        // update as intent would reconcile once per SwiftUI layout frame while
+        // a sidebar or pane is animating, which also re-enters focus handling.
+        let intentChanged = latestIntent.activeSessionID != intent.activeSessionID
+            || latestIntent.wantsTerminalFocus != intent.wantsTerminalFocus
+        let needsReconciliation = self.host !== host || intentChanged
         self.host = host
         host.manager = self
         latestIntent = intent
         self.onFocused = onFocused
         self.onBlurred = onBlurred
         if needsReconciliation {
-            scheduleReconciliation()
+            scheduleReconciliation(.intent)
         }
     }
 
@@ -418,6 +441,10 @@ public final class TerminalSurfaceManager {
             schedulePresent(entry, generation: entry.transitionGeneration)
             return
         }
+        TerminalDiagnostics.logAsync("terminal_geometry_change", [
+            "from": GhosttyDiagnosticsFormat.finiteSize(latestIntent.viewportSize),
+            "to": GhosttyDiagnosticsFormat.finiteSize(size),
+        ])
         latestIntent = TerminalPresentationIntent(
             activeSessionID: latestIntent.activeSessionID,
             viewportSize: size,
@@ -434,16 +461,21 @@ public final class TerminalSurfaceManager {
             try? await Task.sleep(for: .milliseconds(50))
             guard let self else { return }
             self.resizeDebounceTask = nil
-            self.scheduleReconciliation()
+            self.scheduleReconciliation(.geometry)
         }
     }
 
-    public func requestFocusForActiveSurface() {
+    public func requestFocusForActiveSurface(trigger: String = "explicit_request") {
         guard let sessionID = policy.activeSessionID else { return }
         // A key-window transition can leave the same AppKit first responder in
         // place while the daemon control lease was released during the blur.
         // Explicit focus requests therefore force one lease re-claim.
-        focus(sessionID, generation: transitionGeneration, forceReport: true)
+        focus(
+            sessionID,
+            generation: transitionGeneration,
+            forceReport: true,
+            trigger: trigger
+        )
     }
 
     public func requestPresent(_ sessionID: TerminalSessionID) {
@@ -472,7 +504,7 @@ public final class TerminalSurfaceManager {
                 "reason": "inactive_surface",
                 "active": policy.activeSessionID?.description ?? "nil",
             ])
-            scheduleReconciliation()
+            scheduleReconciliation(.presentDeferred)
             return
         }
         schedulePresent(entry, generation: entry.transitionGeneration)
@@ -545,7 +577,7 @@ public final class TerminalSurfaceManager {
             // The remote marker can arrive before the AppKit reconciliation
             // that activates this surface. Reconcile the ready phase into the
             // mounted host rather than requiring a second tab switch.
-            scheduleReconciliation()
+            scheduleReconciliation(.recoveryReady)
         }
     }
 
@@ -658,17 +690,24 @@ public final class TerminalSurfaceManager {
         )
     }
 
-    private func scheduleReconciliation() {
+    private func scheduleReconciliation(_ reason: ReconcileReason) {
+        // The first reason wins: a coalesced turn is attributed to whatever
+        // triggered it, and the later callers only joined that same turn.
+        if pendingReconcileReason == nil {
+            pendingReconcileReason = reason
+        }
         guard !reconcileScheduled else { return }
         reconcileScheduled = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             reconcileScheduled = false
-            reconcile()
+            let reason = pendingReconcileReason ?? .unknown
+            pendingReconcileReason = nil
+            reconcile(reason: reason)
         }
     }
 
-    private func reconcile() {
+    private func reconcile(reason: ReconcileReason) {
         transitionGeneration &+= 1
         let generation = transitionGeneration
         let nextSessionID = latestIntent.activeSessionID
@@ -700,14 +739,21 @@ public final class TerminalSurfaceManager {
               let entry = entries[nextSessionID],
               let host else { return }
         entry.transitionGeneration = generation
-        attach(entry, sessionID: nextSessionID, to: host, generation: generation)
+        attach(
+            entry,
+            sessionID: nextSessionID,
+            to: host,
+            generation: generation,
+            reason: reason
+        )
     }
 
     private func attach(
         _ entry: Entry,
         sessionID: TerminalSessionID,
         to host: TerminalHostContainerView,
-        generation: UInt64
+        generation: UInt64,
+        reason: ReconcileReason
     ) {
         // SwiftUI can submit a newly mounted terminal host before its pane
         // constraints have propagated through AppKit. Flush that pending
@@ -781,7 +827,7 @@ public final class TerminalSurfaceManager {
                               self.host === host,
                               self.entries[sessionID] === entry,
                               self.latestIntent.activeSessionID == sessionID else { return }
-                        self.scheduleReconciliation()
+                        self.scheduleReconciliation(.attachRetry)
                     }
                 } else {
                     self.staleCommandCancellationCount &+= 1
@@ -804,7 +850,7 @@ public final class TerminalSurfaceManager {
             entry.surface.resyncIfNeeded()
             schedulePresent(entry, generation: generation)
             if latestIntent.wantsTerminalFocus {
-                focus(sessionID, generation: generation)
+                focus(sessionID, generation: generation, trigger: reason.rawValue)
             }
         }
     }
@@ -830,6 +876,10 @@ public final class TerminalSurfaceManager {
         entry.surface.clearReattachAnchor()
         entry.view.setFocusLossReportingSuppressed(true)
         if entry.view.window?.firstResponder === entry.view {
+            TerminalDiagnostics.logAsync("terminal_focus_release", [
+                "session": sessionID.description,
+                "cause": "demote",
+            ])
             entry.view.window?.makeFirstResponder(nil)
         }
         setDisplayVisible(false, for: entry)
@@ -853,6 +903,10 @@ public final class TerminalSurfaceManager {
         cancelPresentation(for: entry)
         entry.view.setFocusLossReportingSuppressed(true)
         if entry.view.window?.firstResponder === entry.view {
+            TerminalDiagnostics.logAsync("terminal_focus_release", [
+                "session": sessionID.description,
+                "cause": "dispose",
+            ])
             entry.view.window?.makeFirstResponder(nil)
         }
         setDisplayVisible(false, for: entry)
@@ -878,15 +932,49 @@ public final class TerminalSurfaceManager {
     private func focus(
         _ sessionID: TerminalSessionID,
         generation: UInt64,
-        forceReport: Bool = false
+        forceReport: Bool = false,
+        trigger: String
     ) {
         guard let host,
               let window = host.window,
               let entry = entries[sessionID],
               isCurrent(sessionID, entry: entry, host: host, generation: generation),
               window.isKeyWindow else { return }
-        let wasFirstResponder = window.firstResponder === entry.view
+        let currentResponder = window.firstResponder
+        let wasFirstResponder = currentResponder === entry.view
+        guard wasFirstResponder
+            || Self.canClaimFocus(
+                from: currentResponder,
+                in: window,
+                for: entry.view
+            ) else {
+            TerminalDiagnostics.logAsync("terminal_focus_claim_skipped", [
+                "session": sessionID.description,
+                "trigger": trigger,
+                "previous": Self.responderDescription(currentResponder),
+                "wantsTerminalFocus": latestIntent.wantsTerminalFocus ? "true" : "false",
+            ])
+            return
+        }
+        // Record what the terminal is about to take focus away from. A steal
+        // from a SwiftUI control (the sidebar's rows/buttons are hosted in an
+        // NSView whose class name carries "Hosting") is the signal that a
+        // reconciliation reached past the terminal and disturbed the user's
+        // keyboard context.
+        if !wasFirstResponder {
+            TerminalDiagnostics.logAsync("terminal_focus_claim", [
+                "session": sessionID.description,
+                "trigger": trigger,
+                "previous": Self.responderDescription(currentResponder),
+                "wantsTerminalFocus": latestIntent.wantsTerminalFocus ? "true" : "false",
+            ])
+        }
         guard wasFirstResponder || window.makeFirstResponder(entry.view) else {
+            TerminalDiagnostics.logAsync("terminal_focus_claim_rejected", [
+                "session": sessionID.description,
+                "trigger": trigger,
+                "previous": Self.responderDescription(currentResponder),
+            ])
             return
         }
         entry.view.setFocusLossReportingSuppressed(false)
@@ -894,6 +982,30 @@ public final class TerminalSurfaceManager {
             entry.focusReported = true
             onFocused(sessionID, entry.surface.terminalSize)
         }
+    }
+
+    /// Identifies a first responder without retaining it or reading AppKit
+    /// state that is only valid on the main actor later.
+    private static func responderDescription(_ responder: NSResponder?) -> String {
+        guard let responder else { return "nil" }
+        if responder is NSWindow { return "window" }
+        return String(describing: type(of: responder))
+    }
+
+    /// Focus reconciliation may run while SwiftUI has a real control focused.
+    /// Only claim the responder when AppKit has no user-owned responder, or
+    /// when the current responder is already inside this terminal view.
+    private static func canClaimFocus(
+        from responder: NSResponder?,
+        in window: NSWindow,
+        for terminalView: AppTerminalView
+    ) -> Bool {
+        guard let responder else { return true }
+        if responder === window || responder === terminalView {
+            return true
+        }
+        guard let responderView = responder as? NSView else { return false }
+        return responderView.isDescendant(of: terminalView)
     }
 
     private func schedulePresent(_ entry: Entry, generation: UInt64) {
@@ -1153,7 +1265,7 @@ public final class TerminalSurfaceManager {
                       self.host?.window === window else { return }
                 self.cancelPendingWindowBlur()
                 if latestIntent.wantsTerminalFocus {
-                    requestFocusForActiveSurface()
+                    requestFocusForActiveSurface(trigger: "window_did_become_key")
                 }
                 requestPresentForActiveSurface()
             }

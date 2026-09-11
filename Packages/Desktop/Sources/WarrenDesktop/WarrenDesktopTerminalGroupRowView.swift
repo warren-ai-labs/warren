@@ -107,7 +107,7 @@ struct WarrenDesktopTerminalGroupRow: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.leading, WarrenSpacing.compact)
+            .padding(.leading, WarrenDesktopSidebarIndent.terminalGroup)
             .padding(.trailing, WarrenSpacing.compact)
             .frame(minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)

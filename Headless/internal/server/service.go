@@ -34,7 +34,6 @@ const (
 	defaultRingCapacity     = 256
 	defaultRingMaxBytes     = 8 * 1024 * 1024
 	defaultCommandTimeout   = 10 * time.Second
-	broadcastLockWait       = 100 * time.Millisecond
 	metadataRefreshInterval = 750 * time.Millisecond
 	metadataProbeTimeout    = 2 * time.Second
 	slowRosterThreshold     = 50 * time.Millisecond
@@ -6651,42 +6650,75 @@ func (s *Service) persistCursorLocked(outputSession *outputSession) error {
 }
 
 func (s *Service) broadcastFrame(frame output.Frame) {
+	// Resolve the recipients before touching the session broadcast lock. Every
+	// subscriber that negotiated a direct Ghostline reader is served from its
+	// own paired stream and is excluded below, so this set is empty for a
+	// session whose only subscribers are current desktop clients. Locking for
+	// an empty set is what turned ordinary contention into a peer reset: the
+	// timeout path closed every subscription on the session even though this
+	// frame was never going to be written to any of them.
+	if len(s.sharedBroadcastPeers(frame.SessionID)) == 0 {
+		return
+	}
 	encoded, err := output.EncodeOutput(frame.SessionID, frame.Epoch, frame.Sequence, frame.Payload)
 	if err != nil {
 		return
 	}
 	lock := s.broadcastLock(frame.SessionID)
 	if !lock.TryLock() {
-		// Focus and resize briefly hold the same lock while the runtime applies a
-		// PTY size. Do not reset a healthy WebSocket for that normal contention:
-		// waiting for a bounded interval preserves frame ordering and lets the
-		// current frame reach the client. A genuinely wedged attach/focus still
-		// falls through to the existing reanchor path after the deadline.
-		ctx, cancel := context.WithTimeout(context.Background(), broadcastLockWait)
+		// The same lock is held by attach recovery while it captures a
+		// checkpoint, by focus/resize while the runtime applies a PTY size, and
+		// by the Agent subsystem while it reads a canonical history page.
+		// Waiting preserves frame ordering (the ring already owns these bytes)
+		// and is always preferable to a reset, so the deadline has to cover the
+		// slowest legitimate holder rather than a shorter guess.
+		ctx, cancel := context.WithTimeout(context.Background(), s.broadcastLockWait())
 		err := lock.LockContext(ctx)
 		cancel()
 		if err != nil {
-			s.forceSessionReanchor(frame.SessionID)
+			// Only the peers that were about to receive this frame can have a
+			// gap. Peers reading their own direct stream are unaffected and must
+			// keep their connection: one contended session must never drop the
+			// other sessions multiplexed onto the same WebSocket.
+			s.forcePeerReanchor(frame.SessionID, s.sharedBroadcastPeers(frame.SessionID))
 			return
 		}
 	}
 	defer lock.Unlock()
+	// Re-resolve under the lock. An attach we waited on promotes its peer to a
+	// direct reader, and that peer must not also receive this frame.
+	for _, peer := range s.sharedBroadcastPeers(frame.SessionID) {
+		if !peer.enqueueBinary(encoded) {
+			s.detachPeer(peer, frame.SessionID)
+		}
+	}
+}
+
+// sharedBroadcastPeers lists the subscribers of a session that are still served
+// from the shared ring. A peer holding a direct Ghostline reader — reserved
+// during recovery or already running — receives that stream instead and is
+// excluded.
+func (s *Service) sharedBroadcastPeers(sessionID string) []*wsPeer {
 	s.outputMu.Lock()
-	peers := make([]*wsPeer, 0, len(s.peers[frame.SessionID]))
-	for peer := range s.peers[frame.SessionID] {
+	defer s.outputMu.Unlock()
+	peers := make([]*wsPeer, 0, len(s.peers[sessionID]))
+	for peer := range s.peers[sessionID] {
 		if streams := s.peerOutputs[peer]; streams != nil {
-			if _, direct := streams[frame.SessionID]; direct {
+			if _, direct := streams[sessionID]; direct {
 				continue
 			}
 		}
 		peers = append(peers, peer)
 	}
-	s.outputMu.Unlock()
-	for _, peer := range peers {
-		if !peer.enqueueBinary(encoded) {
-			s.detachPeer(peer, frame.SessionID)
-		}
-	}
+	return peers
+}
+
+// broadcastLockWait bounds how long a shared-ring frame waits for the session
+// broadcast lock. Every legitimate holder is itself bounded by the command
+// timeout, so reaching this deadline means the lock leaked rather than that the
+// receiving peer is slow.
+func (s *Service) broadcastLockWait() time.Duration {
+	return s.commandTimeout()
 }
 
 func (s *Service) broadcastLock(sessionID string) *sessionLock {
@@ -6701,21 +6733,17 @@ func (s *Service) broadcastLock(sessionID string) *sessionLock {
 	return lock
 }
 
-// forceSessionReanchor drops slow or stale peers when output cannot acquire
-// the session broadcast lock. Reconnecting protocol-3 peers always receive a
-// fresh atomic state, so no recovery mode needs to be carried in the ring.
-func (s *Service) forceSessionReanchor(sessionID string) {
-	s.lazyInit()
-	s.outputMu.Lock()
-	outputSession := s.outputs[sessionID]
-	peers := make([]*wsPeer, 0, len(s.peers[sessionID]))
-	for peer := range s.peers[sessionID] {
-		peers = append(peers, peer)
-	}
-	s.outputMu.Unlock()
-	if outputSession == nil || len(peers) == 0 {
+// forcePeerReanchor resets the given subscribers after a shared-ring frame
+// could not be delivered, so a gap is never papered over silently. Closing the
+// connection is the only in-protocol resync signal: a reconnecting peer always
+// receives a fresh atomic state, so no recovery mode is carried in the ring.
+// The caller decides which peers are affected — this must not extend to peers
+// that were never a recipient of the undelivered frame.
+func (s *Service) forcePeerReanchor(sessionID string, peers []*wsPeer) {
+	if len(peers) == 0 {
 		return
 	}
+	s.logWarn("force peer reanchor", "session", sessionID, "peers", len(peers))
 	for _, peer := range peers {
 		peer.closeWithReason("force_reanchor")
 	}

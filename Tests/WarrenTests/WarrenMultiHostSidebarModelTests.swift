@@ -141,6 +141,39 @@ final class WarrenMultiHostSidebarModelTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testDisplayNamesApplyToLocalAndRemoteHostSections() {
+        let model = WarrenMultiHostSidebarModel()
+        defer { model.stop() }
+
+        let host = Host(name: "Local Mac")
+        let activeProjection = WarrenDesktopProjection(
+            host: host,
+            groups: [],
+            connectionState: .attached
+        )
+        let remote = WarrenRemoteEndpointConfiguration(
+            name: "prod",
+            url: "http://127.0.0.1:1",
+            token: "token"
+        )
+
+        model.configure(
+            display: WarrenDisplayConfiguration(
+                endpoints: ["local", "prod"],
+                names: ["local": "Office Mac", "prod": "Production"]
+            ),
+            endpoints: [remote],
+            activeEndpointID: "local",
+            activeProjection: activeProjection,
+            activeConnectionError: nil
+        )
+
+        XCTAssertEqual(model.projection.host(for: "local")?.endpointLabel, "Office Mac")
+        XCTAssertEqual(model.projection.host(for: "local")?.title, "Office Mac · Local Mac")
+        XCTAssertEqual(model.projection.host(for: "prod")?.endpointLabel, "Production")
+    }
+
     private func roster(revision: UInt64?) -> WarrenRemoteRoster {
         WarrenRemoteRoster(
             revision: revision,

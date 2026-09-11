@@ -100,10 +100,35 @@ struct WarrenDesktopEndpointPopover: View {
     let selectedID: String
     let onSelect: (String) -> Void
     let onSetSidebarVisibility: (String, Bool) -> Void
+    let onCustomizeDisplayName: (WarrenDesktopEndpointOption) -> Void
     let onAddSSHHost: () -> Void
     let onRetry: () -> Void
     let onStop: () -> Void
     let onDismiss: () -> Void
+
+    init(
+        connectionState: WarrenDesktopConnectionState,
+        endpoints: [WarrenDesktopEndpointOption],
+        selectedID: String,
+        onSelect: @escaping (String) -> Void,
+        onSetSidebarVisibility: @escaping (String, Bool) -> Void,
+        onCustomizeDisplayName: @escaping (WarrenDesktopEndpointOption) -> Void = { _ in },
+        onAddSSHHost: @escaping () -> Void,
+        onRetry: @escaping () -> Void,
+        onStop: @escaping () -> Void,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.connectionState = connectionState
+        self.endpoints = endpoints
+        self.selectedID = selectedID
+        self.onSelect = onSelect
+        self.onSetSidebarVisibility = onSetSidebarVisibility
+        self.onCustomizeDisplayName = onCustomizeDisplayName
+        self.onAddSSHHost = onAddSSHHost
+        self.onRetry = onRetry
+        self.onStop = onStop
+        self.onDismiss = onDismiss
+    }
 
     var body: some View {
         WarrenDesktopChromePopoverSurface(
@@ -117,6 +142,7 @@ struct WarrenDesktopEndpointPopover: View {
                 selectedID: selectedID,
                 onSelect: onSelect,
                 onSetSidebarVisibility: onSetSidebarVisibility,
+                onCustomizeDisplayName: onCustomizeDisplayName,
                 onAddSSHHost: onAddSSHHost,
                 onRetry: onRetry,
                 onStop: onStop,
@@ -135,10 +161,35 @@ struct WarrenDesktopEndpointPopoverContent: View {
     let selectedID: String
     let onSelect: (String) -> Void
     let onSetSidebarVisibility: (String, Bool) -> Void
+    let onCustomizeDisplayName: (WarrenDesktopEndpointOption) -> Void
     let onAddSSHHost: () -> Void
     let onRetry: () -> Void
     let onStop: () -> Void
     let onDismiss: () -> Void
+
+    init(
+        connectionState: WarrenDesktopConnectionState,
+        endpoints: [WarrenDesktopEndpointOption],
+        selectedID: String,
+        onSelect: @escaping (String) -> Void,
+        onSetSidebarVisibility: @escaping (String, Bool) -> Void,
+        onCustomizeDisplayName: @escaping (WarrenDesktopEndpointOption) -> Void = { _ in },
+        onAddSSHHost: @escaping () -> Void,
+        onRetry: @escaping () -> Void,
+        onStop: @escaping () -> Void,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.connectionState = connectionState
+        self.endpoints = endpoints
+        self.selectedID = selectedID
+        self.onSelect = onSelect
+        self.onSetSidebarVisibility = onSetSidebarVisibility
+        self.onCustomizeDisplayName = onCustomizeDisplayName
+        self.onAddSSHHost = onAddSSHHost
+        self.onRetry = onRetry
+        self.onStop = onStop
+        self.onDismiss = onDismiss
+    }
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -295,6 +346,11 @@ struct WarrenDesktopEndpointPopoverContent: View {
                     onDismiss()
                 }
             )
+            .contextMenu {
+                Button("Customize Display Name…") {
+                    onCustomizeDisplayName(endpoint)
+                }
+            }
 
             Button {
                 onSetSidebarVisibility(endpoint.id, !endpoint.isDisplayedInSidebar)

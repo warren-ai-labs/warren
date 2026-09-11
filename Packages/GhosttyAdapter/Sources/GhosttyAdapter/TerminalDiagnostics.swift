@@ -35,6 +35,18 @@ public enum TerminalDiagnostics {
 
     private static let store = Store()
     private static let maxFileBytes = 2 * 1024 * 1024
+    /// Serial writer for events recorded on latency-sensitive paths.
+    ///
+    /// `log` performs the file write while holding `store.lock`, which is
+    /// acceptable for the low-rate milestone events but not for anything on the
+    /// focus/reconcile path: those run on the main actor and would put a disk
+    /// write between an AppKit responder change and the next frame. Hopping to
+    /// this queue keeps the ordering guarantee (it is serial, and the event
+    /// timestamp is captured at the call site) without blocking the caller.
+    private static let asyncQueue = DispatchQueue(
+        label: "com.abcdlsj.warren.terminal-diagnostics",
+        qos: .utility
+    )
 
     public static var isEnabled: Bool {
         store.lock.lock()
@@ -104,6 +116,25 @@ public enum TerminalDiagnostics {
         writeLocked(event, fields)
     }
 
+    /// Milestone event recorded without blocking the calling thread.
+    ///
+    /// Use this instead of `log` on the main actor's hot paths. The timestamp is
+    /// read here so the recorded time is the moment the event happened rather
+    /// than the moment the writer drained.
+    public static func logAsync(
+        _ event: String,
+        _ fields: [String: String] = [:]
+    ) {
+        guard isEnabled else { return }
+        let timestamp = Date().timeIntervalSince1970
+        asyncQueue.async {
+            store.lock.lock()
+            defer { store.lock.unlock() }
+            guard store.enabled else { return }
+            writeLocked(event, fields, timestamp: timestamp)
+        }
+    }
+
     /// Verbose event: recorded only with `WARREN_TERMINAL_DIAGNOSTICS=1`.
     public static func logVerbose(
         _ event: String,
@@ -117,10 +148,11 @@ public enum TerminalDiagnostics {
 
     private static func writeLocked(
         _ event: String,
-        _ fields: [String: String]
+        _ fields: [String: String],
+        timestamp: TimeInterval? = nil
     ) {
         var payload: [String: String] = [
-            "time": String(format: "%.3f", Date().timeIntervalSince1970),
+            "time": String(format: "%.3f", timestamp ?? Date().timeIntervalSince1970),
             "pid": String(ProcessInfo.processInfo.processIdentifier),
             "event": event,
         ]

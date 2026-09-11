@@ -44,13 +44,16 @@ Local and Server are two independent Host resource trees. Switching endpoints on
 
 The macOS Desktop optionally aggregates Project and Workspace rosters from an
 ordered set of Endpoint aliases in `~/.warren/config.json`. The `display`
-section is client-local and stores aliases only; Endpoint URLs, tokens, SSH
-route metadata, and Relay credentials remain in the catalog. A configuration
-without that section keeps the legacy single-current behavior. Web and iOS do
+section is client-local and stores aliases plus optional display names; Endpoint
+URLs, tokens, SSH route metadata, and Relay credentials remain in the catalog.
+A configuration without that section keeps the legacy single-current behavior.
+Web and iOS do
 not consume this Desktop-only projection. The foreground `current` Endpoint is
 independent from the explicit `display` aliases, so connecting or switching
-Endpoints never changes sidebar membership. The Desktop execution-server menu
-adds or removes a Host; `warren display move` controls its order.
+Endpoints never changes sidebar membership. Display names only affect labels;
+the canonical `local` alias remains lowercase. Right-clicking a Host row in the
+Desktop execution-server menu opens the display-name editor; the same menu adds
+or removes a Host, while `warren display move` controls its order.
 
 The foreground Endpoint owns the existing terminal controller, subscriptions,
 focus lease, resize path, Agent projection, and write operations. Each other

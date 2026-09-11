@@ -11,3 +11,7 @@ directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "404-page"
 run_worker_first = true
+
+[[analytics_engine_datasets]]
+binding = "DOWNLOAD_ANALYTICS"
+dataset = "warren_onboarding_downloads"
