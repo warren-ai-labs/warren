@@ -21,6 +21,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1401,7 +1403,11 @@ func isSlowMutation(method string) bool {
 
 func isBackgroundRequest(method string) bool {
 	switch method {
-	case "git.panel", "git.diff", "session.subscribe", "settings.testOpenAI":
+	case "git.panel", "git.diff", "session.subscribe", "settings.testOpenAI",
+		// usage.stats can refresh unit prices over the network and rescan the
+		// whole rollup, so it belongs off the reader for the same reason git
+		// inspection does: terminal input must stay responsive meanwhile.
+		"usage.stats", "usage.rebuild":
 		return true
 	default:
 		return false
@@ -1598,6 +1604,22 @@ type wsPeer struct {
 	controlSession        string
 	agentSession          string
 	canonicalAgentStreams map[string]struct{}
+	// screenMu guards the split-screen presentation state below. It is its own
+	// lock because reconciling that state requires session lookups, which take
+	// the service lock and must not run under the outbound queue's mutex.
+	screenMu sync.Mutex
+	// screenSessions is presentation state for this authenticated peer only.
+	// A daemon may serve several windows/clients at once; keeping this on the
+	// peer prevents one window's split layout from overwriting another's.
+	screenSessions []string
+	// screenGeneration invalidates a lazily filtered snapshot that raced a new
+	// client report.
+	screenGeneration uint64
+	// screenReportedAt orders the screens of several clients that display one
+	// Session. A CLI running inside a Session asks "where am I on screen" and
+	// expects one answer; the most recent report is the closest thing to the
+	// screen the user is actually looking at.
+	screenReportedAt time.Time
 	// terminalStateFormat is negotiated once during protocol-3 authentication.
 	// Every client must install its selected format behind a presentation gate.
 	terminalStateFormat string
@@ -1917,6 +1939,10 @@ func (p *wsPeer) closeLocked(reason string) ([]string, string, string) {
 	}
 	p.closeFlag = true
 	p.closeReason = reason
+	p.screenMu.Lock()
+	p.screenSessions = nil
+	p.screenGeneration++
+	p.screenMu.Unlock()
 	if p.rosterCancel != nil {
 		p.rosterCancel()
 		p.rosterCancel = nil
@@ -2282,6 +2308,25 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		result, queryErr := p.server.Service.canonicalHistoryPage(ctx, request.StreamID, request.AfterSequence, request.BeforeSequence, int(request.Limit))
 		if queryErr != nil {
 			return p.writeCanonicalError(command.ID, queryErr)
+		}
+		return p.writeResult(command.ID, result)
+	case "usage.stats":
+		request, err := decodeAgentParams[api.UsageStatsRequest](params)
+		if err != nil {
+			return p.writeCanonicalError(command.ID, err)
+		}
+		result, statsErr := p.server.Service.UsageStats(ctx, request)
+		if statsErr != nil {
+			return p.writeCanonicalError(command.ID, statsErr)
+		}
+		return p.writeResult(command.ID, result)
+	case "usage.rebuild":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
+		result, rebuildErr := p.server.Service.RebuildUsage(ctx)
+		if rebuildErr != nil {
+			return p.writeCanonicalError(command.ID, rebuildErr)
 		}
 		return p.writeResult(command.ID, result)
 	case "agent.events.subscribe":
@@ -2793,6 +2838,37 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"agentSessionId": value.AgentSessionID, "transcriptPath": value.TranscriptPath,
 			"lifecycle": value.Lifecycle,
 		})
+	case "screen.report", "session.screen.report":
+		var sessions []string
+		if raw, ok := params["sessions"].([]any); ok {
+			for _, item := range raw {
+				if str, ok := item.(string); ok && strings.TrimSpace(str) != "" {
+					sessions = append(sessions, strings.TrimSpace(str))
+				}
+			}
+		} else if str := stringParam(params, "sessions"); str != "" {
+			for _, part := range strings.Split(str, ",") {
+				if trimmed := strings.TrimSpace(part); trimmed != "" {
+					sessions = append(sessions, trimmed)
+				}
+			}
+		}
+		if err := p.setScreenSessions(sessions); err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]any{"reported": true, "screenSessions": p.screenSessionsSnapshot()})
+	case "screen.panes", "session.screen.panes":
+		id := stringParam(params, "id")
+		if id == "" {
+			return errors.New("session ID is required")
+		}
+		if _, ok := p.server.Service.Session(id); !ok {
+			return fmt.Errorf("session not found: %s", id)
+		}
+		return p.writeResult(command.ID, api.ScreenPanesResult{
+			SessionID: id,
+			Screens:   p.server.screenLayouts(id),
+		})
 	case "session.current":
 		id := stringParam(params, "id")
 		if id == "" {
@@ -2802,7 +2878,14 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if !ok {
 			return fmt.Errorf("session not found: %s", id)
 		}
-		return p.writeResult(command.ID, publicSession(value))
+		pub := publicSession(value)
+		// Only the position, never the neighbours: a Session learns where its
+		// own output sits on screen, and `screen.panes` answers who shares it.
+		if layouts := p.server.screenLayouts(id); len(layouts) > 0 {
+			pub.ScreenPosition = layouts[0].Position
+			pub.ScreenPaneCount = layouts[0].PaneCount
+		}
+		return p.writeResult(command.ID, pub)
 	case "session.rename":
 		if err := p.server.Service.RenameSession(stringParam(params, "id"), stringParam(params, "title")); err != nil {
 			return err
@@ -3783,6 +3866,155 @@ func (p *wsPeer) hasOutput(sessionID string) bool {
 	defer p.enqueueMu.Unlock()
 	_, ok := p.outputs[sessionID]
 	return ok
+}
+
+// isClosed reports peer teardown without taking enqueueMu, so callers holding
+// another lock can check it safely.
+func (p *wsPeer) isClosed() bool {
+	select {
+	case <-p.closed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *wsPeer) setScreenSessions(sessions []string) error {
+	seen := make(map[string]struct{}, len(sessions))
+	validated := make([]string, 0, len(sessions))
+	for _, raw := range sessions {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		session, ok := p.server.Service.Session(id)
+		if !ok {
+			return fmt.Errorf("screen session not found: %s", id)
+		}
+		if session.Lifecycle != "running" {
+			return fmt.Errorf("screen session is not running: %s", id)
+		}
+		seen[id] = struct{}{}
+		validated = append(validated, id)
+	}
+	p.screenMu.Lock()
+	defer p.screenMu.Unlock()
+	if p.isClosed() {
+		return errors.New("connection is closed")
+	}
+	p.screenSessions = validated
+	p.screenGeneration++
+	p.screenReportedAt = time.Now()
+	return nil
+}
+
+// screenSessionsSnapshot removes ended Sessions lazily so a peer that remains
+// connected cannot report stale panes after a Host-side deletion.
+//
+// Session lookup takes the service lock, so it happens outside screenMu. The
+// generation counter makes the write-back safe: a concurrent screen.report
+// bumps the generation and its list wins over this stale filtered copy.
+func (p *wsPeer) screenSessionsSnapshot() []string {
+	p.screenMu.Lock()
+	ids := append([]string(nil), p.screenSessions...)
+	generation := p.screenGeneration
+	p.screenMu.Unlock()
+	valid := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if session, ok := p.server.Service.Session(id); ok && session.Lifecycle == "running" {
+			valid = append(valid, id)
+		}
+	}
+	p.screenMu.Lock()
+	if p.screenGeneration == generation && !p.isClosed() {
+		p.screenSessions = append([]string(nil), valid...)
+	} else {
+		valid = append([]string(nil), p.screenSessions...)
+	}
+	p.screenMu.Unlock()
+	return valid
+}
+
+// screenLayouts returns every connected client screen that currently displays
+// the Session, ordered most recently reported first.
+//
+// The read deliberately crosses peers. Screen state is owned by the client that
+// reported it, but the question "which pane am I" comes from a CLI running
+// inside the Session, on its own short-lived connection with no screen of its
+// own; answering from the asking peer would always say "nowhere". Writes stay
+// per-peer, so one window still cannot overwrite another's layout.
+func (s *HTTPServer) screenLayouts(sessionID string) []api.ScreenLayout {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	s.peersMu.Lock()
+	peers := make([]*wsPeer, 0, len(s.peers))
+	for peer := range s.peers {
+		peers = append(peers, peer)
+	}
+	s.peersMu.Unlock()
+	type reportedScreen struct {
+		sessions   []string
+		reportedAt time.Time
+		clientID   string
+	}
+	reported := make([]reportedScreen, 0, len(peers))
+	for _, peer := range peers {
+		// Snapshotting takes the service lock, so it runs outside peersMu.
+		sessions := peer.screenSessionsSnapshot()
+		if !slices.Contains(sessions, sessionID) {
+			continue
+		}
+		peer.screenMu.Lock()
+		reportedAt := peer.screenReportedAt
+		peer.screenMu.Unlock()
+		reported = append(reported, reportedScreen{
+			sessions:   sessions,
+			reportedAt: reportedAt,
+			clientID:   peer.clientID,
+		})
+	}
+	// The client ID breaks ties so two windows that reported in the same clock
+	// tick still produce a stable order across calls.
+	sort.Slice(reported, func(first, second int) bool {
+		if !reported[first].reportedAt.Equal(reported[second].reportedAt) {
+			return reported[first].reportedAt.After(reported[second].reportedAt)
+		}
+		return reported[first].clientID < reported[second].clientID
+	})
+	layouts := make([]api.ScreenLayout, 0, len(reported))
+	for _, screen := range reported {
+		panes := make([]api.ScreenPane, 0, len(screen.sessions))
+		position := 0
+		for index, id := range screen.sessions {
+			pane := api.ScreenPane{
+				Index:     index + 1,
+				SessionID: id,
+				Current:   id == sessionID,
+			}
+			if session, ok := s.Service.Session(id); ok {
+				if title := strings.TrimSpace(session.CustomTitle); title != "" {
+					pane.Title = title
+				} else {
+					pane.Title = session.Title
+				}
+			}
+			if pane.Current {
+				position = pane.Index
+			}
+			panes = append(panes, pane)
+		}
+		layouts = append(layouts, api.ScreenLayout{
+			Position:  position,
+			PaneCount: len(panes),
+			Panes:     panes,
+		})
+	}
+	return layouts
 }
 
 // releaseControl keeps the output subscription alive while dropping the

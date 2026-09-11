@@ -1052,7 +1052,7 @@ var resourceActions = map[string]map[string]bool{
 	"session": {
 		"list": true, "create": true, "add": true, "remove": true, "delete": true,
 		"kill": true, "rename": true, "pin": true, "move": true, "send": true, "read": true,
-		"current": true, "undo": true,
+		"current": true, "panes": true, "undo": true,
 	},
 }
 
@@ -1328,6 +1328,9 @@ func resourceCommand(args []string) error {
 	if resource == "session" && action == "current" && len(positionals(params)) > 0 {
 		return newUsageError("session current does not accept SESSION_ID; it uses WARREN_SESSION_ID", actionUsageText(commandName, action))
 	}
+	if resource == "session" && action == "panes" && len(positionals(params)) > 1 {
+		return newUsageError("session panes accepts at most one SESSION_ID", actionUsageText(commandName, action))
+	}
 	if label := missingRequiredFlag(resource, action, params); label != "" {
 		return newUsageError("missing "+label, actionUsageText(commandName, action))
 	}
@@ -1380,6 +1383,20 @@ func resourceCommand(args []string) error {
 			return err
 		}
 	}
+	// `session panes` defaults to the Session it runs inside, so an agent can
+	// ask what shares its screen without knowing its own ID.
+	var resolvedPanesID string
+	if resource == "session" && action == "panes" {
+		if positions := positionals(params); len(positions) == 1 {
+			resolvedPanesID = positions[0]
+		} else {
+			var err error
+			resolvedPanesID, err = currentSessionID()
+			if err != nil {
+				return err
+			}
+		}
+	}
 	ctx, c, err := connect()
 	if err != nil {
 		return err
@@ -1391,6 +1408,13 @@ func resourceCommand(args []string) error {
 			return err
 		}
 		return printValue(currentSessionValue{Session: session, WarrenSessionID: session.ID, AgentThreadID: session.AgentSessionID, Current: true})
+	}
+	if resource == "session" && action == "panes" {
+		var result api.ScreenPanesResult
+		if err := c.Request(ctx, "screen.panes", map[string]any{"id": resolvedPanesID}, &result); err != nil {
+			return err
+		}
+		return printValue(screenPaneRows(result))
 	}
 	if action == "list" {
 		state, err := c.Roster(ctx)
@@ -4440,6 +4464,11 @@ func printValue(value any) error {
 				fmt.Println(item.ID)
 			}
 			return nil
+		case []ScreenPaneRow:
+			for _, item := range items {
+				fmt.Println(item.SessionID)
+			}
+			return nil
 		case api.WorkspaceCreateResult:
 			fmt.Println(items.ID)
 			return nil
@@ -4548,6 +4577,12 @@ func printValue(value any) error {
 			rows = append(rows, sessionRowCells(item))
 		}
 		printTable([]string{"WARREN SESSION ID", "PROJECT", "WORKSPACE", "GROUP", "BRANCH", "TITLE", "CURRENT", "KIND", "COMMAND", "AGENT/THREAD ID", "TRANSCRIPT PATH", "LIFECYCLE", "ACTIVITY", "ENDED AT", "PINNED", "CREATED"}, rows...)
+	case []ScreenPaneRow:
+		rows := make([][]string, 0, len(items))
+		for _, item := range items {
+			rows = append(rows, screenPaneRowCells(item))
+		}
+		printTable([]string{"SCREEN", "PANE", "WARREN SESSION ID", "TITLE", "CURRENT"}, rows...)
 	case api.WorkspaceCreateResult:
 		printKVTable(workspaceCreateResultPairs(items))
 	case *api.WorkspaceCreateResult:
@@ -4790,7 +4825,43 @@ func agentCreatePairs(value agentCreateResult) [][2]string {
 func currentSessionPairs(value currentSessionValue) [][2]string {
 	pairs := sessionPairs(value.Session)
 	pairs = append([][2]string{{"CURRENT", displayBool(value.Current)}, {"WARREN SESSION ID", value.WarrenSessionID}, {"AGENT/THREAD ID", displayValue(value.AgentThreadID)}}, pairs...)
+	// Where this Session sits on the screen that displays it, without naming the
+	// panes around it. `warren session panes` is the query for those.
+	if count := value.Session.ScreenPaneCount; count > 1 {
+		pairs = append(pairs, [2]string{
+			"SCREEN POSITION",
+			fmt.Sprintf("pane %d of %d", value.Session.ScreenPosition, count),
+		})
+	}
 	return pairs
+}
+
+// ScreenPaneRow flattens the screens returned by `screen.panes` for tabular
+// output. Screen numbers the client screen, so a Session displayed by two
+// windows at once stays readable as two groups of rows.
+type ScreenPaneRow struct {
+	Screen int `json:"screen"`
+	api.ScreenPane
+}
+
+func screenPaneRows(result api.ScreenPanesResult) []ScreenPaneRow {
+	rows := make([]ScreenPaneRow, 0, len(result.Screens))
+	for index, screen := range result.Screens {
+		for _, pane := range screen.Panes {
+			rows = append(rows, ScreenPaneRow{Screen: index + 1, ScreenPane: pane})
+		}
+	}
+	return rows
+}
+
+func screenPaneRowCells(row ScreenPaneRow) []string {
+	return []string{
+		strconv.Itoa(row.Screen),
+		strconv.Itoa(row.Index),
+		row.SessionID,
+		displayValue(row.Title),
+		displayBool(row.Current),
+	}
 }
 
 func sessionMovePreflightPairs(value api.SessionMovePreflight) [][2]string {
@@ -5061,6 +5132,7 @@ Examples:
   warren session create --group GROUP_ID
   warren session create
   warren session current
+  warren session panes
   warren session move SESSION_ID --workspace WORKSPACE_ID [--confirm] [--expected-workspace ID] [--expected-agent-session ID]
   warren session move --current --workspace WORKSPACE_ID [--dry-run]
   warren session move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]
@@ -5252,6 +5324,7 @@ func resourceUsageText(commandName string) string {
 		return `Usage:
   warren session list [--all | --ended] [WORKSPACE_ID] [--workspace ID] [--project ID] [--group ID] [--kind KIND] [--status STATUS] [--activity ACTIVITY] [--search TEXT] [--current] [--pinned] [--limit N] [-q]
   warren session current
+  warren session panes [SESSION_ID] [-q]
   warren session create [WORKSPACE_ID] [--group GROUP_ID] [--kind KIND] [--command CMD] [--title TITLE]
   warren session remove SESSION_ID [--force] [--current] [--dry-run]
   warren session rename SESSION_ID --title TITLE [--current]
@@ -5362,6 +5435,8 @@ func actionUsageText(commandName, action string) string {
 		return fmt.Sprintf("Usage:\n  warren %s read SESSION_ID [--timeout DURATION] [--contains TEXT] [--current]\n", name)
 	case "session.current":
 		return fmt.Sprintf("Usage:\n  warren %s current\n", name)
+	case "session.panes":
+		return fmt.Sprintf("Usage:\n  warren %s panes [SESSION_ID] [--json] [-q]\n", name)
 	case "session.undo":
 		return fmt.Sprintf("Usage:\n  warren %s undo OPERATION_ID\n", name)
 	}

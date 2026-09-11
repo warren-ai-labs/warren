@@ -39,6 +39,21 @@ func TestReadTranscriptReturnsRecentUsefulActivities(t *testing.T) {
 	}
 }
 
+func TestReadTranscriptUsageReturnsEveryProviderUsageObservation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude.jsonl")
+	writeReadLines(t, path,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-08-19T00:00:00Z","message":{"id":"msg-1","model":"claude-opus-5","content":[{"type":"thinking","thinking":"think"}],"usage":{"input_tokens":100,"output_tokens":20}}}`,
+		`{"type":"assistant","uuid":"a2","timestamp":"2026-08-19T00:00:01Z","message":{"id":"msg-1","model":"claude-opus-5","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":100,"output_tokens":20}}}`,
+	)
+	events, err := ReadTranscriptUsage(context.Background(), "claude", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Usage == nil || events[0].Usage.InputTokens != 100 {
+		t.Fatalf("usage events = %#v, want one deduplicated observation", events)
+	}
+}
+
 func TestProjectEventsMatchesTranscriptReadProjection(t *testing.T) {
 	events, err := ProjectEvents([]api.AgentEvent{
 		{Sequence: 1, Type: "usage", Usage: &api.AgentUsage{TotalTokens: 3}},

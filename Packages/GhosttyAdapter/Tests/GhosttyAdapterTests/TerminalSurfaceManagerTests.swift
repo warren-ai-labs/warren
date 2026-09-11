@@ -805,7 +805,7 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         XCTAssertFalse(reattached.contains("line-1999"), "normal reattach must not jump to live bottom")
     }
 
-    func testReattachResyncsWhenViewportDidNotReturnToAnchor() async throws {
+    func testReattachPreservesTheWarmSurfaceViewportAfterScrollChanges() async throws {
         _ = NSApplication.shared
         let manager = TerminalSurfaceManager(warmLimit: 2)
         let first = makeSurface()
@@ -848,8 +848,9 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         submit(second.id, to: manager, host: host)
         try await waitUntil { manager.snapshot().activeSessionID == second.id }
 
-        // While warm, the viewport moves away from the anchor captured at
-        // demotion; reattach must detect the mismatch and resync to bottom.
+        // While warm, the viewport can move independently of the last frame
+        // shown before demotion. Reattaching the same native surface must
+        // preserve that live viewport rather than replaying or clearing it.
         _ = "scroll_to_bottom".withCString { pointer in
             ghostty_surface_binding_action(raw, pointer, UInt("scroll_to_bottom".utf8.count))
         }
@@ -1004,18 +1005,248 @@ final class TerminalSurfaceManagerTests: XCTestCase {
     private func submit(
         _ sessionID: TerminalSessionID,
         to manager: TerminalSurfaceManager,
-        host: TerminalHostContainerView
+        host: TerminalHostContainerView,
+        wantsTerminalFocus: Bool = false,
+        onFocused: @escaping (TerminalSessionID, TerminalSize?) -> Void = { _, _ in },
+        onBlurred: @escaping (TerminalSessionID) -> Void = { _ in }
     ) {
         manager.submit(
             host: host,
             intent: TerminalPresentationIntent(
                 activeSessionID: sessionID,
                 viewportSize: host.bounds.size,
-                wantsTerminalFocus: false
+                wantsTerminalFocus: wantsTerminalFocus
             ),
-            onFocused: { _, _ in },
-            onBlurred: { _ in }
+            onFocused: onFocused,
+            onBlurred: onBlurred
         )
+    }
+
+    func testManagerSupportsMultipleActiveSplitHostsSimultaneously() async throws {
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        let first = makeSurface()
+        let second = makeSurface()
+
+        manager.insert(first)
+        manager.insert(second)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        window.contentView = container
+
+        let hostA = TerminalHostContainerView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        let hostB = TerminalHostContainerView(frame: NSRect(x: 400, y: 0, width: 400, height: 600))
+        container.addSubview(hostA)
+        container.addSubview(hostB)
+
+        submit(first.id, to: manager, host: hostA, wantsTerminalFocus: true)
+        submit(second.id, to: manager, host: hostB)
+
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertTrue(manager.isActive(first.id))
+        XCTAssertTrue(manager.isActive(second.id))
+        XCTAssertEqual(manager.snapshot().activeSessionID, first.id)
+        XCTAssertEqual(manager.snapshot().activeSessionIDs, Set([first.id, second.id]))
+        XCTAssertTrue(first.mountedTerminalView?.superview === hostA)
+        XCTAssertTrue(second.mountedTerminalView?.superview === hostB)
+        XCTAssertEqual(hostA.subviews.count, 1)
+        XCTAssertEqual(hostB.subviews.count, 1)
+
+        // A duplicate placement for one Session replaces only that Session's
+        // host. The sibling remains mounted and active in its own host.
+        let hostC = TerminalHostContainerView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        container.addSubview(hostC)
+        submit(first.id, to: manager, host: hostC, wantsTerminalFocus: true)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(first.mountedTerminalView?.superview === hostC)
+        XCTAssertTrue(second.mountedTerminalView?.superview === hostB)
+        XCTAssertTrue(hostA.subviews.isEmpty)
+        XCTAssertEqual(manager.snapshot().activeSessionIDs, Set([first.id, second.id]))
+
+        // Re-submitting one host must not orphan or remount the sibling.
+        submit(first.id, to: manager, host: hostA)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(first.mountedTerminalView?.superview === hostA)
+        XCTAssertTrue(second.mountedTerminalView?.superview === hostB)
+    }
+
+    func testExplicitVisibilitySetCanParkMountedSplitHostsForEditorMode() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        let first = makeSurface()
+        let second = makeSurface()
+        manager.insert(first)
+        manager.insert(second)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        window.contentView = container
+        let hostA = TerminalHostContainerView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        let hostB = TerminalHostContainerView(frame: NSRect(x: 400, y: 0, width: 400, height: 600))
+        container.addSubview(hostA)
+        container.addSubview(hostB)
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(first.id, to: manager, host: hostA)
+        submit(second.id, to: manager, host: hostB)
+        try await waitUntil {
+            manager.snapshot().activeSessionIDs == Set([first.id, second.id])
+        }
+
+        manager.activateMultiple(sessionIDs: [])
+        try await waitUntil {
+            manager.snapshot().activeSessionIDs.isEmpty
+                && manager.snapshot().warmSessionIDs.count == 2
+        }
+        XCTAssertTrue(hostA.subviews.isEmpty)
+        XCTAssertTrue(hostB.subviews.isEmpty)
+        XCTAssertNotNil(manager.surface(for: first.id))
+        XCTAssertNotNil(manager.surface(for: second.id))
+
+        manager.activateMultiple(sessionIDs: [first.id, second.id])
+        try await waitUntil {
+            manager.snapshot().activeSessionIDs == Set([first.id, second.id])
+                && first.mountedTerminalView?.superview === hostA
+                && second.mountedTerminalView?.superview === hostB
+        }
+        XCTAssertTrue(first.mountedTerminalView?.superview === hostA)
+        XCTAssertTrue(second.mountedTerminalView?.superview === hostB)
+    }
+
+    func testClickingAPassiveSplitPaneRequestsFocusForThatSession() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        let first = makeSurface()
+        let second = makeSurface()
+        manager.insert(first)
+        manager.insert(second)
+
+        var requested: [TerminalSessionID] = []
+        manager.onFocusRequested = { requested.append($0) }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        window.contentView = container
+        let hostA = TerminalHostContainerView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        let hostB = TerminalHostContainerView(frame: NSRect(x: 400, y: 0, width: 400, height: 600))
+        container.addSubview(hostA)
+        container.addSubview(hostB)
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(first.id, to: manager, host: hostA, wantsTerminalFocus: true)
+        submit(second.id, to: manager, host: hostB)
+        try await waitUntil {
+            manager.snapshot().activeSessionIDs == Set([first.id, second.id])
+                && second.mountedTerminalView?.superview === hostB
+        }
+
+        // AppKit, not SwiftUI, decides which pane a click focuses. The manager
+        // has to forward that decision so the owner can move input routing.
+        guard let passiveView = second.mountedTerminalView else {
+            return XCTFail("expected the passive pane to be mounted")
+        }
+        window.makeFirstResponder(passiveView)
+        XCTAssertEqual(requested, [second.id])
+
+        // The primary pane regaining focus is not a new request: the owner
+        // already treats it as the control target.
+        requested.removeAll()
+        if let primaryView = first.mountedTerminalView {
+            window.makeFirstResponder(primaryView)
+        }
+        XCTAssertTrue(requested.isEmpty)
+    }
+
+    func testDismantledSplitHostIsNotRetainedByTheManager() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        let surface = makeSurface()
+        manager.insert(surface)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        window.contentView = container
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        weak var weakHost: TerminalHostContainerView?
+        // SwiftUI can drop a pane without a final `disconnect`. The manager
+        // records the placement synchronously in `submit`, and must not be the
+        // last owner of the host once the view tree lets go of it.
+        autoreleasepool {
+            let host = TerminalHostContainerView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+            container.addSubview(host)
+            weakHost = host
+            submit(surface.id, to: manager, host: host)
+            host.removeFromSuperview()
+        }
+
+        XCTAssertNil(weakHost, "the manager must hold split hosts weakly")
+        // A dismantled host must not keep the Session active either.
+        try await waitUntil { manager.snapshot().activeSessionIDs.isEmpty }
+    }
+
+    func testDisconnectReportsBlurToTheDisconnectedSession() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        let first = makeSurface()
+        let second = makeSurface()
+        manager.insert(first)
+        manager.insert(second)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        window.contentView = container
+        let hostA = TerminalHostContainerView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        let hostB = TerminalHostContainerView(frame: NSRect(x: 400, y: 0, width: 400, height: 600))
+        container.addSubview(hostA)
+        container.addSubview(hostB)
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        var blurred: [TerminalSessionID] = []
+        submit(first.id, to: manager, host: hostA, onBlurred: { blurred.append($0) })
+        submit(second.id, to: manager, host: hostB, onBlurred: { blurred.append($0) })
+        try await waitUntil { manager.snapshot().activeSessionIDs == Set([first.id, second.id]) }
+
+        manager.disconnect(host: hostA)
+        XCTAssertEqual(blurred, [first.id])
     }
 
     private func waitUntil(

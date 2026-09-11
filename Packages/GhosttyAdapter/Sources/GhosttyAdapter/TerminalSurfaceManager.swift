@@ -15,6 +15,7 @@ public struct TerminalSurfaceRetentionPolicy: Equatable, Sendable {
     public let warmLimit: Int
     public let warmByteLimit: Int
     public private(set) var activeSessionID: TerminalSessionID?
+    public private(set) var activeSessionIDs: Set<TerminalSessionID> = []
     public private(set) var warmSessionIDs: [TerminalSessionID] = []
     private var estimatedBytesBySessionID: [TerminalSessionID: Int] = [:]
 
@@ -34,6 +35,28 @@ public struct TerminalSurfaceRetentionPolicy: Equatable, Sendable {
         }
         warmSessionIDs.removeAll { $0 == sessionID }
         activeSessionID = sessionID
+        activeSessionIDs = [sessionID]
+        return trimWarmSessions()
+    }
+
+    @discardableResult
+    public mutating func activateMultiple(_ sessionIDs: Set<TerminalSessionID>, primary: TerminalSessionID?) -> [TerminalSessionID] {
+        let removedFromActive = activeSessionIDs.subtracting(sessionIDs)
+        for old in removedFromActive.sorted(by: { $0.description < $1.description }) {
+            warmSessionIDs.removeAll { $0 == old }
+            warmSessionIDs.insert(old, at: 0)
+        }
+        for newID in sessionIDs.sorted(by: { $0.description < $1.description }) {
+            warmSessionIDs.removeAll { $0 == newID }
+        }
+        activeSessionIDs = sessionIDs
+        // A caller can reconcile a new visible set while the previous
+        // primary is being dismantled. Never retain a primary that is no
+        // longer active; doing so makes residency and focus callbacks point
+        // at a stale surface.
+        let validPrimary = primary.flatMap { sessionIDs.contains($0) ? $0 : nil }
+        activeSessionID = validPrimary
+            ?? activeSessionIDs.sorted(by: { $0.description < $1.description }).first
         return trimWarmSessions()
     }
 
@@ -43,6 +66,11 @@ public struct TerminalSurfaceRetentionPolicy: Equatable, Sendable {
             warmSessionIDs.removeAll { $0 == activeSessionID }
             warmSessionIDs.insert(activeSessionID, at: 0)
         }
+        for id in activeSessionIDs where id != activeSessionID {
+            warmSessionIDs.removeAll { $0 == id }
+            warmSessionIDs.insert(id, at: 0)
+        }
+        activeSessionIDs.removeAll()
         activeSessionID = nil
         return trimWarmSessions()
     }
@@ -51,6 +79,7 @@ public struct TerminalSurfaceRetentionPolicy: Equatable, Sendable {
         if activeSessionID == sessionID {
             activeSessionID = nil
         }
+        activeSessionIDs.remove(sessionID)
         warmSessionIDs.removeAll { $0 == sessionID }
         estimatedBytesBySessionID[sessionID] = nil
     }
@@ -65,7 +94,7 @@ public struct TerminalSurfaceRetentionPolicy: Equatable, Sendable {
     }
 
     public func residency(of sessionID: TerminalSessionID) -> TerminalSurfaceResidency {
-        if activeSessionID == sessionID { return .active }
+        if activeSessionIDs.contains(sessionID) || activeSessionID == sessionID { return .active }
         if warmSessionIDs.contains(sessionID) { return .warm }
         return .cold
     }
@@ -105,6 +134,7 @@ public struct TerminalPresentationIntent: Equatable, Sendable {
 
 public struct TerminalSurfaceManagerSnapshot: Equatable, Sendable {
     public let activeSessionID: TerminalSessionID?
+    public let activeSessionIDs: Set<TerminalSessionID>
     public let warmSessionIDs: [TerminalSessionID]
     public let retainedSurfaceCount: Int
     public let transitionGeneration: UInt64
@@ -161,6 +191,10 @@ public final class TerminalSurfaceManager {
         /// mounted surface. Geometry-only reconciliations must not re-claim
         /// the daemon control lease on every SwiftUI update.
         var focusReported = false
+        /// A host can disappear through both SwiftUI dismantling and the
+        /// manager's next reconciliation pass. Keep demotion idempotent so a
+        /// single pane does not emit duplicate blur callbacks in that race.
+        var isDemoted = false
         /// The presentation token that last completed successfully. Native
         /// surface identity matters because a coordinator can rebuild the
         /// underlying Ghostty surface without replacing this entry.
@@ -174,9 +208,30 @@ public final class TerminalSurfaceManager {
         }
     }
 
+    /// Weak box for the per-Session host map. SwiftUI can dismantle a pane
+    /// without a final `disconnect`, so a strong map would keep both the
+    /// AppKit host and its Ghostty surface alive for the rest of the session.
+    private final class WeakHostBox {
+        weak var value: TerminalHostContainerView?
+
+        init(_ value: TerminalHostContainerView) {
+            self.value = value
+        }
+    }
+
     private var entries: [TerminalSessionID: Entry] = [:]
     private var policy: TerminalSurfaceRetentionPolicy
     private weak var host: TerminalHostContainerView?
+    private var activeHostBoxes: [TerminalSessionID: WeakHostBox] = [:]
+    /// The Desktop root may keep terminal hosts mounted underneath its
+    /// embedded editor. This explicit visibility set distinguishes mounted
+    /// hosts from Sessions that should currently be active/presented; `nil`
+    /// preserves the single-host API's legacy intent until the owner submits
+    /// its first set.
+    private var requestedActiveSessionIDs: Set<TerminalSessionID>?
+    private var latestIntents: [TerminalSessionID: TerminalPresentationIntent] = [:]
+    private var focusCallbacks: [TerminalSessionID: (TerminalSessionID, TerminalSize?) -> Void] = [:]
+    private var blurCallbacks: [TerminalSessionID: (TerminalSessionID) -> Void] = [:]
     private var latestIntent = TerminalPresentationIntent(
         activeSessionID: nil,
         viewportSize: .zero,
@@ -195,6 +250,12 @@ public final class TerminalSurfaceManager {
         case presentDeferred
         case recoveryPrepare
         case attachRetry
+        /// The owner published a new set of simultaneously visible Sessions
+        /// (a split was added, closed, or maximized).
+        case visibleSet
+        /// A terminal pane was unmounted; the remaining panes reconcile so the
+        /// primary slot moves to a host that still exists.
+        case hostDisconnected
         case unknown
     }
 
@@ -211,11 +272,11 @@ public final class TerminalSurfaceManager {
     private var pendingDisposals: [TerminalSessionID: Entry] = [:]
     private var hiddenRenderAttemptCount: UInt64 = 0
     private var windowObservers: [NSObjectProtocol] = []
-    /// Observer registration is tied to both the window and active session.
-    /// Reinstalling the same observers for every layout reconciliation creates
-    /// notification churn and can race a pending blur.
+    /// Observer registration is tied to the window. Reinstalling the same
+    /// observers for every layout reconciliation creates notification churn and
+    /// can race a pending blur; a split window changes its primary Session
+    /// without changing the window, so the handlers read the live intent.
     private weak var observedWindow: NSWindow?
-    private var observedSessionID: TerminalSessionID?
     /// Invalidates callbacks queued by an observer that was removed while the
     /// host moved between windows or while SwiftUI replaced the terminal pane.
     private var windowObserverGeneration: UInt64 = 0
@@ -242,6 +303,39 @@ public final class TerminalSurfaceManager {
     /// or shutdown). Owners use this to invalidate recovery anchors that are
     /// only valid while the exact surface instance is still alive.
     public var onSurfaceDisposed: ((TerminalSessionID) -> Void)?
+    /// Invoked when AppKit gives keyboard focus to a mounted surface that is
+    /// not the current primary — a click into a passive split pane. The owner
+    /// answers by selecting that Session, which routes input and the control
+    /// lease to the pane the user actually clicked.
+    public var onFocusRequested: ((TerminalSessionID) -> Void)?
+
+    /// Accessors keep the weak-box bookkeeping in one place: a dead box is
+    /// indistinguishable from a missing mapping for every caller.
+    private func activeHost(_ sessionID: TerminalSessionID) -> TerminalHostContainerView? {
+        guard let box = activeHostBoxes[sessionID] else { return nil }
+        guard let value = box.value else {
+            activeHostBoxes.removeValue(forKey: sessionID)
+            return nil
+        }
+        return value
+    }
+
+    private func setActiveHost(_ host: TerminalHostContainerView, for sessionID: TerminalSessionID) {
+        activeHostBoxes[sessionID] = WeakHostBox(host)
+    }
+
+    private func removeActiveHost(for sessionID: TerminalSessionID) {
+        activeHostBoxes.removeValue(forKey: sessionID)
+    }
+
+    /// Sessions with a live mounted host, in a deterministic order.
+    private var activeHostSessionIDs: [TerminalSessionID] {
+        // Snapshot the keys first: the lookup prunes dead boxes and must not
+        // mutate the dictionary while its key view is being iterated.
+        Array(activeHostBoxes.keys)
+            .filter { activeHost($0) != nil }
+            .sorted { $0.description < $1.description }
+    }
 
     public init(
         warmLimit: Int = TerminalSurfaceRetentionPolicy.defaultWarmLimit,
@@ -266,7 +360,22 @@ public final class TerminalSurfaceManager {
     /// subscribing before the host becomes active can capture an intermediate
     /// grid and force a second SIGWINCH immediately after the first frame.
     public func isActive(_ sessionID: TerminalSessionID) -> Bool {
-        policy.activeSessionID == sessionID
+        policy.residency(of: sessionID) == .active
+    }
+
+    public func activateMultiple(sessionIDs: Set<TerminalSessionID>) {
+        let previousActiveIDs = policy.activeSessionIDs.isEmpty
+            ? Set([policy.activeSessionID].compactMap { $0 })
+            : policy.activeSessionIDs
+        for sessionID in previousActiveIDs.subtracting(sessionIDs).sorted(by: { $0.description < $1.description }) {
+            demote(sessionID)
+        }
+        requestedActiveSessionIDs = sessionIDs
+        let primary = policy.activeSessionID.flatMap {
+            sessionIDs.contains($0) ? $0 : nil
+        }
+        _ = policy.activateMultiple(sessionIDs, primary: primary)
+        scheduleReconciliation(.visibleSet)
     }
 
     public func isPresentable(_ sessionID: TerminalSessionID) -> Bool {
@@ -313,7 +422,8 @@ public final class TerminalSurfaceManager {
     /// applies its retry cooldown when surface creation is unavailable.
     @discardableResult
     public func prepareForRecovery(_ sessionID: TerminalSessionID) -> Bool {
-        guard let entry = entries[sessionID], policy.activeSessionID == sessionID else {
+        guard let entry = entries[sessionID],
+              policy.residency(of: sessionID) == .active else {
             scheduleReconciliation(.recoveryPrepare)
             return false
         }
@@ -344,7 +454,18 @@ public final class TerminalSurfaceManager {
 
     public func insert(_ surface: GhosttySurface, recoveryGated: Bool = false) {
         guard entries[surface.id] == nil else { return }
-        let view = AppTerminalView(frame: .zero)
+        let sessionID = surface.id
+        let view = WarrenTerminalSurfaceView(frame: .zero)
+        // A split window has several live surfaces, but only the selected one
+        // owns the input router and the control lease. AppKit decides which
+        // view a click focuses, so the owner must learn about that decision;
+        // otherwise typing into a freshly clicked pane is silently dropped.
+        view.onDidBecomeFirstResponder = { [weak self] in
+            guard let self else { return }
+            guard self.policy.residency(of: sessionID) == .active,
+                  self.latestIntent.activeSessionID != sessionID else { return }
+            self.onFocusRequested?(sessionID)
+        }
         view.delegate = surface.state
         view.controller = surface.state.controller
         view.configuration = surface.state.configuration
@@ -382,6 +503,11 @@ public final class TerminalSurfaceManager {
             dispose(sessionID)
         }
         host = nil
+        activeHostBoxes.removeAll()
+        requestedActiveSessionIDs = nil
+        latestIntents.removeAll()
+        focusCallbacks.removeAll()
+        blurCallbacks.removeAll()
         latestIntent = TerminalPresentationIntent(
             activeSessionID: nil,
             viewportSize: .zero,
@@ -401,55 +527,143 @@ public final class TerminalSurfaceManager {
         onFocused: @escaping (TerminalSessionID, TerminalSize?) -> Void,
         onBlurred: @escaping (TerminalSessionID) -> Void
     ) {
-        // The host's layout callback is the authoritative source for viewport
-        // changes. Treating the size carried by every NSViewRepresentable
-        // update as intent would reconcile once per SwiftUI layout frame while
-        // a sidebar or pane is animating, which also re-enters focus handling.
-        let intentChanged = latestIntent.activeSessionID != intent.activeSessionID
-            || latestIntent.wantsTerminalFocus != intent.wantsTerminalFocus
-        let needsReconciliation = self.host !== host || intentChanged
-        self.host = host
+        // `hostDidLayout` is the authoritative source for viewport changes.
+        // Treating the size carried by every NSViewRepresentable update as
+        // intent would reconcile once per SwiftUI layout frame while a sidebar
+        // or pane animates, which also re-enters focus handling. The comparison
+        // is per-pane: in a split, a passive sibling's intent never matches the
+        // primary one, so comparing against `latestIntent` would reconcile on
+        // every sibling update.
+        let previousPrimaryIntent = latestIntent
+        let previousPaneIntent = intent.activeSessionID.flatMap { latestIntents[$0] }
+        let paneIntentChanged = previousPaneIntent == nil
+            || previousPaneIntent?.wantsTerminalFocus != intent.wantsTerminalFocus
         host.manager = self
-        latestIntent = intent
+        let previous = host.targetSessionID
+        if let previous, previous != intent.activeSessionID {
+            if activeHost(previous) === host {
+                removeActiveHost(for: previous)
+            }
+            latestIntents.removeValue(forKey: previous)
+            focusCallbacks.removeValue(forKey: previous)
+        }
+        // A Session may only occupy one host in this window. If SwiftUI
+        // briefly submits the same leaf to a replacement host, invalidate the
+        // old host before replacing the map entry so stale callbacks cannot
+        // reattach the surface a second time.
+        if let sessionID = intent.activeSessionID {
+            if let previousHost = activeHost(sessionID), previousHost !== host {
+                previousHost.targetSessionID = nil
+                previousHost.manager = nil
+            }
+            host.targetSessionID = sessionID
+            setActiveHost(host, for: sessionID)
+            latestIntents[sessionID] = intent
+            focusCallbacks[sessionID] = onFocused
+            blurCallbacks[sessionID] = onBlurred
+        } else {
+            host.targetSessionID = nil
+        }
+        if let sessionID = intent.activeSessionID {
+            // SwiftUI does not guarantee sibling update order. Only an intent
+            // that explicitly wants keyboard focus may replace the selected
+            // primary surface; passive sibling submissions must not make the
+            // last-rendered pane the focus/control target. A same-session
+            // update still refreshes the primary intent (for example when an
+            // overlay temporarily suppresses focus).
+            let primaryIsMissing = latestIntent.activeSessionID.map {
+                activeHost($0) == nil
+            } ?? true
+            if intent.wantsTerminalFocus
+                || latestIntent.activeSessionID == nil
+                || primaryIsMissing
+                || latestIntent.activeSessionID == sessionID
+            {
+                latestIntent = intent
+                self.host = host
+            }
+        } else if latestIntent.activeSessionID == previous {
+            updatePrimaryIntent()
+        }
         self.onFocused = onFocused
         self.onBlurred = onBlurred
+        // The promotion rules above decide whether this submit becomes the
+        // primary; derive the primary change from their outcome instead of
+        // duplicating them.
+        let primaryChanged = previousPrimaryIntent.activeSessionID != latestIntent.activeSessionID
+            || previousPrimaryIntent.wantsTerminalFocus != latestIntent.wantsTerminalFocus
+        let isDetached = intent.activeSessionID.map {
+            entries[$0]?.view.superview !== host
+        } ?? false
+        let needsReconciliation = primaryChanged
+            || paneIntentChanged
+            || previous != intent.activeSessionID
+            || isDetached
         if needsReconciliation {
             scheduleReconciliation(.intent)
         }
     }
 
     public func disconnect(host: TerminalHostContainerView) {
-        guard self.host === host else { return }
-        transitionGeneration &+= 1
-        if let activeSessionID = policy.activeSessionID {
-            demote(activeSessionID)
+        if let sessionID = host.targetSessionID {
+            let blurCallback = blurCallbacks[sessionID]
+            if activeHost(sessionID) === host {
+                removeActiveHost(for: sessionID)
+            }
+            latestIntents.removeValue(forKey: sessionID)
+            focusCallbacks.removeValue(forKey: sessionID)
+            host.targetSessionID = nil
+            demote(sessionID, blurCallback: blurCallback)
         }
-        let evicted = policy.deactivate()
-        evicted.forEach(dispose)
-        removeWindowObservers()
-        self.host = nil
+        let remainingSessionIDs = activeHostSessionIDs
+        if self.host === host {
+            self.host = remainingSessionIDs.first.flatMap { activeHost($0) }
+        }
+        if remainingSessionIDs.isEmpty && self.host == nil {
+            transitionGeneration &+= 1
+            let evicted = policy.deactivate()
+            evicted.forEach(dispose)
+            removeWindowObservers()
+            self.host = nil
+        } else {
+            updatePrimaryIntent()
+            scheduleReconciliation(.hostDisconnected)
+        }
     }
 
     public func hostDidLayout(_ host: TerminalHostContainerView, size: CGSize) {
-        guard self.host === host else { return }
-        guard latestIntent.viewportSize != size else {
-            guard let sessionID = policy.activeSessionID,
-                  let entry = entries[sessionID],
-                  entry.presentationTask == nil else { return }
+        let sessionID = host.targetSessionID
+        guard let sessionID, let entry = entries[sessionID] else { return }
+        if entry.view.superview === host && entry.view.frame.size != size {
+            entry.view.setFrameSize(size)
+            entry.view.fitToSize()
+            entry.surface.resyncIfNeeded()
+        }
+        let intent = latestIntents[sessionID] ?? latestIntent
+        guard intent.viewportSize != size || intent.activeSessionID != sessionID else {
+            guard entry.presentationTask == nil else { return }
             guard !entry.surface.terminalViewIsPresentable
                 || !entry.surface.terminalSurfaceIsReady else { return }
-            schedulePresent(entry, generation: entry.transitionGeneration)
+            schedulePresent(
+                entry,
+                host: host,
+                generation: entry.transitionGeneration
+            )
             return
         }
         TerminalDiagnostics.logAsync("terminal_geometry_change", [
-            "from": GhosttyDiagnosticsFormat.finiteSize(latestIntent.viewportSize),
+            "from": GhosttyDiagnosticsFormat.finiteSize(intent.viewportSize),
             "to": GhosttyDiagnosticsFormat.finiteSize(size),
+            "session": sessionID.description,
         ])
-        latestIntent = TerminalPresentationIntent(
-            activeSessionID: latestIntent.activeSessionID,
+        latestIntents[sessionID] = TerminalPresentationIntent(
+            activeSessionID: sessionID,
             viewportSize: size,
-            wantsTerminalFocus: latestIntent.wantsTerminalFocus
+            wantsTerminalFocus: intent.wantsTerminalFocus
         )
+        if host === self.host {
+            latestIntent = latestIntents[sessionID] ?? latestIntent
+        }
         // Coalesce rapid resize events (drag) and give the daemon a short
         // window to reflow at the new size before revealing. Without this
         // a shell that is actively producing output would promote with the
@@ -466,7 +680,10 @@ public final class TerminalSurfaceManager {
     }
 
     public func requestFocusForActiveSurface(trigger: String = "explicit_request") {
-        guard let sessionID = policy.activeSessionID else { return }
+        // The selected pane can change while the active-set remains the same;
+        // prefer the latest intent so a key-window transition cannot restore
+        // focus to the previous sibling.
+        guard let sessionID = latestIntent.activeSessionID ?? policy.activeSessionID else { return }
         // A key-window transition can leave the same AppKit first responder in
         // place while the daemon control lease was released during the blur.
         // Explicit focus requests therefore force one lease re-claim.
@@ -494,7 +711,7 @@ public final class TerminalSurfaceManager {
             ])
             return
         }
-        guard policy.activeSessionID == sessionID else {
+        guard policy.residency(of: sessionID) == .active else {
             // Keep the request until the lifecycle transition activates this
             // surface. A network recovery can complete before SwiftUI's
             // reconciliation turn; dropping the request here leaves the
@@ -507,7 +724,11 @@ public final class TerminalSurfaceManager {
             scheduleReconciliation(.presentDeferred)
             return
         }
-        schedulePresent(entry, generation: entry.transitionGeneration)
+        guard let host = activeHost(sessionID) else {
+            scheduleReconciliation(.presentDeferred)
+            return
+        }
+        schedulePresent(entry, host: host, generation: entry.transitionGeneration)
     }
 
     /// Prevents automatic presentation while a remote recovery is staged.
@@ -553,7 +774,8 @@ public final class TerminalSurfaceManager {
         entry.preserveDisplayDuringRecovery = false
         entry.skipNextWarmPromotionRedraw = false
         entry.recoveryPhase = .ready
-        if policy.activeSessionID == sessionID {
+        if policy.residency(of: sessionID) == .active,
+           let host = activeHost(sessionID) {
             if preservingDisplay {
                 // Do not blank the frame that was kept visible during the
                 // transport gap. Schedule a boundary-aware present so the
@@ -572,7 +794,7 @@ public final class TerminalSurfaceManager {
                 setDisplayVisible(false, for: entry)
                 prepareHiddenRendering(for: entry)
             }
-            schedulePresent(entry, generation: entry.transitionGeneration)
+            schedulePresent(entry, host: host, generation: entry.transitionGeneration)
         } else {
             // The remote marker can arrive before the AppKit reconciliation
             // that activates this surface. Reconcile the ready phase into the
@@ -679,6 +901,7 @@ public final class TerminalSurfaceManager {
     public func snapshot() -> TerminalSurfaceManagerSnapshot {
         TerminalSurfaceManagerSnapshot(
             activeSessionID: policy.activeSessionID,
+            activeSessionIDs: policy.activeSessionIDs,
             warmSessionIDs: policy.warmSessionIDs,
             retainedSurfaceCount: entries.count,
             transitionGeneration: transitionGeneration,
@@ -710,42 +933,83 @@ public final class TerminalSurfaceManager {
     private func reconcile(reason: ReconcileReason) {
         transitionGeneration &+= 1
         let generation = transitionGeneration
-        let nextSessionID = latestIntent.activeSessionID
-        let previousSessionID = policy.activeSessionID
 
-        if previousSessionID != nextSessionID, let previousSessionID {
-            demote(previousSessionID)
+        // Drop mappings whose host was dismantled without a final SwiftUI
+        // update. This is common during split-tree replacement and prevents a
+        // stale Session from keeping an active residency indefinitely. A
+        // deallocated host is already gone from the weak map, so this only has
+        // to catch hosts SwiftUI retargeted without telling us.
+        for sessionID in Array(activeHostBoxes.keys) {
+            guard activeHost(sessionID)?.targetSessionID != sessionID else { continue }
+            removeActiveHost(for: sessionID)
+            latestIntents.removeValue(forKey: sessionID)
+            focusCallbacks.removeValue(forKey: sessionID)
+            blurCallbacks.removeValue(forKey: sessionID)
+        }
+        updatePrimaryIntent()
+
+        var targetHosts: [TerminalSessionID: TerminalHostContainerView] = [:]
+        for sessionID in activeHostSessionIDs {
+            if let requestedActiveSessionIDs, !requestedActiveSessionIDs.contains(sessionID) {
+                continue
+            }
+            guard let hostView = activeHost(sessionID) else { continue }
+            targetHosts[sessionID] = hostView
+        }
+        let targetSessions: [TerminalSessionID: TerminalHostContainerView]
+        if !targetHosts.isEmpty {
+            targetSessions = targetHosts
+        } else if requestedActiveSessionIDs == nil,
+                  let activeSessionID = latestIntent.activeSessionID,
+                  let host = self.host {
+            targetSessions = [activeSessionID: host]
+        } else {
+            targetSessions = [:]
+        }
+
+        let previousActiveIDs = policy.activeSessionIDs.isEmpty
+            ? Set([policy.activeSessionID].compactMap { $0 })
+            : policy.activeSessionIDs
+
+        let currentActiveSet = Set(targetSessions.keys)
+        let newlyInactive = previousActiveIDs.subtracting(currentActiveSet)
+        for inactiveID in newlyInactive {
+            demote(inactiveID)
         }
 
         var evicted: [TerminalSessionID]
-        if let nextSessionID, entries[nextSessionID] != nil {
-            evicted = policy.activate(nextSessionID)
-            evicted.append(contentsOf: policy.updateEstimatedBytes(
-                estimatedSurfaceBytes(in: host),
-                for: nextSessionID
-            ))
+        if !currentActiveSet.isEmpty {
+            let primary = latestIntent.activeSessionID.flatMap { currentActiveSet.contains($0) ? $0 : nil }
+            evicted = policy.activateMultiple(currentActiveSet, primary: primary)
+            for (sessID, hostView) in targetSessions {
+                evicted.append(contentsOf: policy.updateEstimatedBytes(
+                    estimatedSurfaceBytes(in: hostView),
+                    for: sessID
+                ))
+            }
         } else {
             evicted = policy.deactivate()
         }
         evicted.forEach(dispose)
+
         let retainedSessionIDs = Set(
-            policy.warmSessionIDs + [policy.activeSessionID].compactMap { $0 }
+            policy.warmSessionIDs + Array(policy.activeSessionIDs) + [policy.activeSessionID].compactMap { $0 }
         )
         for sessionID in Array(entries.keys) where !retainedSessionIDs.contains(sessionID) {
             dispose(sessionID)
         }
 
-        guard let nextSessionID,
-              let entry = entries[nextSessionID],
-              let host else { return }
-        entry.transitionGeneration = generation
-        attach(
-            entry,
-            sessionID: nextSessionID,
-            to: host,
-            generation: generation,
-            reason: reason
-        )
+        for (sessionID, hostView) in targetSessions {
+            guard let entry = entries[sessionID] else { continue }
+            entry.transitionGeneration = generation
+            attach(
+                entry,
+                sessionID: sessionID,
+                to: hostView,
+                generation: generation,
+                reason: reason
+            )
+        }
     }
 
     private func attach(
@@ -776,7 +1040,10 @@ public final class TerminalSurfaceManager {
         // NSViewRepresentable update while SwiftUI is committing a new pane
         // frame; using that stale request would recreate the same first-grid
         // mismatch even though AppKit already knows the final size.
-        let viewport = sanitizedViewport(host.bounds.size, fallback: latestIntent.viewportSize)
+        let viewport = sanitizedViewport(
+            host.bounds.size,
+            fallback: latestIntents[sessionID]?.viewportSize ?? latestIntent.viewportSize
+        )
         // Keep an already-visible active surface visible across an ordinary
         // geometry-only reconciliation (window resize, fullscreen settle,
         // etc.). Tab promotion and recovery enter this path with either a
@@ -799,6 +1066,7 @@ public final class TerminalSurfaceManager {
         } else if entry.view.frame.size != viewport {
             entry.view.setFrameSize(viewport)
         }
+        entry.isDemoted = false
 
         installWindowObservers(for: host.window)
         DispatchQueue.main.async { [weak self, weak host, weak entry] in
@@ -816,17 +1084,17 @@ public final class TerminalSurfaceManager {
                 // schedules another reconciliation.  Retry once the host is
                 // attached to a window; reconciliation will invalidate this
                 // generation if the user selected another tab meanwhile.
-                if self.host === host,
+                if self.activeHost(sessionID) === host,
                    self.entries[sessionID] === entry,
-                   self.latestIntent.activeSessionID == sessionID {
+                   self.latestIntents[sessionID]?.activeSessionID == sessionID {
                     TerminalDiagnostics.log("attach_waiting_for_window", [
                         "session": sessionID.description,
                     ])
                     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) { [weak self, weak host, weak entry] in
                         guard let self, let host, let entry,
-                              self.host === host,
+                              self.activeHost(sessionID) === host,
                               self.entries[sessionID] === entry,
-                              self.latestIntent.activeSessionID == sessionID else { return }
+                              self.latestIntents[sessionID]?.activeSessionID == sessionID else { return }
                         self.scheduleReconciliation(.attachRetry)
                     }
                 } else {
@@ -848,15 +1116,20 @@ public final class TerminalSurfaceManager {
             }
             entry.view.fitToSize()
             entry.surface.resyncIfNeeded()
-            schedulePresent(entry, generation: generation)
-            if latestIntent.wantsTerminalFocus {
+            schedulePresent(entry, host: host, generation: generation)
+            if latestIntents[sessionID]?.wantsTerminalFocus == true {
                 focus(sessionID, generation: generation, trigger: reason.rawValue)
             }
         }
     }
 
-    private func demote(_ sessionID: TerminalSessionID) {
+    private func demote(
+        _ sessionID: TerminalSessionID,
+        blurCallback: ((TerminalSessionID) -> Void)? = nil
+    ) {
         guard let entry = entries[sessionID] else { return }
+        guard !entry.isDemoted else { return }
+        entry.isDemoted = true
         entry.transitionGeneration &+= 1
         cancelPresentation(for: entry)
         entry.waitsForRecoveryBoundary = false
@@ -894,11 +1167,16 @@ public final class TerminalSurfaceManager {
         if let retained {
             entry.surface.inMemory.setSurface(retained)
         }
-        onBlurred(sessionID)
+        (blurCallback ?? blurCallbacks[sessionID] ?? onBlurred)(sessionID)
+        blurCallbacks.removeValue(forKey: sessionID)
     }
 
     private func dispose(_ sessionID: TerminalSessionID) {
         guard let entry = entries.removeValue(forKey: sessionID) else { return }
+        removeActiveHost(for: sessionID)
+        latestIntents.removeValue(forKey: sessionID)
+        focusCallbacks.removeValue(forKey: sessionID)
+        blurCallbacks.removeValue(forKey: sessionID)
         entry.transitionGeneration &+= 1
         cancelPresentation(for: entry)
         entry.view.setFocusLossReportingSuppressed(true)
@@ -935,7 +1213,7 @@ public final class TerminalSurfaceManager {
         forceReport: Bool = false,
         trigger: String
     ) {
-        guard let host,
+        guard let host = activeHost(sessionID),
               let window = host.window,
               let entry = entries[sessionID],
               isCurrent(sessionID, entry: entry, host: host, generation: generation),
@@ -980,7 +1258,7 @@ public final class TerminalSurfaceManager {
         entry.view.setFocusLossReportingSuppressed(false)
         if forceReport || !wasFirstResponder || !entry.focusReported {
             entry.focusReported = true
-            onFocused(sessionID, entry.surface.terminalSize)
+            (focusCallbacks[sessionID] ?? onFocused)(sessionID, entry.surface.terminalSize)
         }
     }
 
@@ -993,8 +1271,8 @@ public final class TerminalSurfaceManager {
     }
 
     /// Focus reconciliation may run while SwiftUI has a real control focused.
-    /// Only claim the responder when AppKit has no user-owned responder, or
-    /// when the current responder is already inside this terminal view.
+    /// A sibling terminal surface is an intentional internal transfer when a
+    /// split pane is selected; SwiftUI/AppKit controls remain protected.
     private static func canClaimFocus(
         from responder: NSResponder?,
         in window: NSWindow,
@@ -1005,10 +1283,20 @@ public final class TerminalSurfaceManager {
             return true
         }
         guard let responderView = responder as? NSView else { return false }
-        return responderView.isDescendant(of: terminalView)
+        if responderView.isDescendant(of: terminalView) {
+            return true
+        }
+        // All terminal views are hosted in the same window and use the
+        // AppKit terminal view class; permitting that peer transfer preserves
+        // split-pane focus cycling without stealing focus from SwiftUI chrome.
+        return responderView is AppTerminalView && responderView.window === window
     }
 
-    private func schedulePresent(_ entry: Entry, generation: UInt64) {
+    private func schedulePresent(
+        _ entry: Entry,
+        host: TerminalHostContainerView,
+        generation: UInt64
+    ) {
         guard entry.recoveryPhase == .ready else { return }
         let sessionID = entry.surface.id
         // A pending presentation already observes the same lifecycle state;
@@ -1239,20 +1527,16 @@ public final class TerminalSurfaceManager {
     }
 
     private func installWindowObservers(for window: NSWindow?) {
-        let activeSessionID = policy.activeSessionID
-        if let window,
-           !windowObservers.isEmpty,
-           observedWindow === window,
-           observedSessionID == activeSessionID
-        {
-            return
-        }
-        removeWindowObservers()
         guard let window else { return }
+        // Reinstalling for every layout reconciliation creates notification
+        // churn and can race a pending blur. The observers are keyed on the
+        // window alone: in a split window the primary Session changes without
+        // the window changing, and the handlers read the live intent.
+        guard !(observedWindow === window && !windowObservers.isEmpty) else { return }
+        removeWindowObservers()
+        observedWindow = window
         windowObserverGeneration &+= 1
         let observerGeneration = windowObserverGeneration
-        observedWindow = window
-        observedSessionID = activeSessionID
         let center = NotificationCenter.default
         windowObservers.append(center.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
@@ -1296,7 +1580,7 @@ public final class TerminalSurfaceManager {
             queue: .main
         ) { [weak self, weak window] _ in
             Task { @MainActor [weak self, weak window] in
-                guard let self, let window, let sessionID = observedSessionID,
+                guard let self, let window, let sessionID = self.latestIntent.activeSessionID,
                       self.windowObserverGeneration == observerGeneration,
                       self.host?.window === window else { return }
                 self.scheduleWindowBlur(
@@ -1315,7 +1599,41 @@ public final class TerminalSurfaceManager {
         windowObservers.forEach(center.removeObserver)
         windowObservers.removeAll()
         observedWindow = nil
-        observedSessionID = nil
+    }
+
+    /// Keeps the global fallback intent aligned with the focused host while
+    /// preserving a deterministic fallback when no pane requested focus.
+    /// `activeHostBoxes` is the source of truth for visible placements; the
+    /// global `host`/`latestIntent` pair exists only for legacy single-host
+    /// lifecycle notifications and primary focus requests.
+    private func updatePrimaryIntent(preferredSessionID: TerminalSessionID? = nil) {
+        if let preferredSessionID,
+           let preferredHost = activeHost(preferredSessionID),
+           let preferredIntent = latestIntents[preferredSessionID] {
+            latestIntent = preferredIntent
+            host = preferredHost
+            return
+        }
+        if let currentSessionID = latestIntent.activeSessionID,
+           let currentHost = activeHost(currentSessionID),
+           let currentIntent = latestIntents[currentSessionID] {
+            latestIntent = currentIntent
+            host = currentHost
+            return
+        }
+        if let fallbackSessionID = activeHostSessionIDs.first,
+           let fallbackHost = activeHost(fallbackSessionID),
+           let fallbackIntent = latestIntents[fallbackSessionID] {
+            latestIntent = fallbackIntent
+            host = fallbackHost
+            return
+        }
+        latestIntent = TerminalPresentationIntent(
+            activeSessionID: nil,
+            viewportSize: .zero,
+            wantsTerminalFocus: false
+        )
+        host = nil
     }
 
     private func scheduleWindowBlur(
@@ -1364,8 +1682,14 @@ public final class TerminalSurfaceManager {
     }
 
     private func requestPresentForActiveSurface() {
-        guard let sessionID = policy.activeSessionID else { return }
-        requestPresent(sessionID)
+        let mountedSessionIDs = activeHostSessionIDs
+        if !mountedSessionIDs.isEmpty {
+            for sessionID in mountedSessionIDs {
+                requestPresent(sessionID)
+            }
+        } else if let sessionID = policy.activeSessionID {
+            requestPresent(sessionID)
+        }
     }
 
     private func isCurrent(
@@ -1375,11 +1699,12 @@ public final class TerminalSurfaceManager {
         generation: UInt64,
         requiresVisibleView: Bool = true
     ) -> Bool {
-        let transitionIsCurrent = policy.activeSessionID == sessionID
+        let isHostMatching = (self.host === host && policy.activeSessionID == sessionID) || (activeHost(sessionID) === host)
+        let transitionIsCurrent = (policy.residency(of: sessionID) == .active)
             && entries[sessionID] === entry
             && entry.transitionGeneration == generation
             && transitionGeneration == generation
-            && self.host === host
+            && isHostMatching
             && entry.view.superview === host
             && entry.view.window != nil
         return transitionIsCurrent && (!requiresVisibleView || !entry.view.isHidden)
@@ -1392,7 +1717,9 @@ public final class TerminalSurfaceManager {
 
     private func estimatedSurfaceBytes(in host: TerminalHostContainerView?) -> Int {
         guard let host else { return 0 }
-        let viewport = sanitizedViewport(host.bounds.size, fallback: latestIntent.viewportSize)
+        let fallback = host.targetSessionID.flatMap { latestIntents[$0]?.viewportSize }
+            ?? latestIntent.viewportSize
+        let viewport = sanitizedViewport(host.bounds.size, fallback: fallback)
         let scale = host.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         let pixels = viewport.width * scale * viewport.height * scale
         guard pixels.isFinite, pixels > 0 else { return 0 }
@@ -1403,9 +1730,26 @@ public final class TerminalSurfaceManager {
     }
 }
 
+/// Terminal view that reports the moment AppKit hands it keyboard focus.
+/// In a split window the user picks the control target by clicking a pane, and
+/// that decision is made by AppKit responder routing rather than by SwiftUI.
+@MainActor
+final class WarrenTerminalSurfaceView: AppTerminalView {
+    var onDidBecomeFirstResponder: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            onDidBecomeFirstResponder?()
+        }
+        return result
+    }
+}
+
 @MainActor
 public final class TerminalHostContainerView: NSView {
     weak var manager: TerminalSurfaceManager?
+    public var targetSessionID: TerminalSessionID?
 
     public override var isFlipped: Bool { true }
 

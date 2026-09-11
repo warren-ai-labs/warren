@@ -185,6 +185,43 @@ type Session struct {
 	// OperationID is returned by mutating session APIs for audit and safe
 	// undo. It is intentionally not persisted in the session record.
 	OperationID string `json:"operationId,omitempty"`
+	// ScreenPosition is this Session's 1-based place on the client screen that
+	// displays it, out of ScreenPaneCount panes. Both are zero when no connected
+	// client reports the Session as visible. The sibling Session IDs are
+	// deliberately absent from the Session record: knowing you are pane 2 of 3
+	// is presentation context for your own output, while learning what else the
+	// user has on screen is a separate question with its own method,
+	// `screen.panes`.
+	ScreenPosition  int `json:"screenPosition,omitempty"`
+	ScreenPaneCount int `json:"screenPaneCount,omitempty"`
+}
+
+// ScreenPane is one Session displayed on a client screen, in the order that
+// client reported its panes.
+type ScreenPane struct {
+	Index     int    `json:"index"`
+	SessionID string `json:"sessionId"`
+	Title     string `json:"title,omitempty"`
+	// Current marks the Session the query asked about.
+	Current bool `json:"current,omitempty"`
+}
+
+// ScreenLayout is one client screen that displays the queried Session.
+// Position is that Session's 1-based place among PaneCount panes.
+type ScreenLayout struct {
+	Position  int          `json:"position"`
+	PaneCount int          `json:"paneCount"`
+	Panes     []ScreenPane `json:"panes"`
+}
+
+// ScreenPanesResult answers "which Sessions share a screen with this one".
+// Screen state belongs to each connected client, and several clients may
+// display one Session at the same time, so the answer is a list of screens
+// ordered most recently reported first. It is empty when no connected client
+// reports the Session as visible.
+type ScreenPanesResult struct {
+	SessionID string         `json:"sessionId"`
+	Screens   []ScreenLayout `json:"screens,omitempty"`
 }
 
 func (session Session) ScopeKind() string {

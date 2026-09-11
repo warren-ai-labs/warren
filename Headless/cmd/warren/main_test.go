@@ -868,6 +868,84 @@ func TestEffectiveSessionTitlePrefersCustomTitle(t *testing.T) {
 	}
 }
 
+func TestSessionCurrentReportsPositionWithoutNamingNeighbours(t *testing.T) {
+	pairs := currentSessionPairs(currentSessionValue{
+		Session: api.Session{
+			ID: "session-2", Kind: "shell", Lifecycle: "running",
+			ScreenPosition: 2, ScreenPaneCount: 3,
+		},
+		WarrenSessionID: "session-2",
+		Current:         true,
+	})
+	var position string
+	for _, pair := range pairs {
+		if pair[0] == "SCREEN POSITION" {
+			position = pair[1]
+		}
+	}
+	if position != "pane 2 of 3" {
+		t.Fatalf("screen position = %q, want pane 2 of 3", position)
+	}
+
+	// A Session alone on screen has no position worth printing.
+	alone := currentSessionPairs(currentSessionValue{
+		Session: api.Session{ID: "session-2", ScreenPosition: 1, ScreenPaneCount: 1},
+	})
+	for _, pair := range alone {
+		if pair[0] == "SCREEN POSITION" {
+			t.Fatalf("unsplit session printed a screen position: %q", pair[1])
+		}
+	}
+}
+
+func TestScreenPaneRowsNumberEveryWindow(t *testing.T) {
+	rows := screenPaneRows(api.ScreenPanesResult{
+		SessionID: "session-3",
+		Screens: []api.ScreenLayout{
+			{Position: 1, PaneCount: 2, Panes: []api.ScreenPane{
+				{Index: 1, SessionID: "session-3", Title: "Shell", Current: true},
+				{Index: 2, SessionID: "session-2"},
+			}},
+			{Position: 2, PaneCount: 2, Panes: []api.ScreenPane{
+				{Index: 1, SessionID: "session-1"},
+				{Index: 2, SessionID: "session-3", Current: true},
+			}},
+		},
+	})
+	if len(rows) != 4 {
+		t.Fatalf("rows = %d, want 4", len(rows))
+	}
+	if rows[0].Screen != 1 || rows[3].Screen != 2 {
+		t.Fatalf("screen numbers = %d,%d want 1,2", rows[0].Screen, rows[3].Screen)
+	}
+	cells := screenPaneRowCells(rows[0])
+	if cells[0] != "1" || cells[1] != "1" || cells[2] != "session-3" || cells[3] != "Shell" || cells[4] != "yes" {
+		t.Fatalf("first row cells = %q", cells)
+	}
+	if got := screenPaneRowCells(rows[1])[3]; got != "-" {
+		t.Fatalf("untitled pane cell = %q, want -", got)
+	}
+}
+
+func TestSessionPanesAcceptsAtMostOneSessionAndDefaultsToBinding(t *testing.T) {
+	err := run([]string{"session", "panes", "session-1", "session-2"})
+	var usageErr *usageError
+	if !errors.As(err, &usageErr) {
+		t.Fatalf("error = %v, want *usageError", err)
+	}
+	if usageErr.message != "session panes accepts at most one SESSION_ID" {
+		t.Fatalf("message = %q", usageErr.message)
+	}
+
+	// Without an explicit ID the command resolves the Session it runs inside,
+	// and says so instead of dialing a daemon.
+	t.Setenv(agent.BindEnvSession, "")
+	err = run([]string{"session", "panes"})
+	if err == nil || !strings.Contains(err.Error(), "WARREN_SESSION_ID") {
+		t.Fatalf("error = %v, want a WARREN_SESSION_ID hint", err)
+	}
+}
+
 func TestParseFlagsBareBooleanDoesNotConsumePositional(t *testing.T) {
 	params := parseFlags([]string{"session-1", "--raw", "hello world"})
 	if !boolValue(params, "raw") {

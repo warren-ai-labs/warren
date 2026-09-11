@@ -185,6 +185,10 @@ public enum WarrenPreferenceKey {
     public static let sidebarShowActiveSessions = "sidebar.showActiveSessions"
     public static let sidebarShowTasks = "sidebar.showTasks"
     public static let publicAccessEnabled = "web.publicAccessEnabled"
+    public static let usageRange = "usage.range"
+    /// Emacs `C-x` prefix for split commands. Off by default: while it is on,
+    /// the chord is consumed by Warren and `C-x` never reaches the terminal.
+    public static let terminalSplitChordsEnabled = "terminal.splitChordsEnabled"
 }
 
 /// User-facing terminal typography shared by renderer adapters.

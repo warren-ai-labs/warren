@@ -13,6 +13,14 @@ type claudeParser struct {
 	baseParser
 	claudeCallTool     map[string]string
 	claudeInteractions map[string]string
+	// claudeCountedUsage remembers which assistant message IDs have already
+	// contributed their token usage. Claude splits one API response across
+	// several transcript lines -- one per content block, so a reply that thinks
+	// and then calls a tool is two lines -- and repeats the complete, identical
+	// usage object on each. Attaching it every time is correct for rendering but
+	// counts the same billable call repeatedly; across local transcripts 1168 of
+	// 2623 usage rows were such repeats, inflating totals by 1.765x.
+	claudeCountedUsage map[string]struct{}
 }
 
 func newClaudeParser(contentLimit int) *claudeParser {
@@ -20,7 +28,36 @@ func newClaudeParser(contentLimit int) *claudeParser {
 		baseParser:         newBaseParser(contentLimit),
 		claudeCallTool:     make(map[string]string),
 		claudeInteractions: make(map[string]string),
+		claudeCountedUsage: make(map[string]struct{}),
 	}
+}
+
+// claudeUsageOnce returns the usage for an assistant message the first time that
+// message is seen and nil afterwards, so exactly one canonical event per
+// billable call carries a token count.
+//
+// Claiming on the first non-nil observation is safe because parseUsage already
+// discards all-zero objects: Claude emits placeholder zero rows before the real
+// counts, and those never reach here. Verified equivalent to keeping the largest
+// observation per message across every local transcript.
+//
+// A message without an ID cannot be correlated, so it is counted as its own call
+// rather than dropped -- under-reporting real spend is worse than the small risk
+// of double counting a malformed record.
+func (p *claudeParser) claudeUsageOnce(messageID string, raw json.RawMessage) *api.AgentUsage {
+	value := parseUsage(raw)
+	if value == nil {
+		return nil
+	}
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return value
+	}
+	if _, counted := p.claudeCountedUsage[messageID]; counted {
+		return nil
+	}
+	p.claudeCountedUsage[messageID] = struct{}{}
+	return value
 }
 
 func (p *claudeParser) Parse(line []byte) []api.AgentEvent {
@@ -253,11 +290,17 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 				Content:    p.clip(content),
 				Model:      record.Message.Model,
 				StopReason: record.Message.StopReason,
-				Usage:      parseUsage(record.Message.Usage),
+				Usage:      p.claudeUsageOnce(record.Message.ID, record.Message.Usage),
 				Sidechain:  record.IsSidechain,
 				Timestamp:  timestamp,
 			}}
 		}
+		// One line's blocks all belong to the same API response, so its usage is
+		// claimed once and then attached to the first block that actually
+		// survives the emit filter below. Attaching it before that filter would
+		// discard the count whenever the leading block carries no renderable
+		// content.
+		messageUsage := p.claudeUsageOnce(record.Message.ID, record.Message.Usage)
 		var events []api.AgentEvent
 		for _, block := range blocks {
 			event := api.AgentEvent{
@@ -265,7 +308,6 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 				ID:         firstNonEmpty(block.ID, record.UUID),
 				Model:      record.Message.Model,
 				StopReason: record.Message.StopReason,
-				Usage:      parseUsage(record.Message.Usage),
 				Sidechain:  record.IsSidechain,
 				Timestamp:  timestamp,
 			}
@@ -342,8 +384,18 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 				event.Content = p.clip(firstNonEmpty(block.Text, block.Thinking, p.content(block.Content), string(record.Message.Content)))
 			}
 			if event.Content != "" || event.ToolName != "" || event.Payload != nil {
+				if messageUsage != nil {
+					event.Usage = messageUsage
+					messageUsage = nil
+				}
 				events = append(events, event)
 			}
+		}
+		// Every block was filtered out. The call still consumed tokens, so the
+		// count is returned to the pool rather than silently dropped: the next
+		// line for this message claims it instead.
+		if messageUsage != nil {
+			delete(p.claudeCountedUsage, strings.TrimSpace(record.Message.ID))
 		}
 		return events
 	case "system":

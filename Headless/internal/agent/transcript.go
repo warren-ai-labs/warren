@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -51,6 +52,117 @@ type DefaultFinder struct {
 	// OpenCodeRoot overrides OpenCode's current data directory containing
 	// opencode.db.
 	OpenCodeRoot string
+}
+
+// HistoricalUsageTranscript identifies one provider transcript that can be
+// replayed for the explicit Usage rebuild. WorkspacePath is best effort: it is
+// used only to restore project attribution and never determines whether the
+// transcript is eligible for token accounting.
+type HistoricalUsageTranscript struct {
+	Provider      string
+	Path          string
+	WorkspacePath string
+}
+
+// HistoricalUsageTranscripts returns every Codex and Claude JSONL transcript
+// under the provider-owned history roots. Unlike Find, this deliberately has
+// no "newest" or modification-time bound: the caller uses it for a one-shot
+// historical Usage rebuild.
+func (f DefaultFinder) HistoricalUsageTranscripts(ctx context.Context) ([]HistoricalUsageTranscript, error) {
+	roots := []struct {
+		provider string
+		root     string
+		matches  func(string) bool
+	}{
+		{
+			provider: "codex",
+			root:     firstNonEmptyPath(f.CodexRoot, defaultCodexSessionsRoot()),
+			matches: func(path string) bool {
+				name := filepath.Base(path)
+				return strings.HasPrefix(name, "rollout-") && strings.HasSuffix(name, ".jsonl")
+			},
+		},
+		{
+			provider: "claude",
+			root:     firstNonEmptyPath(f.ClaudeRoot, defaultClaudeProjectsRoot()),
+			matches: func(path string) bool {
+				return strings.HasSuffix(filepath.Base(path), ".jsonl")
+			},
+		},
+	}
+
+	seen := make(map[string]struct{})
+	var result []HistoricalUsageTranscript
+	for _, root := range roots {
+		files, err := historicalTranscriptFiles(ctx, root.root, root.matches)
+		if err != nil {
+			return nil, err
+		}
+		for _, path := range files {
+			if _, exists := seen[path]; exists {
+				continue
+			}
+			seen[path] = struct{}{}
+			result = append(result, HistoricalUsageTranscript{
+				Provider:      root.provider,
+				Path:          path,
+				WorkspacePath: transcriptWorkspacePath(root.provider, path),
+			})
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Provider != result[j].Provider {
+			return result[i].Provider < result[j].Provider
+		}
+		return result[i].Path < result[j].Path
+	})
+	return result, nil
+}
+
+func firstNonEmptyPath(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func historicalTranscriptFiles(ctx context.Context, root string, matches func(string) bool) ([]string, error) {
+	info, err := os.Lstat(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+		return nil, nil
+	}
+	var files []string
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if entry.Type()&fs.ModeSymlink != 0 || !entry.Type().IsRegular() || !matches(path) {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
 func (f DefaultFinder) Find(ctx context.Context, kind, workspacePath string, after time.Time) (string, error) {
@@ -175,6 +287,17 @@ func transcriptCwdMatches(path, workspacePath string, readCwd func(string) strin
 	return cwd != "" && samePath(cwd, workspacePath)
 }
 
+func transcriptWorkspacePath(provider, path string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "codex":
+		return codexMetaCwd(path)
+	case "claude":
+		return claudeTranscriptCwd(path)
+	default:
+		return ""
+	}
+}
+
 func codexMetaCwd(path string) string {
 	data, err := readFirstLine(path, 1024*1024)
 	if err != nil {
@@ -192,9 +315,14 @@ func codexMetaCwd(path string) string {
 }
 
 func claudeTranscriptMatchesCwd(path, workspacePath string) bool {
+	cwd := claudeTranscriptCwd(path)
+	return cwd != "" && samePath(cwd, workspacePath)
+}
+
+func claudeTranscriptCwd(path string) string {
 	file, err := openRegularFile(path)
 	if err != nil {
-		return false
+		return ""
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
@@ -205,11 +333,11 @@ func claudeTranscriptMatchesCwd(path, workspacePath string) bool {
 		var record struct {
 			Cwd string `json:"cwd"`
 		}
-		if json.Unmarshal(scanner.Bytes(), &record) == nil && samePath(record.Cwd, workspacePath) {
-			return true
+		if json.Unmarshal(scanner.Bytes(), &record) == nil && strings.TrimSpace(record.Cwd) != "" {
+			return record.Cwd
 		}
 	}
-	return false
+	return ""
 }
 
 func readFirstLine(path string, limit int64) ([]byte, error) {

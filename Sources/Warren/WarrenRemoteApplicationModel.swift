@@ -1440,6 +1440,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// daemon. The Host Secret remains in the daemon credential store.
     @Published private(set) var relaySettings = WarrenDesktopRelaySettings()
     @Published private(set) var relayDevices: [WarrenDesktopRelayDevice] = []
+    /// Aggregated Agent token usage and equivalent cost, owned by the Host.
+    /// Aggregation stays there because the client's event replica is a bounded
+    /// cache and folding it would under-report older spend.
+    @Published private(set) var usageStats = WarrenUsageStats()
+    @Published private(set) var usageState = WarrenUsageLoadState.idle
     /// The explicit, short-lived Host-side window that accepts an iPhone PIN.
     /// No pairing state is inferred from discovery; it is returned by the
     /// authenticated daemon settings projection.
@@ -1482,6 +1487,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var selectedSessionID: TerminalSessionID?
     private var attachedSessionID: TerminalSessionID?
     private var focusedSessionID: TerminalSessionID?
+    /// The locally focused Session is the control target for split panes.
+    /// Exposing this read-only projection lets the composition root scope
+    /// per-pane search without leaking attachment mutability into the UI.
+    var focusedTerminalSessionID: TerminalSessionID? {
+        focusedSessionID ?? selectedSessionID
+    }
     private var pendingFocusSessionID: TerminalSessionID?
     private var pendingFocusSize: TerminalSize?
     private var pendingFocusResizeSize: TerminalSize?
@@ -1527,6 +1538,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// retained surface. One entry per warm/active surface; background
     /// frames keep these surfaces current so tab promotion stays local.
     private var outputSubscriptions: Set<TerminalSessionID> = []
+    /// The Desktop root reports presentation state independently of the
+    /// transport lifecycle. Retain the latest set so a freshly authenticated
+    /// WebSocket receives the report even when reconnecting leaves the visible
+    /// Session IDs unchanged and SwiftUI emits no Set change.
+    private var lastReportedScreenSessions: Set<TerminalSessionID> = []
+    /// Background subscriptions are launched from SwiftUI's visibility
+    /// callback, which may fire more than once while a split tree is being
+    /// mounted. The token prevents duplicate requests and lets a stale task
+    /// finish without clearing a newer connection's in-flight marker.
+    private var backgroundAttachTokens: [TerminalSessionID: UInt64] = [:]
+    private var nextBackgroundAttachToken: UInt64 = 0
     /// Atomic states accepted by Ghostty but not yet released by the matching
     /// synced marker. The anchor prevents a late marker from an older attach
     /// generation from exposing a newly replaced surface.
@@ -1666,6 +1688,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         _ configuration: WarrenRemoteEndpointConfiguration,
         isLocal: Bool = false
     ) {
+        // A click into a passive split pane is routed by AppKit, so the manager
+        // reports it here. Selecting that Session moves the input router and
+        // the control lease to the pane the user clicked; without this, the
+        // keystrokes that follow the click are dropped by the router.
+        surfaceManager.onFocusRequested = { [weak self] sessionID in
+            self?.selectTab(forSessionID: sessionID)
+        }
         surfaceManager.onSurfaceDisposed = { [weak self] sessionID in
             guard let self else { return }
             self.outputAnchors.removeValue(forKey: sessionID)
@@ -1771,6 +1800,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         tabOrderByWorkspaceID.removeAll()
         tabOrderByTerminalGroupID.removeAll()
         dismissedActivityBySessionID.removeAll()
+        lastReportedScreenSessions.removeAll()
         creatingSessionWorkspaceIDs.removeAll()
         creatingSessionTerminalGroupIDs.removeAll()
         clearDeletionState()
@@ -1940,6 +1970,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 if case .connection(.connected) = event {
                     attempt = 0
+                    // A reconnect creates a new authenticated peer whose screen
+                    // telemetry starts empty. Re-send the latest Desktop set even
+                    // when the visible Session IDs did not change.
+                    let reportedScreenSessions = self.lastReportedScreenSessions
+                    self.sendScreenReport(reportedScreenSessions, using: wire)
                 }
                 if case .disconnected(let reason) = event {
                     disconnectReason = reason
@@ -2057,6 +2092,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         outputAnchors = outputAnchors.filter { retainedSurfaceIDs.contains($0.key) }
         suppressFramedAnchorUpdates.removeAll()
         outputSubscriptions.removeAll()
+        backgroundAttachTokens.removeAll()
         installedAtomicStateAnchors.removeAll()
         cancelAllAtomicRecoveryRetries()
         pendingAtomicRecoveries.removeAll()
@@ -2096,6 +2132,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         outputAnchors.removeAll()
         suppressFramedAnchorUpdates.removeAll()
         outputSubscriptions.removeAll()
+        backgroundAttachTokens.removeAll()
         installedAtomicStateAnchors.removeAll()
         cancelAllAtomicRecoveryRetries()
         pendingAtomicRecoveries.removeAll()
@@ -2234,6 +2271,70 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     /// Loads the headless daemon's settings. Runtime selection is a
     /// headless-side decision; the Desktop only reflects and changes it.
+    /// Fetches usage stats for the trailing `days` window.
+    ///
+    /// Each call replaces the previous result rather than merging: the panel
+    /// shows one range at a time, and a stale range blended into a new one
+    /// would produce totals that match neither.
+    func loadUsageStats(days: Int) {
+        guard let wire else {
+            usageState = .failed("Not connected to a Host.")
+            return
+        }
+        if usageState == .loading { return }
+        usageState = .loading
+        let calendar = Calendar.current
+        let today = Date()
+        let start = calendar.date(byAdding: .day, value: -(max(days, 1) - 1), to: today) ?? today
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        // Days are the Host's local calendar days; the client only names the
+        // window and must not reinterpret the boundaries.
+        formatter.dateFormat = "yyyy-MM-dd"
+
+        Task { @MainActor [weak self] in
+            do {
+                let response: WarrenUsageStatsResponse = try await wire.request(
+                    "usage.stats",
+                    params: [
+                        "fromDay": formatter.string(from: start),
+                        "toDay": formatter.string(from: today),
+                    ]
+                )
+                guard let self else { return }
+                self.usageStats = response.model
+                self.usageState = .loaded
+            } catch {
+                guard let self else { return }
+                self.usageState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Explicitly replaces the Host's derived Usage tables from retained Agent
+    /// history. The Host leaves the canonical journal and all other databases
+    /// untouched; the settings surface asks for confirmation before calling.
+    func rebuildUsageData(
+        completion: @escaping (Result<Void, Error>) -> Void = { _ in }
+    ) {
+        guard let wire else {
+            let error = NSError(domain: "WarrenRemote", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Not connected to a Host.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        Task { @MainActor [weak self] in
+            do {
+                _ = try await wire.request("usage.rebuild")
+                completion(.success(()))
+            } catch {
+                self?.present(error)
+                completion(.failure(error))
+            }
+        }
+    }
+
     func loadSettings() {
         guard !settingsLoaded, let wire else { return }
         settingsLoaded = true
@@ -3651,6 +3752,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
+    private func resize(
+        sessionID: TerminalSessionID,
+        columns: Int,
+        rows: Int
+    ) {
+        guard selectedSessionID == sessionID else { return }
+        resize(columns: columns, rows: rows)
+    }
+
     func resize(columns: Int, rows: Int) {
         guard let sessionID = selectedSessionID,
               attachedSessionID == sessionID else { return }
@@ -3728,15 +3838,24 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     func blur(sessionID: TerminalSessionID) {
-        if pendingFocusSessionID == sessionID {
-            pendingFocusSessionID = nil
-            pendingFocusSize = nil
+        // TerminalSurfaceManager reports blur for every pane that is parked
+        // or whose host disappears. In a split window a passive sibling must
+        // not cancel the selected pane's resize buffer or invalidate its
+        // focus-claim generation; those pieces of state belong exclusively
+        // to the selected control target.
+        guard selectedSessionID == sessionID else {
+            if pendingFocusSessionID == sessionID {
+                pendingFocusSessionID = nil
+                pendingFocusSize = nil
+            }
+            return
         }
+        pendingFocusSessionID = nil
+        pendingFocusSize = nil
         pendingFocusResizeSize = nil
         cancelResizeRequests()
         focusClaimInFlight = false
         focusClaimGeneration += 1
-        guard selectedSessionID == sessionID else { return }
         focusTask?.cancel()
         focusedSessionID = nil
         guard attachedSessionID == sessionID else { return }
@@ -3788,6 +3907,46 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     func report(_ error: Error) { present(error) }
+
+    func reportActiveScreenSessions(_ sessions: Set<TerminalSessionID>) {
+        // The Desktop callback intentionally exposes a Set, so sort before
+        // sending it to keep `session.current` and CLI output stable across
+        // Swift hash-seed changes.
+        let joined = sessions
+            .sorted { $0.description < $1.description }
+            .map(\.rawValue.uuidString)
+            .joined(separator: ",")
+        lastReportedScreenSessions = sessions
+        guard let wire else { return }
+        sendScreenReport(sessions, joined: joined, using: wire)
+    }
+
+    private func sendScreenReport(
+        _ sessions: Set<TerminalSessionID>,
+        using wire: WarrenRemoteClient
+    ) {
+        let joined = sessions
+            .sorted { $0.description < $1.description }
+            .map(\.rawValue.uuidString)
+            .joined(separator: ",")
+        sendScreenReport(sessions, joined: joined, using: wire)
+    }
+
+    private func sendScreenReport(
+        _ sessions: Set<TerminalSessionID>,
+        joined: String,
+        using wire: WarrenRemoteClient
+    ) {
+        Task { @MainActor [weak self, wire] in
+            guard let self, self.wire === wire,
+                  self.lastReportedScreenSessions == sessions else { return }
+            do {
+                _ = try await wire.request("screen.report", params: ["sessions": joined])
+            } catch {
+                // Background report; fail silently
+            }
+        }
+    }
 
     func addNotice(
         title: String,
@@ -5320,6 +5479,129 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// locally: its grid already holds the current screen, so presentation
     /// is a reparent plus a control-lease swap and performs zero replay,
     /// snapshot, or clear. Everything else takes the cold seeding path.
+    private func makeSurface(for session: WarrenDesktopSession) -> GhosttySurface {
+        let sessionID = session.id
+        let inputRouter = self.inputRouter
+        let inputBridge = WarrenOrderedInputBridge { [inputRouter, sessionID] data in
+            inputRouter.enqueue(data, for: sessionID)
+        }
+        return GhosttySurface(
+            id: sessionID,
+            attachmentID: TerminalAttachmentID(),
+            workingDirectory: session.workingDirectory,
+            font: terminalFont,
+            onInput: { data in inputBridge.send(data) },
+            onResize: { [weak self] columns, rows in
+                Task { @MainActor in
+                    // Every visible pane owns a native surface and therefore
+                    // emits its own geometry callbacks. Only the selected
+                    // surface may resize the shared PTY/control lease; a
+                    // passive sibling must never resize whichever pane
+                    // happens to be selected at the time its view lays out.
+                    self?.resize(
+                        sessionID: sessionID,
+                        columns: columns,
+                        rows: rows
+                    )
+                }
+            },
+            onOpenURL: { [weak self] url, kind, workingDirectory in
+                guard let self else { return false }
+                return self.onOpenTerminalURL?(
+                    sessionID,
+                    url,
+                    kind,
+                    workingDirectory ?? session.workingDirectory
+                ) ?? false
+            }
+        )
+    }
+
+    /// Ensures every leaf currently rendered by the split window has a live
+    /// output subscription. The selected leaf additionally owns the control
+    /// lease; sibling subscriptions are passive and failures stay isolated to
+    /// that pane.
+    /// Selects the Tab that renders `sessionID`. Used when AppKit, not the UI,
+    /// decides which split pane owns keyboard focus.
+    func selectTab(forSessionID sessionID: TerminalSessionID) {
+        let tabID = Self.tabID(sessionID)
+        guard navigation.selectedTabID != tabID,
+              projection.tabs.contains(where: { $0.id == tabID && $0.sessionID == sessionID }) else {
+            return
+        }
+        perform(.selectTab(tabID))
+    }
+
+    func ensureVisibleSessions(_ sessionIDs: Set<TerminalSessionID>) {
+        let live = Set(projection.sessions.filter { $0.state.isActive }.map(\.id))
+        let visible = sessionIDs.intersection(live)
+        let selectedID = navigation.selectedTabID.flatMap { tabID in
+            projection.tabs.first(where: { $0.id == tabID })?.sessionID
+        }
+        for sessionID in visible where sessionID != selectedID {
+            guard backgroundAttachTokens[sessionID] == nil else { continue }
+            nextBackgroundAttachToken &+= 1
+            let token = nextBackgroundAttachToken
+            backgroundAttachTokens[sessionID] = token
+            Task { @MainActor [weak self] in
+                await self?.attachBackgroundSession(sessionID, token: token)
+            }
+        }
+        guard let selectedID, visible.contains(selectedID) else { return }
+        Task { @MainActor [weak self] in
+            await self?.presentSelectedSession()
+        }
+    }
+
+    private func attachBackgroundSession(
+        _ sessionID: TerminalSessionID,
+        token: UInt64
+    ) async {
+        defer {
+            if backgroundAttachTokens[sessionID] == token {
+                backgroundAttachTokens.removeValue(forKey: sessionID)
+            }
+        }
+        guard backgroundAttachTokens[sessionID] == token,
+              let wire,
+              let session = projection.session(id: sessionID),
+              session.state.isActive,
+              !outputSubscriptions.contains(sessionID) else { return }
+
+        let surface: GhosttySurface
+        if let existing = surfaceManager.surface(for: sessionID) {
+            surface = existing
+        } else {
+            outputAnchors.removeValue(forKey: sessionID)
+            suppressFramedAnchorUpdates.remove(sessionID)
+            surface = makeSurface(for: session)
+            surfaceManager.insert(surface, recoveryGated: true)
+        }
+        guard self.wire === wire,
+              backgroundAttachTokens[sessionID] == token else { return }
+        surfaceManager.beginRecovery(for: sessionID)
+        do {
+            try await seedSessionSubscription(
+                using: wire,
+                sessionID: sessionID,
+                size: nil,
+                claimControl: false
+            )
+            guard self.wire === wire,
+                  backgroundAttachTokens[sessionID] == token else { return }
+            outputSubscriptions.insert(sessionID)
+        } catch {
+            // A sibling's recovery failure must not tear down the selected
+            // pane or the shared WebSocket. The next visibility update can
+            // retry from the same Session-keyed anchor.
+            if self.wire === wire,
+               backgroundAttachTokens[sessionID] == token,
+               selectedSessionID != sessionID {
+                removeMountedSurface(sessionID: sessionID)
+            }
+        }
+    }
+
     private func presentSelectedSession() async {
         guard let tabID = navigation.selectedTabID,
               let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID else { return }
@@ -5328,6 +5610,20 @@ final class WarrenRemoteApplicationModel: ObservableObject {
            reconnectPreservedSessions.contains(sessionID) {
             await attachSelectedSession(preservingExistingSurface: true)
             return
+        }
+        // A sibling pane may be seeding this Session in the background. Let it
+        // finish so promotion can reuse that subscription, but never wait
+        // indefinitely: a hung or slow seed must fall through to the cold path
+        // instead of leaving the pane unattached.
+        let backgroundAttachDeadline = ContinuousClock.now + .seconds(2)
+        while backgroundAttachTokens[sessionID] != nil,
+              ContinuousClock.now < backgroundAttachDeadline {
+            do {
+                try await Task.sleep(for: .milliseconds(10))
+            } catch {
+                return
+            }
+            guard navigation.selectedTabID == tabID else { return }
         }
         if !isLocalEndpoint,
            surfaceManager.surface(for: sessionID) != nil,
@@ -5344,17 +5640,25 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private func promoteRetainedSession(_ sessionID: TerminalSessionID) async {
         guard let wire else { return }
         if selectedSessionID != sessionID {
+            if let previousSessionID = selectedSessionID {
+                // Split siblings stay mounted, but only one Session owns the
+                // daemon control lease. Release the previous focus before
+                // promoting the newly selected retained surface.
+                blur(sessionID: previousSessionID)
+            }
             pendingFocusSessionID = nil
             pendingFocusSize = nil
             pendingFocusResizeSize = nil
             cancelResizeRequests()
+            attachedSessionID = nil
+            focusedSessionID = nil
         }
         inputRouter.prepare(for: sessionID)
         selectedSessionID = sessionID
         TerminalDiagnostics.log("tab_promote_local", [
             "session": sessionID.description,
         ])
-        guard selectedSessionID == sessionID else { return }
+        guard selectedSessionID == sessionID, self.wire === wire else { return }
         attachedSessionID = sessionID
         TerminalDiagnostics.log("promote_complete", [
             "session": sessionID.description,
@@ -5364,13 +5668,18 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             try? await wire.sendInput(sessionID: sessionID.description, payload: data)
         }
         let measuredSize = surfaceManager.surface(for: sessionID)?.terminalSize
-        guard pendingFocusSessionID == sessionID else { return }
-        // Focus ownership is claimed only when
-        // the surface actually gained keyboard focus (the manager reports it
-        // through onFocused, which parks the request here while the control
-        // swap was still in flight). An unfocused window switching tabs must
-        // not steal resize authority from another endpoint viewing the same
-        // terminal.
+        // Focus ownership is claimed only when the surface actually gained
+        // keyboard focus: either the manager parked a request here while the
+        // promotion was in flight, or a split sibling is already the first
+        // responder and will not report focus again. An unfocused window
+        // switching panes must not steal resize authority from another
+        // endpoint viewing the same terminal.
+        //
+        // The claim goes through `session.focus`, never `claimControl`: only a
+        // real focus records the client's control lease, so a reconnect
+        // reclaims it for this pane instead of the sibling that held it.
+        guard pendingFocusSessionID == sessionID
+            || surfaceManager.ownsTerminalFocus(sessionID) else { return }
         let pendingSize = pendingFocusSize ?? measuredSize
         pendingFocusSessionID = nil
         pendingFocusSize = nil
@@ -5411,6 +5720,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         ])
         inputRouter.prepare(for: sessionID)
         if let previousSessionID = selectedSessionID, previousSessionID != sessionID {
+            blur(sessionID: previousSessionID)
             pendingFocusSessionID = nil
             pendingFocusSize = nil
             pendingFocusResizeSize = nil
@@ -5441,22 +5751,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // surface with an anchor from an older surface instance.
             outputAnchors.removeValue(forKey: sessionID)
             suppressFramedAnchorUpdates.remove(sessionID)
-            let inputRouter = self.inputRouter
-            let inputBridge = WarrenOrderedInputBridge { [inputRouter, sessionID] data in
-                inputRouter.enqueue(data, for: sessionID)
-            }
-            surface = GhosttySurface(
-                id: sessionID,
-                attachmentID: TerminalAttachmentID(),
-                workingDirectory: session.workingDirectory,
-                font: terminalFont,
-                onInput: { data in inputBridge.send(data) },
-                onResize: { [weak self] columns, rows in Task { @MainActor in self?.resize(columns: columns, rows: rows) } },
-                onOpenURL: { [weak self] url, kind, workingDirectory in
-                    guard let self else { return false }
-                    return self.onOpenTerminalURL?(sessionID, url, kind, workingDirectory ?? session.workingDirectory) ?? false
-                }
-            )
+            surface = makeSurface(for: session)
             surfaceManager.insert(surface, recoveryGated: true)
         }
         selectedSessionID = sessionID
@@ -5497,12 +5792,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // in another client's TUI.
             let claimControl = surfaceManager.ownsTerminalFocus(sessionID)
             try await seedSessionSubscription(
+                using: wire,
                 sessionID: sessionID,
                 size: claimControl ? size : nil,
                 claimControl: claimControl
             )
             guard generation == attachGeneration,
-                  selectedSessionID == sessionID else { return }
+                  selectedSessionID == sessionID,
+                  self.wire === wire else { return }
             outputSubscriptions.insert(sessionID)
             attachedSessionID = sessionID
             TerminalDiagnostics.log("attach_complete", [
@@ -5597,11 +5894,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Subscribes the daemon-side output stream and records the attachment
     /// identity required for every subsequent DENB input frame.
     private func seedSessionSubscription(
+        using wire: WarrenRemoteClient,
         sessionID: TerminalSessionID,
         size: TerminalSize?,
         claimControl: Bool
     ) async throws {
-        guard let wire else { throw URLError(.networkConnectionLost) }
         let anchor = outputAnchors[sessionID].map {
             WarrenRemoteRecoveryAnchor(epoch: $0.epoch, sequence: $0.sequence)
         }
@@ -5773,6 +6070,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
             do {
                 try await seedSessionSubscription(
+                    using: wire,
                     sessionID: sessionID,
                     size: nil,
                     claimControl: false

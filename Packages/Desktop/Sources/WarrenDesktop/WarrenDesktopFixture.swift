@@ -1118,4 +1118,18 @@ public struct WarrenDesktopTerminalContext: Hashable, Sendable {
         self.font = font
         self.wantsTerminalFocus = wantsTerminalFocus
     }
+
+    public init(
+        workspace: Workspace?,
+        terminalGroup: TerminalGroup?,
+        tab: ClientTab,
+        font: TerminalFontPreference = .init(),
+        wantsTerminalFocus: Bool = true
+    ) {
+        self.workspace = workspace
+        self.terminalGroup = terminalGroup
+        self.tab = tab
+        self.font = font
+        self.wantsTerminalFocus = wantsTerminalFocus
+    }
 }

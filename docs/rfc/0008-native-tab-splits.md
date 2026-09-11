@@ -1,506 +1,397 @@
-# RFC 0008: Native split panes within a client Tab
+# RFC 0008: Desktop split windows for independent terminal Sessions
 
-- Status: Deferred
-- Owner: Warren Client Core, Desktop, Ghostty Adapter, and Headless
+- Status: Implemented
+- Owner: Warren Desktop, Ghostty Adapter, and Headless
 - Created: 2026-08-25
-- Priority: Low; no target release
-- Scope: device-local split layout for multiple Warren Terminal Sessions
+- Scope: macOS Desktop presentation for Warren Terminal Sessions
 
 ## Summary
 
-Warren may add native split panes inside one client Tab. A split Tab is a
-device-local layout container whose leaf Panes each reference a distinct
-Warren Terminal Session. Every referenced Session keeps its existing Host
-ownership, Runtime Binding, PTY, output recovery stream, and lifecycle.
+A Desktop split window is a client-local arrangement of independent Warren
+Terminal Sessions. It is a window-level layout, not a second kind of Warren
+Session and not a split nested inside one Host-owned Tab. Every leaf owns one
+stable presentation Pane and displays one existing Desktop Tab, which in the
+current projection maps one-to-one to a running Warren Session and its PTY.
 
 ```text
-Client Tab
-└── Split (left/right)
-    ├── Pane -> Warren Terminal Session A -> PTY A
+Desktop window, Workspace scope
+└── Split (left/right, 50/50)
+    ├── Pane -> Tab A -> Session A -> PTY A -> Ghostty surface A
     └── Split (top/bottom)
-        ├── Pane -> Warren Terminal Session B -> PTY B
-        └── Pane -> Warren Terminal Session C -> PTY C
+        ├── Pane -> Tab B -> Session B -> PTY B -> Ghostty surface B
+        └── Pane -> Tab C -> Session C -> PTY C -> Ghostty surface C
 ```
 
-Two Panes do not share one PTY, and Warren does not expose tmux windows or
-panes as Warren domain resources. Rendering one PTY twice would be mirroring,
-not splitting: both views would compete over terminal size, focus, input, and
-cursor state.
+Two leaves never mirror one PTY. A Session has one terminal viewport, input
+stream, recovery anchor, and runtime lifecycle. A native split creates or
+places another Session instead of trying to render one Session at two sizes.
 
-This RFC records the intended boundary so a later implementation does not
-grow an accidental second terminal model. The feature is deliberately
-deferred. The current workaround is to run tmux as the foreground application
-inside a ghostline-backed Warren Shell Session.
-
-## Status and scheduling
-
-`Deferred` means:
-
-- no implementation is scheduled;
-- the RFC does not reserve a release or create a compatibility commitment;
-- current clients continue to present one Session per Tab;
-- implementations must not partially expose the models or protocol described
-  here without first moving the RFC back to `Proposed` and reviewing it
-  against the then-current architecture.
-
-Native splits are a convenience feature, not a prerequisite for durable
-Sessions, remote access, Agent workflows, or terminal correctness. The tmux
-workaround covers the immediate interactive need well enough that retention,
-recovery, correctness, and performance work take precedence.
-
-## Current workaround: tmux inside ghostline
-
-Use the default and recommended `ghostline` runtime for the Warren Session,
-then start a normal interactive tmux client inside that Shell:
-
-```sh
-tmux new-session -A -s warren
-```
-
-With the default tmux prefix:
-
-- `Control-b %` creates a left/right split;
-- `Control-b "` creates a top/bottom split;
-- `Control-b` plus an arrow key changes the active tmux pane;
-- `Control-b d` detaches while leaving tmux processes running.
-
-This workaround is intentionally an application inside one Warren PTY.
-Warren sees one Session, one foreground tmux client, one output stream, and
-one terminal viewport. tmux owns the nested pane layout and process lifecycle.
-
-Warren's alternative `tmux` runtime is not the same workaround. That adapter
-maps one Warren Session to one tmux session and intentionally streams only its
-first pane. Native Warren splits must not depend on discovering or projecting
-the adapter's internal tmux panes. Running a nested interactive tmux client is
-therefore recommended only in a ghostline-backed Warren Session.
-
-Known limitations of the workaround are acceptable while this RFC is
-deferred:
-
-- Warren cannot name, focus, close, recover, or observe individual tmux panes;
-- Agent activity and terminal metadata remain Session-level;
-- Desktop and Web receive tmux's composed terminal screen, not a structured
-  split tree;
-- tmux configuration and key bindings remain the user's responsibility.
-
-## Motivation
-
-Tabs are efficient for switching between full terminal contexts. They are
-less efficient when two or more processes must remain visible together, for
-example:
-
-- an editor or Agent beside a test runner;
-- a service log beside an interactive shell;
-- two independent Agents operating in the same Workspace;
-- a build, debugger, and Git inspection shell shown at once.
-
-A native split would let Warren preserve per-Pane titles, activity, focus,
-viewport size, recovery, and lifecycle while keeping the processes visually
-grouped in one Tab. It would also avoid requiring tmux knowledge for a basic
-client layout operation.
-
-The feature is not a request to split one Shell process. A Shell is a process
-inside a PTY; a native split creates another Session and another PTY.
-
-## Goals
-
-- Represent a recursive left/right and top/bottom Pane layout inside a Tab.
-- Bind every leaf Pane to exactly one Warren Terminal Session.
-- Preserve the existing one Session to one Runtime Binding and PTY invariant.
-- Keep Tab, Pane, split ratio, and focused-Pane state device-local.
-- Allow all Panes in the selected Tab to render and recover independently.
-- Route keyboard input, search, focus, and resize to the intended Pane only.
-- Create a new Shell Session in the same Session Scope when the user splits a
-  Pane.
-- Collapse redundant split nodes deterministically after a Pane closes.
-- Keep unsplit Tabs and other Warren clients behaviorally compatible.
-- Bound visible Pane count and rendering cost before enabling the feature by
-  default.
-
-## Non-goals
-
-- Exposing tmux sessions, windows, or panes as Warren Pane resources.
-- Sharing one PTY, Runtime Session, terminal emulator, or Agent Conversation
-  between multiple Panes.
-- Synchronizing split geometry, focused Pane, or divider position across
-  devices.
-- Allowing Panes from different Workspaces or Terminal Groups in one Tab in
-  the first implementation.
-- Dragging an existing Tab into a split in the first implementation.
-- Restoring a child Shell by inferring or replaying `cd` commands.
-- Changing Runtime persistence or making a split Tab a Host-owned resource.
-- Implementing native splits in Desktop and Web simultaneously.
-- Removing or deprecating the tmux runtime or the nested tmux workaround.
+The layout is local to one Desktop window and one Session scope. Headless
+persists no Pane tree and does not need to understand the layout. Web and CLI
+continue to see ordinary Host Sessions.
 
 ## Ownership and invariants
 
-The ownership boundary is:
-
 | Resource | Owner | Shared across clients |
 | --- | --- | --- |
-| Project, Workspace, Terminal Group | Host | Yes |
-| Warren Terminal Session | Host | Yes |
-| Runtime Binding and PTY | Host Runtime | Yes |
-| Tab, Pane tree, split ratio | Client Window Layout | No |
-| Focused Pane | Client Window Layout | No |
-| Attachment and viewport authority | Host protocol, per Session | Temporary |
+| Project, Workspace, Terminal Group | Headless Host | Yes |
+| Warren Session, Runtime binding, and PTY | Headless Host/runtime | Yes |
+| Tab projection | Desktop client model | No |
+| Pane tree, ratios, and active Pane | Desktop window | No |
+| Ghostty surface and AppKit host view | `TerminalSurfaceManager` | No |
+| Screen-session report | Authenticated WebSocket peer | No |
+| Output anchor and terminal viewport authority | Host protocol per Session | Per Session |
 
-The following invariants are mandatory:
+The implementation preserves these invariants:
 
-1. One Pane leaf references one Session ID.
-2. One Session appears at most once in one Window's visible Pane tree.
-3. Every Pane in a Tab belongs to the same Workspace or Terminal Group.
-4. A split mutation never changes a Session's Host scope or Runtime Binding.
-5. A layout mutation cannot create, terminate, or move a Runtime implicitly;
-   the corresponding typed Host operation must succeed first.
-6. A missing or ended Session cannot remain an interactive Pane.
-7. Only one Pane in a Window receives local keyboard focus.
-8. Output and recovery anchors remain keyed by Session ID, never Pane ID.
+1. Each leaf has one non-empty Pane ID and one unique Tab ID.
+2. Every leaf in a tree belongs to the current Workspace or Terminal Group.
+3. A leaf is attached only while its Session is running and present in the
+   current Host roster.
+4. A Session appears at most once in a window's visible tree.
+5. Splitting and closing never silently moves a Session or changes its runtime.
+6. Only the active Pane receives local keyboard focus and the control lease;
+   sibling Panes receive passive output and recovery updates.
+7. Output and recovery state is keyed by Session ID, never by Pane ID.
+8. The visible tree contains at most four Panes.
 
-Pane ID is presentation identity. Session ID remains execution identity. A
-Pane may be replaced without changing a Session, while a new Shell always
-gets a new Session ID and Pane binding.
+## Layout model and persistence
 
-## Client layout model
-
-The current `ClientPane` placeholder is a flat Workspace-level array and the
-current `ClientTab` directly stores a Session ID. Native splits require the
-layout root to belong to the Tab:
+`Packages/Desktop` stores an immutable recursive value:
 
 ```swift
-public struct ClientTab: Codable, Hashable, Sendable, Identifiable {
-    public let id: String
-    public var title: String
-    public var root: ClientPaneNode
-}
-
-public struct ClientPane: Codable, Hashable, Sendable, Identifiable {
-    public let id: String
-    public var sessionID: TerminalSessionID
-}
-
-public indirect enum ClientPaneNode: Codable, Hashable, Sendable {
-    case leaf(ClientPane)
+indirect enum SplitLayoutTree {
+    case leaf(SplitPaneItem)       // stable paneID + projected tabID
     case split(
-        id: String,
-        axis: ClientSplitAxis,
-        ratio: Double,
-        first: ClientPaneNode,
-        second: ClientPaneNode
+        axis: SplitAxis,           // horizontal = left/right
+        ratio: Double,             // first child share
+        first: SplitLayoutTree,
+        second: SplitLayoutTree
     )
 }
-
-public enum ClientSplitAxis: String, Codable, Hashable, Sendable {
-    case horizontal
-    case vertical
-}
 ```
 
-Axis names describe the divider: a vertical divider creates left/right
-children and a horizontal divider creates top/bottom children. User-facing
-commands should use `Split Right` and `Split Down` to avoid that ambiguity.
+The ratio is normalized when decoding and encoding. Interactive changes are
+clamped to safe bounds and the renderer also derives minimum ratios from the
+actual child geometry, so a divider cannot intentionally create a zero-column
+or zero-row terminal. A divider is addressed by an immutable child path:
+`false` descends to `first`, and `true` descends to `second`. Paths follow the
+same tree-addressing idea as Ghostty's split tree and are not guessed from a
+preorder index after a nested split is added.
 
-The persisted ratio is the first child's share of available space. Decoding
-normalizes non-finite or out-of-range values to `0.5`; interaction clamps the
-ratio according to the minimum Pane size instead of a fixed percentage.
+Layouts are stored in device-local `UserDefaults` under
+`warren.desktop.splitLayouts`. Keys include the selected endpoint and scope,
+such as `endpoint-<endpoint>-workspace-<UUID>` and
+`endpoint-<endpoint>-terminalGroup-<UUID>`, so a Session ID from one Host can
+never be rebound to another Host's layout. Restoring a layout validates it
+against the current scope's running Tabs, removes invalid or duplicate leaves,
+collapses empty parents, normalizes ratios, and falls back to the selected
+running Tab. Persisted output, commands, credentials, working directories,
+and PTY state are never copied into the layout.
 
-### Migration
+The endpoint prefix is a new namespace boundary. Older unprefixed layout keys
+are intentionally not migrated or interpreted because their Host ownership is
+unknown; the first restore after this change starts from the selected running
+Tab and writes only the endpoint-scoped form.
 
-An existing Tab with `sessionID = S` migrates to:
+Reconciliation also drops layouts whose Workspace or Terminal Group no longer
+exists, so the store does not grow forever. Only the current endpoint's scopes
+are evaluated: another endpoint's Workspaces are absent from this projection
+and must not be read as deleted. Writes are coalesced over a short quiet
+period, because a divider drag republishes a new ratio on every pointer event
+and would otherwise run one JSON encode plus one `UserDefaults` write per frame.
 
-```text
-Tab(root: leaf(Pane(sessionID: S)))
+Window minimum size follows the tree, but stops at two Panes per axis. Using
+the exact four-Pane minimum would force the user's window to grow past a
+comfortable size; divider clamps still use the exact per-subtree minimums.
+
+The layout root belongs to the current window scope, not to a `ClientTab`.
+Selecting a Tab already present in the tree focuses its Pane. Selecting an
+unrelated Tab exits the current split and makes that Tab the sole Pane; this
+prevents a newly selected Tab from appearing beside stale Sessions.
+
+## Split, drag-and-drop, close, and focus semantics
+
+### Split Right and Split Below
+
+The command captures the current scope and active Pane, then requests a new
+Shell Session in that same Workspace or Terminal Group. The tree is unchanged
+while creation is pending. Once the roster confirms a newly created running
+Tab (and the normal creation flow has selected it), the client inserts a 50/50
+child split, focuses the new Pane, and lets the normal attachment pipeline
+mount its Session. A failed or cancelled creation leaves the previous tree
+intact; a bounded pending-operation timeout prevents a stuck command from
+blocking later splits.
+
+The request uses ordinary Host Session creation. The new process starts at the
+Workspace path or Terminal Group home, just like any other new Shell Session;
+the client does not synthesize `cd` commands or replay input.
+
+### Drag and drop
+
+Dragging an existing Tab onto a Pane can place it above, below, left, or right
+of that Pane, or replace the Pane at the center target. The drop is accepted
+only for a running Session in the current scope and never adds a duplicate
+Tab/Session. Invalid, cross-scope, ended, or stale drops are ignored. A
+directional drop changes only the local tree; it does not create or terminate
+a Host Session.
+
+### Close and maximize
+
+Closing a Pane requests termination of that Pane's Session. The leaf remains
+visible until the Host roster confirms that the Tab has disappeared, so a
+failed delete cannot leave a hidden running process or falsely claim success.
+The parent split then collapses to its surviving child and the nearest
+surviving Pane is selected. A single remaining Pane follows the ordinary Close
+Tab action. Maximize keeps the chosen leaf as the root without changing the
+Session lifecycle. Pending close operations are bounded and are also
+reconciled when the user changes scope.
+
+`Cycle Pane Focus` walks the tree's stable leaf order. The layout model also
+provides geometry-based nearest-Pane lookup with optional wrapping, so future
+directional focus commands can use visual adjacency rather than tree order. The
+directional lookup is currently a model capability only; no directional menu or
+keyboard command is claimed as implemented by this RFC.
+
+### Commands and key bindings
+
+Every split command is a View menu item that posts a notification; the Desktop
+root resolves the current scope and Pane when it receives one. The default
+bindings are Command shortcuts, so no keystroke is taken away from the shell:
+Split Right `⌘D`, Split Below `⇧⌘D`, Close Split Pane `⇧⌘W`, Maximize Pane
+`⇧⌘↩`, Cycle Pane Focus `⌘]`.
+
+The Emacs chords `C-x 2/3/0/1/o` are available as an opt-in preference
+(Settings › Splits, `terminal.splitChordsEnabled`, off by default). They are
+not on by default because the prefix is captured application-wide: while the
+chord is enabled `C-x` never reaches the terminal, which would silently break
+nano, an in-terminal emacs, and a tmux `C-x` prefix. `C-g` cancels a pending
+chord and `C-x C-x` sends a literal `Ctrl-X`. The monitor also declines to
+capture while an AppKit text control is first responder, and cancels any
+pending chord in that case.
+
+### Selecting a Pane by clicking it
+
+Only the selected Pane owns the input router and the control lease, so a click
+into a passive Pane must change that selection. Clicks inside a terminal are
+routed by AppKit, not SwiftUI: the terminal view becomes first responder, and
+`TerminalSurfaceManager` reports that through `onFocusRequested`. The owner
+answers by selecting that Session's Tab, which moves the active Pane, the input
+router, and the control lease together. Clicks in Pane chrome use a
+simultaneous SwiftUI gesture so the same click still reaches the terminal.
+
+Keyboard pane cycling takes the mirror-image path. Focus reconciliation refuses
+to steal first-responder status from an unrelated responder, which would
+otherwise make a command that moves focus between two mounted terminals a no-op:
+the sibling still holds the responder. A peer terminal view in the same window
+is therefore an allowed transfer, while SwiftUI and AppKit chrome stay
+protected. Every reconciliation carries the reason that scheduled it — a new
+visible set, an unmounted host, a deferred present, a recovery — so a focus
+claim in a split window remains attributable in diagnostics.
+
+The drop zones layered over a terminal must never take a hit-test shape. A
+transparent-but-hit-testable overlay makes the SwiftUI host answer every click
+over the terminal body, which breaks click-to-position, selection drags, and
+terminal mouse reporting. A regression test pins this by hit-testing the
+overlay against a hosted AppKit view.
+
+## Desktop rendering
+
+`WarrenDesktopSplitTreeView` recursively renders the tree with a
+`GeometryReader`. A split allocates the first and second child from the
+persisted ratio, inserts one draggable divider, and passes the divider's child
+path to the resize callback. A leaf renders the existing pane header, focus
+indicator, close/maximize controls, drag/drop overlay, and one terminal
+surface. Divider values expose an accessibility percentage and an adjustable
+action; dragging and keyboard adjustments use the same clamped ratio path.
+
+A drag latches onto an even split within a pull radius measured in points, not
+in ratio space, so the pull feels the same at any pane width. The radius is
+small enough that a deliberate drag past it still tracks the pointer exactly.
+A snap nobody can see is a snap that reads as a stuck divider, so the affordance
+is shown rather than inferred: hovering the divider draws a dashed guide at each
+reachable target, latching brightens that guide and widens the rule into a glow,
+and the trackpad taps the system alignment feedback once as it catches. Targets
+outside the divider's clamp range are dropped from both the guides and the
+latch, since the divider could never come to rest there.
+
+The split root is tagged with `SplitLayoutTree.structuralIdentity`, following
+Ghostty's `TerminalSplitTreeView` convention. This identity includes each
+leaf's Pane/Tab identity and every split axis, but deliberately excludes
+ratios. Inserting, removing, replacing, or maximizing a leaf therefore rebuilds
+the recursive SwiftUI structure, while a divider drag preserves the mounted
+AppKit terminal hosts and only changes their frames.
+
+The rendering model follows the useful properties of Ghostty's native
+`SplitTree`:
+
+- immutable tree transformations return a new tree rather than mutating
+  sibling nodes in place;
+- a leaf has presentation identity separate from the execution Session;
+- split ratios describe the first child's share of the available rectangle;
+- geometry is computed recursively, making spatial navigation independent of
+  window size;
+- removing a leaf collapses redundant parent nodes deterministically.
+
+The Desktop cap of four visible Panes is a product and performance boundary,
+not an arbitrary persistence limit. Raising it requires new rendering and
+transport measurements.
+
+## Terminal surfaces and output flow
+
+`TerminalSurfaceManager` is the sole owner of AppKit terminal views. It keeps
+one `GhosttySurface` and one terminal view per retained Session, while a
+per-Session host map binds each visible Session to exactly one
+`TerminalHostContainerView`. Those host references are weak: SwiftUI may drop a
+pane without a final `disconnect`, and the manager must not become the last
+owner of a dismantled host and its surface. Reconciliation is scheduled on a
+later main-loop turn; SwiftUI's `body`, layout, and `updateNSView` only submit
+immutable intent.
+
+The manager supports a set of active Session IDs for a split window:
+
+- the intent that explicitly wants keyboard focus is the primary Session;
+- passive sibling intents cannot become primary merely because SwiftUI updates
+  them later;
+- a Session cannot be mounted into two hosts in one window;
+- replacing a host for one Session does not demote or remount its siblings;
+- warm surfaces retain bounded native state and are promoted without replaying
+  a second Session's output;
+- disposal invalidates the Session's host, intent, callbacks, and recovery
+  resources.
+
+The active set is explicit even while terminal hosts remain mounted under the
+embedded editor. Entering editor mode parks those hosts as warm surfaces and
+reports an empty screen set; returning to terminal mode reactivates the same
+hosts without creating a second PTY viewport.
+
+Warm promotion of a retained surface stays limited to remote endpoints, as
+before this feature; a local endpoint keeps taking the cold seeding path. This
+RFC does not change that boundary, and neither path duplicates the Session's
+PTY.
+
+Promoting a retained sibling has to claim the control lease, because siblings
+were seeded without one. That claim is gated on the surface actually owning
+keyboard focus in a key window, exactly like the cold seeding path: an unfocused
+window switching panes must not take input and resize authority away from
+another client viewing the same terminal. The claim is one `session.focus`, not
+a control-only alias: the client tracks a single leased Session and replays that
+claim (with its viewport) after a reconnect, so a lease taken outside `focus`
+would let a reconnect reclaim the sibling that used to hold it and hand the
+shared runtime the wrong geometry. A pane that gains keyboard focus only after
+the promotion sends the same request from its parked focus report.
+
+Each visible leaf receives output through the remote model's Session-keyed
+subscription. The selected Session additionally requests the control lease and
+local focus. Siblings use passive `session.subscribe` recovery with
+`claimControl=false`; their snapshots, framed output, anchors, and rendering
+fail independently. A promotion waits only briefly for an in-flight background
+seed of the same Session and then falls through to the cold path, so a hung
+seed cannot leave the selected pane unattached. A sibling failure must not disconnect or blank the
+selected Pane. Terminal search is bound to the currently focused Session, not
+shown simultaneously in every leaf.
+
+When the workspace's embedded editor is selected, the terminal tree remains
+mounted for fast return but no terminal Session is reported as screen-visible;
+its surfaces become warm retained state until terminal mode is selected again.
+
+## Session lifecycle and roster reconciliation
+
+The Host roster remains authoritative. The Desktop reconciles the persisted
+tree whenever Tabs change:
+
+- a removed or ended Session is pruned from its leaf and its parent collapses;
+- a Session moved to another Workspace or Terminal Group cannot remain in the
+  old scope's tree;
+- Sessions created by CLI, Web, another Desktop window, or an older client
+  appear as ordinary unsplit Tabs until explicitly placed in this window;
+- selecting a Tab outside the tree exits the split rather than silently
+  replacing an arbitrary leaf;
+- selected and sibling surfaces are retained only while their Session remains
+  live in the projection.
+
+The split creation and close paths deliberately wait for roster confirmation.
+This keeps local presentation state and Host process lifecycle in lockstep
+across delayed responses, reconnects, and another client's mutations.
+
+## Per-peer screen reporting
+
+The Desktop reports the sorted set of currently visible Session IDs through
+`screen.report`. This is presentation telemetry, not a new Host resource. The
+client retains the latest set and re-sends it after a new WebSocket is
+authenticated, because a reconnect creates a fresh peer even when the visible
+Session IDs did not change.
+
+The daemon stores that list on the authenticated `wsPeer`, not on the global
+HTTP server. Each report is deduplicated and accepts only Sessions that still
+exist and have `Lifecycle == "running"`. Ended and deleted Sessions are removed
+lazily on read, and closing a peer clears its screen state. Two Desktop windows
+connected to one daemon therefore never overwrite one another's screen list.
+
+Reads cross peers, because the client that asks is usually not the client that
+reported. A CLI invoked inside a Session opens its own short-lived connection
+and has no screen of its own, so answering from the asking peer would always say
+"nowhere". `screen.panes` returns one entry per connected screen that displays
+the queried Session, ordered most recently reported first and tie-broken by
+client ID so repeated calls agree. Several windows may display one Session at
+once, which is why the answer is a list rather than a single layout.
+
+The two reads disclose different amounts on purpose. `session.current` carries
+only `screenPosition` and `screenPaneCount` — where this Session's own output
+sits — and never the sibling IDs, so a Session cannot enumerate what else is on
+the user's screen as a side effect of asking about itself. Learning who shares
+the screen is the separate, explicit `screen.panes` request.
+
+The screen list has its own peer mutex rather than sharing the outbound queue's
+lock, because reconciling it requires Session lookups that take the service
+lock. Those lookups run outside the mutex, so the lazy write-back is guarded by
+a generation counter: a concurrent `screen.report` bumps the generation and its
+list wins over the stale filtered copy.
+
+## Failure, recovery, and compatibility
+
+- A pending split or close expires without changing a tree if the Host request
+  fails or no confirming roster transition arrives.
+- A missing/ended Session is never attached from restored layout data.
+- Recovery anchors are independent per Session; a late marker for one Pane
+  cannot reveal or reset another Pane.
+- Warm split demotion deliberately preserves the native Ghostty viewport. The
+  manager does not synchronously read grid text to create a reattach anchor,
+  because that read can contend with the background output drain on the main
+  actor; protocol recovery remains the authoritative resync path.
+- A resize is derived from the owning Pane's measured host geometry. Only the
+  focused Session may claim the shared runtime control lease.
+- Desktop is the only client that renders this tree. Headless, Web, and CLI
+  keep their existing Session-level behavior and do not persist Pane layout.
+- The first render remains one ordinary terminal until the user invokes a
+  split or places another existing Tab into the window.
+
+The feature adds no protocol version solely for layout. Existing
+`session.subscribe`, control-lease, recovery, and output envelopes remain
+Session-addressed. A future transport can multiplex more explicitly, but it
+must preserve the Session-keyed ownership and recovery boundaries above.
+
+## Verification and performance boundary
+
+The implementation is covered by focused tree, surface-manager, and
+screen-report tests. These checks exercise the value model, AppKit lifecycle,
+and protocol state transitions; they do not replace a running macOS AppKit
+pixel/interaction capture of a real split window. Full validation should
+include:
+
+```sh
+swift test --package-path Packages/Desktop
+swift test --package-path Packages/GhosttyAdapter
+go test ./Headless/...
 ```
 
-Existing Workspace-level `panes` arrays are not evidence of a valid split
-tree and must not be guessed into one. Empty legacy arrays decode as an
-unsplit layout; non-empty legacy data must be validated and migrated through
-one explicit schema version.
-
-The migration must be atomic and idempotent. An older client that cannot
-decode the new layout schema must preserve or reject it, not overwrite it with
-an unsplit layout.
-
-## Roster and Tab reconciliation
-
-Host rosters contain Sessions, not Tabs or Panes. The client reconciler uses
-these rules:
-
-1. A running Session already referenced by a local Pane is not also projected
-   as a separate Tab.
-2. A running Session not referenced by local layout becomes a new unsplit Tab.
-   This covers Sessions created by CLI, Web, another Desktop, or an older
-   client.
-3. An ended or removed Session turns its Pane into a non-interactive ended
-   presentation when durable Session memory is available; otherwise the Pane
-   is removed and its parent split collapses.
-4. If an external operation moves one Pane's Session to another scope, the
-   client removes that leaf from the source Tab and creates an unsplit Tab in
-   the destination scope. A Tab never silently spans scopes.
-5. Reconciliation preserves stable Pane and Tab IDs for unaffected nodes.
-
-Session creation for a split carries an idempotent request ID and a pending
-local placement. A roster event may arrive before the creation response; the
-pending placement prevents the new Session from briefly appearing as a
-second Tab.
-
-## Split and close operations
-
-### Split Right and Split Down
-
-Splitting the focused Pane is a coordinated operation:
-
-```text
-capture focused Pane, Tab, scope, and request ID
--> request a new Shell Session in that captured scope
--> wait for the Host result
--> replace the focused leaf with a 50/50 split
--> bind the new leaf to the returned Session ID
--> attach and focus the new Pane
--> persist the Client Window Layout
-```
-
-If Session creation fails, the layout remains unchanged. A completion never
-derives its target from the user's later selection.
-
-The first implementation starts the new Shell at the Workspace path or
-Terminal Group home, matching ordinary Session creation. Inheriting the
-active Pane's current directory requires a future typed `cwd` launch field
-validated by Headless. Clients must not send `cd`, synthesize keystrokes, or
-interpolate runtime metadata into a shell command.
-
-### Close Pane
-
-Closing a Pane retains Warren's current destructive close semantics:
-
-```text
-terminate referenced Session
--> confirm the Host lifecycle transition
--> remove the leaf
--> replace its parent split with the surviving sibling
--> select the nearest surviving Pane
--> persist layout
-```
-
-If termination fails, the Pane stays in place and presents the error. Closing
-the last Pane closes the Tab. A separate `Close Tab` action attempts to
-terminate every live Session in the Tab; successfully ended Panes disappear,
-but any failed Pane keeps the Tab open so partial failure is visible.
-
-A future detachable layout may add `Remove Pane without terminating`, but it
-is not part of this RFC.
-
-## Desktop presentation and interaction
-
-The Desktop recursively renders the Pane tree. Each leaf keeps the existing
-Pane header and terminal presentation. Each split owns one draggable divider
-and enforces the design system's minimum terminal width and height.
-
-Recommended commands are:
-
-| Command | Default shortcut |
-| --- | --- |
-| Split Right | `Command+D` |
-| Split Down | `Shift+Command+D` |
-| Focus Pane Left/Right/Up/Down | `Option+Command+Arrow` |
-| Close Pane | `Command+W` |
-| Close Tab | no destructive default until interaction review |
-
-Shortcuts remain subject to a conflict audit against Ghostty, macOS, search,
-and Agent input behavior before implementation. Menu commands and command
-palette actions are authoritative; key bindings are conveniences.
-
-Interaction requirements:
-
-- clicking a Pane gives only that Pane the local first responder;
-- focus movement uses geometric neighbors, not tree traversal order;
-- an active Pane has a non-color-only focus indicator;
-- dividers are keyboard adjustable and expose accessibility values;
-- loading, reconnecting, ended, and failed states render per Pane;
-- a Pane below minimum size does not create a zero-column or zero-row PTY;
-- Tab title fallback uses the focused Pane's effective Session title;
-- terminal search opens in and searches only the focused Pane.
-
-The first implementation should cap one Tab at four Panes. Raising the cap
-requires performance evidence rather than a settings-only change.
-
-## Attachments, input, output, and viewport
-
-The current Desktop and WebSocket peer each track one attached Session. A
-native split requires several visible Sessions to receive output concurrently.
-
-The client should introduce a `TerminalChannel` boundary keyed by Session ID.
-Each channel owns:
-
-- attachment and control state;
-- pending ordered input;
-- output recovery anchor;
-- latest-wins resize buffering;
-- reconnect and error state.
-
-The initial implementation may use one control/roster WebSocket plus one
-terminal WebSocket per visible Pane. That works with the current one-attached-
-Session peer contract, limits protocol risk, and bounds connection count with
-the four-Pane cap. Hidden Tabs detach their terminal channels while retaining
-bounded warm render surfaces and recovery anchors.
-
-The `TerminalChannel` interface must not expose the one-WebSocket-per-Pane
-choice. A later protocol may multiplex explicitly addressed attach, input,
-focus, resize, and detach messages over one connection. Binary input and
-output envelopes already carry Session identity; raw implicit-session input
-must not be extended as the multiplexed contract.
-
-Every visible Pane has an independent Runtime viewport because it references
-a distinct Session. Only the focused Pane accepts local keyboard input. Host
-viewport authority remains per Session, so visible local Panes do not compete
-with one another; another client observing the same Session may still own its
-canonical viewport. The implementation review must define how inactive local
-Panes represent a remotely owned viewport without stealing control merely
-because a split Tab became visible.
-
-## Terminal surface management
-
-`TerminalSurfaceManager` must evolve from one active Session and one host view
-to a set of visible placements:
-
-```swift
-struct TerminalSurfacePlacement {
-    let paneID: String
-    let sessionID: TerminalSessionID
-    let host: TerminalHostContainerView
-    let viewportSize: CGSize
-    let wantsKeyboardFocus: Bool
-}
-```
-
-The manager retains one Ghostty surface and AppKit view per Session, attaches
-every visible placement, and keeps exactly one local first responder. Visible
-surfaces are not counted against the warm hidden-surface limit. A Session may
-not be mounted into two hosts in the same Window.
-
-Reconciliation remains one-way: SwiftUI submits immutable placement intent;
-the manager performs AppKit mount, hide, focus, and disposal operations on a
-later main-loop turn. Split layout callbacks must not synchronously tear down
-Ghostty views. This preserves the rendering and deadlock protections defined
-by RFC 0002 and the terminal runbooks.
-
-## Failure and recovery behavior
-
-- Failure to attach one Pane does not disconnect or blank its siblings.
-- Output backpressure or channel failure is isolated per terminal connection.
-- Reconnect uses that Pane's Session-keyed recovery anchor.
-- A stale attach, resize, or creation completion validates Pane, Session,
-  scope, and operation generation before mutating layout.
-- Switching Tabs detaches hidden terminal channels without ending Runtimes.
-- Host restart rebuilds visible channels independently and reconciles missing
-  Sessions before restoring focus.
-- Client restart restores the Pane tree, then treats the Host roster as the
-  authority for Session existence and lifecycle.
-
-## Compatibility and rollout
-
-The first implementation is Desktop-only and capability-gated. Headless does
-not persist Pane layout and does not advertise tmux panes. Web and CLI continue
-to show every Host Session independently; a Session grouped into a Desktop
-split may therefore appear as an ordinary Tab or list item elsewhere.
-
-Rollout order, after this RFC is reactivated, is:
-
-1. Client layout schema, migration, normalization, and tree mutation tests.
-2. Roster-to-layout reconciliation and pending split placement.
-3. Per-Session terminal channels and simultaneous attachment tests.
-4. Multi-placement Ghostty surface management.
-5. Recursive Desktop layout, commands, accessibility, and error states.
-6. Performance qualification and opt-in release.
-
-No server-side Runtime or state migration is required for the core model.
-Protocol multiplexing, if later selected, requires its own versioned change.
-
-## Performance expectations
-
-Native splits add work to rendering and output paths. Qualification must
-measure, with one and four visible Panes:
-
-- steady-state and burst output latency;
-- main-thread and renderer CPU;
-- Ghostty surface, grid, scrollback, and GPU memory;
-- WebSocket count, output traffic, and reconnect time;
-- divider-drag responsiveness and resize request rate;
-- battery impact during continuous background output.
-
-The implementation must preserve latest-wins resize buffering and bounded
-surface retention. It must not perform persistence writes, tree encoding, or
-full-roster reconciliation on every PTY output frame.
-
-## Security and privacy
-
-Pane layout stores only local presentation IDs, ratios, and Host Session IDs.
-It does not duplicate PTY output, commands, environment variables, transcript
-paths, credentials, or working-directory metadata into the Client Layout
-Store.
-
-A Session ID received from persisted layout is validated against the active
-Host roster and scope before attachment. A layout restored for one endpoint
-must never bind the same textual ID against another endpoint without an
-endpoint-scoped Client Layout identity.
-
-## Acceptance criteria
-
-The RFC may move from `Deferred` to `Proposed` only when an implementation plan
-can demonstrate all of the following:
-
-1. Existing unsplit Tabs migrate without changing Session or Runtime
-   lifecycle.
-2. A split creates a distinct Session and PTY in the captured scope.
-3. Four visible Panes receive simultaneous output without cross-routing,
-   truncation, duplication, or global disconnect on one Pane's failure.
-4. Input, search, local focus, and title fallback follow the focused Pane.
-5. Each Session receives resize events derived only from its own Pane and
-   canonical viewport authority.
-6. Closing one Pane terminates only its Session and collapses the tree
-   deterministically.
-7. External Session creation, removal, ending, and scope movement reconcile
-   without duplicate Tabs or mixed-scope split trees.
-8. Client and Host restart recover every surviving Pane from its own output
-   anchor.
-9. Keyboard, pointer, accessibility, loading, error, empty, and reconnecting
-   states pass interaction review.
-10. Four-Pane performance stays within documented CPU, memory, I/O, network,
-    and battery budgets.
-11. Fresh installations retain the existing one-Session-per-Tab behavior
-    until the user invokes a split command.
-12. Web and CLI behavior remains compatible without understanding client Pane
-    trees.
-
-## Alternatives considered
-
-### Keep using nested tmux indefinitely
-
-This is the chosen near-term behavior. It is mature, immediately available,
-and keeps Warren implementation complexity at zero. It does not provide
-native per-Pane identity, recovery, Agent activity, or client interaction.
-
-### Expose tmux panes as Warren Panes
-
-Rejected. It would make the UI domain depend on one optional Runtime adapter,
-give ghostline a different resource model, and blur Runtime Binding with
-Warren Session identity.
-
-### Mirror one Warren Session into several Panes
-
-Rejected. A PTY has one canonical row and column size and one ordered input
-stream. Multiple independently sized interactive surfaces cannot own it
-without conflicting behavior.
-
-### Make Pane layout Host-owned
-
-Rejected for the first implementation. Desktop and Web have different screen
-sizes and interaction models. Synchronizing geometry would require conflict
-resolution without improving Runtime durability.
-
-### Multiplex every Pane on the existing WebSocket immediately
-
-Deferred separately. It may be the long-term transport shape, but it expands
-the daemon peer lifecycle, control routing, teardown, and compatibility risk.
-The `TerminalChannel` abstraction allows the UI feature to begin with bounded
-per-Session connections and change transport later.
+Before raising the four-Pane cap, measure one- and four-Pane steady and burst
+output latency, Ghostty/AppKit CPU and memory, output traffic, recovery time,
+divider-drag responsiveness, and battery impact. The implementation must not
+encode or persist the entire tree for every PTY frame, and passive sibling
+subscriptions must remain bounded by the visible-Pane cap and normal surface
+retention policy.
+
+`screen.report` is presentation telemetry owned by each authenticated WebSocket
+peer. It is not a durable Host resource and must not be used as the lifecycle
+authority for Sessions or PTYs.

@@ -28,8 +28,10 @@ public final class GhosttySurface: Identifiable {
     public let outputWriter: WarrenGhosttyOutputWriter
     private let onViewportResize: @Sendable (Int, Int) -> Void
     private let ansiObserver = TerminalANSIObserver()
-    /// Viewport fingerprint captured at demotion, used to detect a reattached
-    /// surface whose viewport did not return to its previous position.
+    /// Optional viewport fingerprint used by callers that can safely capture
+    /// the grid before demotion. TerminalSurfaceManager deliberately leaves
+    /// this unset because a synchronous grid read can contend with output
+    /// draining on the main actor.
     private var reattachAnchorText: String?
     /// The AppKit terminal view currently backing this surface, kept weak so
     /// a recreated view is reflected on the next lookup. Used by diagnostics
@@ -392,9 +394,9 @@ public final class GhosttySurface: Identifiable {
         scrollToBottom()
     }
 
-    /// Capture the current viewport content as the anchor for the next
-    /// reattach. Called when the surface is demoted; the anchor is compared
-    /// after reattach to decide whether a forced resync is needed.
+    /// Capture the current viewport content as an optional anchor for the next
+    /// reattach. Callers must only use this when a synchronous grid read is
+    /// known not to contend with the output writer.
     public func captureReattachAnchor() {
         guard let text = viewportText() else {
             reattachAnchorText = nil
@@ -407,15 +409,10 @@ public final class GhosttySurface: Identifiable {
         reattachAnchorText = nil
     }
 
-    /// Resync the reattached viewport only when it did not return to its
-    /// pre-demotion position. Jump to bottom without animation; scrollback
-    /// remains intact so the user can still scroll up after the jump.
-    ///
-    /// The original anchor comparison called `ghostty_surface_read_text` on
-    /// MainActor inside `demote`, which blocks on `terminalCallLock` while the
-    /// background drain is in `ghostty_surface_write_buffer`. For tab-close
-    /// the anchor is never used (surface is disposed), so keep the synchronous
-    /// path cheap: clear instead of reading.
+    /// Resync the reattached viewport only when an optional anchor does not
+    /// match. Jump to bottom without animation; scrollback remains intact so
+    /// the user can still scroll up after the jump. The Desktop surface
+    /// manager leaves the anchor unset and preserves the live viewport.
     public func resyncIfNeeded() {
         // Cheap path used after the demote change: no synchronous grid read.
         // Keep the hook for warm promotion if a future lightweight anchor

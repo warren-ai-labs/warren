@@ -110,6 +110,7 @@ warren --endpoint my-vps agent create WORKSPACE_ID --provider opencode --command
 warren --endpoint my-vps session move SESSION_ID --group GROUP_ID --confirm
 warren --endpoint my-vps session move SESSION_ID --workspace WORKSPACE_ID --confirm
 warren --endpoint my-vps session current
+warren --endpoint my-vps session panes
 warren --endpoint my-vps session move --current --workspace WORKSPACE_ID --dry-run
 warren --endpoint my-vps session move --current --workspace WORKSPACE_ID
 warren --endpoint my-vps session list
@@ -358,7 +359,16 @@ moves it back. The running process, cwd, output history, and Session ID are
 preserved, so the tab simply appears under the destination context. Use
 `session current` or `--current` from a Warren-managed shell to target only the
 session named by `WARREN_SESSION_ID`. `--current` refuses to guess when the
-binding is missing. `--dry-run` (also `--preflight`) returns the exact source,
+binding is missing.
+
+When a client displays several sessions side by side, `session current` adds
+`SCREEN POSITION` (`pane 2 of 3`) for the session itself and nothing about its
+neighbours. `session panes [SESSION_ID]` is the query for those: it lists every
+client screen that currently displays the session, with each pane's order,
+title, and which one the query asked about. It defaults to `WARREN_SESSION_ID`,
+so a session can ask what shares its screen without knowing its own ID. Both
+read the presentation state clients report through `screen.report`, so a session
+no client is displaying simply reports no screen. `--dry-run` (also `--preflight`) returns the exact source,
 destination, agent binding, and transcript path without changing state.
 Explicit-ID moves require `--confirm` (or `--yes`) unless an expected source
 context is supplied with `--expected-workspace` or `--expected-agent-session`;

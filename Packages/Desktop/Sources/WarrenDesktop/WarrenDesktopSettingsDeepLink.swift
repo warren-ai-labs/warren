@@ -8,11 +8,14 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
     case terminalFont = "Font"
     case terminalTitle = "Title"
     case terminalRuntime = "Terminal runtime"
+    case splits = "Splits"
     case aiTitles = "AI titles"
     case presets = "Presets"
     case workspaces = "Workspaces"
     case notifications = "Notifications"
     case externalIDEs = "External IDEs"
+    case usageOverview = "Overview"
+    case usage = "Usage"
     case relay = "Relay"
     case lanPairing = "LAN Pairing"
     case publicAccess = "Public Access"
@@ -24,11 +27,14 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case .terminalFont: "terminal-font"
         case .terminalTitle: "terminal-title"
         case .terminalRuntime: "terminal-runtime"
+        case .splits: "splits"
         case .aiTitles: "ai-titles"
         case .presets: "presets"
         case .workspaces: "workspaces"
         case .notifications: "notifications"
         case .externalIDEs: "external-ides"
+        case .usageOverview: "usage-overview"
+        case .usage: "usage"
         case .relay: "relay"
         case .lanPairing: "lan-pairing"
         case .publicAccess: "public-access"
@@ -40,11 +46,14 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case "terminal-font", "font": self = .terminalFont
         case "terminal-title", "title": self = .terminalTitle
         case "terminal-runtime", "runtime": self = .terminalRuntime
+        case "splits", "split", "panes": self = .splits
         case "ai-titles", "ai-title", "openai", "openai-titles": self = .aiTitles
         case "presets": self = .presets
         case "workspaces", "workspace": self = .workspaces
         case "notifications", "notification": self = .notifications
         case "external-ides", "external-ide", "ides": self = .externalIDEs
+        case "usage-overview", "overview", "usage-summary": self = .usageOverview
+        case "usage", "stats", "usage-stats", "cost": self = .usage
         case "relay": self = .relay
         case "lan-pairing", "lan-pairing-window", "pairing": self = .lanPairing
         case "public-access", "publicaccess", "public": self = .publicAccess

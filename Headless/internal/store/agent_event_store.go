@@ -17,6 +17,10 @@ import (
 type AgentEventStore struct {
 	mu sync.RWMutex
 	db *sql.DB
+	// usageAttribution resolves the project a spend row belongs to. The journal
+	// has no host-state dependency of its own, so the Service injects this and
+	// usage accumulation stays inert until it does.
+	usageAttribution UsageAttributionResolver
 }
 
 const (
@@ -81,6 +85,94 @@ func OpenAgentEventStore(dbPath string) (*AgentEventStore, error) {
 		created_at    INTEGER NOT NULL,
 		completed_at  INTEGER,
 		PRIMARY KEY (execution_id, command_id)
+	);
+
+	-- Durable token accounting, aggregated per local day.
+	--
+	-- Why a separate table rather than querying the journal: journal rows are
+	-- opaque event JSON with no usage columns, agent_stream_state carries a
+	-- retained_from_sequence boundary that permits trimming, and a transcript
+	-- rebuild replaces the stream entirely. None of that may erase spend that
+	-- already happened.
+	--
+	-- Every column here is additive. Rates (cache hit rate, cost per call) are
+	-- derived at read time from these sums and are deliberately absent: storing
+	-- a rate forces a weighted merge on every accumulate, which is where this
+	-- kind of table usually starts drifting.
+	CREATE TABLE IF NOT EXISTS agent_usage_daily (
+		-- Local calendar day the spend is attributed to, YYYY-MM-DD. Local and
+		-- not UTC because the heatmap cell has to mean the day the person
+		-- remembers working; bucketing UTC and converting at read time makes
+		-- every historical cell shift when the host moves timezone.
+		local_day       TEXT NOT NULL,
+		provider        TEXT NOT NULL,
+		-- Pricing-normalized model id, plus the provider's original spelling so
+		-- an entry that fails to match a price can be diagnosed instead of
+		-- silently disappearing into an unpriced bucket.
+		model           TEXT NOT NULL,
+		model_raw       TEXT NOT NULL,
+		-- Project the spend belongs to, or '' when it cannot be attributed.
+		-- Session is deliberately not a dimension: sessions are numerous and
+		-- short-lived, so keying on them makes cardinality unbounded.
+		project_id      TEXT NOT NULL,
+		-- Offset used to derive local_day, so a later timezone change is
+		-- detectable. Diagnostic only, which is why it is not part of the key.
+		utc_offset_min  INTEGER NOT NULL DEFAULT 0,
+		calls           INTEGER NOT NULL DEFAULT 0,
+		-- The four disjoint token buckets. They sum to the real total, so the
+		-- provider's own input/total counters are intentionally not stored:
+		-- input has no consistent cross-provider meaning and total is derivable.
+		fresh_input     INTEGER NOT NULL DEFAULT 0,
+		cache_write     INTEGER NOT NULL DEFAULT 0,
+		cache_read      INTEGER NOT NULL DEFAULT 0,
+		output          INTEGER NOT NULL DEFAULT 0,
+		-- Reasoning subset of output. Display only; billed inside output.
+		reasoning       INTEGER NOT NULL DEFAULT 0,
+		-- Cost cache in integer nanodollars, filled by the pricing pass rather
+		-- than at append time: models.dev prices change, and an integer keeps
+		-- the column addable without the float drift a decimal-as-text column
+		-- reintroduces the moment it is summed.
+		cost_nano_usd   INTEGER NOT NULL DEFAULT 0,
+		-- Calls within this row that had a known price. Less than calls means
+		-- the row's cost is a lower bound and must render as such.
+		priced_calls    INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (local_day, provider, model, model_raw, project_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_agent_usage_daily_day
+	ON agent_usage_daily(local_day);
+
+	-- Durable intraday token accounting at the finest display grain. The Host
+	-- writes 5-minute buckets and the client may merge adjacent buckets into
+	-- one-hour points. Like the daily table, this is independent of the
+	-- retained journal so trimming or rebuilding a transcript cannot erase the
+	-- usage curve.
+	CREATE TABLE IF NOT EXISTS agent_usage_interval (
+		local_day          TEXT NOT NULL,
+		-- Minutes from local midnight, floored to the 5-minute base grain.
+		bucket_start_min   INTEGER NOT NULL,
+		provider           TEXT NOT NULL,
+		model              TEXT NOT NULL,
+		model_raw          TEXT NOT NULL,
+		project_id         TEXT NOT NULL,
+		utc_offset_min     INTEGER NOT NULL DEFAULT 0,
+		calls              INTEGER NOT NULL DEFAULT 0,
+		fresh_input        INTEGER NOT NULL DEFAULT 0,
+		cache_write        INTEGER NOT NULL DEFAULT 0,
+		cache_read         INTEGER NOT NULL DEFAULT 0,
+		output             INTEGER NOT NULL DEFAULT 0,
+		reasoning          INTEGER NOT NULL DEFAULT 0,
+		cost_nano_usd      INTEGER NOT NULL DEFAULT 0,
+		priced_calls       INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (local_day, bucket_start_min, provider, model, model_raw, project_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_agent_usage_interval_day
+	ON agent_usage_interval(local_day, bucket_start_min);
+
+	-- Deliberately separate from the canonical journal. Maintenance operations
+	-- may replace Usage projections without touching the Agent event history.
+	CREATE TABLE IF NOT EXISTS agent_usage_meta (
+		key   TEXT PRIMARY KEY,
+		value TEXT NOT NULL
 	);
 `
 	if _, err := db.Exec(schema); err != nil {
