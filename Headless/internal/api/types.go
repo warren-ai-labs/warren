@@ -263,8 +263,12 @@ type AgentEvent struct {
 	ID       string `json:"id,omitempty"`
 	Provider string `json:"provider"`
 	Type     string `json:"type"`
-	Role     string `json:"role,omitempty"`
-	Content  string `json:"content,omitempty"`
+	// CanonicalType is local presentation metadata retained while projecting a
+	// canonical history row back to the legacy AgentEvent shape. It is not part
+	// of the AgentEvent wire representation.
+	CanonicalType string `json:"-"`
+	Role          string `json:"role,omitempty"`
+	Content       string `json:"content,omitempty"`
 	// ContentDelta marks content as an append-only delta to the previous event
 	// with the same provider, type, and ID. It is used by providers such as
 	// OpenCode whose mutable parts are projected into the append-only event

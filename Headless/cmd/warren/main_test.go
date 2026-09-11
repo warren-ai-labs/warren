@@ -964,6 +964,139 @@ func TestAgentReadOptionsMakeToolsExplicit(t *testing.T) {
 	}
 }
 
+func TestProjectCanonicalEventsRestoresConversationMessageTypes(t *testing.T) {
+	events := projectCanonicalEvents([]api.CanonicalAgentEvent{
+		{
+			EventID:  "user-event",
+			Sequence: 1,
+			Type:     "message.created",
+			Origin:   api.AgentEventOrigin{Provider: "codex"},
+			Payload: map[string]any{
+				"role": "user", "content": "question", "messageId": "user-message",
+			},
+		},
+		{
+			EventID:  "assistant-event",
+			Sequence: 2,
+			Type:     "message.delta",
+			Origin:   api.AgentEventOrigin{Provider: "opencode"},
+			Payload: map[string]any{
+				"role": "assistant", "content": "answer", "messageId": "assistant-message",
+			},
+		},
+	})
+	if len(events) != 2 {
+		t.Fatalf("projected events = %#v, want two messages", events)
+	}
+	if events[0].Type != "user" || events[0].Provider != "codex" || events[0].ID != "user-message" {
+		t.Fatalf("user projection = %#v, want user/codex/user-message", events[0])
+	}
+	if events[1].Type != "assistant" || !events[1].ContentDelta || events[1].Provider != "opencode" || events[1].ID != "assistant-message" {
+		t.Fatalf("assistant projection = %#v, want assistant delta/opencode/assistant-message", events[1])
+	}
+	projected, err := agent.ProjectEvents(events, agent.ReadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projected) != 2 || projected[0].Type != "user" || projected[1].Type != "assistant" {
+		t.Fatalf("default read projection = %#v, want user and assistant", projected)
+	}
+}
+
+func TestProjectCanonicalEventsMapsStructuredAliasesAndLifecycleFields(t *testing.T) {
+	events := projectCanonicalEvents([]api.CanonicalAgentEvent{
+		{
+			EventID:  "question-event",
+			Sequence: 1,
+			Type:     "interaction.requested",
+			Origin:   api.AgentEventOrigin{Provider: "OpenCode"},
+			Payload: map[string]any{
+				"kind": "question", "requestId": "question-1",
+			},
+		},
+		{
+			EventID:  "todo-event",
+			Sequence: 2,
+			Type:     "tasks.updated",
+			Origin:   api.AgentEventOrigin{Provider: "codex"},
+			Payload: map[string]any{
+				"taskListId": "todos-1", "items": []any{"inspect"},
+			},
+		},
+		{
+			EventID:  "completed-event",
+			Sequence: 3,
+			Type:     "message.completed",
+			Origin:   api.AgentEventOrigin{Provider: "codex"},
+			Payload: map[string]any{
+				"messageId": "message-1", "content": "done", "contentDelta": true,
+			},
+		},
+		{
+			EventID:  "numeric-event",
+			Sequence: 4,
+			Type:     "message.delta",
+			Origin:   api.AgentEventOrigin{Provider: "opencode"},
+			Payload: map[string]any{
+				"messageId": float64(42), "role": "assistant", "content": "!",
+			},
+		},
+	})
+	if got := events[0]; got.Type != "question" || got.ID != "question-1" || got.Provider != "opencode" || got.Payload["state"] != "pending" {
+		t.Fatalf("question projection = %#v, want normalized alias, stable ID, provider, and pending state", got)
+	}
+	if got := events[1]; got.Type != "todo" || got.ID != "todos-1" {
+		t.Fatalf("todo projection = %#v, want todo/todos-1", got)
+	}
+	if got := events[2]; got.Type != "assistant" || got.Role != "assistant" || got.ContentDelta || got.ID != "message-1" {
+		t.Fatalf("completed message projection = %#v, want assistant/message-1 without delta", got)
+	}
+	if got := events[3]; got.ID != "42" || !got.ContentDelta {
+		t.Fatalf("numeric delta projection = %#v, want stable numeric ID and delta", got)
+	}
+
+	projected, err := agent.ProjectEvents(events, agent.ReadOptions{IncludeTypes: []string{"question", "todo"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projected) != 2 || projected[0].Type != "question" || projected[1].Type != "todo" {
+		t.Fatalf("alias include projection = %#v, want question and todo", projected)
+	}
+
+	projected, err = agent.ProjectEvents(events, agent.ReadOptions{IncludeTypes: []string{"interaction.requested"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projected) != 1 || projected[0].Type != "question" {
+		t.Fatalf("canonical include projection = %#v, want one question", projected)
+	}
+}
+
+func TestProjectCanonicalEventsUsesStableMessageIDForOpenCodeText(t *testing.T) {
+	events := projectCanonicalEvents([]api.CanonicalAgentEvent{
+		{
+			EventID:  "event-1",
+			Sequence: 1,
+			Type:     "message.created",
+			Origin:   api.AgentEventOrigin{Provider: "opencode"},
+			Payload:  map[string]any{"messageId": "message-1", "role": "assistant", "content": "hel"},
+		},
+		{
+			EventID:  "event-2",
+			Sequence: 2,
+			Type:     "message.delta",
+			Origin:   api.AgentEventOrigin{Provider: "opencode"},
+			Payload:  map[string]any{"messageId": "message-1", "role": "assistant", "content": "lo"},
+		},
+	})
+	if events[0].ID != "message-1" || events[1].ID != "message-1" {
+		t.Fatalf("OpenCode projected IDs = %#v, want both message-1", events)
+	}
+	if want := []string{"hello"}; !reflect.DeepEqual(agentTextLines(events), want) {
+		t.Fatalf("OpenCode projected text = %#v, want %#v", agentTextLines(events), want)
+	}
+}
+
 func TestCollectAgentTypeFlagsPreservesRepeatedValues(t *testing.T) {
 	values := collectAgentTypeFlags([]string{
 		"agent-1",
