@@ -1,4 +1,10 @@
 import { parseChangelog } from "./changelog.js";
+import {
+  downloadAnalyticsPoint,
+  visitorCookieHeader,
+  visitorForRequest,
+  writeDownloadMetric,
+} from "./download-analytics.js";
 
 const securityHeaders = {
   "Content-Security-Policy":
@@ -198,6 +204,49 @@ async function latestReleaseResponseForRequest(ctx, env) {
   }
 }
 
+function releaseResponseForDownload(response, visitor) {
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "no-store");
+  headers.delete("CDN-Cache-Control");
+  headers.delete("Cloudflare-CDN-Cache-Control");
+  if (visitor.isNew) {
+    headers.append("Set-Cookie", visitorCookieHeader(visitor.id));
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+async function downloadResponseForRequest(request, env, ctx) {
+  if (request.method !== "GET") {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: { Allow: "GET" },
+    });
+  }
+
+  const response = await latestReleaseResponseForRequest(ctx, env);
+  if (!response.ok) return response;
+
+  let release;
+  try {
+    release = await response.clone().json();
+  } catch {
+    return response;
+  }
+
+  const visitor = visitorForRequest(request);
+  const point = downloadAnalyticsPoint({ request, release, visitorId: visitor.id });
+  const pendingMetric = writeDownloadMetric(env, point);
+  if (pendingMetric && typeof ctx?.waitUntil === "function") {
+    ctx.waitUntil(pendingMetric);
+  }
+
+  return releaseResponseForDownload(response, visitor);
+}
+
 function changelogResponse(entries, cachedAt = Date.now()) {
   return new Response(
     JSON.stringify({ entries, cachedAt: new Date(cachedAt).toISOString() }),
@@ -274,6 +323,10 @@ export default {
 
     if (url.pathname === "/health") {
       return Response.json({ ok: true, service: "warren-onboarding" });
+    }
+
+    if (url.pathname === "/api/download") {
+      return downloadResponseForRequest(request, env, ctx);
     }
 
     if (url.pathname === "/api/latest-release" || url.pathname === "/api/update/latest") {

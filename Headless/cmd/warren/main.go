@@ -139,9 +139,10 @@ func displayCommand(args []string) error {
 }
 
 type displayEndpointsResult struct {
-	Endpoints []string `json:"endpoints"`
-	Current   string   `json:"current"`
-	Version   int      `json:"version"`
+	Endpoints []string          `json:"endpoints"`
+	Current   string            `json:"current"`
+	Version   int               `json:"version"`
+	Names     map[string]string `json:"names,omitempty"`
 }
 
 func displayEndpointsCommand(args []string) error {
@@ -220,6 +221,7 @@ func displayEndpointsCommand(args []string) error {
 			settings.Display = &config.DisplayConfig{
 				Version:   config.DisplayConfigVersion,
 				Endpoints: append([]string(nil), positions...),
+				Names:     cloneDisplayNames(settings.Display),
 			}
 		case "add":
 			aliases, err := effectiveDisplayForMutation(*settings)
@@ -243,7 +245,11 @@ func displayEndpointsCommand(args []string) error {
 			} else if before != "" && indexOfString(aliases, before) < 0 {
 				return fmt.Errorf("display endpoint not found: %s", before)
 			}
-			settings.Display = &config.DisplayConfig{Version: config.DisplayConfigVersion, Endpoints: aliases}
+			settings.Display = &config.DisplayConfig{
+				Version:   config.DisplayConfigVersion,
+				Endpoints: aliases,
+				Names:     cloneDisplayNames(settings.Display),
+			}
 		case "remove":
 			aliases, err := effectiveDisplayForMutation(*settings)
 			if err != nil {
@@ -258,7 +264,11 @@ func displayEndpointsCommand(args []string) error {
 			if len(aliases) == 0 {
 				return errors.New("display endpoint set cannot be empty")
 			}
-			settings.Display = &config.DisplayConfig{Version: config.DisplayConfigVersion, Endpoints: aliases}
+			settings.Display = &config.DisplayConfig{
+				Version:   config.DisplayConfigVersion,
+				Endpoints: aliases,
+				Names:     cloneDisplayNames(settings.Display),
+			}
 		case "move":
 			aliases, err := effectiveDisplayForMutation(*settings)
 			if err != nil {
@@ -279,6 +289,7 @@ func displayEndpointsCommand(args []string) error {
 				settings.Display = &config.DisplayConfig{
 					Version:   config.DisplayConfigVersion,
 					Endpoints: aliases,
+					Names:     cloneDisplayNames(settings.Display),
 				}
 				break
 			}
@@ -288,7 +299,11 @@ func displayEndpointsCommand(args []string) error {
 				to--
 			}
 			aliases = insertString(aliases, to, item)
-			settings.Display = &config.DisplayConfig{Version: config.DisplayConfigVersion, Endpoints: aliases}
+			settings.Display = &config.DisplayConfig{
+				Version:   config.DisplayConfigVersion,
+				Endpoints: aliases,
+				Names:     cloneDisplayNames(settings.Display),
+			}
 		case "reset":
 			settings.Display = nil
 		default:
@@ -381,7 +396,23 @@ func makeDisplayEndpointsResult(settings config.Config) displayEndpointsResult {
 	if current == "" {
 		current = defaultEndpointName
 	}
-	return displayEndpointsResult{Endpoints: aliases, Current: current, Version: version}
+	return displayEndpointsResult{
+		Endpoints: aliases,
+		Current:   current,
+		Version:   version,
+		Names:     cloneDisplayNames(settings.Display),
+	}
+}
+
+func cloneDisplayNames(display *config.DisplayConfig) map[string]string {
+	if display == nil || len(display.Names) == 0 {
+		return nil
+	}
+	names := make(map[string]string, len(display.Names))
+	for alias, name := range display.Names {
+		names[alias] = name
+	}
+	return names
 }
 
 func unknownDisplayFlags(flags map[string]any) string {
@@ -3318,7 +3349,11 @@ func endpointCommand(args []string) error {
 					settings.Display = &config.DisplayConfig{
 						Version:   config.DisplayConfigVersion,
 						Endpoints: aliases,
+						Names:     cloneDisplayNames(settings.Display),
 					}
+				}
+				if settings.Display != nil {
+					delete(settings.Display.Names, args[1])
 				}
 			}
 			delete(settings.Endpoints, args[1])
@@ -4857,13 +4892,14 @@ func displayUsageText() string {
   warren display set NAME [NAME ...]
   warren display reset
 
-The display set is local Desktop configuration. It stores endpoint names
-only; URLs, tokens, SSH metadata, and Relay credentials remain in the endpoint
-catalog. A missing display section keeps the legacy single-current behavior.
+The display set is local Desktop configuration. It stores endpoint names and
+optional display labels; URLs, tokens, SSH metadata, and Relay credentials
+remain in the endpoint catalog. A missing display section keeps the legacy
+single-current behavior.
 The current endpoint is independent from the explicit set, so switching it
 does not change sidebar membership. An explicit set cannot be empty. Use
---json for an object containing endpoints, current, and version; use --quiet
-to print one endpoint alias per line.
+--json for an object containing endpoints, current, version, and custom names;
+use --quiet to print one endpoint alias per line.
 `
 }
 

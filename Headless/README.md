@@ -131,8 +131,8 @@ Host daemon remains the authority for every Project, Workspace, Session, and
 Host-local ordering. Web and iOS clients continue to use their existing
 single-Endpoint behavior.
 
-The optional `display` section in `~/.warren/config.json` stores only an
-ordered list of Endpoint aliases:
+The optional `display` section in `~/.warren/config.json` stores the ordered
+Endpoint aliases and optional client-local labels:
 
 ```json
 {
@@ -146,17 +146,24 @@ ordered list of Endpoint aliases:
   },
   "display": {
     "version": 1,
-    "endpoints": ["local", "build-vps"]
+    "endpoints": ["local", "build-vps"],
+    "names": {"local": "Office Mac", "build-vps": "Build VPS"}
   }
 }
 ```
 
 URLs, bearer tokens, SSH metadata, and Relay credentials stay in the Endpoint
-catalog and are never duplicated in `display`. A missing section preserves the
-legacy single-current view. `local` is the synthetic local-daemon alias and is
-valid even when it is not present in `endpoints`. The current Endpoint is
-independent from the explicit set: switching or connecting to an Endpoint does
-not add it to the sidebar. An explicit set cannot be empty.
+catalog and are never duplicated in `display`. Names only affect what the
+Desktop shows; aliases remain the routing identity (`local` is always
+lowercase). A missing section preserves the legacy single-current view.
+`local` is the synthetic local-daemon alias and is valid even when it is not
+present in `endpoints`. The current Endpoint is independent from the explicit
+set: switching or connecting to an Endpoint does not add it to the sidebar. An
+explicit set cannot be empty.
+
+In the Desktop's Execution Server menu, right-click any Host row and choose
+"Customize Display Name…". The local Host keeps the canonical alias `local`
+even when its displayed label is customized.
 
 Manage the set with local configuration commands (these commands do not open a
 Host connection):
@@ -170,9 +177,10 @@ warren display set local build-vps staging
 warren display reset
 ```
 
-Use `--json` for an object containing the ordered `endpoints`, `current`, and
-configuration `version`; `--quiet` prints one alias per line. `reset` removes
-the explicit section and returns to the compatible single-current behavior.
+Use `--json` for an object containing the ordered `endpoints`, `current`,
+configuration `version`, and any custom `names`; `--quiet` prints one alias per
+line. `reset` removes the explicit section and returns to the compatible
+single-current behavior.
 Removing an Endpoint also removes its display alias and selects a remaining
 Endpoint when necessary. Endpoint and display writes use the same sidecar lock,
 temporary file, and `0600` permissions, so concurrent CLI and Desktop updates

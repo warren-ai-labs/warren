@@ -662,7 +662,10 @@ public actor WarrenRemoteClient {
     /// optional preserves compatibility with older capabilities that have no
     /// client_id claim.
     private let clientID: String?
-    private var injectedTask: (any WarrenWebSocketTaskAdapter)?
+    /// Scripted adapters consumed in order, one per connection attempt. A queue
+    /// rather than a single value so a test can drive a reconnect, which is the
+    /// only point where retained subscription intent is replayed.
+    private var injectedTasks: [any WarrenWebSocketTaskAdapter] = []
     private let codec: WarrenWireCodec
     private let terminalStateFormats: Set<String>
     private let eventStream: AsyncStream<WarrenRemoteEvent>
@@ -680,6 +683,16 @@ public actor WarrenRemoteClient {
     /// while this table records the user's current visibility intent.
     private var subscriptions: [String: Subscription] = [:]
     private var subscriptionGeneration: UInt64 = 0
+    /// The single Session whose control lease this client currently holds.
+    ///
+    /// `Subscription.claimControl` records what one `session.subscribe` asked
+    /// for and never expires, so every Session that was ever selected keeps a
+    /// historical claim. Replaying those on reconnect made the Host apply a
+    /// focus handoff and a PTY resize per retained surface, which is both a
+    /// visible reflow and a burst of contention on the Host. Focus is the
+    /// authoritative lease transition, so track it separately and restore only
+    /// the claim that is still live.
+    private var controlSessionID: String?
 
     public init(
         configuration: WarrenRemoteEndpointConfiguration,
@@ -727,6 +740,33 @@ public actor WarrenRemoteClient {
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
         tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
     ) {
+        self.init(
+            configuration: configuration,
+            tasks: [task],
+            codec: codec,
+            capabilities: capabilities,
+            terminalStateFormats: terminalStateFormats,
+            urlSession: urlSession,
+            clientID: clientID,
+            refreshTokenHandler: refreshTokenHandler,
+            tokenUpdateHandler: tokenUpdateHandler
+        )
+    }
+
+    /// Injection initializer that scripts several connection attempts. Each
+    /// adapter serves one attempt, so a test can observe what the client replays
+    /// onto the replacement socket.
+    public init(
+        configuration: WarrenRemoteEndpointConfiguration,
+        tasks: [any WarrenWebSocketTaskAdapter],
+        codec: WarrenWireCodec = WarrenWireCodec(),
+        capabilities: [String] = ["roster-delta"],
+        terminalStateFormats: [String] = [WarrenRemoteClient.replayTerminalStateFormat],
+        urlSession: URLSession = WarrenRemoteNetworking.session,
+        clientID: String? = nil,
+        refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
+        tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
+    ) {
         self.configuration = configuration
         self.urlSession = urlSession
         self.accessToken = configuration.token
@@ -735,7 +775,7 @@ public actor WarrenRemoteClient {
         self.tokenUpdateHandler = tokenUpdateHandler
         self.advertisedCapabilities = capabilities
         self.clientID = clientID ?? configuration.clientID
-        self.injectedTask = task
+        self.injectedTasks = tasks
         self.codec = codec
         self.terminalStateFormats = Set(terminalStateFormats.filter { !$0.isEmpty })
         let pair = AsyncStream<WarrenRemoteEvent>.makeStream(
@@ -1056,6 +1096,11 @@ public actor WarrenRemoteClient {
                 attachmentID: nil,
                 generation: subscriptionGeneration
             )
+            if claimControl {
+                controlSessionID = sessionID
+            } else if controlSessionID == sessionID {
+                controlSessionID = nil
+            }
         }
         let intentGeneration = subscriptions[sessionID]?.generation
         let data: Data
@@ -1084,6 +1129,9 @@ public actor WarrenRemoteClient {
         // reconnect must still not resurrect a Session the user left.
         subscriptionGeneration &+= 1
         subscriptions.removeValue(forKey: sessionID)
+        if controlSessionID == sessionID {
+            controlSessionID = nil
+        }
         let result = try await request(
             "session.unsubscribe",
             params: ["id": sessionID],
@@ -1105,7 +1153,37 @@ public actor WarrenRemoteClient {
             params["cols"] = String(size.columns)
             params["rows"] = String(size.rows)
         }
-        return try await request("session.focus", params: params, decoding: WarrenRemoteFocusResult.self)
+        // An Agent-only focus is acknowledged without taking the terminal PTY
+        // lease, so it must not change which subscription a reconnect reclaims.
+        // A release is recorded before the request: if it fails in transit the
+        // Host drops the lease when the socket does, and reclaiming it on the
+        // next socket would resize a runtime this client no longer drives.
+        if !agentOnly, !focused, controlSessionID == sessionID {
+            controlSessionID = nil
+        }
+        let result = try await request(
+            "session.focus",
+            params: params,
+            decoding: WarrenRemoteFocusResult.self
+        )
+        if !agentOnly, focused, result.focused {
+            controlSessionID = sessionID
+            if let size { recordSubscribedSize(size, for: sessionID) }
+        }
+        return result
+    }
+
+    /// Keeps the recorded viewport aligned with the last size this client asked
+    /// the Host to apply. A reconnect replays it with the control claim, so a
+    /// stale value would revert the runtime to an earlier geometry.
+    private func recordSubscribedSize(_ size: TerminalSize, for sessionID: String) {
+        guard let current = subscriptions[sessionID], current.size != size else { return }
+        subscriptions[sessionID] = Subscription(
+            size: size,
+            claimControl: current.claimControl,
+            attachmentID: current.attachmentID,
+            generation: current.generation
+        )
     }
 
     /// Promotes the existing terminal subscription to the focused control
@@ -1128,7 +1206,9 @@ public actor WarrenRemoteClient {
             ],
             decoding: [String: Bool].self
         )
-        return result["resized"] ?? false
+        let resized = result["resized"] ?? false
+        if resized { recordSubscribedSize(size, for: sessionID) }
+        return resized
     }
 
     /// Sends one DENB input frame. The Host accepts it only while this client
@@ -1515,9 +1595,8 @@ public actor WarrenRemoteClient {
             }
             setConnectionState(attempt == 0 ? .connecting : .reconnecting)
             let adapter: any WarrenWebSocketTaskAdapter
-            if let injectedTask {
-                adapter = injectedTask
-                self.injectedTask = nil
+            if !injectedTasks.isEmpty {
+                adapter = injectedTasks.removeFirst()
             } else {
                 adapter = WarrenRemoteSocket.adapter(
                     url: url,
@@ -1765,13 +1844,20 @@ public actor WarrenRemoteClient {
                   current.size == subscription.size,
                   current.claimControl == subscription.claimControl,
                   current.generation == subscription.generation else { continue }
+            // Restore visibility for every retained Session, but reclaim the
+            // control lease only for the one that still holds it. A passive
+            // restore also drops the viewport: the Host applies a size only
+            // together with a claim, and sending one per Session would hand the
+            // shared runtime a queue of conflicting SIGWINCHes.
+            let claimsControl = sessionID == controlSessionID
+            let size = claimsControl ? subscription.size : nil
             let anchor = anchors[sessionID]
             do {
                 _ = try await subscribe(
                     sessionID: sessionID,
-                    size: subscription.size,
+                    size: size,
                     anchor: anchor,
-                    claimControl: subscription.claimControl,
+                    claimControl: claimsControl,
                     record: false,
                     socket: socket
                 )
@@ -1789,9 +1875,9 @@ public actor WarrenRemoteClient {
                    subscriptions[sessionID]?.generation == subscription.generation {
                     _ = try? await subscribe(
                         sessionID: sessionID,
-                        size: subscription.size,
+                        size: size,
                         anchor: nil,
-                        claimControl: subscription.claimControl,
+                        claimControl: claimsControl,
                         record: false,
                         socket: socket
                     )

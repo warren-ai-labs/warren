@@ -87,7 +87,7 @@ struct WarrenDesktopTaskRow: View {
 
                     Spacer(minLength: 0)
                 }
-                .padding(.leading, WarrenSpacing.compact)
+                .padding(.leading, WarrenDesktopSidebarIndent.task)
                 .padding(.trailing, actionSlot)
                 .frame(minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -130,7 +130,7 @@ struct WarrenDesktopTaskRow: View {
             .contentShape(.rect)
             .opacity(isHovered || isToggleFocused ? 1 : 0)
             .focused($isToggleFocused)
-            .padding(.leading, WarrenSpacing.compact)
+            .padding(.leading, WarrenDesktopSidebarIndent.task)
             .accessibilityLabel(isExpanded ? "Collapse task \(task.name)" : "Expand task \(task.name)")
             .warrenSemanticElement(
                 id: "task.\(task.id.description).toggle",

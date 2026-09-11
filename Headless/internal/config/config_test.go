@@ -17,7 +17,11 @@ func TestDisplayConfigRoundTripsAndComputesEffectiveSet(t *testing.T) {
 			"dev":  {Name: "dev", URL: "https://dev.example", Token: "dev-token"},
 			"prod": {Name: "prod", URL: "https://prod.example", Token: "prod-token"},
 		},
-		Display: &DisplayConfig{Version: DisplayConfigVersion, Endpoints: []string{"local", "dev", "prod"}},
+		Display: &DisplayConfig{
+			Version:   DisplayConfigVersion,
+			Endpoints: []string{"local", "dev", "prod"},
+			Names:     map[string]string{"local": "Office Mac", "prod": "Production"},
+		},
 	}
 	if err := Save(path, value); err != nil {
 		t.Fatal(err)
@@ -43,6 +47,9 @@ func TestDisplayConfigRoundTripsAndComputesEffectiveSet(t *testing.T) {
 	}
 	if _, ok := raw["display"]; !ok {
 		t.Fatalf("display section missing from config: %s", data)
+	}
+	if got := loaded.Display.Names["local"]; got != "Office Mac" {
+		t.Fatalf("local display name = %q, want Office Mac", got)
 	}
 }
 
@@ -111,6 +118,7 @@ func TestDisplayUpdatePreservesEndpointRouteMetadata(t *testing.T) {
 		Display: &DisplayConfig{
 			Version:   DisplayConfigVersion,
 			Endpoints: []string{"local", "prod"},
+			Names:     map[string]string{"prod": "Production"},
 		},
 	}
 	if err := Save(path, value); err != nil {
@@ -131,6 +139,9 @@ func TestDisplayUpdatePreservesEndpointRouteMetadata(t *testing.T) {
 		endpoint.DirectURL != "https://prod.example" || endpoint.RelayURL != "https://relay.example" ||
 		endpoint.RoutePreference != "auto" {
 		t.Fatalf("display update dropped endpoint metadata: %+v", endpoint)
+	}
+	if got := loaded.Display.Names["prod"]; got != "Production" {
+		t.Fatalf("display update dropped custom name: %q", got)
 	}
 }
 

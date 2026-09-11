@@ -7,11 +7,13 @@ enum WarrenDesktopRenameRequest: Hashable, Sendable {
     case project(ProjectID, name: String)
     case workspace(WorkspaceID, name: String)
     case session(TerminalSessionID, title: String)
+    case endpoint(String, name: String)
 
     var initialValue: String {
         switch self {
         case .task(_, let name), .project(_, let name), .workspace(_, let name): name
         case .session(_, let title): title
+        case .endpoint(_, let name): name
         }
     }
 
@@ -21,6 +23,7 @@ enum WarrenDesktopRenameRequest: Hashable, Sendable {
         case .project: "Rename Project"
         case .workspace: "Rename Workspace"
         case .session: "Rename Session"
+        case .endpoint: "Customize Server Display Name"
         }
     }
 
@@ -34,6 +37,8 @@ enum WarrenDesktopRenameRequest: Hashable, Sendable {
             "The Git branch name and worktree path are unchanged."
         case .session:
             "Custom titles are stored on the Host and shared by every client."
+        case .endpoint:
+            "Only the label shown in Warren changes; the endpoint alias and connection remain unchanged."
         }
     }
 
@@ -43,6 +48,14 @@ enum WarrenDesktopRenameRequest: Hashable, Sendable {
         case .project: "Project name"
         case .workspace: "Workspace name"
         case .session: "Session title"
+        case .endpoint: "Display name"
+        }
+    }
+
+    var confirmLabel: String {
+        switch self {
+        case .endpoint: "Save"
+        default: "Rename"
         }
     }
 }

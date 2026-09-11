@@ -186,6 +186,7 @@ struct WarrenCompositionRoot: View {
             selectedEndpointID: selectedEndpointID,
             onSelectEndpoint: { id in selectEndpoint(id) },
             onSetEndpointSidebarVisibility: setEndpointSidebarVisibility,
+            onSetEndpointDisplayName: setEndpointDisplayName,
             sidebarHostProjections: multiHostSidebar.projection.hosts,
             usesSidebarHostSections: displayConfiguration != nil,
             sidebarResourceSelection: activeSidebarResourceSelection,
@@ -647,9 +648,13 @@ struct WarrenCompositionRoot: View {
     private var endpointOptions: [WarrenDesktopEndpointOption] {
         let localEndpoint = WarrenRemoteEndpointConfiguration.localDaemon()
         let localProbe = remoteModel.hostProbes[localEndpoint]
+        let localLabel = displayConfiguration?.displayName(
+            for: "local",
+            fallback: "Local"
+        ) ?? "Local"
         let local = WarrenDesktopEndpointOption(
             id: "local",
-            label: "Local",
+            label: localLabel,
             isLocal: true,
             detail: Self.endpointDetail(localEndpoint.url),
             probeStatus: localProbe?.message ?? "Checking Host…",
@@ -660,9 +665,13 @@ struct WarrenCompositionRoot: View {
         let configured = endpointCatalog
             .filter { $0.id != local.id }
             .map { endpoint in
-                WarrenDesktopEndpointOption(
+                let label = displayConfiguration?.displayName(
+                    for: endpoint.id,
+                    fallback: endpoint.name
+                ) ?? endpoint.name
+                return WarrenDesktopEndpointOption(
                     id: endpoint.id,
-                    label: endpoint.name,
+                    label: label,
                     detail: endpoint.ssh.map { "SSH · \($0)" } ?? Self.endpointDetail(endpoint.url),
                     probeStatus: remoteModel.hostProbes[endpoint]?.message ?? "Checking Host…",
                     probeFailed: remoteModel.hostProbes[endpoint]?.isFailure ?? false,
@@ -765,6 +774,26 @@ struct WarrenCompositionRoot: View {
             try WarrenEndpointCatalog.setDisplayMembership(
                 endpointID,
                 isDisplayed: isDisplayed,
+                to: configURL
+            )
+            let catalog = try WarrenEndpointCatalog.loadThrowing(from: configURL)
+            endpointCatalog = catalog.endpoints
+            displayConfiguration = catalog.display
+        } catch {
+            remoteModel.report(error)
+        }
+    }
+
+    private func setEndpointDisplayName(
+        _ endpointID: String,
+        name: String?
+    ) {
+        guard endpointOptions.contains(where: { $0.id == endpointID }) else { return }
+        do {
+            let configURL = WarrenEndpointCatalog.configurationURL()
+            try WarrenEndpointCatalog.setDisplayName(
+                endpointID,
+                name: name,
                 to: configURL
             )
             let catalog = try WarrenEndpointCatalog.loadThrowing(from: configURL)

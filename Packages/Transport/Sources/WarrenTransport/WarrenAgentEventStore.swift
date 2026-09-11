@@ -303,6 +303,133 @@ public actor WarrenAgentEventStore {
         return state
     }
 
+    /// Replaces one canonical stream in a single SQLite transaction.
+    ///
+    /// This is intentionally separate from `saveEvents`: a manual repair must
+    /// not clear the verified replica first and then risk leaving an empty
+    /// stream when the replacement write fails.
+    public func replaceStream(
+        _ events: [WarrenRemoteAgentEvent],
+        namespace: Namespace,
+        streamID: String,
+        headSequence: UInt64 = 0,
+        retainedFromSequence: UInt64? = nil,
+        checkpointSequence: UInt64 = 0,
+        checkpoint: [String: WarrenRemoteJSONValue]? = nil
+    ) throws -> SyncState {
+        guard namespace.isValid else { throw WarrenAgentEventStoreError.invalidNamespace }
+        let streamID = streamID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !streamID.isEmpty else { throw WarrenAgentEventStoreError.invalidStream }
+        guard let db else { throw WarrenAgentEventStoreError.unavailable }
+
+        let normalizedEvents = events.sorted { $0.sequence < $1.sequence }
+        var eventsBySequence: [UInt64: WarrenRemoteAgentEvent] = [:]
+        var sequencesByEventID: [String: UInt64] = [:]
+        for event in normalizedEvents {
+            guard event.sequence > 0,
+                  event.sequence <= UInt64(Int64.max),
+                  !event.eventID.isEmpty,
+                  event.streamID == streamID,
+                  event.executionID?.isEmpty == false else {
+                throw WarrenAgentEventStoreError.invalidEvent
+            }
+            if let existing = eventsBySequence[event.sequence], existing != event {
+                throw WarrenAgentEventStoreError.sequenceConflict(
+                    streamID: streamID,
+                    sequence: event.sequence
+                )
+            }
+            if let existingSequence = sequencesByEventID[event.eventID], existingSequence != event.sequence {
+                throw WarrenAgentEventStoreError.eventConflict(
+                    streamID: streamID,
+                    eventID: event.eventID
+                )
+            }
+            eventsBySequence[event.sequence] = event
+            sequencesByEventID[event.eventID] = event.sequence
+        }
+
+        let retainedBoundary = retainedFromSequence.map { min($0, UInt64(Int64.max)) }
+        let checkpointSequence = min(checkpointSequence, UInt64(Int64.max))
+        let requestedHead = min(headSequence, UInt64(Int64.max))
+        try exec(db, "BEGIN IMMEDIATE TRANSACTION;")
+        var committed = false
+        defer {
+            if !committed { sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) }
+        }
+
+        try deleteStreamRows(db, namespace: namespace, streamID: streamID)
+        for event in eventsBySequence.values.sorted(by: { $0.sequence < $1.sequence }) {
+            let data = try encoder.encode(event)
+            guard let json = String(data: data, encoding: .utf8) else {
+                throw WarrenAgentEventStoreError.unavailable
+            }
+            let sql = """
+            INSERT INTO agent_events
+                (host_id, access_scope_id, stream_id, execution_id, sequence, event_id, event_type, event_json, recorded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+                throw WarrenAgentEventStoreError.unavailable
+            }
+            bind(statement, 1, namespace.hostID)
+            bind(statement, 2, namespace.accessScopeID)
+            bind(statement, 3, streamID)
+            bind(statement, 4, event.executionID ?? streamID)
+            sqlite3_bind_int64(statement, 5, Int64(event.sequence))
+            bind(statement, 6, event.eventID)
+            bind(statement, 7, event.type)
+            bind(statement, 8, json)
+            if let recordedAt = event.recordedAt {
+                bind(statement, 9, recordedAt)
+            } else {
+                sqlite3_bind_null(statement, 9)
+            }
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw WarrenAgentEventStoreError.unavailable
+            }
+            sqlite3_finalize(statement)
+        }
+
+        var retainedEvents = Array(eventsBySequence.values).sorted { $0.sequence < $1.sequence }
+        if retainedEvents.count > maxEventsPerStream {
+            let evicted = retainedEvents.dropLast(maxEventsPerStream)
+            for event in evicted {
+                deleteEvent(db, namespace: namespace, streamID: streamID, sequence: event.sequence)
+            }
+            retainedEvents = Array(retainedEvents.suffix(maxEventsPerStream))
+        }
+        let localRetained = retainedEvents.first?.sequence ?? 0
+        let retained = retainedBoundary ?? (eventsBySequence.keys.min() ?? 0)
+        let head = max(
+            requestedHead,
+            eventsBySequence.keys.max() ?? 0,
+            checkpointSequence
+        )
+        let baseline = retained > 0 ? retained - 1 : 0
+        let state = SyncState(
+            namespace: namespace,
+            streamID: streamID,
+            retainedFromSequence: retained,
+            headSequence: head,
+            contiguousThrough: contiguousThrough(
+                after: baseline,
+                sequences: Set(retainedEvents.map(\.sequence))
+            ),
+            checkpointSequence: checkpointSequence,
+            checkpoint: checkpoint,
+            hasMoreBefore: localRetained > 0 && (retained > 0
+                ? localRetained > retained
+                : localRetained > 1)
+        )
+        try writeState(db, state)
+        try exec(db, "COMMIT;")
+        committed = true
+        return state
+    }
+
     /// Installs the replacement snapshot supplied by a Host
     /// `history_boundary` error. Local rows before the Host's retained prefix
     /// are disposable cache data and are removed atomically with the cursor.
@@ -577,6 +704,30 @@ public actor WarrenAgentEventStore {
     private func deleteAll(_ db: OpaquePointer, namespace: Namespace, streamID: String) {
         deleteRows(db, "DELETE FROM agent_events WHERE host_id = ? AND access_scope_id = ? AND stream_id = ?;", namespace: namespace, streamID: streamID)
         deleteRows(db, "DELETE FROM agent_stream_state WHERE host_id = ? AND access_scope_id = ? AND stream_id = ?;", namespace: namespace, streamID: streamID)
+    }
+
+    private func deleteStreamRows(
+        _ db: OpaquePointer,
+        namespace: Namespace,
+        streamID: String
+    ) throws {
+        for sql in [
+            "DELETE FROM agent_events WHERE host_id = ? AND access_scope_id = ? AND stream_id = ?;",
+            "DELETE FROM agent_stream_state WHERE host_id = ? AND access_scope_id = ? AND stream_id = ?;",
+        ] {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+                throw WarrenAgentEventStoreError.unavailable
+            }
+            bind(statement, 1, namespace.hostID)
+            bind(statement, 2, namespace.accessScopeID)
+            bind(statement, 3, streamID)
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                sqlite3_finalize(statement)
+                throw WarrenAgentEventStoreError.unavailable
+            }
+            sqlite3_finalize(statement)
+        }
     }
 
     private func deleteRows(

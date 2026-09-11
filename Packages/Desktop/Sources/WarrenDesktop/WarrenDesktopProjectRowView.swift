@@ -200,7 +200,9 @@ struct WarrenDesktopProjectRow: View {
 
                     Spacer(minLength: 0)
                 }
-                .padding(.leading, WarrenSpacing.compact)
+                // The row's own background inset is 8pt, so the content
+                // carries the remainder of its depth-1 indent.
+                .padding(.leading, WarrenDesktopSidebarIndent.project)
                 .padding(.trailing, actionSlot)
                 .frame(minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -267,7 +269,9 @@ struct WarrenDesktopProjectRow: View {
             .contentShape(.rect)
             .opacity(isHovered || isToggleFocused ? 1 : 0)
             .focused($isToggleFocused)
-            .padding(.leading, WarrenSpacing.compact)
+            // The chevron replaces the avatar in place, so it tracks the same
+            // indent as the row content.
+            .padding(.leading, WarrenDesktopSidebarIndent.project)
             .accessibilityLabel(isExpanded ? "Collapse project \(project.name)" : "Expand project \(project.name)")
             .warrenSemanticElement(
                 id: "\(semanticID).toggle",

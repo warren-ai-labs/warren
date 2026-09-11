@@ -156,6 +156,9 @@ struct WarrenDesktopWorkspaceRow: View {
 
                 Spacer(minLength: 0)
             }
+            // The indent lives inside the button, as it does on a project row,
+            // so nesting a workspace deeper never shrinks the row's hit area.
+            .padding(.leading, WarrenDesktopSidebarIndent.workspace)
             .frame(minHeight: WarrenLayoutMetrics.sidebarWorkspaceRowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
@@ -184,7 +187,6 @@ struct WarrenDesktopWorkspaceRow: View {
             }
         )
         .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarWorkspaceRowHeight)
-        .padding(.leading, WarrenSpacing.compact + WarrenSpacing.xs)
         .padding(.trailing, WarrenSpacing.compact)
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
         .contentShape(.rect)

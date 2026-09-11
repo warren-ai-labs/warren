@@ -46,8 +46,34 @@ public enum WarrenLayoutMetrics {
     public static let sidebarSectionLabelHeight: CGFloat = 32
     /// Host labels are subordinate tree-group controls, not resource rows.
     public static let sidebarHostHeaderHeight: CGFloat = 24
+    /// The active tab's selection rule.
+    ///
+    /// Selection is a permanent state rather than an alert, so the rule stays
+    /// thin and neutral: enough to win a squint against the 7/255 background
+    /// difference it replaces, without pulling the eye to the top of the window
+    /// the way an accent-colored bar does.
+    public static let activeTabIndicatorHeight: CGFloat = 1.5
+
     public static let sidebarRowIconSlotSize: CGFloat = 18
     public static let sidebarActionButtonSize: CGFloat = 24
+
+    /// One indent step in the sidebar tree.
+    ///
+    /// Depth is the only thing that moves a row's text origin, so a level is
+    /// legible without reading the label. 10pt is the smallest step that still
+    /// reads as a level in a 280pt rail: indent competes with title width, and
+    /// a wider step truncates ordinary branch names.
+    public static let sidebarIndentStep: CGFloat = 10
+
+    /// The text origin for a sidebar row at the given tree depth.
+    ///
+    /// Depth 0 is a section label. Host labels, projects, tasks, and terminal
+    /// groups are depth 1; a Host label does not claim its own level because
+    /// it is a lightweight group heading rather than a resource row.
+    /// Workspaces are depth 2.
+    public static func sidebarLeadingInset(depth: Int) -> CGFloat {
+        WarrenSpacing.standard + CGFloat(depth) * sidebarIndentStep
+    }
     /// `OverflowFadeContainer` uses a 1.5rem edge fade in Superset.
     public static let sidebarScrollFadeLength: CGFloat = 24
     /// Tab overflow needs to read as a real affordance; use a longer gradient

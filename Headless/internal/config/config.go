@@ -34,11 +34,12 @@ type Endpoint struct {
 }
 
 // DisplayConfig is the client-local, ordered set of endpoint aliases shown
-// together by the Desktop. It intentionally stores aliases only;
-// endpoint credentials and route metadata remain in Config.Endpoints.
+// together by the Desktop. Names only affect presentation; endpoint
+// credentials and route metadata remain in Config.Endpoints.
 type DisplayConfig struct {
-	Version   int      `json:"version"`
-	Endpoints []string `json:"endpoints"`
+	Version   int               `json:"version"`
+	Endpoints []string          `json:"endpoints"`
+	Names     map[string]string `json:"names,omitempty"`
 }
 
 type Config struct {
@@ -101,6 +102,9 @@ func (c Config) EffectiveDisplay() ([]string, error) {
 			}
 		}
 	}
+	if _, err := normalizeDisplayNames(c.Display.Names, c.Endpoints); err != nil {
+		return nil, err
+	}
 	return aliases, nil
 }
 
@@ -138,6 +142,11 @@ func (c *Config) NormalizeDisplay() error {
 		}
 	}
 	c.Display.Endpoints = aliases
+	names, err := normalizeDisplayNames(c.Display.Names, c.Endpoints)
+	if err != nil {
+		return err
+	}
+	c.Display.Names = names
 	current := strings.TrimSpace(c.Current)
 	if current == "" {
 		current = "local"
@@ -152,6 +161,28 @@ func (c *Config) NormalizeDisplay() error {
 	// a valid current endpoint does not need to appear in that list.
 	c.Current = current
 	return nil
+}
+
+// normalizeDisplayNames validates labels for known endpoint aliases and drops
+// stale entries left behind after an endpoint is removed.
+func normalizeDisplayNames(values map[string]string, endpoints map[string]Endpoint) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	result := make(map[string]string, len(values))
+	for alias, rawName := range values {
+		if alias != "local" {
+			if _, ok := endpoints[alias]; !ok {
+				continue
+			}
+		}
+		name := strings.TrimSpace(rawName)
+		if name == "" || name != rawName || strings.ContainsAny(name, "\r\n\x00") {
+			return nil, fmt.Errorf("invalid endpoint display name: %q", rawName)
+		}
+		result[alias] = name
+	}
+	return result, nil
 }
 
 func normalizeDisplayAliases(values []string) ([]string, error) {

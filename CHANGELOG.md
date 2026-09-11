@@ -4,6 +4,11 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Record anonymous onboarding download starts in Workers Analytics Engine with
+  release, visitor, platform, location, language, and referrer dimensions.
+
 ## [0.12.2] - 2026-09-09
 
 > Patch release: improves remote Host diagnostics and compatibility handling,

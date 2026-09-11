@@ -57,6 +57,60 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         XCTAssertEqual(manager.snapshot().activeSessionID, first.id)
     }
 
+    func testViewportOnlySubmitDoesNotScheduleAnotherReconciliation() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 1)
+        let surface = makeSurface()
+        manager.insert(surface)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        manager.submit(
+            host: host,
+            intent: TerminalPresentationIntent(
+                activeSessionID: surface.id,
+                viewportSize: host.bounds.size,
+                wantsTerminalFocus: false
+            ),
+            onFocused: { _, _ in },
+            onBlurred: { _ in }
+        )
+        try await waitUntil { manager.snapshot().activeSessionID == surface.id }
+        try await Task.sleep(for: .milliseconds(100))
+        let settledGeneration = manager.snapshot().transitionGeneration
+
+        manager.submit(
+            host: host,
+            intent: TerminalPresentationIntent(
+                activeSessionID: surface.id,
+                viewportSize: CGSize(width: 640, height: 480),
+                wantsTerminalFocus: false
+            ),
+            onFocused: { _, _ in },
+            onBlurred: { _ in }
+        )
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(
+            manager.snapshot().transitionGeneration,
+            settledGeneration,
+            "a SwiftUI viewport-only update must wait for hostDidLayout"
+        )
+    }
+
     func testWindowKeyTransitionWaitsForBecomeBeforeBlurring() async throws {
         _ = NSApplication.shared
         let manager = TerminalSurfaceManager(warmLimit: 1)

@@ -181,10 +181,18 @@ struct WarrenDesktopSidebarHostRows: View {
                 hostProjectRows(for: host)
             }
         }
-        // A Host is a compact tree group, not a padded card. The tint still
-        // spans its complete subtree while avoiding repeated vertical chrome.
-        .background(tint.opacity(WarrenDesktopHostTint.targetOpacity))
-        .clipShape(.rect(cornerRadius: WarrenRadius.small))
+        // A Host is a compact tree group, not a padded card. A 4% wash over the
+        // sidebar surface resolves to a few units of 255 and does not read as a
+        // grouping at all, so the subtree is marked by a leading rule instead:
+        // it spans the same range, survives a squint, and costs no vertical
+        // chrome.
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(tint.opacity(WarrenDesktopHostTint.ruleOpacity))
+                .frame(width: WarrenDesktopHostTint.ruleWidth)
+                .padding(.leading, WarrenSpacing.compact)
+                .accessibilityHidden(true)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Host \(host.title)")
     }
@@ -200,7 +208,7 @@ struct WarrenDesktopSidebarHostRows: View {
                 Text(message)
                     .font(WarrenTypography.navigationMeta)
                     .foregroundStyle(tokens.mutedForeground)
-                    .padding(.leading, WarrenSpacing.large)
+                    .padding(.leading, WarrenDesktopSidebarIndent.host)
                     .padding(.vertical, WarrenSpacing.xs)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -653,7 +661,7 @@ private struct WarrenDesktopSidebarHostsSectionHeader: View {
         .tracking(1.0)
         .foregroundStyle(tokens.mutedForeground)
         .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarSectionLabelHeight, alignment: .leading)
-        .padding(.leading, WarrenSpacing.standard)
+        .padding(.leading, WarrenDesktopSidebarIndent.section)
         .padding(.trailing, WarrenSpacing.compact)
         .contentShape(.rect)
         .onHover { isHovered = $0 }
@@ -726,7 +734,7 @@ private struct WarrenDesktopSidebarHostHeader: View {
             connectionAccessory(tokens: tokens)
         }
         .frame(height: WarrenLayoutMetrics.sidebarHostHeaderHeight)
-        .padding(.leading, WarrenSpacing.standard)
+        .padding(.leading, WarrenDesktopSidebarIndent.host)
         .padding(.trailing, WarrenSpacing.compact)
         .onHover { isHovered = $0 }
     }

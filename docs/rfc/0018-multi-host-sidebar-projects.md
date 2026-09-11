@@ -117,8 +117,9 @@ value is `[current]`, or `[local]` when no current Endpoint exists. The CLI
 normalizes duplicates, validates Endpoint names, and rejects an empty explicit
 result. The current Endpoint remains independent from `display`, so selecting
 or connecting to an Endpoint never adds it to the sidebar. The section contains
-aliases only; it never duplicates URLs, tokens, SSH metadata, or Relay
-credentials.
+aliases and optional client-local display names; it never duplicates URLs,
+tokens, SSH metadata, or Relay credentials. The canonical `local` alias remains
+lowercase even when its label is customized in the Desktop.
 
 Both the Go config model and the Swift `WarrenEndpointCatalog` model must
 decode and write this field. Existing sidecar locks, `0600` permissions,

@@ -36,6 +36,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let endpointCapabilities: WarrenDesktopEndpointCapabilities
     private let onSelectEndpoint: (String) -> Void
     private let onSetEndpointSidebarVisibility: (String, Bool) -> Void
+    private let onSetEndpointDisplayName: (String, String?) -> Void
     private let sidebarHostProjections: [WarrenDesktopSidebarHostProjection]?
     private let usesSidebarHostSections: Bool
     /// The endpoint-scoped counterpart to the active navigation selection.
@@ -166,6 +167,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         endpointCapabilities: WarrenDesktopEndpointCapabilities? = nil,
         onSelectEndpoint: @escaping (String) -> Void = { _ in },
         onSetEndpointSidebarVisibility: @escaping (String, Bool) -> Void = { _, _ in },
+        onSetEndpointDisplayName: @escaping (String, String?) -> Void = { _, _ in },
         sidebarHostProjections: [WarrenDesktopSidebarHostProjection]? = nil,
         usesSidebarHostSections: Bool = false,
         sidebarResourceSelection: WarrenDesktopSidebarResourceSelection? = nil,
@@ -237,6 +239,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.endpointCapabilities = resolvedEndpointCapabilities
         self.onSelectEndpoint = onSelectEndpoint
         self.onSetEndpointSidebarVisibility = onSetEndpointSidebarVisibility
+        self.onSetEndpointDisplayName = onSetEndpointDisplayName
         self.sidebarHostProjections = sidebarHostProjections
         self.usesSidebarHostSections = usesSidebarHostSections
         self.sidebarResourceSelection = sidebarResourceSelection
@@ -647,6 +650,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         selectedID: selectedEndpointID,
                         onSelect: onSelectEndpoint,
                         onSetSidebarVisibility: onSetEndpointSidebarVisibility,
+                        onCustomizeDisplayName: { endpoint in
+                            setChromePopover(nil)
+                            onCustomizeEndpointDisplayName(endpoint)
+                        },
                         onAddSSHHost: onAddSSHHost,
                         onRetry: onRetryConnection,
                         onStop: onStopConnection,
@@ -1244,6 +1251,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         onBack()
                     },
                     onSetSidebarVisibility: onSetEndpointSidebarVisibility,
+                    onCustomizeDisplayName: { endpoint in
+                        onBack()
+                        onCustomizeEndpointDisplayName(endpoint)
+                    },
                     onAddSSHHost: {
                         onAddSSHHost()
                         onBack()
@@ -1474,6 +1485,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
     }
 
+    private func onCustomizeEndpointDisplayName(
+        _ endpoint: WarrenDesktopEndpointOption
+    ) {
+        presentRename(.endpoint(endpoint.id, name: endpoint.label))
+    }
+
     private func dismissRename() {
         pendingRenameEndpointID = nil
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
@@ -1496,6 +1513,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             dispatch(.renameWorkspace(id, renameValue))
         case .session(let id, _):
             dispatch(.renameSession(id, renameValue))
+        case .endpoint(let id, _):
+            onSetEndpointDisplayName(
+                id,
+                renameValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
         }
         dismissRename()
     }
@@ -1609,7 +1631,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 message: pendingRename.message,
                 fieldLabel: pendingRename.fieldLabel,
                 text: $renameValue,
-                confirmLabel: "Rename",
+                confirmLabel: pendingRename.confirmLabel,
                 onCancel: dismissRename,
                 onConfirm: confirmRename
             )
