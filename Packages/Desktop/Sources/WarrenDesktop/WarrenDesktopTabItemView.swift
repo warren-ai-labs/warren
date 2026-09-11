@@ -9,6 +9,7 @@ struct WarrenDesktopTabItem: View {
     let displayTitle: String
     let activity: AgentActivityState?
     let isSelected: Bool
+    var isSplitVisible: Bool = false
     let isPinned: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
@@ -98,6 +99,12 @@ struct WarrenDesktopTabItem: View {
                             .foregroundStyle(tokens.mutedForeground)
                             .accessibilityHidden(true)
                     }
+                    if isSplitVisible {
+                        Image(systemName: "rectangle.split.2x1")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(tokens.info.opacity(0.85))
+                            .accessibilityLabel("Split visible")
+                    }
                     if let activity {
                         WarrenDesktopActivityIndicator(activity: activity)
                             .accessibilityHidden(true)
@@ -183,7 +190,9 @@ struct WarrenDesktopTabItem: View {
         .background(
             isSelected
                 ? tokens.background
-                : (isHovered ? tokens.fillHover : .clear)
+                : (isSplitVisible
+                    ? tokens.fillHover.opacity(0.4)
+                    : (isHovered ? tokens.fillHover : .clear))
         )
         .animation(
             WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),

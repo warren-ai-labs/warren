@@ -28,6 +28,7 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/settings"
 	"github.com/abcdlsj/warren/Headless/internal/store"
 	sessiontitle "github.com/abcdlsj/warren/Headless/internal/title"
+	"github.com/abcdlsj/warren/Headless/internal/usage"
 )
 
 const (
@@ -209,8 +210,12 @@ type Service struct {
 	lifecycleOnce               sync.Once
 	lifecycleCancel             context.CancelFunc
 	canonicalCommandsReconciled bool
-	runtimeProbeMu              sync.Mutex
-	runtimeProbeLog             map[string]time.Time
+	usageAttributionInstalled   bool
+	// usagePrices caches the unit price table behind cost figures. Shared so a
+	// panel refresh does not refetch the catalog on every request.
+	usagePrices     usage.PriceFetcher
+	runtimeProbeMu  sync.Mutex
+	runtimeProbeLog map[string]time.Time
 }
 
 type canonicalCommandResult struct {
@@ -460,6 +465,13 @@ func (s *Service) lazyInitLocked() {
 		if agentStore, err := store.OpenAgentEventStore(path); err == nil {
 			s.AgentStore = agentStore
 		}
+	}
+	if s.AgentStore != nil && !s.usageAttributionInstalled {
+		// The journal owns no host state, so it cannot map a stream to a
+		// project on its own. Injecting the lookup keeps spend attributable
+		// while leaving stores built by tests and embedders inert.
+		s.AgentStore.SetUsageAttributionResolver(s.usageAttributionForStream)
+		s.usageAttributionInstalled = true
 	}
 	if s.AgentStore != nil && !s.canonicalCommandsReconciled {
 		if _, err := s.AgentStore.ReconcilePendingCanonicalCommands(
@@ -5610,6 +5622,42 @@ func (s *Service) canonicalExecutionForSession(sessionID string) (api.AgentExecu
 		result.HeadSequence = history.HeadSequence
 	}
 	return result, true
+}
+
+// usageAttributionForStream maps a canonical stream to the project its spend
+// belongs to.
+//
+// This runs inside the journal's append transaction, which the caller enters
+// while holding the agent entry's own mutex. It therefore reads only the durable
+// state snapshot and must never reach for agentsMu or an entry mutex the way
+// sessionForCanonicalStream does on its fallback path, because Go mutexes are
+// not reentrant and that would deadlock the append.
+//
+// An unresolvable stream yields an empty project rather than no row at all.
+// Filing spend as unattributed keeps the panel's total honest; dropping it would
+// make the total quietly disagree with what the Agents actually consumed.
+func (s *Service) usageAttributionForStream(streamID string) store.UsageAttribution {
+	streamID = strings.TrimSpace(streamID)
+	if streamID == "" || s.Store == nil {
+		return store.UsageAttribution{}
+	}
+	state := s.Store.Snapshot()
+	workspaceID := ""
+	for _, session := range state.Sessions {
+		if session.AgentExecutionID == streamID {
+			workspaceID = strings.TrimSpace(session.WorkspaceID)
+			break
+		}
+	}
+	if workspaceID == "" {
+		return store.UsageAttribution{}
+	}
+	for _, workspace := range state.Workspaces {
+		if workspace.ID == workspaceID {
+			return store.UsageAttribution{ProjectID: strings.TrimSpace(workspace.ProjectID)}
+		}
+	}
+	return store.UsageAttribution{}
 }
 
 func (s *Service) sessionForCanonicalStream(streamID string) (api.Session, bool) {

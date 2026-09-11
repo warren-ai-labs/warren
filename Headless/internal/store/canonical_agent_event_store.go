@@ -434,6 +434,12 @@ func (s *AgentEventStore) appendCanonicalEvents(
 		`, streamID, executionID, event.Sequence, event.EventID, event.Type, string(encoded), event.RecordedAt.UnixMilli()); err != nil {
 			return nil, fmt.Errorf("insert canonical event %s: %w", event.EventID, err)
 		}
+		// Only newly inserted rows reach here; replays returned above. That is
+		// what makes accounting idempotent without a cursor of its own, since
+		// the watcher re-reads every transcript from offset zero on restart.
+		if err := s.accumulateUsage(ctx, tx, streamID, event); err != nil {
+			return nil, err
+		}
 		resolved = append(resolved, event)
 	}
 

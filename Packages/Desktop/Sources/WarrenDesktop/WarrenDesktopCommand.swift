@@ -24,4 +24,11 @@ public enum WarrenDesktopCommand {
     public static let settingsDismissed = Notification.Name("WarrenDesktopCommand.settingsDismissed")
     /// Posted to switch the active workspace to Embedded Editor mode.
     public static let openEmbeddedEditor = Notification.Name("WarrenDesktopCommand.openEmbeddedEditor")
+
+    // Split screen commands (Emacs C-x 2, C-x 3, C-x 0, C-x 1, C-x o)
+    public static let splitBelow = Notification.Name("WarrenDesktopCommand.splitBelow")
+    public static let splitRight = Notification.Name("WarrenDesktopCommand.splitRight")
+    public static let closePane = Notification.Name("WarrenDesktopCommand.closePane")
+    public static let maximizePane = Notification.Name("WarrenDesktopCommand.maximizePane")
+    public static let otherPane = Notification.Name("WarrenDesktopCommand.otherPane")
 }

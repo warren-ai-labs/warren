@@ -27,6 +27,15 @@ type codexParser struct {
 	queueDBPath            string
 	lastQueuedItemIDs      map[string]struct{}
 	lastQueuedFingerprints map[string]string
+
+	// codexLastTokenSignature is the previous token_count measurement, used to
+	// drop immediate repeats. Codex re-emits the same counts once per rate-limit
+	// lane it reports on, so a single billable call can appear several times;
+	// across local rollouts this inflated totals by 1.028x. The signature covers
+	// both the per-call and cumulative counters, which is what distinguishes a
+	// repeated measurement from a genuine second call that happens to consume an
+	// identical number of tokens.
+	codexLastTokenSignature string
 }
 
 func newCodexParser(contentLimit int) *codexParser {
@@ -794,11 +803,26 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			event.Type = "usage"
 			event.Model = payload.Info.Model
 			if event.Model == "" {
+				// Codex never populates this field in practice, so the model is
+				// carried over from the session's turn context. Safe because a
+				// token_count is never observed before the first model
+				// declaration and sessions rarely switch models mid-run.
 				event.Model = p.codexModel
 			}
+			// A repeat of the previous measurement is the same billable call
+			// reported against another rate-limit lane, not new spend.
+			signature := string(payload.Info.LastTokenUsage) + "|" + string(payload.Info.TotalTokenUsage)
+			if signature != "|" && signature == p.codexLastTokenSignature {
+				return nil
+			}
+			p.codexLastTokenSignature = signature
+			// last_token_usage is this call's own consumption. total_token_usage
+			// is session-cumulative and is known to reset mid-session, so it is
+			// never treated as a per-call amount; it only serves as a signature
+			// component above.
 			raw := payload.Info.LastTokenUsage
 			if len(raw) == 0 {
-				raw = payload.Info.TotalTokenUsage
+				return nil
 			}
 			event.Usage = parseUsage(raw)
 			if event.Usage == nil {

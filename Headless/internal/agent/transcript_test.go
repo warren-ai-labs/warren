@@ -435,6 +435,31 @@ func TestFinderPicksNewestMatchingCodex(t *testing.T) {
 	}
 }
 
+func TestHistoricalUsageTranscriptsListsAllProviderFiles(t *testing.T) {
+	root := t.TempDir()
+	codexPath := filepath.Join(root, "codex", "2026", "rollout-one.jsonl")
+	claudePath := filepath.Join(root, "claude", "project", "session.jsonl")
+	writeLines(t, codexPath, `{"timestamp":"2026-08-19T10:00:00Z","type":"session_meta","payload":{"cwd":"/work/codex"}}`)
+	writeLines(t, claudePath, `{"type":"user","cwd":"/work/claude","message":{"content":"hi"}}`)
+
+	transcripts, err := (DefaultFinder{
+		CodexRoot:  filepath.Join(root, "codex"),
+		ClaudeRoot: filepath.Join(root, "claude"),
+	}).HistoricalUsageTranscripts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transcripts) != 2 {
+		t.Fatalf("transcripts = %#v, want both provider files", transcripts)
+	}
+	if transcripts[0].Provider != "claude" || transcripts[0].Path != claudePath || transcripts[0].WorkspacePath != "/work/claude" {
+		t.Fatalf("claude transcript = %#v", transcripts[0])
+	}
+	if transcripts[1].Provider != "codex" || transcripts[1].Path != codexPath || transcripts[1].WorkspacePath != "/work/codex" {
+		t.Fatalf("codex transcript = %#v", transcripts[1])
+	}
+}
+
 func TestFinderMatchesCodexTranscriptEvenWhenFileIsLarge(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	path := filepath.Join(root, "2026", "08", "19", "rollout-large.jsonl")
@@ -563,6 +588,101 @@ func TestCodexTokenUsageEvent(t *testing.T) {
 	}
 }
 
+func TestCodexDropsRepeatedTokenCountForOtherRateLimitLane(t *testing.T) {
+	// Codex reports the same measurement once per rate-limit lane. The repeat is
+	// the same billable call, so only the first may become a usage event.
+	path := filepath.Join(t.TempDir(), "rollout-lanes.jsonl")
+	usage := `{"input_tokens":240291,"cached_input_tokens":229120,"cache_write_input_tokens":0,"output_tokens":317,"reasoning_output_tokens":154,"total_tokens":240608}`
+	writeLines(t, path,
+		`{"timestamp":"2026-08-16T10:00:00Z","type":"turn_context","payload":{"model":"gpt-5","effort":"high"}}`,
+		`{"timestamp":"2026-08-16T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":`+usage+`,"total_token_usage":`+usage+`},"rate_limits":{"limit_id":"base_model_inference"}}}`,
+		`{"timestamp":"2026-08-16T10:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":`+usage+`,"total_token_usage":`+usage+`},"rate_limits":{"limit_id":"codex"}}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("codex"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var usageEvents []api.AgentEvent
+	for _, event := range events {
+		if event.Type == "usage" {
+			usageEvents = append(usageEvents, event)
+		}
+	}
+	if len(usageEvents) != 1 {
+		t.Fatalf("usage events = %d, want 1", len(usageEvents))
+	}
+	if usageEvents[0].Usage.InputTokens != 240291 {
+		t.Fatalf("usage = %#v", usageEvents[0].Usage)
+	}
+}
+
+func TestCodexKeepsDistinctTokenCounts(t *testing.T) {
+	// Consecutive calls advance the cumulative counter, so their signatures
+	// differ and both must be counted even when the per-call amounts match.
+	path := filepath.Join(t.TempDir(), "rollout-distinct.jsonl")
+	writeLines(t, path,
+		`{"timestamp":"2026-08-16T10:00:00Z","type":"turn_context","payload":{"model":"gpt-5","effort":"high"}}`,
+		`{"timestamp":"2026-08-16T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110},"total_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}}`,
+		`{"timestamp":"2026-08-16T10:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110},"total_token_usage":{"input_tokens":200,"output_tokens":20,"total_tokens":220}}}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("codex"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := 0
+	for _, event := range events {
+		if event.Type == "usage" {
+			counted++
+		}
+	}
+	if counted != 2 {
+		t.Fatalf("usage events = %d, want 2", counted)
+	}
+}
+
+func TestCodexIgnoresTokenCountWithoutPerCallUsage(t *testing.T) {
+	// total_token_usage is session-cumulative and resets mid-session, so it must
+	// never be read as a per-call amount.
+	path := filepath.Join(t.TempDir(), "rollout-total-only.jsonl")
+	writeLines(t, path,
+		`{"timestamp":"2026-08-16T10:00:00Z","type":"turn_context","payload":{"model":"gpt-5","effort":"high"}}`,
+		`{"timestamp":"2026-08-16T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9999,"output_tokens":888,"total_tokens":10887}}}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("codex"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == "usage" {
+			t.Fatalf("cumulative-only token_count must not become usage: %#v", event.Usage)
+		}
+	}
+}
+
+func TestCodexReadsCacheWriteTokens(t *testing.T) {
+	// Codex spells cache creation cache_write_input_tokens. Missing it would let
+	// those tokens price at the input rate instead of the higher cache rate.
+	path := filepath.Join(t.TempDir(), "rollout-cache-write.jsonl")
+	writeLines(t, path,
+		`{"timestamp":"2026-08-16T10:00:00Z","type":"turn_context","payload":{"model":"gpt-5","effort":"high"}}`,
+		`{"timestamp":"2026-08-16T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":33410,"cached_input_tokens":22389,"cache_write_input_tokens":7623,"output_tokens":495,"reasoning_output_tokens":1,"total_tokens":33905}}}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("codex"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type != "usage" {
+			continue
+		}
+		if event.Usage.CacheCreationInputTokens != 7623 {
+			t.Fatalf("cache creation = %d, want 7623", event.Usage.CacheCreationInputTokens)
+		}
+		return
+	}
+	t.Fatal("no usage event produced")
+}
+
 func TestClaudeToolResultErrorAndFiles(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "claude-tools.jsonl")
 	writeLines(t, path,
@@ -602,6 +722,92 @@ func TestClaudeAssistantCarriesModelUsage(t *testing.T) {
 		event.StopReason != "end_turn" || event.Usage == nil ||
 		event.Usage.InputTokens != 100 || event.Usage.OutputTokens != 50 {
 		t.Fatalf("assistant event = %#v", event)
+	}
+}
+
+func TestClaudeCountsMessageUsageOnceAcrossLines(t *testing.T) {
+	// Claude splits one API response across a line per content block and repeats
+	// the identical usage object on each. Only the first may carry the count, or
+	// a single billable call is billed as many times as it has blocks.
+	path := filepath.Join(t.TempDir(), "claude-split-response.jsonl")
+	writeLines(t, path,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"id":"msg_split","model":"claude-opus-5","role":"assistant","content":[{"type":"thinking","thinking":"weighing options"}],"usage":{"input_tokens":15739,"cache_creation_input_tokens":19484,"cache_read_input_tokens":0,"output_tokens":79}}}`,
+		`{"type":"assistant","uuid":"a2","timestamp":"2026-08-16T10:00:01Z","message":{"id":"msg_split","model":"claude-opus-5","role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"Read","input":{"file_path":"/tmp/x"}}],"usage":{"input_tokens":15739,"cache_creation_input_tokens":19484,"cache_read_input_tokens":0,"output_tokens":79}}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+	if events[0].Usage == nil || events[0].Usage.InputTokens != 15739 {
+		t.Fatalf("first event must carry the usage: %#v", events[0].Usage)
+	}
+	if events[1].Usage != nil {
+		t.Fatalf("repeat of msg_split must not carry usage again: %#v", events[1].Usage)
+	}
+}
+
+func TestClaudeCountsUsageOncePerMultiBlockLine(t *testing.T) {
+	// The same rule within one line: every block shares the response's usage.
+	path := filepath.Join(t.TempDir(), "claude-multi-block.jsonl")
+	writeLines(t, path,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"id":"msg_multi","model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"reply"},{"type":"tool_use","id":"call_1","name":"Read","input":{"file_path":"/tmp/x"}}],"usage":{"input_tokens":200,"output_tokens":30}}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+	counted := 0
+	for _, event := range events {
+		if event.Usage != nil {
+			counted++
+		}
+	}
+	if counted != 1 {
+		t.Fatalf("usage carried by %d of %d events, want exactly 1", counted, len(events))
+	}
+}
+
+func TestClaudeDistinctMessagesEachCountUsage(t *testing.T) {
+	// Dedupe must not suppress a genuine second call that happens to consume an
+	// identical number of tokens.
+	path := filepath.Join(t.TempDir(), "claude-distinct.jsonl")
+	writeLines(t, path,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"id":"msg_1","model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"first"}],"usage":{"input_tokens":100,"output_tokens":10}}}`,
+		`{"type":"assistant","uuid":"a2","timestamp":"2026-08-16T10:00:01Z","message":{"id":"msg_2","model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"second"}],"usage":{"input_tokens":100,"output_tokens":10}}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Usage == nil || events[1].Usage == nil {
+		t.Fatalf("both distinct messages must carry usage: %#v", events)
+	}
+}
+
+func TestClaudeReleasesUsageWhenEveryBlockIsFiltered(t *testing.T) {
+	// A line whose blocks all fail the emit filter produces no event, so the
+	// count must stay claimable by the next line for that message instead of
+	// disappearing with the dropped blocks.
+	path := filepath.Join(t.TempDir(), "claude-empty-then-real.jsonl")
+	writeLines(t, path,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"id":"msg_late","model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":""}],"usage":{"input_tokens":300,"output_tokens":40}}}`,
+		`{"type":"assistant","uuid":"a2","timestamp":"2026-08-16T10:00:01Z","message":{"id":"msg_late","model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"actual reply"}],"usage":{"input_tokens":300,"output_tokens":40}}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want 1", events)
+	}
+	if events[0].Usage == nil || events[0].Usage.InputTokens != 300 {
+		t.Fatalf("usage must survive the filtered line: %#v", events[0].Usage)
 	}
 }
 

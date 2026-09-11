@@ -889,6 +889,7 @@ func parseUsage(raw json.RawMessage) *api.AgentUsage {
 	var value struct {
 		InputTokens              int64 `json:"input_tokens"`
 		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+		CacheWriteInputTokens    int64 `json:"cache_write_input_tokens"`
 		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 		CachedInputTokens        int64 `json:"cached_input_tokens"`
 		OutputTokens             int64 `json:"output_tokens"`
@@ -903,6 +904,12 @@ func parseUsage(raw json.RawMessage) *api.AgentUsage {
 	}
 	if value.CacheReadInputTokens == 0 {
 		value.CacheReadInputTokens = value.CachedInputTokens
+	}
+	// Codex spells cache creation `cache_write_input_tokens`. Without this the
+	// bucket reads as zero and its tokens fall into fresh input, which prices
+	// them at the input rate instead of the higher cache-write rate.
+	if value.CacheCreationInputTokens == 0 {
+		value.CacheCreationInputTokens = value.CacheWriteInputTokens
 	}
 	return &api.AgentUsage{
 		InputTokens:              value.InputTokens,

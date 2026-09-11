@@ -5,6 +5,7 @@ import {
   visitorForRequest,
   writeDownloadMetric,
 } from "./download-analytics.js";
+import { projectPricing } from "./pricing.js";
 
 const securityHeaders = {
   "Content-Security-Policy":
@@ -25,6 +26,13 @@ const CHANGELOG_SOURCE = "https://raw.githubusercontent.com/warren-ai-labs/warre
 const CHANGELOG_CACHE_KEY = new Request("https://warrenai.xyz/__cache/changelog");
 const CHANGELOG_TTL_MS = 5 * 60 * 1000;
 const CHANGELOG_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600";
+
+const PRICING_SOURCE = "https://models.dev/api.json";
+const PRICING_CACHE_KEY = new Request("https://warrenai.xyz/__cache/model-pricing");
+// Unit prices move on release announcements, not minutes. A long TTL keeps a
+// Host from re-fetching a multi-megabyte catalog to learn nothing changed.
+const PRICING_TTL_MS = 12 * 60 * 60 * 1000;
+const PRICING_CACHE_CONTROL = "public, max-age=43200, stale-while-revalidate=86400";
 
 export function releaseAssetFromHtml(html) {
   const matches = html.matchAll(
@@ -317,6 +325,81 @@ async function changelogResponseForRequest(ctx) {
   }
 }
 
+function pricingResponse(document, cachedAt = Date.now()) {
+  return new Response(
+    JSON.stringify({ ...document, cachedAt: new Date(cachedAt).toISOString() }),
+    {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": PRICING_CACHE_CONTROL,
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Warren-Pricing-Cached-At": String(cachedAt),
+      },
+    },
+  );
+}
+
+function markPricingStale(response) {
+  const headers = new Headers(response.headers);
+  headers.set("X-Warren-Pricing-Stale", "true");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+async function readCachedPricing() {
+  const response = await caches.default.match(PRICING_CACHE_KEY);
+  if (!response) return null;
+  const cachedAt = Number(response.headers.get("X-Warren-Pricing-Cached-At"));
+  return {
+    response,
+    fresh: Number.isFinite(cachedAt) && Date.now() - cachedAt < PRICING_TTL_MS,
+  };
+}
+
+async function refreshPricing() {
+  const upstream = await fetch(PRICING_SOURCE, {
+    headers: { Accept: "application/json", "User-Agent": "warren-pricing-proxy" },
+  });
+  if (!upstream.ok) {
+    throw new Error(`models.dev responded with ${upstream.status}`);
+  }
+  // projectPricing throws when the catalog yields nothing priceable, which
+  // keeps a shape change upstream from being cached as an empty price table.
+  const response = pricingResponse(projectPricing(await upstream.json()));
+  await caches.default.put(PRICING_CACHE_KEY, response.clone());
+  return response;
+}
+
+async function pricingResponseForRequest(ctx) {
+  const cached = await readCachedPricing();
+  if (cached?.fresh) return cached.response;
+
+  if (cached) {
+    ctx.waitUntil(refreshPricing().catch(() => undefined));
+    return markPricingStale(cached.response);
+  }
+
+  try {
+    return await refreshPricing();
+  } catch {
+    // No stale copy and no upstream. Reporting the failure lets a Host keep
+    // its own last-known prices instead of treating models as free.
+    return Response.json(
+      { error: "Could not resolve model pricing." },
+      {
+        status: 502,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-store",
+        },
+      },
+    );
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -335,6 +418,10 @@ export default {
 
     if (url.pathname === "/api/changelog") {
       return changelogResponseForRequest(ctx);
+    }
+
+    if (url.pathname === "/api/model-pricing") {
+      return pricingResponseForRequest(ctx);
     }
 
     // The ASSETS binding rewrites unknown paths to "/" with a redirect, so

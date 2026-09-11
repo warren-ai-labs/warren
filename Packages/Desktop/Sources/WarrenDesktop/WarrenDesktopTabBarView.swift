@@ -14,6 +14,7 @@ struct WarrenDesktopTabBar: View {
     let tabActivities: [TerminalSessionID: AgentActivityState]
     let pinnedSessionIDs: Set<TerminalSessionID>
     let selectedTabID: String?
+    let splitTabIDs: Set<String>
     let chromeMode: WarrenDesktopChromeMode
     let isSidebarCollapsed: Bool
     let connectionState: WarrenDesktopConnectionState
@@ -61,6 +62,7 @@ struct WarrenDesktopTabBar: View {
         tabActivities: [TerminalSessionID: AgentActivityState],
         pinnedSessionIDs: Set<TerminalSessionID>,
         selectedTabID: String?,
+        splitTabIDs: Set<String> = [],
         chromeMode: WarrenDesktopChromeMode,
         isSidebarCollapsed: Bool,
         connectionState: WarrenDesktopConnectionState,
@@ -103,6 +105,7 @@ struct WarrenDesktopTabBar: View {
         self.tabActivities = tabActivities
         self.pinnedSessionIDs = pinnedSessionIDs
         self.selectedTabID = selectedTabID
+        self.splitTabIDs = splitTabIDs
         self.chromeMode = chromeMode
         self.isSidebarCollapsed = isSidebarCollapsed
         self.connectionState = connectionState
@@ -169,11 +172,13 @@ struct WarrenDesktopTabBar: View {
                         ForEach(tabs) { tab in
                             let activity = tab.sessionID.flatMap { tabActivities[$0] }
                             let isSelected = !embeddedEditorSelected && selectedTabID == tab.id
+                            let isSplitVisible = splitTabIDs.contains(tab.id) && !isSelected
                             WarrenDesktopTabItem(
                                 tab: tab,
                                 displayTitle: tabTitles[tab.id] ?? tab.title,
                                 activity: activity,
                                 isSelected: isSelected,
+                                isSplitVisible: isSplitVisible,
                                 isPinned: tab.sessionID.map(pinnedSessionIDs.contains) ?? false,
                                 onSelect: { selectTab(tab.id) },
                                 onClose: { onCloseTab(tab.id) },

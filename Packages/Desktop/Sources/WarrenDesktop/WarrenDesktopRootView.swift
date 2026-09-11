@@ -30,6 +30,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     public let onNoticeRead: (WarrenDesktopNotice.ID) -> Void
     public let onNoticeDismiss: (WarrenDesktopNotice.ID) -> Void
     public let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
+    public let onActiveScreenSessionsChanged: (Set<TerminalSessionID>) -> Void
 
     private let endpointOptions: [WarrenDesktopEndpointOption]
     private let selectedEndpointID: String
@@ -82,6 +83,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onSetOpenAISetting: (String, String) -> Void
     private let onTestOpenAI: @MainActor (String, String, String?) async throws -> Void
     private let onSetProjectSetupScript: (ProjectID, String) -> Void
+    private let usageStats: WarrenUsageStats
+    private let usageState: WarrenUsageLoadState
+    private let onLoadUsage: ((Int) -> Void)?
+    private let onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     private let embeddedEditorAvailable: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
     private let persistenceEnabled: Bool
@@ -113,6 +118,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var pendingDeletionEndpointID: String?
     @State private var deleteWorkspaceRemoveWorktree = false
     @State private var workspaceContentModes: [WorkspaceID: WarrenDesktopWorkspaceContentMode]
+    @State private var splitTrees: [String: SplitLayoutTree]
+    @State private var activePaneIDs: [String: String]
+    @State private var pendingSplits: [String: PendingSplit]
+    @State private var pendingPaneClosures: [String: PendingPaneClosure]
+    @State private var emacsChordActive = false
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var terminalTitleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
     @AppStorage(WarrenPreferenceKey.terminalFontFamily)
@@ -126,6 +136,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var embeddedEditorDefaultIDE = false
     @AppStorage(WarrenPreferenceKey.sidebarShowTasks)
     private var showsTasks = true
+    @AppStorage(WarrenPreferenceKey.terminalSplitChordsEnabled)
+    private var splitChordsEnabled = false
     @Environment(\.warrenSemanticRecorder) private var semanticRecorder
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -137,6 +149,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let tab: ClientTab?
         let session: WarrenDesktopSession?
         let tabs: [ClientTab]
+    }
+
+    private struct PendingSplit: Equatable {
+        let targetPaneID: String
+        let existingTabIDs: Set<String>
+        let axis: SplitAxis
+    }
+
+    private struct PendingPaneClosure: Equatable {
+        let paneID: String
+        let tabID: String
+        let replacementPaneID: String?
     }
 
     public init(
@@ -160,6 +184,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onNoticeRead: @escaping (WarrenDesktopNotice.ID) -> Void = { _ in },
         onNoticeDismiss: @escaping (WarrenDesktopNotice.ID) -> Void = { _ in },
         externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl] = WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
+        onActiveScreenSessionsChanged: @escaping (Set<TerminalSessionID>) -> Void = { _ in },
         endpointOptions: [WarrenDesktopEndpointOption] = [
             .init(id: "local", label: "Local", isLocal: true),
         ],
@@ -207,6 +232,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             throw URLError(.unsupportedURL)
         },
         onSetProjectSetupScript: @escaping (ProjectID, String) -> Void = { _, _ in },
+        usageStats: WarrenUsageStats = WarrenUsageStats(),
+        usageState: WarrenUsageLoadState = .idle,
+        onLoadUsage: ((Int) -> Void)? = nil,
+        onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         embeddedEditorAvailable: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
         persistenceEnabled: Bool = true,
@@ -232,6 +261,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             externallyVisibleControls,
             endpointCount: endpointOptions.count
         )
+        self.onActiveScreenSessionsChanged = onActiveScreenSessionsChanged
         self.selectedEndpointID = selectedEndpointID
         let resolvedEndpointCapabilities = endpointCapabilities
             ?? endpointOptions.first(where: { $0.id == selectedEndpointID })?.capabilities
@@ -284,6 +314,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onSetOpenAISetting = onSetOpenAISetting
         self.onTestOpenAI = onTestOpenAI
         self.onSetProjectSetupScript = onSetProjectSetupScript
+        self.usageStats = usageStats
+        self.usageState = usageState
+        self.onLoadUsage = onLoadUsage
+        self.onRebuildUsage = onRebuildUsage
         self.embeddedEditorAvailable = embeddedEditorAvailable
             && resolvedEndpointCapabilities.canUseEmbeddedEditor
         self.editorSurface = editorSurface
@@ -305,10 +339,24 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 )
                 : [:]
         )
+        _splitTrees = State(
+            initialValue: persistenceEnabled
+                ? WarrenDesktopSplitLayoutPersistence.restore()
+                : [:]
+        )
+        _activePaneIDs = State(initialValue: [:])
+        _pendingSplits = State(initialValue: [:])
+        _pendingPaneClosures = State(initialValue: [:])
     }
 
     public var body: some View {
         let presentation = makePresentation()
+        let currentTree = currentSplitTree(presentation: presentation)
+        let currentPaneID = currentActivePaneID(presentation: presentation, tree: currentTree)
+        let contentMode = workspaceContentMode(for: presentation.workspace)
+        let activeVisibleSessions = contentMode == .terminal
+            ? visibleScreenSessionIDs(for: presentation, in: currentTree)
+            : []
         let tabTitles = Dictionary(uniqueKeysWithValues: presentation.tabs.map { tab in
             let session = tab.sessionID.flatMap { projection.session(id: $0) }
             let workspace = tab.sessionID.flatMap { projection.workspace(for: $0) }
@@ -331,7 +379,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let isAddingSession = isAddingSession(in: presentation)
         let sessionMoveTargets = makeSessionMoveTargets()
         let sessionMoveDestinations = makeSessionMoveDestinations()
-        let contentMode = workspaceContentMode(for: presentation.workspace)
         let externalIDEOptions = makeExternalIDEOptions(for: presentation)
         let embeddedEditorChromeAvailable = embeddedEditorAvailable
             && externalIDEOptions != nil
@@ -353,7 +400,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             sessionMoveTargets: sessionMoveTargets,
             sessionMoveDestinations: sessionMoveDestinations,
             externalIDEOptions: externalIDEOptions,
-            embeddedEditorChromeAvailable: embeddedEditorChromeAvailable
+            embeddedEditorChromeAvailable: embeddedEditorChromeAvailable,
+            currentTree: currentTree
         )
         let sidebarView = WarrenDesktopSidebar(
             projection: projection,
@@ -396,7 +444,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             presentation: presentation,
             tabBarView: tabBarView,
             contentMode: contentMode,
-            isAddingSession: isAddingSession
+            isAddingSession: isAddingSession,
+            currentTree: currentTree,
+            currentPaneID: currentPaneID
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         ZStack(alignment: .topLeading) {
@@ -415,12 +465,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
         .frame(
             minWidth: WarrenLayoutMetrics.sidebarExpandedWidth
-                + WarrenLayoutMetrics.paneMinimumWidth,
+                + currentTree.windowMinimumPaneWidth,
             minHeight: (chromeMode.showsIndependentTopBar ? WarrenLayoutMetrics.topBarHeight : 0)
                 + WarrenLayoutMetrics.tabBarHeight
                 + WarrenLayoutMetrics.presetBarHeight
-                + WarrenLayoutMetrics.paneHeaderHeight
-                + WarrenLayoutMetrics.paneMinimumHeight
+                + currentTree.windowMinimumPaneHeight
         )
         .denSurface()
         .warrenUnixTextEditing()
@@ -497,6 +546,87 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             }
             setWorkspaceContentMode(.editor, for: targetWorkspace)
         }
+        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.splitBelow)) { _ in
+            handleSplitBelow(in: presentation)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.splitRight)) { _ in
+            handleSplitRight(in: presentation)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.closePane)) { _ in
+            handleClosePane(in: presentation)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.maximizePane)) { _ in
+            handleMaximizePane(in: presentation)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.otherPane)) { _ in
+            handleOtherPane(in: presentation)
+        }
+        .onChange(of: activeVisibleSessions) { sessions in
+            onActiveScreenSessionsChanged(sessions)
+        }
+        .onChange(of: splitTrees) { newTrees in
+            // A divider drag rewrites the ratio on every pointer event.
+            // Coalesce those writes so dragging does not run a JSON encode
+            // plus a UserDefaults write per frame.
+            if persistenceEnabled {
+                WarrenDesktopSplitLayoutPersistence.scheduleSave(newTrees)
+            }
+        }
+        .onChange(of: projection.tabs) { _ in
+            reconcilePendingSplitMutations()
+            reconcilePersistedSplitTree()
+        }
+        .onChange(of: navigation) { _ in
+            reconcilePendingSplitMutations()
+            reconcilePersistedSplitTree()
+        }
+        .onChange(of: creatingSessionWorkspaceIDs) { _ in
+            reconcilePendingSplitMutations()
+            reconcilePersistedSplitTree()
+        }
+        .onChange(of: creatingSessionTerminalGroupIDs) { _ in
+            reconcilePendingSplitMutations()
+            reconcilePersistedSplitTree()
+        }
+        .onAppear {
+            reconcilePersistedSplitTree()
+            onActiveScreenSessionsChanged(activeVisibleSessions)
+            // The monitor only forwards a command notification. Resolving the
+            // current presentation in `.onReceive` avoids retaining the tab
+            // and scope captured by the first SwiftUI appearance.
+            EmacsSplitChordMonitor.shared.onAction = { action in
+                let command: Notification.Name
+                switch action {
+                case .splitBelow: command = WarrenDesktopCommand.splitBelow
+                case .splitRight: command = WarrenDesktopCommand.splitRight
+                case .closePane: command = WarrenDesktopCommand.closePane
+                case .maximize: command = WarrenDesktopCommand.maximizePane
+                case .otherPane: command = WarrenDesktopCommand.otherPane
+                }
+                NotificationCenter.default.post(name: command, object: nil)
+                return true
+            }
+            EmacsSplitChordMonitor.shared.onChordStateChanged = { inChord in
+                emacsChordActive = inChord
+            }
+            // The chord swallows `C-x` app-wide, so it stays opt-in: the split
+            // commands are always reachable from the View menu and its Command
+            // shortcuts. Menu equivalents never take a key away from the shell.
+            if splitChordsEnabled {
+                EmacsSplitChordMonitor.shared.start()
+            }
+        }
+        .onChange(of: splitChordsEnabled) { enabled in
+            if enabled {
+                EmacsSplitChordMonitor.shared.start()
+            } else {
+                EmacsSplitChordMonitor.shared.stop()
+                emacsChordActive = false
+            }
+        }
+        .onDisappear {
+            EmacsSplitChordMonitor.shared.stop()
+        }
         .overlay {
             renameDialog
         }
@@ -553,6 +683,20 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 embeddedEditorChromeAvailable: embeddedEditorChromeAvailable,
                 overflowControls: trailingControlLayout.overflow
             )
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if emacsChordActive {
+                Text("C-x-")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .padding(WarrenSpacing.medium)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
         }
         .onChange(of: chromePopover) { popover in
             guard case .web? = popover else { return }
@@ -793,7 +937,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         sessionMoveTargets: [WarrenDesktopSessionMoveTarget],
         sessionMoveDestinations: [TerminalSessionID: WarrenDesktopSessionMoveDestination],
         externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
-        embeddedEditorChromeAvailable: Bool
+        embeddedEditorChromeAvailable: Bool,
+        currentTree: SplitLayoutTree
     ) -> AnyView {
         AnyView(WarrenDesktopTabBar(
             tabs: presentation.tabs,
@@ -801,6 +946,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             tabActivities: tabActivities,
             pinnedSessionIDs: pinnedSessionIDs,
             selectedTabID: navigation.selectedTabID,
+            splitTabIDs: Set(currentTree.allTabIDs),
             chromeMode: chromeMode,
             isSidebarCollapsed: sidebarState.isCollapsed,
             connectionState: projection.connectionState,
@@ -830,7 +976,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             onSelectEndpoint: onSelectEndpoint,
             onRetryConnection: onRetryConnection,
             onStopConnection: onStopConnection,
-            onSelectTab: { selectTab($0, in: presentation) },
+            onSelectTab: { selectTabFromTabBar($0, in: presentation) },
             onMoveTab: { tabID, destinationTabID in
                 dispatch(.moveTab(tabID, before: destinationTabID))
             },
@@ -861,7 +1007,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         presentation: Presentation,
         tabBarView: AnyView,
         contentMode: WarrenDesktopWorkspaceContentMode,
-        isAddingSession: Bool
+        isAddingSession: Bool,
+        currentTree: SplitLayoutTree,
+        currentPaneID: String
     ) -> AnyView {
         return AnyView(
             VStack(spacing: 0) {
@@ -906,6 +1054,27 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             && !commandPalettePresented
                             && !activeSessionsPresented
                             && !settingsPresented,
+                        splitTree: currentTree,
+                        activePaneID: currentPaneID,
+                        allTabs: presentation.tabs,
+                        sessionLookup: { sessionID in
+                            projection.session(id: sessionID)
+                        },
+                        onSelectPane: { paneID in
+                            handleSelectPane(paneID, in: presentation, tree: currentTree)
+                        },
+                        onClosePane: { paneID in
+                            handleClosePane(paneID: paneID, in: presentation)
+                        },
+                        onMaximizePane: { paneID in
+                            handleMaximizePane(paneID: paneID, in: presentation)
+                        },
+                        onSplitDrop: { targetPaneID, droppedTabID, target in
+                            handleSplitDrop(targetPaneID: targetPaneID, droppedTabID: droppedTabID, target: target, in: presentation)
+                        },
+                        onResizeSplit: { splitPath, ratio in
+                            handleResizeSplit(splitPath: splitPath, ratio: ratio, in: presentation)
+                        },
                         onAddProject: { dispatch(.addProject) },
                         onImportSuperset: { dispatch(.importSuperset) },
                         terminalSurface: terminalSurface
@@ -994,6 +1163,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onTestOpenAI: onTestOpenAI,
                 projects: projection.groups.map(\.project),
                 onSetProjectSetupScript: onSetProjectSetupScript,
+                usageStats: usageStats,
+                usageState: usageState,
+                onLoadUsage: onLoadUsage,
+                onRebuildUsage: onRebuildUsage,
                 initialSettingsSection: settingsDeepLinkSection,
                 publicAccessPrefill: settingsPublicAccessPrefill,
                 relayPrefill: settingsRelayPrefill
@@ -1426,6 +1599,414 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         case .editor:
             setWorkspaceContentMode(.editor, for: presentation.workspace)
         }
+    }
+
+    private func currentScopeKey(presentation: Presentation) -> String? {
+        let endpointScope = "endpoint-\(selectedEndpointID)-"
+        if let workspace = presentation.workspace {
+            return endpointScope + "workspace-\(workspace.id.rawValue.uuidString)"
+        } else if let terminalGroup = presentation.terminalGroup {
+            return endpointScope + "terminalGroup-\(terminalGroup.id.rawValue.uuidString)"
+        }
+        return nil
+    }
+
+    private func currentSplitTree(presentation: Presentation) -> SplitLayoutTree {
+        guard let scope = currentScopeKey(presentation: presentation) else {
+            let defaultTabID = presentation.tab?.id ?? "default"
+            return .leaf(
+                SplitPaneItem(
+                    id: SplitPaneItem.fallbackID(forTabID: defaultTabID),
+                    tabID: defaultTabID
+                )
+            )
+        }
+        let validTabIDs = Set(presentation.tabs.map(\.id))
+        let fallbackTabID = presentation.tab?.id ?? presentation.tabs.first?.id
+        if let existing = splitTrees[scope] {
+            if let reconciled = existing.reconcile(validTabIDs: validTabIDs, fallbackTabID: fallbackTabID) {
+                return treeAlignedWithSelection(
+                    reconciled,
+                    validTabIDs: validTabIDs,
+                    scope: scope
+                )
+            }
+        }
+        let tabID = presentation.tab?.id ?? fallbackTabID ?? "empty"
+        return .leaf(
+            SplitPaneItem(
+                id: SplitPaneItem.fallbackID(forTabID: tabID),
+                tabID: tabID
+            )
+        )
+    }
+
+    private func currentActivePaneID(presentation: Presentation, tree: SplitLayoutTree) -> String {
+        guard let scope = currentScopeKey(presentation: presentation) else {
+            return tree.allPaneIDs.first ?? "pane-default"
+        }
+        // Navigation changes can select the successor tab synchronously when
+        // a pane is closing, before the Host roster removes the old leaf.
+        // Prefer the selected tab whenever it is already represented so the
+        // control/focus intent follows that pane instead of briefly targeting
+        // the session that is being deleted.
+        if let selectedTabID = navigation.selectedTabID,
+           let item = tree.item(forTabID: selectedTabID) {
+            return item.id
+        }
+        if let existingID = activePaneIDs[scope], tree.contains(paneID: existingID) {
+            return existingID
+        }
+        return tree.allPaneIDs.first ?? "pane-default"
+    }
+
+    private func setSplitTree(_ tree: SplitLayoutTree, for scope: String) {
+        splitTrees[scope] = tree
+    }
+
+    /// Persist the same reconciled tree that the renderer uses. Keeping this
+    /// out of `body` avoids mutating SwiftUI state during view evaluation,
+    /// while still removing ended/foreign leaves instead of carrying them
+    /// across the next launch.
+    private func reconcilePersistedSplitTree() {
+        let presentation = makePresentation()
+        guard let scope = currentScopeKey(presentation: presentation),
+              let existing = splitTrees[scope] else { return }
+        let validTabIDs = Set(presentation.tabs.map(\.id))
+        let fallbackTabID = presentation.tab?.id ?? presentation.tabs.first?.id
+        guard let reconciled = existing.reconcile(
+            validTabIDs: validTabIDs,
+            fallbackTabID: fallbackTabID
+        ) else {
+            splitTrees.removeValue(forKey: scope)
+            activePaneIDs.removeValue(forKey: scope)
+            return
+        }
+        let canonical = treeAlignedWithSelection(
+            reconciled,
+            validTabIDs: validTabIDs,
+            scope: scope
+        )
+        if splitTrees[scope] != canonical {
+            splitTrees[scope] = canonical
+        }
+        if let activePaneID = activePaneIDs[scope], !canonical.contains(paneID: activePaneID) {
+            activePaneIDs[scope] = canonical.item(forTabID: navigation.selectedTabID ?? "")?.id
+                ?? canonical.allPaneIDs.first
+        }
+        pruneSplitTreesForDeletedScopes()
+    }
+
+    /// Layouts are keyed by endpoint and scope, so a deleted Workspace or
+    /// Terminal Group would otherwise keep its tree in UserDefaults forever.
+    /// Only the current endpoint's scopes are evaluated: another endpoint's
+    /// Workspaces are absent from this projection and are not deleted.
+    private func pruneSplitTreesForDeletedScopes() {
+        var liveScopeKeys: Set<String> = []
+        let endpointScope = "endpoint-\(selectedEndpointID)-"
+        for workspace in projection.groups.flatMap(\.workspaces) {
+            liveScopeKeys.insert(endpointScope + "workspace-\(workspace.id.rawValue.uuidString)")
+        }
+        for terminalGroup in projection.terminalGroups {
+            liveScopeKeys.insert(endpointScope + "terminalGroup-\(terminalGroup.id.rawValue.uuidString)")
+        }
+        let pruned = WarrenDesktopSplitLayoutPersistence.pruned(
+            splitTrees,
+            endpointID: selectedEndpointID,
+            liveScopeKeys: liveScopeKeys
+        )
+        guard pruned.count != splitTrees.count else { return }
+        let removed = Set(splitTrees.keys).subtracting(pruned.keys)
+        splitTrees = pruned
+        for scope in removed {
+            activePaneIDs.removeValue(forKey: scope)
+            pendingSplits.removeValue(forKey: scope)
+            pendingPaneClosures.removeValue(forKey: scope)
+        }
+    }
+
+    /// A window-level split is tied to the current tab selection. If an
+    /// external selection points at a tab that is not in the restored tree,
+    /// render that tab as the sole pane until the persisted state catches up.
+    /// The pending split exception is important: creation selects its new tab
+    /// before the roster callback can insert it into the captured tree.
+    private func treeAlignedWithSelection(
+        _ tree: SplitLayoutTree,
+        validTabIDs: Set<String>,
+        scope: String
+    ) -> SplitLayoutTree {
+        guard pendingSplits[scope] == nil,
+              let selectedTabID = navigation.selectedTabID,
+              validTabIDs.contains(selectedTabID),
+              !tree.contains(tabID: selectedTabID) else {
+            return tree
+        }
+        return .leaf(
+            SplitPaneItem(
+                id: SplitPaneItem.fallbackID(forTabID: selectedTabID),
+                tabID: selectedTabID
+            )
+        )
+    }
+
+    private func visibleScreenSessionIDs(
+        for presentation: Presentation,
+        in tree: SplitLayoutTree
+    ) -> Set<TerminalSessionID> {
+        let tabsByID = Dictionary(presentation.tabs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let sessionIDs = tree.leaves.compactMap { leaf in
+            tabsByID[leaf.tabID]?.sessionID
+        }
+        if sessionIDs.isEmpty, let fallback = presentation.tab?.sessionID {
+            return [fallback]
+        }
+        return Set(sessionIDs)
+    }
+
+    private func selectTabFromTabBar(_ tabID: String, in presentation: Presentation) {
+        guard let scope = currentScopeKey(presentation: presentation) else {
+            selectTab(tabID, in: presentation)
+            return
+        }
+        let tree = currentSplitTree(presentation: presentation)
+        if let existingItem = tree.item(forTabID: tabID) {
+            activePaneIDs[scope] = existingItem.id
+            selectTab(tabID, in: presentation)
+            return
+        }
+        // A split window is a coherent placement, not a bag of slots.
+        // Selecting an unrelated tab exits that split window instead of
+        // silently replacing one leaf and leaving the other sessions visible
+        // under the wrong tab selection.
+        let nextTree = SplitLayoutTree.leaf(
+            SplitPaneItem(
+                id: SplitPaneItem.fallbackID(forTabID: tabID),
+                tabID: tabID
+            )
+        )
+        setSplitTree(nextTree, for: scope)
+        activePaneIDs[scope] = nextTree.allPaneIDs.first
+        selectTab(tabID, in: presentation)
+    }
+
+    private func handleSelectPane(_ paneID: String, in presentation: Presentation, tree: SplitLayoutTree) {
+        guard let scope = currentScopeKey(presentation: presentation) else { return }
+        activePaneIDs[scope] = paneID
+        if let item = tree.item(for: paneID) {
+            selectTab(item.tabID, in: presentation)
+        }
+    }
+
+    private func handleSplitBelow(in presentation: Presentation) {
+        handleSplit(axis: .vertical, in: presentation)
+    }
+
+    private func handleSplitRight(in presentation: Presentation) {
+        handleSplit(axis: .horizontal, in: presentation)
+    }
+
+    private func handleSplit(axis: SplitAxis, in presentation: Presentation) {
+        guard let scope = currentScopeKey(presentation: presentation) else { return }
+        let tree = currentSplitTree(presentation: presentation)
+        guard tree.count < SplitLayoutTree.maxPanes else { return }
+        let activePaneID = currentActivePaneID(presentation: presentation, tree: tree)
+        let isCreating = presentation.workspace.map {
+            creatingSessionWorkspaceIDs.contains($0.id)
+        } ?? presentation.terminalGroup.map {
+            creatingSessionTerminalGroupIDs.contains($0.id)
+        } ?? false
+        guard !isCreating else { return }
+        guard let activeItem = tree.item(for: activePaneID),
+              let activeTab = presentation.tabs.first(where: { $0.id == activeItem.tabID }),
+              activeTab.sessionID != nil,
+              pendingSplits[scope] == nil,
+              pendingPaneClosures[scope] == nil else { return }
+
+        pendingSplits[scope] = PendingSplit(
+            targetPaneID: activePaneID,
+            existingTabIDs: Set(tree.allTabIDs),
+            axis: axis
+        )
+        if let workspace = presentation.workspace {
+            dispatch(.requestNewSession(workspace.id))
+        } else if let terminalGroup = presentation.terminalGroup {
+            dispatch(.requestNewTerminalGroupSession(terminalGroup.id))
+        } else {
+            pendingSplits.removeValue(forKey: scope)
+            return
+        }
+
+        // Creation is asynchronous and the roster may be delayed. Keep the
+        // captured target alive only for a bounded interval; a failed request
+        // must not make all future split commands inert.
+        let captured = pendingSplits[scope]
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+            guard self.pendingSplits[scope] == captured else { return }
+            self.pendingSplits.removeValue(forKey: scope)
+        }
+    }
+
+    private func handleClosePane(paneID: String? = nil, in presentation: Presentation) {
+        guard let scope = currentScopeKey(presentation: presentation) else { return }
+        let tree = currentSplitTree(presentation: presentation)
+        let targetPaneID = paneID ?? currentActivePaneID(presentation: presentation, tree: tree)
+        if tree.count > 1 {
+            guard pendingPaneClosures[scope] == nil,
+                  let item = tree.item(for: targetPaneID) else { return }
+            pendingPaneClosures[scope] = PendingPaneClosure(
+                paneID: targetPaneID,
+                tabID: item.tabID,
+                replacementPaneID: tree.nextPaneID(after: targetPaneID)
+            )
+            if let tab = presentation.tabs.first(where: { $0.id == item.tabID }),
+               tab.sessionID != nil {
+                // The Host owns Session termination. Keep the leaf mounted
+                // until the roster confirms deletion so a failed delete does
+                // not leave a hidden running process or a misleading layout.
+                dispatch(.closeTab(item.tabID))
+                let captured = pendingPaneClosures[scope]
+                DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                    guard self.pendingPaneClosures[scope] == captured else { return }
+                    self.pendingPaneClosures.removeValue(forKey: scope)
+                }
+            } else {
+                reconcilePendingSplitMutations()
+            }
+        } else {
+            handleCloseTab(in: presentation)
+        }
+    }
+
+    private func handleMaximizePane(paneID: String? = nil, in presentation: Presentation) {
+        guard let scope = currentScopeKey(presentation: presentation) else { return }
+        let tree = currentSplitTree(presentation: presentation)
+        guard tree.count > 1 else { return }
+        let targetPaneID = paneID ?? currentActivePaneID(presentation: presentation, tree: tree)
+        let newTree = tree.maximize(paneID: targetPaneID)
+        setSplitTree(newTree, for: scope)
+    }
+
+    private func handleOtherPane(in presentation: Presentation) {
+        guard let scope = currentScopeKey(presentation: presentation) else { return }
+        let tree = currentSplitTree(presentation: presentation)
+        let activePaneID = currentActivePaneID(presentation: presentation, tree: tree)
+        if let nextID = tree.nextPaneID(after: activePaneID, forward: true) {
+            activePaneIDs[scope] = nextID
+            if let item = tree.item(for: nextID) {
+                selectTab(item.tabID, in: presentation)
+            }
+        }
+    }
+
+    private func handleSplitDrop(
+        targetPaneID: String,
+        droppedTabID: String,
+        target: SplitDropTarget,
+        in presentation: Presentation
+    ) {
+        guard let scope = currentScopeKey(presentation: presentation) else { return }
+        let tree = currentSplitTree(presentation: presentation)
+        guard tree.contains(paneID: targetPaneID),
+              let droppedTab = presentation.tabs.first(where: { $0.id == droppedTabID }),
+              droppedTab.sessionID != nil,
+              projection.tabs.contains(where: { $0.id == droppedTabID }),
+              (presentation.workspace.map { projection.workspaceID(forTabID: droppedTabID) == $0.id }
+                  ?? presentation.terminalGroup.map { projection.terminalGroupID(forTabID: droppedTabID) == $0.id }
+                  ?? false),
+              pendingSplits[scope] == nil,
+              pendingPaneClosures[scope] == nil else { return }
+        if tree.contains(tabID: droppedTabID), tree.item(for: targetPaneID)?.tabID != droppedTabID {
+            // Moving a tab between existing panes needs an explicit reorder
+            // operation. Rejecting it here prevents duplicate Session IDs.
+            return
+        }
+        let newTree: SplitLayoutTree
+        switch target {
+        case .top:
+            newTree = tree.split(targetPaneID: targetPaneID, newTabID: droppedTabID, axis: .vertical, placeAfter: false)
+        case .bottom:
+            newTree = tree.split(targetPaneID: targetPaneID, newTabID: droppedTabID, axis: .vertical, placeAfter: true)
+        case .left:
+            newTree = tree.split(targetPaneID: targetPaneID, newTabID: droppedTabID, axis: .horizontal, placeAfter: false)
+        case .right:
+            newTree = tree.split(targetPaneID: targetPaneID, newTabID: droppedTabID, axis: .horizontal, placeAfter: true)
+        case .center:
+            newTree = tree.replace(paneID: targetPaneID, withTabID: droppedTabID)
+        }
+        setSplitTree(newTree, for: scope)
+        if let item = newTree.item(forTabID: droppedTabID) {
+            activePaneIDs[scope] = item.id
+            selectTab(droppedTabID, in: presentation)
+        }
+    }
+
+    /// Applies asynchronous split/close requests only after the Host roster
+    /// confirms the corresponding Session transition. This keeps the layout
+    /// tree and process lifecycle in lockstep even when a request races a
+    /// roster update or another client.
+    private func reconcilePendingSplitMutations() {
+        let presentation = makePresentation()
+
+        for (scope, pending) in Array(pendingSplits) {
+            guard currentScopeKey(presentation: presentation) == scope else { continue }
+            let tree = currentSplitTree(presentation: presentation)
+            guard tree.contains(paneID: pending.targetPaneID) else {
+                pendingSplits.removeValue(forKey: scope)
+                continue
+            }
+            guard let newTab = presentation.tabs.first(where: {
+                !pending.existingTabIDs.contains($0.id)
+                    && $0.sessionID != nil
+                    && $0.id == navigation.selectedTabID
+            }) else {
+                // Creation clears its spinner before publishing the selected
+                // Tab. Keep the pending intent through that brief ordering
+                // window; a failed request is released by the timeout below.
+                continue
+            }
+            let newTree = tree.split(
+                targetPaneID: pending.targetPaneID,
+                newTabID: newTab.id,
+                axis: pending.axis,
+                placeAfter: true
+            )
+            guard newTree.count == tree.count + 1 else {
+                pendingSplits.removeValue(forKey: scope)
+                continue
+            }
+            setSplitTree(newTree, for: scope)
+            if let item = newTree.item(forTabID: newTab.id) {
+                activePaneIDs[scope] = item.id
+                selectTab(newTab.id, in: presentation)
+            }
+            pendingSplits.removeValue(forKey: scope)
+        }
+
+        for (scope, pending) in Array(pendingPaneClosures) {
+            guard currentScopeKey(presentation: presentation) == scope else { continue }
+            guard !presentation.tabs.contains(where: { $0.id == pending.tabID }) else { continue }
+            let tree = currentSplitTree(presentation: presentation)
+            guard let newTree = tree.remove(paneID: pending.paneID) else {
+                pendingPaneClosures.removeValue(forKey: scope)
+                continue
+            }
+            setSplitTree(newTree, for: scope)
+            let nextPaneID = pending.replacementPaneID.flatMap { replacement in
+                newTree.contains(paneID: replacement) ? replacement : nil
+            } ?? newTree.allPaneIDs.first
+            activePaneIDs[scope] = nextPaneID
+            if let nextPaneID, let item = newTree.item(for: nextPaneID) {
+                selectTab(item.tabID, in: presentation)
+            }
+            pendingPaneClosures.removeValue(forKey: scope)
+        }
+    }
+
+    private func handleResizeSplit(splitPath: [Bool], ratio: Double, in presentation: Presentation) {
+        guard let scope = currentScopeKey(presentation: presentation) else { return }
+        let tree = currentSplitTree(presentation: presentation)
+        let newTree = tree.updateRatio(path: splitPath, ratio: ratio)
+        setSplitTree(newTree, for: scope)
     }
 
     private func selectTab(_ tabID: String, in presentation: Presentation) {

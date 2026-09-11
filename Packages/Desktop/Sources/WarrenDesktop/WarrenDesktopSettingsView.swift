@@ -49,11 +49,14 @@ private extension WarrenDesktopSettingsSection {
         case .terminalFont: "terminal"
         case .terminalTitle: "textformat"
         case .terminalRuntime: "cpu"
+        case .splits: "rectangle.split.2x1"
         case .aiTitles: "sparkles"
         case .presets: "hammer"
         case .workspaces: "arrow.triangle.branch"
         case .notifications: "bell"
         case .externalIDEs: "macwindow"
+        case .usageOverview: "chart.bar"
+        case .usage: "chart.bar"
         case .relay: "point.3.connected.trianglepath.dotted"
         case .lanPairing: "lock.shield"
         case .publicAccess: "globe"
@@ -65,11 +68,14 @@ private extension WarrenDesktopSettingsSection {
         case .terminalFont: "Applied to every terminal surface."
         case .terminalTitle: "Auxiliary context below the preset bar."
         case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
+        case .splits: "Split panes and their keyboard shortcuts."
         case .aiTitles: "Generate concise titles from the opening exchange."
         case .presets: "Choose visible presets and customize every launch command."
         case .workspaces: "Configure workspace behavior and task visibility."
         case .notifications: "Choose how Warren alerts you when background Agents finish."
         case .externalIDEs: "Choose the IDE button default and manage workspace editors."
+        case .usageOverview: "Review daily totals, activity heatmap, and cost breakdowns."
+        case .usage: "Token consumption per Agent, with equivalent API cost."
         case .relay: "Connect once and share with iPhone."
         case .lanPairing: "Arm a temporary PIN window for a trusted iPhone."
         case .publicAccess: "Publish this Host's Web UI through the enrolled Relay."
@@ -81,11 +87,14 @@ private extension WarrenDesktopSettingsSection {
         case .terminalFont: [rawValue, detail, "font", "family", "size", "typography"]
         case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
         case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
+        case .splits: [rawValue, detail, "split", "pane", "emacs", "chord", "C-x", "keyboard", "shortcut"]
         case .aiTitles: [rawValue, detail, "openai", "api", "model", "base", "key", "summary", "automatic"]
         case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "opencode", "pi", "trae", "agent", "visible", "hidden"]
         case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "setup", "script", "environment", "env", "variables", "WARREN", "shell", "AI", "Claude", "Codex", "sidebar", "tasks", "visibility"]
         case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
         case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
+        case .usageOverview: [rawValue, detail, "usage", "overview", "token", "tokens", "cost", "spend", "price", "pricing", "stats", "statistics", "heatmap", "quota", "budget", "cache", "models.dev", "claude", "codex", "rebuild", "history"]
+        case .usage: [rawValue, detail, "usage", "token", "tokens", "cost", "spend", "price", "pricing", "stats", "statistics", "heatmap", "quota", "budget", "cache", "models.dev", "claude", "codex"]
         case .relay: [rawValue, detail, "relay", "connect", "enrollment", "ticket", "host", "remote", "iphone", "qr"]
         case .lanPairing: [rawValue, detail, "pairing", "pin", "lan", "bonjour", "iphone", "mobile", "discovery", "security"]
         case .publicAccess: [rawValue, detail, "relay", "route", "hostname", "path", "endpoint", "tunnel", "internet"]
@@ -93,7 +102,8 @@ private extension WarrenDesktopSettingsSection {
     }
 
     var isTerminalSection: Bool {
-        self != .notifications && self != .relay && self != .lanPairing && self != .publicAccess
+        self != .notifications && self != .usageOverview && self != .usage && self != .relay
+            && self != .lanPairing && self != .publicAccess
     }
 }
 
@@ -129,6 +139,14 @@ struct WarrenDesktopSettingsView: View {
     let onTestOpenAI: @MainActor (String, String, String?) async throws -> Void
     let projects: [Project]
     let onSetProjectSetupScript: (ProjectID, String) -> Void
+    let usageStats: WarrenUsageStats
+    let usageState: WarrenUsageLoadState
+    /// Requests a fetch for the given day range. Optional so hosts that do not
+    /// wire usage simply show the section's empty state.
+    let onLoadUsage: ((Int) -> Void)?
+    /// Replaces only the Host's derived Usage projections from retained Agent
+    /// history. The settings page asks for confirmation before invoking it.
+    let onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
 
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
@@ -162,8 +180,12 @@ struct WarrenDesktopSettingsView: View {
     private var embeddedEditorOpenLinks = false
     @AppStorage(WarrenPreferenceKey.agentCompletionSoundEnabled)
     private var agentCompletionSoundEnabled = true
+    @AppStorage(WarrenPreferenceKey.usageRange)
+    private var usageRange = WarrenUsageRange.month
     @AppStorage(WarrenPreferenceKey.sidebarShowTasks)
     private var showsTasks = true
+    @AppStorage(WarrenPreferenceKey.terminalSplitChordsEnabled)
+    private var splitChordsEnabled = false
     @State private var openAIBaseURLDraft = ""
     @State private var openAIModelDraft = ""
     @State private var openAIKeyDraft = ""
@@ -182,6 +204,9 @@ struct WarrenDesktopSettingsView: View {
     @State private var relayInviteQRPresented = false
     @State private var lanPairingBusy = false
     @State private var lanPairingError: String?
+    @State private var usageRebuildConfirmation = false
+    @State private var usageRebuildBusy = false
+    @State private var usageRebuildError: String?
     @State private var copiedSettingsSection: WarrenDesktopSettingsSection?
     @Environment(\.colorScheme) private var colorScheme
 
@@ -242,6 +267,10 @@ struct WarrenDesktopSettingsView: View {
         onTestOpenAI: @escaping @MainActor (String, String, String?) async throws -> Void,
         projects: [Project] = [],
         onSetProjectSetupScript: @escaping (ProjectID, String) -> Void = { _, _ in },
+        usageStats: WarrenUsageStats = WarrenUsageStats(),
+        usageState: WarrenUsageLoadState = .idle,
+        onLoadUsage: ((Int) -> Void)? = nil,
+        onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         initialSettingsSection: WarrenDesktopSettingsSection? = nil,
         publicAccessPrefill: WarrenDesktopPublicAccessPrefill? = nil,
         relayPrefill: WarrenDesktopRelayPrefill? = nil
@@ -274,6 +303,10 @@ struct WarrenDesktopSettingsView: View {
         self.onTestOpenAI = onTestOpenAI
         self.projects = projects
         self.onSetProjectSetupScript = onSetProjectSetupScript
+        self.usageStats = usageStats
+        self.usageState = usageState
+        self.onLoadUsage = onLoadUsage
+        self.onRebuildUsage = onRebuildUsage
         self.initialSettingsSection = initialSettingsSection
         self.publicAccessPrefill = publicAccessPrefill
         self.relayPrefill = relayPrefill
@@ -301,6 +334,15 @@ struct WarrenDesktopSettingsView: View {
                 Rectangle()
                     .fill(tokens.border)
                     .frame(width: WarrenSpacing.hairline)
+
+                if selectedSection == .usageOverview || selectedSection == .usage {
+                    usageSubnavigationPanel(tokens: tokens)
+                        .frame(width: WarrenLayoutMetrics.settingsNavigationWidth * 0.72)
+
+                    Rectangle()
+                        .fill(tokens.border)
+                        .frame(width: WarrenSpacing.hairline)
+                }
 
                 detailPanel(tokens: tokens)
             }
@@ -339,6 +381,7 @@ struct WarrenDesktopSettingsView: View {
 
     private func navigationPanel(tokens: WarrenColorTokens) -> some View {
         let terminalSections = visibleSections.filter(\.isTerminalSection)
+        let usageSections = visibleSections.filter { $0 == .usageOverview || $0 == .usage }
         let notificationSections = visibleSections.filter { $0 == .notifications }
         let webSections = visibleSections.filter {
             $0 == .relay || $0 == .lanPairing || $0 == .publicAccess
@@ -378,6 +421,11 @@ struct WarrenDesktopSettingsView: View {
                         navigationItem(section, tokens: tokens)
                     }
 
+                    if !usageSections.isEmpty {
+                        groupLabel("Usage", tokens: tokens)
+                        usageRootNavigationItem(tokens: tokens)
+                    }
+
                     if !notificationSections.isEmpty {
                         groupLabel("Notifications", tokens: tokens)
                     }
@@ -410,6 +458,80 @@ struct WarrenDesktopSettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(tokens.sidebarSurface)
+    }
+
+    private func usageSubnavigationPanel(tokens: WarrenColorTokens) -> some View {
+        let sections = visibleSections.filter { $0 == .usageOverview || $0 == .usage }
+        return VStack(alignment: .leading, spacing: 0) {
+            Text("Usage")
+                .font(WarrenTypography.settingsScreenTitle)
+                .padding(.horizontal, WarrenSpacing.standard)
+                .padding(.top, WarrenSpacing.standard)
+                .padding(.bottom, WarrenSpacing.large)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                    groupLabel("Views", tokens: tokens)
+                    ForEach(sections) { section in
+                        navigationItem(
+                            section,
+                            tokens: tokens,
+                            semanticID: "settings.usage.view.\(section.id)"
+                        )
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(tokens.border)
+                    .frame(height: WarrenSpacing.hairline)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(tokens.sidebarSurface.opacity(0.72))
+    }
+
+    private func usageRootNavigationItem(tokens: WarrenColorTokens) -> some View {
+        let isSelected = selectedSection == .usageOverview || selectedSection == .usage
+        return Button {
+            selectedSection = .usageOverview
+        } label: {
+            HStack(spacing: WarrenSpacing.compact) {
+                Image(systemName: "chart.bar")
+                    .font(.system(size: 12, weight: .light))
+                    .frame(width: 16)
+                    .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
+                    .accessibilityHidden(true)
+
+                Text("Usage")
+                    .font(isSelected
+                        ? WarrenTypography.settingsNavigationItemActive
+                        : WarrenTypography.settingsNavigationItem)
+                    .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(tokens.mutedForeground)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, WarrenSpacing.standard)
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .contentShape(.rect)
+        }
+        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected))
+        .accessibilityLabel("Usage")
+        .accessibilityValue(isSelected ? "Selected" : "")
+        .accessibilityIdentifier("settings.section.Usage")
+        .warrenSemanticElement(
+            id: "settings.section.Usage",
+            role: .button,
+            label: "Usage",
+            isSelected: isSelected,
+            action: { selectedSection = .usageOverview }
+        )
     }
 
     private func groupLabel(_ title: String, tokens: WarrenColorTokens) -> some View {
@@ -461,9 +583,11 @@ struct WarrenDesktopSettingsView: View {
 
     private func navigationItem(
         _ section: SettingsSection,
-        tokens: WarrenColorTokens
+        tokens: WarrenColorTokens,
+        semanticID: String? = nil
     ) -> some View {
         let isSelected = selectedSection == section
+        let itemID = semanticID ?? "settings.section.\(section.id)"
         return Button {
             selectedSection = section
         } label: {
@@ -490,7 +614,14 @@ struct WarrenDesktopSettingsView: View {
         .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected))
         .accessibilityLabel(section.rawValue)
         .accessibilityValue(isSelected ? "Selected" : "")
-        .accessibilityIdentifier("settings.section.\(section.id)")
+        .accessibilityIdentifier(itemID)
+        .warrenSemanticElement(
+            id: itemID,
+            role: .button,
+            label: section.rawValue,
+            isSelected: isSelected,
+            action: { selectedSection = section }
+        )
     }
 
     private func detailPanel(tokens: WarrenColorTokens) -> some View {
@@ -503,6 +634,8 @@ struct WarrenDesktopSettingsView: View {
                     terminalTitleSection(tokens: tokens)
                 case .terminalRuntime:
                     terminalRuntimeSection(tokens: tokens)
+                case .splits:
+                    splitsSection(tokens: tokens)
                 case .aiTitles:
                     aiTitlesSection(tokens: tokens)
                 case .presets:
@@ -513,6 +646,10 @@ struct WarrenDesktopSettingsView: View {
                     notificationsSection(tokens: tokens)
                 case .externalIDEs:
                     externalIDEsSection(tokens: tokens)
+                case .usageOverview:
+                    usageOverviewSection(tokens: tokens)
+                case .usage:
+                    usageSection(tokens: tokens)
                 case .relay:
                     relaySection(tokens: tokens)
                 case .lanPairing:
@@ -521,24 +658,29 @@ struct WarrenDesktopSettingsView: View {
                     publicAccessSection(tokens: tokens)
                 }
 
-                Button("Restore terminal defaults") {
-                    titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
-                    fontFamily = TerminalFontPreference.defaultFamily
-                    fontSize = TerminalFontPreference.defaultSize
-                    shellCommand = ""
-                    claudeCommand = "claude"
-                    codexCommand = "codex --dangerously-bypass-hook-trust"
-                    opencodeCommand = "opencode"
-                    piCommand = "pi"
-                    traeCommand = "trae-cli interactive"
-                    presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
-                    hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
+                // Scoped to the sections it actually resets. It reads as an
+                // available action on any page it appears on, which is wrong on
+                // a read-only panel like Usage.
+                if selectedSection.isTerminalSection {
+                    Button("Restore terminal defaults") {
+                        titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
+                        fontFamily = TerminalFontPreference.defaultFamily
+                        fontSize = TerminalFontPreference.defaultSize
+                        shellCommand = ""
+                        claudeCommand = "claude"
+                        codexCommand = "codex --dangerously-bypass-hook-trust"
+                        opencodeCommand = "opencode"
+                        piCommand = "pi"
+                        traeCommand = "trae-cli interactive"
+                        presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
+                        hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
+                    }
+                    .buttonStyle(.plain)
+                    .font(WarrenTypography.settingsAction)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .padding(.top, WarrenSpacing.medium)
+                    .accessibilityIdentifier("settings.restore-defaults")
                 }
-                .buttonStyle(.plain)
-                .font(WarrenTypography.settingsAction)
-                .foregroundStyle(tokens.mutedForeground)
-                .padding(.top, WarrenSpacing.medium)
-                .accessibilityIdentifier("settings.restore-defaults")
             }
             .frame(maxWidth: WarrenLayoutMetrics.settingsContentMaxWidth, alignment: .leading)
             .padding(.horizontal, WarrenSpacing.large)
@@ -948,6 +1090,103 @@ struct WarrenDesktopSettingsView: View {
             .buttonStyle(.bordered)
             .disabled(!agentCompletionSoundEnabled)
             .accessibilityIdentifier("settings.notifications.play-test-sound")
+        }
+    }
+
+    private func usageOverviewSection(tokens: WarrenColorTokens) -> some View {
+        settingsSection("Overview", section: .usageOverview, tokens: tokens) {
+            WarrenDesktopUsageOverviewPanel(
+                stats: usageStats,
+                state: usageState,
+                tokens: tokens,
+                range: $usageRange,
+                onReload: { onLoadUsage?(usageRange.days) }
+            )
+            // Fetch on first appearance and whenever the panel is revisited, so
+            // reopening settings does not show a figure from an earlier session.
+            .onAppear { onLoadUsage?(usageRange.days) }
+
+            usageRebuildSection(tokens: tokens)
+        }
+        .alert("Rebuild Usage data?", isPresented: $usageRebuildConfirmation) {
+            Button("Rebuild Usage data", role: .destructive) {
+                rebuildUsage()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "Warren will delete the current daily and intraday Usage aggregates "
+                    + "and rebuild them from retained Agent history. The Agent journal "
+                    + "and all other databases will remain unchanged."
+            )
+        }
+    }
+
+    private func usageSection(tokens: WarrenColorTokens) -> some View {
+        settingsSection("Usage", section: .usage, tokens: tokens) {
+            WarrenDesktopUsagePanel(
+                stats: usageStats,
+                state: usageState,
+                tokens: tokens,
+                range: $usageRange,
+                onReload: { onLoadUsage?(usageRange.days) }
+            )
+            .onAppear { onLoadUsage?(usageRange.days) }
+        }
+    }
+
+    private func usageRebuildSection(tokens: WarrenColorTokens) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
+            Text("Rebuild Usage data")
+                .font(WarrenTypography.settingsBodyEmphasis)
+            Text(
+                "Use this once after upgrading if historical days are present but token totals are incomplete. "
+                    + "It deletes and rebuilds only Usage aggregates; Agent history, projects, sessions, and every other database are left untouched."
+            )
+            .font(WarrenTypography.settingsSupporting)
+            .foregroundStyle(tokens.mutedForeground)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Button(usageRebuildBusy ? "Rebuilding…" : "Rebuild Usage data") {
+                usageRebuildConfirmation = true
+            }
+            .buttonStyle(.bordered)
+            .font(WarrenTypography.settingsAction)
+            .disabled(usageRebuildBusy || onRebuildUsage == nil)
+            .accessibilityIdentifier("settings.usage.rebuild")
+
+            if usageRebuildBusy {
+                ProgressView("Rebuilding Usage…")
+                    .controlSize(.small)
+                    .font(WarrenTypography.settingsSupporting)
+            }
+            if let usageRebuildError, !usageRebuildError.isEmpty {
+                Text("Usage rebuild failed: \(usageRebuildError)")
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.destructive)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings.usage.rebuild.error")
+            }
+        }
+        .padding(WarrenSpacing.medium)
+        .background(tokens.fillHover)
+        .clipShape(.rect(cornerRadius: WarrenRadius.medium))
+    }
+
+    private func rebuildUsage() {
+        guard !usageRebuildBusy, let onRebuildUsage else { return }
+        usageRebuildBusy = true
+        usageRebuildError = nil
+        onRebuildUsage { result in
+            DispatchQueue.main.async {
+                usageRebuildBusy = false
+                switch result {
+                case .success:
+                    onLoadUsage?(usageRange.days)
+                case .failure(let error):
+                    usageRebuildError = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -1985,6 +2224,34 @@ struct WarrenDesktopSettingsView: View {
             .foregroundStyle(tokens.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
 
+        }
+    }
+
+    private func splitsSection(tokens: WarrenColorTokens) -> some View {
+        settingsSection("Splits", section: .splits, tokens: tokens) {
+            Text(
+                "Split a pane from the View menu: Split Right (⌘D), Split Below "
+                    + "(⇧⌘D), Close Split Pane (⇧⌘W), Maximize Pane (⇧⌘↩), and "
+                    + "Cycle Pane Focus (⌘])."
+            )
+            .font(WarrenTypography.settingsSupporting)
+            .foregroundStyle(tokens.mutedForeground)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Toggle("Emacs C-x split chords", isOn: $splitChordsEnabled)
+                .toggleStyle(.switch)
+                .font(WarrenTypography.settingsControl)
+                .accessibilityIdentifier("settings.splits.emacs-chords")
+            Text(
+                "Adds C-x 2, C-x 3, C-x 0, C-x 1, and C-x o. While this is on, "
+                    + "Warren consumes Ctrl-X and it no longer reaches the "
+                    + "terminal, so programs that use it (nano, emacs, a tmux "
+                    + "C-x prefix) stop seeing that key. C-g cancels a pending "
+                    + "chord and C-x C-x sends a literal Ctrl-X."
+            )
+            .font(WarrenTypography.settingsSupporting)
+            .foregroundStyle(tokens.mutedForeground)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 

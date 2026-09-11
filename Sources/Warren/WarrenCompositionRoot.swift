@@ -51,6 +51,7 @@ struct WarrenCompositionRoot: View {
     @State private var worktreeImportCandidates: [WarrenDesktopWorktreeCandidate] = []
     @State private var worktreeImportLoading = false
     @State private var terminalSearchPresented = false
+    @State private var terminalSearchSessionID: TerminalSessionID?
     @State private var updateStatus: WarrenDesktopUpdateStatus = .none
     @StateObject private var presentation = WarrenPresentationCoordinator()
     @Environment(\.colorScheme) private var colorScheme
@@ -182,6 +183,11 @@ struct WarrenCompositionRoot: View {
             },
             onNoticeRead: { remoteModel.markNoticeRead($0) },
             onNoticeDismiss: { remoteModel.dismissNotice($0) },
+            onActiveScreenSessionsChanged: { sessions in
+                surfaceManager.activateMultiple(sessionIDs: sessions)
+                remoteModel.ensureVisibleSessions(sessions)
+                remoteModel.reportActiveScreenSessions(sessions)
+            },
             endpointOptions: endpointOptions,
             selectedEndpointID: selectedEndpointID,
             onSelectEndpoint: { id in selectEndpoint(id) },
@@ -263,6 +269,14 @@ struct WarrenCompositionRoot: View {
             onSetProjectSetupScript: { projectID, script in
                 remoteModel.setProjectSetupScript(projectID, script: script)
             },
+            usageStats: remoteModel.usageStats,
+            usageState: remoteModel.usageState,
+            onLoadUsage: { days in
+                remoteModel.loadUsageStats(days: days)
+            },
+            onRebuildUsage: { completion in
+                remoteModel.rebuildUsageData(completion: completion)
+            },
             embeddedEditorAvailable: selectedEndpointCapabilities.canUseEmbeddedEditor,
             editorSurface: { workspace in
                 AnyView(WarrenEmbeddedEditorSurface(
@@ -283,7 +297,21 @@ struct WarrenCompositionRoot: View {
                 onBlurred: { sessionID in
                     remoteModel.blur(sessionID: sessionID)
                 },
-                searchPresented: $terminalSearchPresented
+                searchPresented: Binding(
+                    get: {
+                        terminalSearchPresented
+                            && terminalSearchSessionID == context.tab.sessionID
+                    },
+                    set: { presented in
+                        if presented {
+                            terminalSearchSessionID = context.tab.sessionID
+                            terminalSearchPresented = true
+                        } else if terminalSearchSessionID == context.tab.sessionID {
+                            terminalSearchPresented = false
+                            terminalSearchSessionID = nil
+                        }
+                    }
+                )
             )
         }
         .preferredColorScheme(.dark)
@@ -337,7 +365,8 @@ struct WarrenCompositionRoot: View {
             // Release the terminal's AppKit first responder before the search
             // field mounts so the field receives the next keystroke.
             NSApp.keyWindow?.makeFirstResponder(nil)
-            terminalSearchPresented = true
+            terminalSearchSessionID = remoteModel.focusedTerminalSessionID
+            terminalSearchPresented = terminalSearchSessionID != nil
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenAppPresentation.message)) { note in
             guard let message = note.object as? WarrenAppMessage else { return }

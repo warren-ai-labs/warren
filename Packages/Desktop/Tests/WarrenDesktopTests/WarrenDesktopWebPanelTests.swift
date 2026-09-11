@@ -112,6 +112,77 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testUsageSettingsSectionIsVisibleInNavigation() {
+        let recorder = WarrenSemanticRecorder()
+        let hostingView = makeUsageHostingView(initialSection: .usage, recorder: recorder)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let snapshot = recorder.snapshot()
+        let root = snapshot.node(id: "settings.section.Usage")
+        let overview = snapshot.node(id: "settings.usage.view.Overview")
+        let usage = snapshot.node(id: "settings.usage.view.Usage")
+
+        XCTAssertEqual(root?.label, "Usage")
+        XCTAssertTrue(root?.isSelected == true)
+        XCTAssertEqual(overview?.label, "Overview")
+        XCTAssertFalse(overview?.isSelected == true)
+        XCTAssertEqual(usage?.label, "Usage")
+        XCTAssertTrue(usage?.isSelected == true)
+        XCTAssertLessThan(root?.frame.x ?? .greatestFiniteMagnitude, usage?.frame.x ?? -.greatestFiniteMagnitude)
+        XCTAssertNil(snapshot.node(id: "settings.section.Overview"))
+    }
+
+    @MainActor
+    func testUsageOverviewSelectsOverviewInSecondLevelNavigation() {
+        let recorder = WarrenSemanticRecorder()
+        let hostingView = makeUsageHostingView(initialSection: .usageOverview, recorder: recorder)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let snapshot = recorder.snapshot()
+        XCTAssertTrue(snapshot.node(id: "settings.section.Usage")?.isSelected == true)
+        XCTAssertTrue(snapshot.node(id: "settings.usage.view.Overview")?.isSelected == true)
+        XCTAssertFalse(snapshot.node(id: "settings.usage.view.Usage")?.isSelected == true)
+    }
+
+    @MainActor
+    private func makeUsageHostingView(
+        initialSection: WarrenDesktopSettingsSection,
+        recorder: WarrenSemanticRecorder
+    ) -> NSHostingView<AnyView> {
+        let settings = WarrenDesktopSettingsView(
+            onBack: {},
+            hostName: "Test Host",
+            webStatus: WarrenDesktopWebStatus(),
+            onWebTest: nil,
+            onWebStop: nil,
+            onWebReset: nil,
+            onRelayEnroll: nil,
+            defaultRuntime: nil,
+            onSetRuntime: { _ in },
+            autoOpenShell: false,
+            onSetAutoOpenShell: { _ in },
+            autoStartAI: false,
+            onSetAutoStartAI: { _ in },
+            openAIBaseURL: "",
+            openAIModel: "",
+            openAITitleEnabled: false,
+            onSetOpenAISetting: { _, _ in },
+            onTestOpenAI: { _, _, _ in },
+            initialSettingsSection: initialSection
+        )
+        .environment(\.colorScheme, .dark)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .frame(width: 1_000, height: 800)
+
+        return NSHostingView(rootView: AnyView(settings))
+    }
+
     func testAITitleSettingsSectionIsRegisteredAndDeepLinkable() throws {
         XCTAssertTrue(WarrenDesktopSettingsSection.allCases.contains(.aiTitles))
         XCTAssertEqual(WarrenDesktopSettingsSection.aiTitles.deepLinkValue, "ai-titles")

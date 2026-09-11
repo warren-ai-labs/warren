@@ -42,6 +42,20 @@ final class GhosttyAdapterTests: XCTestCase {
         XCTAssertEqual(policy.warmSessionIDs, [second])
     }
 
+    func testRetentionPolicyDropsStalePrimaryWhenActivatingMultipleSessions() {
+        let stale = TerminalSessionID(rawValue: UUID())
+        let active = TerminalSessionID(rawValue: UUID())
+        var policy = TerminalSurfaceRetentionPolicy(warmLimit: 2)
+
+        _ = policy.activate(stale)
+        _ = policy.activateMultiple([active], primary: stale)
+
+        XCTAssertEqual(policy.activeSessionIDs, [active])
+        XCTAssertEqual(policy.activeSessionID, active)
+        XCTAssertEqual(policy.residency(of: stale), .warm)
+        XCTAssertEqual(policy.residency(of: active), .active)
+    }
+
     func testRetentionPolicyDeactivationRespectsZeroWarmBudget() {
         let sessionID = TerminalSessionID(rawValue: UUID())
         var policy = TerminalSurfaceRetentionPolicy(warmLimit: 0)

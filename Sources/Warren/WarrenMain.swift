@@ -176,6 +176,9 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Split layout writes are coalesced, so quitting right after a divider
+        // drag would otherwise drop the last ratio.
+        WarrenDesktopSplitLayoutPersistence.flushPendingSave()
         updateCheckTask?.cancel()
         updateInstallTask?.cancel()
         cliInstallTask?.cancel()
@@ -490,6 +493,18 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         if menuItem.representedObject as? String == WarrenDesktopCommand.activeSessions.rawValue {
             return true
         }
+        if let raw = menuItem.representedObject as? String {
+            switch raw {
+            case WarrenDesktopCommand.splitBelow.rawValue,
+                 WarrenDesktopCommand.splitRight.rawValue,
+                 WarrenDesktopCommand.closePane.rawValue,
+                 WarrenDesktopCommand.maximizePane.rawValue,
+                 WarrenDesktopCommand.otherPane.rawValue:
+                return true
+            default:
+                break
+            }
+        }
         return menuItem.action != #selector(postCommand(_:))
     }
 
@@ -683,6 +698,56 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         )
         fullScreenItem.target = target
         fullScreenItem.keyEquivalentModifierMask = [.command, .control]
+
+        // Split commands ship with Command shortcuts so they never take a key
+        // away from the shell. The optional Emacs C-x chords (Settings ›
+        // Splits) reach the same notifications.
+        viewMenu.addItem(.separator())
+        let splitRightItem = viewMenu.addItem(
+            withTitle: "Split Right",
+            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            keyEquivalent: "d"
+        )
+        splitRightItem.target = target
+        splitRightItem.keyEquivalentModifierMask = [.command]
+        splitRightItem.representedObject = WarrenDesktopCommand.splitRight.rawValue
+
+        let splitBelowItem = viewMenu.addItem(
+            withTitle: "Split Below",
+            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            keyEquivalent: "d"
+        )
+        splitBelowItem.target = target
+        splitBelowItem.keyEquivalentModifierMask = [.command, .shift]
+        splitBelowItem.representedObject = WarrenDesktopCommand.splitBelow.rawValue
+
+        let closePaneItem = viewMenu.addItem(
+            withTitle: "Close Split Pane",
+            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            keyEquivalent: "w"
+        )
+        closePaneItem.target = target
+        closePaneItem.keyEquivalentModifierMask = [.command, .shift]
+        closePaneItem.representedObject = WarrenDesktopCommand.closePane.rawValue
+
+        let maximizePaneItem = viewMenu.addItem(
+            withTitle: "Maximize Pane",
+            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            keyEquivalent: "\r"
+        )
+        maximizePaneItem.target = target
+        maximizePaneItem.keyEquivalentModifierMask = [.command, .shift]
+        maximizePaneItem.representedObject = WarrenDesktopCommand.maximizePane.rawValue
+
+        let otherPaneItem = viewMenu.addItem(
+            withTitle: "Cycle Pane Focus",
+            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            keyEquivalent: "]"
+        )
+        otherPaneItem.target = target
+        otherPaneItem.keyEquivalentModifierMask = [.command]
+        otherPaneItem.representedObject = WarrenDesktopCommand.otherPane.rawValue
+
         viewMenuItem.submenu = viewMenu
 
         let webMenuItem = NSMenuItem()

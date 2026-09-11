@@ -71,6 +71,57 @@ func ProjectEvents(events []api.AgentEvent, options ReadOptions) ([]api.AgentEve
 	return result, nil
 }
 
+// ReadTranscriptUsage parses a complete transcript with the provider parser
+// and returns only observations carrying token usage. It intentionally does
+// not apply the conversation projection's recent-event bound: a historical
+// rebuild must see every billable observation in a file, while still reusing
+// the parser's provider-specific duplicate suppression.
+func ReadTranscriptUsage(ctx context.Context, provider, path string) ([]api.AgentEvent, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider != "codex" && provider != "claude" && provider != "opencode" && provider != "pi" && provider != "qoder" && provider != "antigravity" {
+		return nil, fmt.Errorf("unsupported agent provider %q", provider)
+	}
+	if strings.TrimSpace(path) == "" {
+		return nil, errors.New("agent transcript path is required")
+	}
+
+	file, err := openRegularFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	parser := newParserWithContentLimit(provider, 0)
+	reader := bufio.NewReaderSize(file, 64*1024)
+	var result []api.AgentEvent
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		line, readErr := readBoundedLine(reader, maxTranscriptLine)
+		if len(line) > 0 {
+			line = bytes.TrimSpace(line)
+			if len(line) > 0 {
+				for _, event := range parser.parse(line) {
+					if event.Usage != nil {
+						result = append(result, event)
+					}
+				}
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+	return result, nil
+}
+
 // ReadTranscript parses one Codex, Claude, OpenCode, or Pi JSONL transcript
 // into the same normalized events used by Warren's live agent view. The file
 // is consumed line by line, so the reader never loads the whole transcript
