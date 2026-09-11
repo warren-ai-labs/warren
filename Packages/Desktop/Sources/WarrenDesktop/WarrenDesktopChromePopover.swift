@@ -291,7 +291,9 @@ struct WarrenDesktopEndpointPopoverContent: View {
         _ endpoint: WarrenDesktopEndpointOption,
         tokens: WarrenColorTokens
     ) -> some View {
-        HStack(alignment: .center, spacing: WarrenSpacing.xs) {
+        let isSelected = endpoint.id == selectedID
+
+        return HStack(alignment: .center, spacing: WarrenSpacing.xs) {
             Button {
                 onSelect(endpoint.id)
                 onDismiss()
@@ -352,54 +354,65 @@ struct WarrenDesktopEndpointPopoverContent: View {
                 }
             }
 
-            Button {
-                onSetSidebarVisibility(endpoint.id, !endpoint.isDisplayedInSidebar)
-            } label: {
-                Label(
-                    endpoint.isDisplayedInSidebar ? "Sidebar" : "Add",
-                    systemImage: endpoint.isDisplayedInSidebar ? "checkmark" : "plus"
-                )
-                .font(WarrenTypography.popoverMeta.weight(.semibold))
-                .foregroundStyle(
+            if isSelected && !endpoint.isDisplayedInSidebar {
+                sidebarMembershipLabel(isDisplayed: true, tokens: tokens)
+                    .accessibilityHidden(true)
+            } else {
+                Button {
+                    onSetSidebarVisibility(endpoint.id, !endpoint.isDisplayedInSidebar)
+                } label: {
+                    sidebarMembershipLabel(
+                        isDisplayed: endpoint.isDisplayedInSidebar,
+                        tokens: tokens
+                    )
+                }
+                .buttonStyle(.plain)
+                .help(
                     endpoint.isDisplayedInSidebar
-                        ? tokens.highlight
-                        : tokens.mutedForeground
+                        ? "Remove \(endpoint.label) from Sidebar"
+                        : "Add \(endpoint.label) to Sidebar"
                 )
-                .padding(.horizontal, WarrenSpacing.xs)
-                .padding(.vertical, WarrenSpacing.xxs)
-                .background(
+                .accessibilityLabel(
                     endpoint.isDisplayedInSidebar
-                        ? tokens.highlight.opacity(0.14)
-                        : tokens.border.opacity(0.6),
-                    in: Capsule()
+                        ? "Remove \(endpoint.label) from Sidebar"
+                        : "Add \(endpoint.label) to Sidebar"
+                )
+                .accessibilityHint("This does not change the active execution server")
+                .warrenSemanticElement(
+                    id: "endpoint.\(endpoint.id).sidebar",
+                    role: .button,
+                    label: endpoint.isDisplayedInSidebar
+                        ? "Remove \(endpoint.label) from Sidebar"
+                        : "Add \(endpoint.label) to Sidebar",
+                    action: {
+                        onSetSidebarVisibility(endpoint.id, !endpoint.isDisplayedInSidebar)
+                    }
                 )
             }
-            .buttonStyle(.plain)
-            .help(
-                endpoint.isDisplayedInSidebar
-                    ? "Remove \(endpoint.label) from Sidebar"
-                    : "Add \(endpoint.label) to Sidebar"
-            )
-            .accessibilityLabel(
-                endpoint.isDisplayedInSidebar
-                    ? "Remove \(endpoint.label) from Sidebar"
-                    : "Add \(endpoint.label) to Sidebar"
-            )
-            .accessibilityHint("This does not change the active execution server")
-            .warrenSemanticElement(
-                id: "endpoint.\(endpoint.id).sidebar",
-                role: .button,
-                label: endpoint.isDisplayedInSidebar
-                    ? "Remove \(endpoint.label) from Sidebar"
-                    : "Add \(endpoint.label) to Sidebar",
-                action: {
-                    onSetSidebarVisibility(endpoint.id, !endpoint.isDisplayedInSidebar)
-                }
-            )
         }
         .padding(.leading, WarrenSpacing.standard)
         .padding(.trailing, WarrenSpacing.compact)
         .padding(.vertical, WarrenSpacing.compact)
+    }
+
+    private func sidebarMembershipLabel(
+        isDisplayed: Bool,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        Label(
+            isDisplayed ? "Sidebar" : "Add",
+            systemImage: isDisplayed ? "checkmark" : "plus"
+        )
+        .font(WarrenTypography.popoverMeta.weight(.semibold))
+        .foregroundStyle(isDisplayed ? tokens.highlight : tokens.mutedForeground)
+        .padding(.horizontal, WarrenSpacing.xs)
+        .padding(.vertical, WarrenSpacing.xxs)
+        .background(
+            isDisplayed
+                ? tokens.highlight.opacity(0.14)
+                : tokens.border.opacity(0.6),
+            in: Capsule()
+        )
     }
 }
 

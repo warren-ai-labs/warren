@@ -40,6 +40,35 @@ final class WarrenHostProbeIntegrationTests: XCTestCase {
         XCTAssertEqual(visibilityChange?.isDisplayed, true)
     }
 
+    @MainActor
+    func testSelectedEndpointIsImplicitlyInTheSidebar() async throws {
+        let recorder = WarrenSemanticRecorder()
+        let view = WarrenDesktopEndpointPopover(
+            connectionState: .attached,
+            endpoints: [.init(id: "local", label: "Local")],
+            selectedID: "local",
+            onSelect: { _ in },
+            onSetSidebarVisibility: { _, _ in
+                XCTFail("The selected endpoint should not expose a sidebar toggle")
+            },
+            onAddSSHHost: {},
+            onRetry: {},
+            onStop: {},
+            onDismiss: {}
+        )
+        .environment(\.colorScheme, .dark)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(x: 0, y: 0, width: 260, height: 260)
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        hosting.layoutSubtreeIfNeeded()
+
+        XCTAssertNotNil(recorder.snapshot().node(id: "endpoint.local"))
+        XCTAssertNil(recorder.snapshot().node(id: "endpoint.local.sidebar"))
+    }
+
     /// Opt-in acceptance against a running daemon, without changing its catalog
     /// or sessions. The image is the production popover rendered by AppKit.
     @MainActor

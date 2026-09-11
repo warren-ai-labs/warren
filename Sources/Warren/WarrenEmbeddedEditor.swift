@@ -1491,12 +1491,28 @@ private final class WarrenEmbeddedEditorWKWebView: WKWebView {
 }
 
 @MainActor
-enum WarrenEmbeddedEditorWebViewStorage {
-    /// Keep each cached workspace in its own browser storage namespace. The
-    /// default WebKit store is shared by every view for this origin, which
-    /// lets VS Code's local state and HTTP cache bleed across workspaces.
+final class WarrenEmbeddedEditorWebViewStorage {
+    /// Keep each workspace's browser state alive independently of its cached
+    /// WebView. The default WebKit store is shared by every view for this
+    /// origin, while a non-persistent store gives each workspace an isolated
+    /// in-memory namespace for the lifetime of the editor server.
+    private var dataStores: [String: WKWebsiteDataStore] = [:]
+
     static func makeIsolatedDataStore() -> WKWebsiteDataStore {
         .nonPersistent()
+    }
+
+    func dataStore(for workspacePath: String) -> WKWebsiteDataStore {
+        if let dataStore = dataStores[workspacePath] {
+            return dataStore
+        }
+        let dataStore = Self.makeIsolatedDataStore()
+        dataStores[workspacePath] = dataStore
+        return dataStore
+    }
+
+    func removeAll() {
+        dataStores.removeAll()
     }
 }
 
@@ -1521,6 +1537,7 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     private static let maximumCachedWebViews = 3
     private var webViews: [String: WKWebView] = [:]
     private var webViewOrder: [String] = []
+    private let webViewStorage = WarrenEmbeddedEditorWebViewStorage()
     private var requestedWorkspacePaths: Set<String> = []
     private var process: Process?
     private var processGroupID: pid_t?
@@ -1864,6 +1881,7 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         }
         objectWillChange.send()
         webViews[workspacePath] = makeWebView(
+            workspacePath: workspacePath,
             url: WarrenEmbeddedEditorConfiguration.workspaceURL(
                 serverURL: serverURL,
                 path: workspacePath,
@@ -1941,10 +1959,10 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         }
     }
 
-    private func makeWebView(url: URL) -> WKWebView {
+    private func makeWebView(workspacePath: String, url: URL) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore =
-            WarrenEmbeddedEditorWebViewStorage.makeIsolatedDataStore()
+            webViewStorage.dataStore(for: workspacePath)
         WarrenEmbeddedEditorPointerBridge.install(in: configuration)
         WarrenEmbeddedEditorNativeSelectionBridge.install(in: configuration)
         WarrenEmbeddedEditorChrome.install(in: configuration)
@@ -1980,6 +1998,7 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         }
         webViews = [:]
         webViewOrder = []
+        webViewStorage.removeAll()
         if let mouseEventMonitor {
             NSEvent.removeMonitor(mouseEventMonitor)
             self.mouseEventMonitor = nil

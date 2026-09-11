@@ -4,10 +4,55 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-11
+
+> Minor release: makes Warren Hosts discoverable on the local network, adds
+> explicit Host-armed pairing, and brings multi-Host navigation and iOS Host
+> management into the client surface. This release covers macOS, iOS, Web, and
+> Headless clients; the JSON control protocol remains at 4.0.
+
 ### Added
 
+- Add mDNS/DNS-SD discovery for Warren Hosts, stable Host identity, candidate
+  probing, direct-LAN routing, and endpoint aggregation across changing network
+  addresses.
+- Add an explicit Host-armed LAN pairing flow with a short-lived PIN and scoped
+  client credentials; discovery alone never grants access.
+- Add multi-Host Desktop navigation with Host-scoped Projects and Workspaces,
+  endpoint display names, active-session filtering, clearer empty states, and
+  Task-aware navigation.
+- Add iOS Host management with local discovery, direct-LAN and Relay route
+  selection, QR/PIN pairing, Agent history reload, and richer Agent cards.
 - Record anonymous onboarding download starts in Workers Analytics Engine with
   release, visitor, platform, location, language, and referrer dimensions.
+
+### Changed
+
+- Keep Desktop, Web, CLI, and iOS Agent surfaces on the canonical projection
+  while normalizing plan events, compaction summaries, provider markup, diffs,
+  and legacy read responses.
+- Make endpoint identity explicit in transport and sidebar state so focus,
+  resize, routing, and resource selection remain scoped to the correct Host.
+- Keep the terminal sidebar and embedded editor state stable while improving
+  attach/reconnect behavior and preserving workspace context.
+
+### Fixed
+
+- Preserve terminal connections across output resets and guard focus claims and
+  resizes against stale layout generations.
+- Route task-linked Workspaces to their actionable Task row and distinguish
+  unavailable Hosts, active-only filtering, and Hosts without Projects.
+- Preserve embedded-editor workspace state across presentation and navigation
+  changes.
+
+### Release notes
+
+- LAN discovery is a reachability mechanism, not a trust grant. Pairing must be
+  explicitly armed on the Host, and existing Relay/direct endpoints remain
+  available when LAN discovery is unavailable.
+- The release adds no control-protocol version change or state-schema migration;
+  validate direct-LAN pairing, multi-Host routing, and iOS local-network
+  permissions on real devices before publishing.
 
 ## [0.12.2] - 2026-09-09
 

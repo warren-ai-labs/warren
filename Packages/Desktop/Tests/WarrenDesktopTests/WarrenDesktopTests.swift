@@ -74,6 +74,7 @@ private struct SidebarHostRowsTestHarness: View {
             onSelect: { state.recordSelection($0) },
             onOpenWorkspace: { _ in },
             onFocusTask: { _ in },
+            onToggleActiveOnly: {},
             onRetry: { _ in }
         )
     }
@@ -493,7 +494,19 @@ final class WarrenDesktopTests: XCTestCase {
         let localWorkspaceID = "workspace.host.local.\(sharedWorkspaceID.description)"
         let remoteWorkspaceID = "workspace.host.remote.\(sharedWorkspaceID.description)"
         let localProjectID = "project.host.local.\(sharedProjectID.description)"
-        XCTAssertNil(recorder.snapshot().node(id: localWorkspaceID))
+        let initialSnapshot = recorder.snapshot()
+        guard let localEmptyAction = initialSnapshot.node(
+            id: "sidebar.empty.host.local.add-project"
+        ), let localHostHeader = initialSnapshot.node(id: "host.local.toggle") else {
+            XCTFail("Multi-host empty Host must expose its header and add-project action")
+            return
+        }
+        XCTAssertEqual(
+            localEmptyAction.frame.x - localHostHeader.frame.x,
+            Double(WarrenDesktopSidebarIndent.hostEmptyState - WarrenDesktopSidebarIndent.host),
+            accuracy: 0.01
+        )
+        XCTAssertNil(initialSnapshot.node(id: localWorkspaceID))
         XCTAssertNil(recorder.snapshot().node(id: remoteWorkspaceID))
 
         state.hosts = [
@@ -1972,6 +1985,52 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(
             WarrenDesktopSidebar.workspaceScrollTarget(for: available),
             "workspace.project-list.\(available.id.description)"
+        )
+    }
+
+    func testHostScopedTaskWorkspaceScrollsToItsTaskRowRatherThanTheProjectTree() {
+        let host = WarrenDomain.Host(name: "Task Host")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let assigned = Workspace(
+            projectID: project.id,
+            taskID: task.id,
+            name: "assigned",
+            path: "/tmp/api-assigned"
+        )
+        let available = Workspace(
+            projectID: project.id,
+            name: "available",
+            path: "/tmp/api-available"
+        )
+
+        // The Host tree renders a task-linked row unselectable, so navigation
+        // has to land on the Task row instead of the Projects subtree.
+        XCTAssertEqual(
+            WarrenDesktopSidebar.hostWorkspaceScrollTarget(
+                endpointID: "local",
+                workspaceID: assigned.id,
+                owningTaskID: task.id
+            ),
+            "workspace.task-list.\(assigned.id.description)"
+        )
+        XCTAssertEqual(
+            WarrenDesktopSidebar.hostWorkspaceScrollTarget(
+                endpointID: "local",
+                workspaceID: available.id,
+                owningTaskID: nil
+            ),
+            "host.local.workspace.\(available.id.description)"
+        )
+        // Tasks are current-Host-only, so a background Host keeps its own row
+        // as the activation path even for a task-linked workspace.
+        XCTAssertEqual(
+            WarrenDesktopSidebar.hostWorkspaceScrollTarget(
+                endpointID: "vps",
+                workspaceID: assigned.id,
+                owningTaskID: nil
+            ),
+            "host.vps.workspace.\(assigned.id.description)"
         )
     }
 

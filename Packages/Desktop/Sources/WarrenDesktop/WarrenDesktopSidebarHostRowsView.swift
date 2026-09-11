@@ -21,6 +21,7 @@ struct WarrenDesktopSidebarHostRows: View {
     let onSelect: (WarrenDesktopSidebarResourceSelection) -> Void
     let onOpenWorkspace: (WarrenDesktopHostResourceRef<WorkspaceID>) -> Void
     let onFocusTask: (TaskID) -> Void
+    let onToggleActiveOnly: () -> Void
     let onRetry: (String) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -203,14 +204,22 @@ struct WarrenDesktopSidebarHostRows: View {
     ) -> some View {
         let groups = scopedProjectGroups(for: host)
         if groups.isEmpty {
-            if let message = emptyMessage(for: host) {
-                let tokens = WarrenColorTokens.resolved(for: colorScheme)
-                Text(message)
-                    .font(WarrenTypography.navigationMeta)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .padding(.leading, WarrenDesktopSidebarIndent.host)
-                    .padding(.vertical, WarrenSpacing.xs)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if let reason = emptyReason(for: host) {
+                WarrenDesktopSidebarEmptyState(
+                    reason: reason,
+                    onShowAll: {
+                        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+                            // The filter is shared by every Host in the
+                            // aggregated view, so one escape action restores
+                            // the complete roster.
+                            onToggleActiveOnly()
+                        }
+                    },
+                    onRetry: { onRetry(host.endpointID) },
+                    onAddProject: canMutate(host) ? { onAction(.addProject) } : nil,
+                    semanticIDPrefix: "sidebar.empty.host.\(host.endpointID)",
+                    isNestedUnderHost: usesHostSectionPresentation
+                )
             }
         } else {
             ForEach(groups) { scopedGroup in
@@ -510,22 +519,34 @@ struct WarrenDesktopSidebarHostRows: View {
         }
     }
 
-    private func emptyMessage(for host: WarrenDesktopSidebarHostProjection) -> String? {
+    private func emptyReason(
+        for host: WarrenDesktopSidebarHostProjection
+    ) -> WarrenDesktopSidebarEmptyReason? {
         switch host.connectionState {
         case .connecting, .reconnecting:
+            // A spinner already sits in the Host header; a second message would
+            // report the same transient state twice.
             return nil
         case .failed, .disconnected:
-            if let error = host.lastError?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !error.isEmpty {
-                return String(error.prefix(160))
-            }
-            return host.connectionState == .failed
-                ? "Host is unavailable."
-                : "Host is disconnected."
+            let error = host.lastError?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .hostUnavailable(
+                isFailed: host.connectionState == .failed,
+                detail: error.flatMap { $0.isEmpty ? nil : String($0.prefix(160)) }
+            )
         case .attached:
-            return showsActiveOnly && !host.projectGroups.isEmpty
-                ? "No active workspaces"
-                : "No projects"
+            guard showsActiveOnly, !host.projectGroups.isEmpty else {
+                return .noProjects(
+                    canAddProject: canMutate(host),
+                    hostName: host.title
+                )
+            }
+            return .filteredByActiveOnly(
+                hiddenWorkspaceCount: host.projectGroups.reduce(0) { total, group in
+                    total + group.workspaces.reduce(0) { count, workspace in
+                        count + (host.activeWorkspaceIDs.contains(workspace.id) ? 0 : 1)
+                    }
+                }
+            )
         }
     }
 
