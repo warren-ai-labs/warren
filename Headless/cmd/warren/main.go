@@ -1785,12 +1785,16 @@ func sessionTerminalRead(ctx context.Context, c *client.Client, params map[strin
 	return err
 }
 
-func agentReadSession(ctx context.Context, c *client.Client, session api.Session, params map[string]any) error {
+func agentReadSession(ctx context.Context, c *client.Client, session api.Session, streamID string, params map[string]any) error {
 	options, err := agentReadOptions(params)
 	if err != nil {
 		return err
 	}
-	events, err := readAgentHistory(ctx, c, session.AgentExecutionID, options)
+	streamID = strings.TrimSpace(streamID)
+	if streamID == "" {
+		streamID = strings.TrimSpace(session.AgentExecutionID)
+	}
+	events, err := readAgentHistory(ctx, c, streamID, options)
 	if err != nil {
 		return err
 	}
@@ -1880,29 +1884,210 @@ func agentReadTextOnly(params map[string]any) bool {
 func projectCanonicalEvents(events []api.CanonicalAgentEvent) []api.AgentEvent {
 	result := make([]api.AgentEvent, 0, len(events))
 	for _, event := range events {
+		eventType := strings.ToLower(strings.TrimSpace(event.Type))
+		payload := cloneCanonicalPayload(event.Payload)
 		var value api.AgentEvent
-		raw, _ := json.Marshal(event.Payload)
+		raw, _ := json.Marshal(payload)
 		_ = json.Unmarshal(raw, &value)
 		value.Sequence, value.ID, value.Timestamp = event.Sequence, event.EventID, event.OccurredAt
 		value.Turn, _ = strconv.ParseUint(event.TurnID, 10, 64)
-		value.Payload = event.Payload
-		switch event.Type {
-		case "message.created", "message.completed":
-			value.Type = "message"
+		value.Provider = strings.ToLower(strings.TrimSpace(event.Origin.Provider))
+		value.CanonicalType = eventType
+		value.Payload = payload
+		switch eventType {
+		case "message", "message.created", "message.completed":
+			value.Type = canonicalMessageProjectionType(value.Role)
+			value.ContentDelta = false
 		case "message.delta":
-			value.Type, value.ContentDelta = "message", true
+			value.Type, value.ContentDelta = canonicalMessageProjectionType(value.Role), true
 		case "reasoning.delta":
 			value.Type = "reasoning"
 		case "tool.started", "tool.updated":
 			value.Type = "tool_call"
 		case "tool.completed", "tool.failed":
 			value.Type = "tool_output"
+		case "interaction.requested", "interaction.resolved", "interaction.expired":
+			value.Type = canonicalInteractionProjectionType(eventType, payload)
+			value.Payload = canonicalInteractionProjectionPayload(eventType, value.Payload)
+		case "plan.updated":
+			value.Type = "plan"
+		case "tasks.updated", "todo.updated":
+			value.Type = "todo"
+		case "goal.updated":
+			value.Type = "goal"
+		case "activity.updated":
+			value.Type = "activity"
+		case "plugin.updated":
+			value.Type = "plugin"
+		case "subagent.updated":
+			value.Type = "subagent"
+		case "attachment.updated":
+			value.Type = "attachment"
+		case "context.updated":
+			value.Type = "context"
+		case "diff.updated":
+			value.Type = "diff"
+		case "diagnostics.updated":
+			value.Type = "diagnostics"
+		case "config.updated":
+			value.Type = "config"
+		case "compaction.updated":
+			value.Type = "compaction"
+		case "queue.updated", "queue_operation", "queue":
+			value.Type = "queue"
 		default:
-			value.Type = event.Type
+			value.Type = eventType
 		}
+		if isCanonicalMessageEventType(eventType) && strings.TrimSpace(value.Role) == "" {
+			value.Role = "assistant"
+		}
+		value.ID = canonicalProjectionID(eventType, value.Payload, value.ID)
 		result = append(result, value)
 	}
 	return result
+}
+
+func cloneCanonicalPayload(payload map[string]any) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	clone := make(map[string]any, len(payload))
+	for key, value := range payload {
+		clone[key] = value
+	}
+	return clone
+}
+
+func isCanonicalMessageEventType(eventType string) bool {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case "message", "message.created", "message.delta", "message.completed":
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalMessageProjectionType(role string) string {
+	role = strings.ToLower(strings.TrimSpace(role))
+	switch role {
+	case "user", "assistant", "system":
+		return role
+	default:
+		// Canonical message rows emitted by older providers may omit role. The
+		// Web projection uses the same compatibility default so the row remains
+		// visible instead of disappearing from the conversation read.
+		return "assistant"
+	}
+}
+
+func canonicalInteractionProjectionType(eventType string, payload map[string]any) string {
+	kind, _ := payload["kind"].(string)
+	kind = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(kind, "-", "_")))
+	switch kind {
+	case "question", "permission", "confirmation":
+		return kind
+	case "approval":
+		return "permission"
+	case "confirm":
+		return "confirmation"
+	default:
+		return eventType
+	}
+}
+
+func canonicalInteractionProjectionPayload(eventType string, payload map[string]any) map[string]any {
+	if payload == nil {
+		payload = make(map[string]any)
+	}
+	state, _ := payload["state"].(string)
+	if strings.TrimSpace(state) == "" {
+		switch eventType {
+		case "interaction.requested":
+			payload["state"] = "pending"
+		case "interaction.resolved":
+			payload["state"] = "resolved"
+		case "interaction.expired":
+			payload["state"] = "expired"
+		}
+	}
+	return payload
+}
+
+var canonicalProjectionIDFields = map[string][]string{
+	"message.created":       {"messageId"},
+	"message.delta":         {"messageId"},
+	"message.completed":     {"messageId"},
+	"message":               {"messageId"},
+	"reasoning.delta":       {"messageId"},
+	"tool.started":          {"callId", "toolCallId"},
+	"tool.updated":          {"callId", "toolCallId"},
+	"tool.completed":        {"callId", "toolCallId"},
+	"tool.failed":           {"callId", "toolCallId"},
+	"interaction.requested": {"interactionId", "requestId"},
+	"interaction.resolved":  {"interactionId", "requestId"},
+	"interaction.expired":   {"interactionId", "requestId"},
+	"plan.updated":          {"planId"},
+	"tasks.updated":         {"taskListId", "todoId"},
+	"todo.updated":          {"todoId", "taskListId"},
+	"goal.updated":          {"goalId", "threadId", "sessionId"},
+	"activity.updated":      {"activityId"},
+	"plugin.updated":        {"pluginId"},
+	"subagent.updated":      {"subagentId"},
+	"attachment.updated":    {"attachmentId"},
+	"diff.updated":          {"diffId", "file"},
+	"diagnostics.updated":   {"diagnosticsId", "file"},
+	"config.updated":        {"configId"},
+	"compaction.updated":    {"compactionId"},
+	"queue.updated":         {"queueId", "itemId", "requestId"},
+	"queue_operation":       {"queueId", "itemId", "requestId"},
+	"queue":                 {"queueId", "itemId", "requestId"},
+}
+
+func canonicalProjectionID(eventType string, payload map[string]any, fallback string) string {
+	eventType = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(eventType, "-", "_")))
+	for _, key := range canonicalProjectionIDFields[eventType] {
+		if value, ok := canonicalProjectionIDValue(payload[key]); ok {
+			return value
+		}
+	}
+	return fallback
+}
+
+func canonicalProjectionIDValue(value any) (string, bool) {
+	switch value := value.(type) {
+	case string:
+		value = strings.TrimSpace(value)
+		return value, value != ""
+	case json.Number:
+		text := strings.TrimSpace(string(value))
+		return text, text != ""
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64), true
+	case float32:
+		return strconv.FormatFloat(float64(value), 'f', -1, 32), true
+	case int:
+		return strconv.Itoa(value), true
+	case int8:
+		return strconv.FormatInt(int64(value), 10), true
+	case int16:
+		return strconv.FormatInt(int64(value), 10), true
+	case int32:
+		return strconv.FormatInt(int64(value), 10), true
+	case int64:
+		return strconv.FormatInt(value, 10), true
+	case uint:
+		return strconv.FormatUint(uint64(value), 10), true
+	case uint8:
+		return strconv.FormatUint(uint64(value), 10), true
+	case uint16:
+		return strconv.FormatUint(uint64(value), 10), true
+	case uint32:
+		return strconv.FormatUint(uint64(value), 10), true
+	case uint64:
+		return strconv.FormatUint(value, 10), true
+	default:
+		return "", false
+	}
 }
 
 func readCanonicalTurn(ctx context.Context, c *client.Client, streamID string, turn uint64) ([]api.CanonicalAgentEvent, error) {
@@ -2317,7 +2502,7 @@ func agentReadCommand(args []string) error {
 	if !isAgentSession(session) {
 		return fmt.Errorf("session is not a Codex, Claude, OpenCode, Pi, Qoder, or Antigravity agent: %s", session.ID)
 	}
-	return agentReadSession(ctx, c, session, params)
+	return agentReadSession(ctx, c, session, subscription.Execution.StreamID, params)
 }
 
 func agentAttachCommand(args []string) error {

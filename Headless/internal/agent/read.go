@@ -250,10 +250,11 @@ func readProjectionOptions(options ReadOptions) (map[string]bool, map[string]boo
 
 func includeReadEvent(event api.AgentEvent, include, exclude map[string]bool) bool {
 	typeName := strings.ToLower(strings.TrimSpace(event.Type))
-	if !include[typeName] {
+	canonicalType := strings.ToLower(strings.TrimSpace(event.CanonicalType))
+	if !include[typeName] && (canonicalType == "" || !include[canonicalType]) {
 		return false
 	}
-	return !exclude[typeName]
+	return !exclude[typeName] && (canonicalType == "" || !exclude[canonicalType])
 }
 
 func limitReadEvent(event api.AgentEvent, limit int) api.AgentEvent {

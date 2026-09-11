@@ -19,3 +19,5 @@ Frameworks/
 __pycache__/
 *.pyc
 .envrc
+
+.claude/
