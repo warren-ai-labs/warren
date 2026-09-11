@@ -182,6 +182,7 @@ struct WarrenDesktopSidebar: View {
                                             }
                                         }
                                     },
+                                    onToggleActiveOnly: toggleActiveOnly,
                                     onRetry: onRetrySidebarHost
                                 )
                             }
@@ -239,6 +240,21 @@ struct WarrenDesktopSidebar: View {
                           case let .workspace(reference)? = newSelection else {
                         return
                     }
+                    // A task-linked workspace is navigated from its Task row.
+                    // The Host tree renders that row unselectable, so scrolling
+                    // into the Projects subtree would land on a row the user
+                    // cannot act on while the usable row sits in Tasks.
+                    let owningTaskID = currentHostTaskID(for: reference)
+                    if let owningTaskID {
+                        // Task rows exist only while the Task is expanded, so
+                        // reveal it before asking for the scroll.
+                        Self.revealTask(owningTaskID, in: &sidebarTree)
+                    }
+                    let targetID = Self.hostWorkspaceScrollTarget(
+                        endpointID: reference.endpointID,
+                        workspaceID: reference.id,
+                        owningTaskID: owningTaskID
+                    )
                     // A nil anchor asks ScrollViewReader to make an off-screen
                     // row visible with the smallest required movement. It
                     // leaves an already visible row where it is instead of
@@ -248,9 +264,7 @@ struct WarrenDesktopSidebar: View {
                             .stateChange,
                             reduceMotion: reduceMotion
                         )) {
-                            proxy.scrollTo(
-                                "host.\(reference.endpointID).workspace.\(reference.id.description)"
-                            )
+                            proxy.scrollTo(targetID)
                         }
                     }
                 }
@@ -262,6 +276,13 @@ struct WarrenDesktopSidebar: View {
                     let workspace = projection.groups
                         .flatMap(\.workspaces)
                         .first(where: { $0.id == workspaceID })
+                    // `workspaceScrollTarget` already points a task-linked
+                    // workspace at its Task row, but that row is only mounted
+                    // while the Task is expanded. Reveal it first so the scroll
+                    // has a target instead of silently doing nothing.
+                    if showsTasks, let owningTaskID = workspace?.taskID {
+                        Self.revealTask(owningTaskID, in: &sidebarTree)
+                    }
                     let targetID = workspace.map(Self.workspaceScrollTarget)
                         ?? "workspace.project-list.\(workspaceID.description)"
                     // A nil anchor asks ScrollViewReader to make an off-screen
@@ -335,6 +356,38 @@ struct WarrenDesktopSidebar: View {
     static func workspaceScrollTarget(for workspace: Workspace) -> String {
         let scope = workspace.taskID == nil ? "project-list" : "task-list"
         return "workspace.\(scope).\(workspace.id.description)"
+    }
+
+    /// The scroll target for a workspace selected in the Host-scoped tree.
+    ///
+    /// A task-linked workspace resolves to its Task row, because the Host tree
+    /// deliberately renders that row unselectable and the Projects subtree
+    /// therefore holds no target the user can act on. Everything else resolves
+    /// to its Host row.
+    static func hostWorkspaceScrollTarget(
+        endpointID: String,
+        workspaceID: WorkspaceID,
+        owningTaskID: TaskID?
+    ) -> String {
+        owningTaskID == nil
+            ? "host.\(endpointID).workspace.\(workspaceID.description)"
+            : "workspace.task-list.\(workspaceID.description)"
+    }
+
+    /// The Task that owns a selected workspace, when the Task row is the
+    /// navigation target rather than the Host's Projects subtree.
+    ///
+    /// Tasks are current-Host-only in this release, so a workspace on a
+    /// background Host keeps its Host row as the only activation path — which
+    /// is also why that row stays selectable there.
+    private func currentHostTaskID(
+        for reference: WarrenDesktopHostResourceRef<WorkspaceID>
+    ) -> TaskID? {
+        guard showsTasks, reference.endpointID == activeEndpointID else { return nil }
+        return projection.groups
+            .flatMap(\.workspaces)
+            .first(where: { $0.id == reference.id })?
+            .taskID
     }
 
     private func toggleSidebar() {

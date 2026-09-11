@@ -28,4 +28,9 @@ enum WarrenDesktopSidebarIndent {
     /// Workspaces nest inside a project or a task.
     static let workspace = WarrenLayoutMetrics.sidebarLeadingInset(depth: 2)
         - WarrenSpacing.compact
+
+    /// Empty-state copy is content beneath a Host heading, so align it with
+    /// the workspace row's leading content edge rather than an arbitrary
+    /// visual offset. Workspace rows add the outer row inset back at layout.
+    static let hostEmptyState = workspace + WarrenSpacing.compact
 }

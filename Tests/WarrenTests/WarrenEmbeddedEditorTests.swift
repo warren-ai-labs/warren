@@ -226,6 +226,21 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertFalse(first === second)
     }
 
+    @MainActor
+    func testEmbeddedEditorWebViewStorageReusesWorkspaceStateAfterViewEviction() {
+        let storage = WarrenEmbeddedEditorWebViewStorage()
+        let first = storage.dataStore(for: "/work/warren")
+        let sameWorkspace = storage.dataStore(for: "/work/warren")
+        let otherWorkspace = storage.dataStore(for: "/work/other")
+
+        XCTAssertTrue(first === sameWorkspace)
+        XCTAssertFalse(first === otherWorkspace)
+
+        storage.removeAll()
+        let afterReset = storage.dataStore(for: "/work/warren")
+        XCTAssertFalse(first === afterReset)
+    }
+
     func testEmbeddedNavigationPolicyNeverOpensCustomSchemes() {
         XCTAssertEqual(
             WarrenEmbeddedEditorNavigationPolicy.decision(

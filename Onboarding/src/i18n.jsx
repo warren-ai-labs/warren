@@ -118,6 +118,49 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.13.0",
+        dateISO: "2026-09-11",
+        date: "September 11, 2026",
+        title: "Warren makes Hosts discoverable and workflows multi-Host.",
+        summary:
+          "A minor release that adds local-network Host discovery, explicit Host-armed pairing, multi-Host navigation, and iOS Host management. It also strengthens canonical Agent projections and terminal recovery across macOS, iOS, Web, and Headless clients; the JSON control protocol remains at 4.0.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add mDNS/DNS-SD Host discovery, stable Host identity, candidate probing, direct-LAN routing, and endpoint aggregation across changing network addresses.",
+              "Add an explicit Host-armed LAN pairing flow with a short-lived PIN and scoped client credentials; discovery alone never grants access.",
+              "Add multi-Host Desktop navigation with Host-scoped Projects and Workspaces, endpoint display names, active-session filtering, clearer empty states, and Task-aware navigation.",
+              "Add iOS Host management with local discovery, direct-LAN and Relay route selection, QR/PIN pairing, Agent history reload, and richer Agent cards.",
+              "Record anonymous onboarding download starts in Workers Analytics Engine with release, visitor, platform, location, language, and referrer dimensions.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Keep Desktop, Web, CLI, and iOS Agent surfaces on the canonical projection while normalizing plan events, compaction summaries, provider markup, diffs, and legacy read responses.",
+              "Make endpoint identity explicit in transport and sidebar state so focus, resize, routing, and resource selection remain scoped to the correct Host.",
+              "Keep the terminal sidebar and embedded editor state stable while improving attach/reconnect behavior and preserving workspace context.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Preserve terminal connections across output resets and guard focus claims and resizes against stale layout generations.",
+              "Route task-linked Workspaces to their actionable Task row and distinguish unavailable Hosts, active-only filtering, and Hosts without Projects.",
+              "Preserve embedded-editor workspace state across presentation and navigation changes.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "LAN discovery is a reachability mechanism, not a trust grant. Pairing must be explicitly armed on the Host, and existing Relay/direct endpoints remain available when LAN discovery is unavailable.",
+              "The release adds no control-protocol version change or state-schema migration; validate direct-LAN pairing, multi-Host routing, and iOS local-network permissions on real devices before publishing.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.12.2",
         dateISO: "2026-09-09",
         date: "September 9, 2026",
@@ -989,6 +1032,49 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.13.0",
+        dateISO: "2026-09-11",
+        date: "2026 年 9 月 11 日",
+        title: "Warren 让 Host 可被发现，也让工作流支持多 Host。",
+        summary:
+          "次版本：新增局域网 Host 发现、Host 主动配对、多 Host 导航和 iOS Host 管理，同时增强 macOS、iOS、Web 与 Headless 的统一 Agent 投影和终端恢复；JSON 控制协议仍为 4.0。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "新增 mDNS/DNS-SD Host 发现、稳定 Host 身份、候选地址探测、直连 LAN 路由，以及对变化中的网络地址做 endpoint 聚合。",
+              "新增 Host 主动开启的 LAN 配对流程，使用短时 PIN 和受限客户端凭据；发现 Host 本身不会授予访问权限。",
+              "新增支持多 Host 的 Desktop 导航，按 Host 作用域展示 Project 与 Workspace，支持 endpoint 显示名、活动会话过滤、更清晰的空状态和 Task 导航。",
+              "新增 iOS Host 管理，支持局域网发现、直连 LAN 与 Relay 路由选择、二维码/PIN 配对、Agent 历史刷新和更完整的 Agent 卡片。",
+              "在 Workers Analytics Engine 记录匿名 onboarding 下载开始事件，包含 release、visitor、platform、location、language 和 referrer 维度。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "让 Desktop、Web、CLI 与 iOS Agent 界面统一使用 canonical projection，并规范 plan event、compaction summary、provider markup、diff 和旧 read response。",
+              "让 transport 与 sidebar 状态显式携带 endpoint 身份，确保 focus、resize、路由和资源选择始终作用于正确的 Host。",
+              "稳定 terminal sidebar 与 embedded editor 状态，改进 attach/reconnect 行为并保留 Workspace 上下文。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "修复 output reset 导致终端连接丢失的问题，并防止过期 layout generation 误认 focus claim 或 resize。",
+              "将关联 Task 的 Workspace 导航到可操作的 Task 行，并区分不可用 Host、仅活动过滤和没有 Project 的 Host。",
+              "修复 embedded editor 在呈现和导航变化中丢失 Workspace 状态的问题。",
+            ],
+          },
+          {
+            title: "发布说明",
+            items: [
+              "LAN 发现只提供可达性，不代表信任。必须在 Host 上显式开启配对；LAN 不可用时仍可使用已有 Relay/直连 endpoint。",
+              "本版本没有控制协议版本变化或 state schema migration；发布前必须在真实设备上验证直连 LAN 配对、多 Host 路由和 iOS 局域网权限。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.12.2",
         dateISO: "2026-09-09",

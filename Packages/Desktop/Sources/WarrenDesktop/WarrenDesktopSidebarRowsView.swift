@@ -323,50 +323,29 @@ struct WarrenDesktopSidebarRows: View {
     }
 
     private var noProjectsMessage: some View {
-        VStack(spacing: WarrenSpacing.xs) {
-            Text("No workspaces yet")
-                .font(WarrenTypography.body)
-            Text(endpointCapabilities.canAddProject
-                ? "Add a project or drop a Git repository folder"
-                : "Add a project from the remote CLI on the host machine")
-                .font(WarrenTypography.supporting)
-                .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, WarrenSpacing.medium)
-        .padding(.vertical, WarrenSpacing.large)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            endpointCapabilities.canAddProject
-                ? "No workspaces yet. Add a project or drop a Git repository folder."
-                : "No workspaces yet. Add a project from the remote CLI on the host machine."
+        WarrenDesktopSidebarEmptyState(
+            reason: .noProjects(
+                canAddProject: endpointCapabilities.canAddProject,
+                hostName: nil
+            ),
+            onAddProject: endpointCapabilities.canAddProject ? onAddProject : nil
         )
     }
 
     private var noActiveWorkspacesMessage: some View {
-        VStack(spacing: WarrenSpacing.xs) {
-            Text("No active workspaces")
-                .font(WarrenTypography.body)
-            Text("No workspaces currently have running or attached sessions.")
-                .font(WarrenTypography.supporting)
-                .foregroundStyle(WarrenColorTokens.dark.mutedForeground)
-                .multilineTextAlignment(.center)
-            Button("Show all workspaces") {
+        let hiddenWorkspaceCount = groups.reduce(0) { total, group in
+            total + group.workspaces.reduce(0) { count, workspace in
+                count + (activeWorkspaceIDs.contains(workspace.id) ? 0 : 1)
+            }
+        }
+        return WarrenDesktopSidebarEmptyState(
+            reason: .filteredByActiveOnly(hiddenWorkspaceCount: hiddenWorkspaceCount),
+            onShowAll: {
                 withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
                     tree.showsActiveOnly = false
                 }
             }
-            .font(WarrenTypography.supporting)
-            .buttonStyle(.plain)
-            .foregroundStyle(WarrenColorTokens.dark.highlight)
-            .padding(.top, WarrenSpacing.xs)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, WarrenSpacing.medium)
-        .padding(.vertical, WarrenSpacing.large)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("No active workspaces. No workspaces currently have running or attached sessions.")
+        )
     }
 
     private func activeAgentRow(
