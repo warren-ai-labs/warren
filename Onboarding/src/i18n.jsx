@@ -118,6 +118,49 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.14.0",
+        dateISO: "2026-09-14",
+        date: "September 14, 2026",
+        title: "Warren brings native split terminals and richer Usage insights.",
+        summary:
+          "A minor release that adds native split terminal workflows, historical Usage analytics, thread-oriented sidebar organization, and runtime-aware Session titles across Desktop, Web, and Headless clients; the JSON control protocol remains at 4.0.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add native AppKit split terminal panes with drag-and-drop placement, independent PTY sizing, and screen reporting.",
+              "Rebuild Usage from historical transcripts with per-day Agent, model, and project breakdowns, a selectable heatmap, an intraday curve, and cached fetches.",
+              "Add a thread-oriented sidebar mode with Sessions as leaves, Task pinning, Projects and Workspaces cards, and quick setup scripts.",
+              "Show a Session's foreground command line and OSC 7 working directory in its pane title, tab, and sidebar.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Make pane close actions Session commands: closing a pane, other panes, or all panes now ends the Sessions shown there.",
+              "Rework Desktop Settings and Usage into categorized two-column layouts with grouped cards, refined typography, and a clearer sidebar tree rail.",
+              "Keep startup work, Relay device listing, state-store reads, and loopback handoff work off the terminal attach path to improve reconnect reliability.",
+              "Remove the Tasks section from the Web client; Task management remains on Desktop and the CLI.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Keep a Session on its retired Agent conversation until the replacement transcript is on disk, preventing stale title updates.",
+              "Apply Usage range changes made during an in-flight fetch and scope missing-token caveats to the requested range.",
+              "Improve terminal search highlight contrast and use Menlo in the find field.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The release adds no control-protocol version change or state-schema migration; validate split-pane focus and close behavior, Usage history reconstruction, and OSC 7 title reporting on a clean host.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.13.0",
         dateISO: "2026-09-11",
         date: "September 11, 2026",
@@ -1032,6 +1075,49 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.14.0",
+        dateISO: "2026-09-14",
+        date: "2026 年 9 月 14 日",
+        title: "Warren 带来原生分屏终端与更完整的 Usage 分析。",
+        summary:
+          "次版本：为 Desktop、Web 与 Headless 新增原生分屏终端、历史 Usage 分析、面向 thread 的侧边栏组织方式，以及带运行时信息的 Session 标题；JSON 控制协议仍为 4.0。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "新增原生 AppKit 分屏终端，支持拖拽放置、每个 pane 独立 PTY 尺寸与 screen report。",
+              "从历史 transcript 重建 Usage，提供按天、Agent、模型和项目的明细、可选热力图、日内曲线与缓存获取。",
+              "新增面向 thread 的侧边栏模式，让 Sessions 成为叶子，并支持 Task 置顶、Projects/Workspaces 卡片和快速 setup script。",
+              "在 pane 标题、Tab 和侧边栏显示 Session 的 foreground command line 与 OSC 7 工作目录。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "将 pane 关闭操作视为 Session 命令：关闭单个、其他或全部 pane 会结束其中显示的 Session。",
+              "将 Desktop Settings 与 Usage 重构为分类侧栏、双栏布局和 grouped cards，并改进排版与侧边栏树形导轨。",
+              "把启动工作、Relay device 列表、state store 读取和 loopback handoff 移出 terminal attach 路径，提升重连可靠性。",
+              "移除 Web 客户端的 Tasks 区域；Task 管理仍保留在 Desktop 和 CLI。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "让 Session 在替换 transcript 写入磁盘前继续绑定旧 Agent conversation，避免过期标题覆盖当前会话。",
+              "修复 fetch 进行期间的 Usage 范围变更丢失问题，并将 token 缺失提示限定在请求范围内。",
+              "提高 terminal search 高亮对比度，并在查找输入框使用 Menlo。",
+            ],
+          },
+          {
+            title: "发布说明",
+            items: [
+              "本版本没有控制协议版本变化或 state schema migration；请在干净 Host 上验证分屏焦点与关闭行为、Usage 历史重建和 OSC 7 标题。",
+              "本地打包使用现有 Apple Development 签名且未 notarize；归档仅适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.13.0",
         dateISO: "2026-09-11",
