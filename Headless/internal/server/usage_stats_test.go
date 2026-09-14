@@ -304,6 +304,106 @@ func TestUsageStatsKeepsTokensWhenPricingIsUnreachable(t *testing.T) {
 	}
 }
 
+func TestUsageStatsScopesIntradayPayloadAndDayGroupsToTheRequestedDay(t *testing.T) {
+	service, agentStore := newUsageStatsService(t)
+	older := time.Date(2026, time.September, 8, 10, 5, 0, 0, time.Local)
+	newer := time.Date(2026, time.September, 9, 11, 5, 0, 0, time.Local)
+	appendUsage(t, agentStore, "evt-1", "exec-1", "claude", "claude-opus-5", older,
+		&api.AgentUsage{InputTokens: 100})
+	appendUsage(t, agentStore, "evt-2", "exec-2", "codex", "gpt-5.6-luna", newer,
+		&api.AgentUsage{InputTokens: 200})
+
+	result, err := service.UsageStats(context.Background(), api.UsageStatsRequest{
+		FromDay:     "2026-09-08",
+		ToDay:       "2026-09-09",
+		IntervalDay: "2026-09-08",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Daily rows still cover the whole range, or the heatmap would lose days.
+	if len(result.Days) != 2 {
+		t.Fatalf("days = %#v, want the full range", result.Days)
+	}
+	if result.DetailDay != "2026-09-08" {
+		t.Fatalf("detailDay = %q", result.DetailDay)
+	}
+	// Only the requested day's five-minute buckets travel, not the whole range.
+	if len(result.Intervals) != 1 || result.Intervals[0].Day != "2026-09-08" {
+		t.Fatalf("intervals = %#v, want only the requested day", result.Intervals)
+	}
+	if len(result.DayProviders) != 1 || result.DayProviders[0].Key != "claude" {
+		t.Fatalf("dayProviders = %#v, want only the selected day's agent", result.DayProviders)
+	}
+	if len(result.Providers) != 2 {
+		t.Fatalf("providers = %#v, want the whole range", result.Providers)
+	}
+}
+
+func TestUsageStatsDefaultsDetailDayToTheMostRecentDay(t *testing.T) {
+	service, agentStore := newUsageStatsService(t)
+	older := time.Date(2026, time.September, 8, 10, 5, 0, 0, time.Local)
+	newer := time.Date(2026, time.September, 9, 11, 5, 0, 0, time.Local)
+	appendUsage(t, agentStore, "evt-1", "exec-1", "claude", "claude-opus-5", older,
+		&api.AgentUsage{InputTokens: 100})
+	appendUsage(t, agentStore, "evt-2", "exec-2", "codex", "gpt-5.6-luna", newer,
+		&api.AgentUsage{InputTokens: 200})
+
+	result, err := service.UsageStats(context.Background(), api.UsageStatsRequest{
+		FromDay: "2026-09-08",
+		ToDay:   "2026-09-09",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The client opens on the newest curve before anyone picks a day.
+	if result.DetailDay != "2026-09-09" {
+		t.Fatalf("detailDay = %q, want the most recent day", result.DetailDay)
+	}
+	if len(result.Intervals) != 1 || result.Intervals[0].Day != "2026-09-09" {
+		t.Fatalf("intervals = %#v, want only the most recent day", result.Intervals)
+	}
+}
+
+func TestUsageStatsUnmeasuredProvidersRespectTheRequestedRange(t *testing.T) {
+	service, _ := newUsageStatsService(t)
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions = []api.Session{{
+			ID: "session-qoder", Kind: "agent", AgentProvider: "qoder",
+			Runtime: "qoder", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+		}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service.Store = state
+
+	// A historical window must not be blamed for today's Agents.
+	historical := time.Now().AddDate(0, 0, -100).Format("2006-01-02")
+	result, err := service.UsageStats(context.Background(), api.UsageStatsRequest{
+		FromDay: historical, ToDay: historical,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Cost.UnmeasuredProviders) != 0 {
+		t.Fatalf("unmeasured = %#v, want none on a historical range", result.Cost.UnmeasuredProviders)
+	}
+
+	// A window that includes the running session reports the gap.
+	result, err = service.UsageStats(context.Background(), api.UsageStatsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Cost.UnmeasuredProviders) != 1 || result.Cost.UnmeasuredProviders[0] != "qoder" {
+		t.Fatalf("unmeasured = %#v, want qoder", result.Cost.UnmeasuredProviders)
+	}
+}
+
 func TestUsageStatsWithoutAgentStoreIsEmpty(t *testing.T) {
 	result, err := (&Service{}).UsageStats(context.Background(), api.UsageStatsRequest{})
 	if err != nil {

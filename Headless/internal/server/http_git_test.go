@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"net/http/httptest"
 	"strings"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestBackgroundRequestClassification(t *testing.T) {
-	for _, method := range []string{"git.panel", "git.diff"} {
+	for _, method := range []string{"git.panel", "git.diff", "usage.stats", "usage.rebuild"} {
 		if !isBackgroundRequest(method) {
 			t.Errorf("%s is not scheduled as a background request", method)
 		}
@@ -21,6 +22,18 @@ func TestBackgroundRequestClassification(t *testing.T) {
 		if isBackgroundRequest(method) {
 			t.Errorf("%s should stay on the ordered request path", method)
 		}
+	}
+}
+
+func TestUsageRebuildUsesAContextThatOutlivesThePeer(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := backgroundRequestContext(parent, "usage.rebuild").Err(); err != nil {
+		t.Fatalf("usage rebuild context must survive peer cancellation: %v", err)
+	}
+	if err := backgroundRequestContext(parent, "usage.stats").Err(); err == nil {
+		t.Fatal("usage stats should retain the request context")
 	}
 }
 

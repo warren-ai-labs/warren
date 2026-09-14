@@ -1445,6 +1445,19 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// cache and folding it would under-report older spend.
     @Published private(set) var usageStats = WarrenUsageStats()
     @Published private(set) var usageState = WarrenUsageLoadState.idle
+    /// Range-and-day key of the payload currently in `usageStats`, so moving
+    /// between the two Usage settings views reuses a fetch instead of repeating
+    /// it. The refresh action and a rebuild bypass the cache.
+    private var usageLoadedKey: String?
+    private var usageLoadedAt: Date?
+    /// Monotonic token for in-flight usage requests. Only the newest response
+    /// may land, so switching range mid-load cannot leave the picker showing
+    /// one window while the figures describe another.
+    private var usageRequestGeneration = 0
+    /// A cached payload is reused for this long. Long enough to absorb the
+    /// duplicate fetch from reopening the section, short enough that a person
+    /// who reopened Settings to check fresh numbers is not shown a stale total.
+    private static let usageCacheLifetime: TimeInterval = 60
     /// The explicit, short-lived Host-side window that accepts an iPhone PIN.
     /// No pairing state is inferred from discovery; it is returned by the
     /// authenticated daemon settings projection.
@@ -2269,43 +2282,43 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         )
     }
 
-    /// Loads the headless daemon's settings. Runtime selection is a
-    /// headless-side decision; the Desktop only reflects and changes it.
-    /// Fetches usage stats for the trailing `days` window.
+    /// Fetches usage stats for the trailing `days` window, optionally scoped to
+    /// one detail day.
     ///
     /// Each call replaces the previous result rather than merging: the panel
     /// shows one range at a time, and a stale range blended into a new one
-    /// would produce totals that match neither.
-    func loadUsageStats(days: Int) {
+    /// would produce totals that match neither. A response whose generation is
+    /// no longer current is dropped, so a range change made while a load is in
+    /// flight still ends with the figures the picker describes.
+    func loadUsageStats(days: Int, selectedDay: String? = nil, force: Bool = false) {
         guard let wire else {
             usageState = .failed("Not connected to a Host.")
             return
         }
-        if usageState == .loading { return }
+        let request = WarrenUsageStatsRequest.window(days: days, selectedDay: selectedDay)
+
+        if !force, usageLoadedKey == request.cacheKey, let loadedAt = usageLoadedAt,
+           Date().timeIntervalSince(loadedAt) < Self.usageCacheLifetime {
+            return
+        }
+
+        usageRequestGeneration += 1
+        let generation = usageRequestGeneration
         usageState = .loading
-        let calendar = Calendar.current
-        let today = Date()
-        let start = calendar.date(byAdding: .day, value: -(max(days, 1) - 1), to: today) ?? today
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        // Days are the Host's local calendar days; the client only names the
-        // window and must not reinterpret the boundaries.
-        formatter.dateFormat = "yyyy-MM-dd"
 
         Task { @MainActor [weak self] in
             do {
                 let response: WarrenUsageStatsResponse = try await wire.request(
                     "usage.stats",
-                    params: [
-                        "fromDay": formatter.string(from: start),
-                        "toDay": formatter.string(from: today),
-                    ]
+                    params: request.parameters
                 )
-                guard let self else { return }
+                guard let self, self.usageRequestGeneration == generation else { return }
                 self.usageStats = response.model
                 self.usageState = .loaded
+                self.usageLoadedKey = request.cacheKey
+                self.usageLoadedAt = Date()
             } catch {
-                guard let self else { return }
+                guard let self, self.usageRequestGeneration == generation else { return }
                 self.usageState = .failed(error.localizedDescription)
             }
         }
@@ -2326,6 +2339,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         Task { @MainActor [weak self] in
             do {
+                // Historical transcript scans are Host-owned background work;
+                // the transport applies the method's no-timeout policy so a
+                // healthy rebuild cannot look like a failure after 15 seconds.
                 _ = try await wire.request("usage.rebuild")
                 completion(.success(()))
             } catch {

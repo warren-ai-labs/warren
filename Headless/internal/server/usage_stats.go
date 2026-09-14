@@ -168,9 +168,30 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 	if err != nil {
 		return api.UsageStatsResult{}, err
 	}
-	intervalRows, err := s.AgentStore.QueryUsageIntervals(ctx, fromDay, toDay)
-	if err != nil {
-		return api.UsageStatsResult{}, err
+
+	// Resolve the day the intraday payload describes. The request may name one;
+	// otherwise the most recent day with intraday data is the useful default,
+	// because that is the curve the panel opens on. Only one day's buckets are
+	// ever sent: the client draws a single day at a time, so moving the whole
+	// range's five-minute rows would transfer data that is never rendered.
+	detailDay := strings.TrimSpace(request.IntervalDay)
+	if detailDay < fromDay || detailDay > toDay {
+		detailDay = ""
+	}
+	if detailDay == "" {
+		detailDay, err = s.AgentStore.LatestUsageIntervalDay(ctx, fromDay, toDay)
+		if err != nil {
+			return api.UsageStatsResult{}, err
+		}
+	}
+	result.DetailDay = detailDay
+
+	var intervalRows []store.UsageIntervalRow
+	if detailDay != "" {
+		intervalRows, err = s.AgentStore.QueryUsageIntervals(ctx, detailDay, detailDay)
+		if err != nil {
+			return api.UsageStatsResult{}, err
+		}
 	}
 
 	projectNames := s.usageProjectNames()
@@ -179,6 +200,9 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 	providers := map[string]*api.UsageGroupStats{}
 	models := map[string]*api.UsageGroupStats{}
 	projects := map[string]*api.UsageGroupStats{}
+	dayProviders := map[string]*api.UsageGroupStats{}
+	dayModels := map[string]*api.UsageGroupStats{}
+	dayProjects := map[string]*api.UsageGroupStats{}
 
 	for _, row := range rows {
 		buckets := api.UsageBuckets{
@@ -211,6 +235,20 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 		project := usageGroupEntry(projects, row.ProjectID, projectNames[row.ProjectID])
 		addUsageBuckets(&project.Buckets, buckets)
 		addUsageCost(&project.Cost, cost)
+
+		if detailDay != "" && row.LocalDay == detailDay {
+			dayProvider := usageGroupEntry(dayProviders, row.Provider, "")
+			addUsageBuckets(&dayProvider.Buckets, buckets)
+			addUsageCost(&dayProvider.Cost, cost)
+
+			dayModel := usageGroupEntry(dayModels, row.Model, "")
+			addUsageBuckets(&dayModel.Buckets, buckets)
+			addUsageCost(&dayModel.Cost, cost)
+
+			dayProject := usageGroupEntry(dayProjects, row.ProjectID, projectNames[row.ProjectID])
+			addUsageBuckets(&dayProject.Buckets, buckets)
+			addUsageCost(&dayProject.Cost, cost)
+		}
 	}
 
 	for _, row := range intervalRows {
@@ -235,7 +273,7 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 	// Providers that report no token counts cannot appear in the rollup at all,
 	// so their absence is recorded explicitly. Without this the panel would show
 	// a total that silently excludes whole Agents.
-	unmeasured := s.usageUnmeasuredProviders()
+	unmeasured := s.usageUnmeasuredProviders(fromDay, toDay)
 	result.Cost.UnmeasuredProviders = unmeasured
 
 	result.Days = sortedUsageDays(days)
@@ -243,6 +281,9 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 	result.Providers = sortedUsageGroups(providers)
 	result.Models = sortedUsageGroups(models)
 	result.Projects = sortedUsageGroups(projects)
+	result.DayProviders = sortedUsageGroups(dayProviders)
+	result.DayModels = sortedUsageGroups(dayModels)
+	result.DayProjects = sortedUsageGroups(dayProjects)
 	return result, nil
 }
 
@@ -251,9 +292,11 @@ type usageIntervalKey struct {
 	minute int
 }
 
-// usageUnmeasuredProviders lists providers bound to sessions that exist right
-// now but whose transcripts carry no token counts.
-func (s *Service) usageUnmeasuredProviders() []string {
+// usageUnmeasuredProviders lists providers bound to sessions that were in use
+// during the requested range but whose transcripts carry no token counts. The
+// range matters: flagging today's Agents on a strictly historical window would
+// attach a present-day gap to last month's total.
+func (s *Service) usageUnmeasuredProviders(fromDay, toDay string) []string {
 	if s.Store == nil {
 		return nil
 	}
@@ -264,6 +307,13 @@ func (s *Service) usageUnmeasuredProviders() []string {
 			continue
 		}
 		if usage.SemanticsFor(provider).Reports {
+			continue
+		}
+		if fromDay != "" && session.EndedAt != nil &&
+			session.EndedAt.Local().Format("2006-01-02") < fromDay {
+			continue
+		}
+		if toDay != "" && session.CreatedAt.Local().Format("2006-01-02") > toDay {
 			continue
 		}
 		seen[provider] = struct{}{}

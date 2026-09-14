@@ -4,6 +4,34 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fail loopback Host connections immediately instead of waiting for
+  connectivity, and give them a short welcome deadline, so a Desktop that
+  starts during a Ghostline handoff reconnects as soon as the daemon returns
+  instead of showing "Migrating runtime sessions…" for the full remote
+  handshake window.
+- Apply a Usage range change that is made while a fetch is in flight instead of
+  dropping it, so the figures always describe the selected window.
+- Scope the "provider reports no token counts" caveat to the requested range, so
+  a historical window is not blamed for an Agent that only exists today.
+
+### Changed
+
+- Send only the selected day's five-minute Usage buckets instead of the whole
+  range, cap the intraday payload at the most recent day when no day is picked,
+  and skip the Usage reprice scan when neither usage nor prices changed; a
+  year-long range no longer moves or reprices every bucket on each open.
+- Reuse a freshly fetched Usage payload when moving between the Overview and
+  Usage settings pages, and make Refresh bypass that reuse.
+- Let the Usage heatmap select a day in both pages: Overview opens that day's
+  detail, and Detail replaces the day menu with the same grid.
+
+### Added
+
+- Add per-day Usage breakdowns by agent, model, and project, and a Tokens/Cost
+  toggle on the intraday curve.
+
 ## [0.13.0] - 2026-09-11
 
 > Minor release: makes Warren Hosts discoverable on the local network, adds

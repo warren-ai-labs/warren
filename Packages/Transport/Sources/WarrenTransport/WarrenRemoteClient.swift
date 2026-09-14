@@ -78,12 +78,18 @@ private enum WarrenRemoteSocketEvent: Sendable {
 /// prevents a response from an old socket from completing a request on a new
 /// socket.
 private actor WarrenRemoteSocket {
-    // Mobile networks may spend several seconds on DNS, TLS, and proxy
-    // negotiation before the authenticated welcome arrives.
-    private static let connectTimeout: Duration = .seconds(30)
     private static let requestTimeout: Duration = .seconds(15)
+    /// Host-owned maintenance operations may scan unbounded local history.
+    /// They remain correlated with the response but must not be failed by the
+    /// short interactive RPC deadline.
+    private static let requestsWithoutTimeout: Set<String> = ["usage.rebuild"]
     private static let heartbeatInterval: Duration = .seconds(20)
     private let terminalStateFormats: Set<String>
+    /// Hard deadline for the authenticated welcome. Mobile networks may spend
+    /// several seconds on DNS, TLS, and proxy negotiation before it arrives,
+    /// so the default stays generous; loopback callers pass a shorter deadline
+    /// because a vanished listener should be retried promptly.
+    private let welcomeTimeout: Duration
 
     let events: AsyncThrowingStream<WarrenRemoteSocketEvent, Error>
 
@@ -103,11 +109,13 @@ private actor WarrenRemoteSocket {
     init(
         adapter: any WarrenWebSocketTaskAdapter,
         codec: WarrenWireCodec = WarrenWireCodec(),
-        terminalStateFormats: Set<String>
+        terminalStateFormats: Set<String>,
+        welcomeTimeout: Duration = WarrenRemoteNetworking.defaultWelcomeTimeout
     ) {
         self.adapter = adapter
         self.codec = codec
         self.terminalStateFormats = terminalStateFormats
+        self.welcomeTimeout = welcomeTimeout
         // A peer can stream terminal bytes and Agent deltas faster than a
         // suspended iOS consumer can drain them. Bound the socket queue so a
         // stalled scene cannot retain an unbounded transcript; the model's
@@ -189,7 +197,7 @@ private actor WarrenRemoteSocket {
                 try await withThrowingTaskGroup(of: String.self) { group in
                     group.addTask { try await self.waitForWelcome() }
                     group.addTask {
-                        try await Task.sleep(for: Self.connectTimeout)
+                        try await Task.sleep(for: self.welcomeTimeout)
                         throw WarrenRemoteClientError.requestTimedOut("welcome")
                     }
                     let value = try await group.next()!
@@ -261,13 +269,25 @@ private actor WarrenRemoteSocket {
     }
 
     func request(_ method: String, params: [String: String]) async throws -> Data {
-		var jsonParams: [String: String] = [:]
-		for (key, value) in params { jsonParams[key] = value }
-		let data = (try? JSONSerialization.data(withJSONObject: jsonParams)) ?? Data("{}".utf8)
-		return try await request(method, paramsData: data)
-	}
+        var jsonParams: [String: String] = [:]
+        for (key, value) in params { jsonParams[key] = value }
+        let data = (try? JSONSerialization.data(withJSONObject: jsonParams)) ?? Data("{}".utf8)
+        return try await request(method, paramsData: data)
+    }
 
-	func request(_ method: String, paramsData: Data) async throws -> Data {
+    func request(_ method: String, paramsData: Data) async throws -> Data {
+        return try await request(
+            method,
+            paramsData: paramsData,
+            timeout: Self.requestsWithoutTimeout.contains(method) ? nil : Self.requestTimeout
+        )
+    }
+
+    private func request(
+        _ method: String,
+        paramsData: Data,
+        timeout: Duration?
+    ) async throws -> Data {
         guard !isClosed else { throw WarrenRemoteClientError.closed }
         guard paramsData.count <= WarrenRemoteClient.maximumJSONMessageBytes else {
             throw WarrenRemoteClientError.messageTooLarge(
@@ -294,10 +314,12 @@ private actor WarrenRemoteSocket {
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 requests[id] = continuation
-                requestTimeoutTasks[id] = Task { [weak self] in
-                    try? await Task.sleep(for: Self.requestTimeout)
-                    guard !Task.isCancelled else { return }
-                    await self?.failRequest(id, error: WarrenRemoteClientError.requestTimedOut(method))
+                if let timeout {
+                    requestTimeoutTasks[id] = Task { [weak self] in
+                        try? await Task.sleep(for: timeout)
+                        guard !Task.isCancelled else { return }
+                        await self?.failRequest(id, error: WarrenRemoteClientError.requestTimedOut(method))
+                    }
                 }
                 Task { [weak self] in
                     do {
@@ -652,6 +674,9 @@ public actor WarrenRemoteClient {
 
     private let configuration: WarrenRemoteEndpointConfiguration
     private let urlSession: URLSession
+    /// Hard deadline for the authenticated welcome on this endpoint. Loopback
+    /// endpoints retry faster because they have no DNS, TLS, or proxy step.
+    private let welcomeTimeout: Duration
     private var accessToken: String
     private let advertisedCapabilities: [String]
     private var refreshToken: String?  // OAuth2-style refresh token for Relay
@@ -696,7 +721,7 @@ public actor WarrenRemoteClient {
 
     public init(
         configuration: WarrenRemoteEndpointConfiguration,
-        urlSession: URLSession = WarrenRemoteNetworking.session,
+        urlSession: URLSession? = nil,
         codec: WarrenWireCodec = WarrenWireCodec(),
         terminalStateFormats: [String] = [WarrenRemoteClient.replayTerminalStateFormat],
         clientID: String? = nil,
@@ -704,7 +729,8 @@ public actor WarrenRemoteClient {
         tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
     ) {
         self.configuration = configuration
-        self.urlSession = urlSession
+        self.urlSession = urlSession ?? WarrenRemoteNetworking.session(for: configuration)
+        self.welcomeTimeout = WarrenRemoteNetworking.welcomeTimeout(for: configuration)
         self.accessToken = configuration.token
         // Extract refresh_token from endpoint metadata if available
         self.refreshToken = configuration.refreshToken
@@ -735,7 +761,7 @@ public actor WarrenRemoteClient {
         codec: WarrenWireCodec = WarrenWireCodec(),
         capabilities: [String] = ["roster-delta"],
         terminalStateFormats: [String] = [WarrenRemoteClient.replayTerminalStateFormat],
-        urlSession: URLSession = WarrenRemoteNetworking.session,
+        urlSession: URLSession? = nil,
         clientID: String? = nil,
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
         tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
@@ -762,13 +788,14 @@ public actor WarrenRemoteClient {
         codec: WarrenWireCodec = WarrenWireCodec(),
         capabilities: [String] = ["roster-delta"],
         terminalStateFormats: [String] = [WarrenRemoteClient.replayTerminalStateFormat],
-        urlSession: URLSession = WarrenRemoteNetworking.session,
+        urlSession: URLSession? = nil,
         clientID: String? = nil,
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
         tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
     ) {
         self.configuration = configuration
-        self.urlSession = urlSession
+        self.urlSession = urlSession ?? WarrenRemoteNetworking.session(for: configuration)
+        self.welcomeTimeout = WarrenRemoteNetworking.welcomeTimeout(for: configuration)
         self.accessToken = configuration.token
         self.refreshToken = configuration.refreshToken
         self.refreshTokenHandler = refreshTokenHandler
@@ -1607,7 +1634,8 @@ public actor WarrenRemoteClient {
             let socket = WarrenRemoteSocket(
                 adapter: adapter,
                 codec: codec,
-                terminalStateFormats: terminalStateFormats
+                terminalStateFormats: terminalStateFormats,
+                welcomeTimeout: welcomeTimeout
             )
             self.socket = socket
             negotiatedCapabilities = []

@@ -60,6 +60,7 @@ final class WarrenDesktopUsageRenderTests: XCTestCase {
             )
         }
         let start = calendar.date(byAdding: .day, value: -(days - 1), to: today) ?? today
+        let detailDay = entries.last?.day
         return WarrenUsageStats(
             fromDay: formatter.string(from: start),
             toDay: formatter.string(from: today),
@@ -84,8 +85,43 @@ final class WarrenDesktopUsageRenderTests: XCTestCase {
                 WarrenUsageGroup(key: "p1", label: "warren", buckets: WarrenUsageBuckets(freshInput: 250_000_000),
                                  cost: WarrenUsageCost(nanoUSD: 30_800_000_000, calls: 1777, pricedCalls: 1777)),
             ],
+            detailDay: detailDay,
+            dayProviders: [
+                WarrenUsageGroup(key: "claude", buckets: WarrenUsageBuckets(freshInput: 4_000_000),
+                                 cost: WarrenUsageCost(nanoUSD: 800_000_000, calls: 12, pricedCalls: 12)),
+                WarrenUsageGroup(key: "codex", buckets: WarrenUsageBuckets(freshInput: 1_000_000),
+                                 cost: WarrenUsageCost(nanoUSD: 200_000_000, calls: 5, pricedCalls: 5)),
+            ],
+            dayModels: [
+                WarrenUsageGroup(key: "claude-opus-5", buckets: WarrenUsageBuckets(freshInput: 4_000_000),
+                                 cost: WarrenUsageCost(nanoUSD: 800_000_000, calls: 12, pricedCalls: 12)),
+            ],
+            dayProjects: [
+                WarrenUsageGroup(key: "p1", label: "warren", buckets: WarrenUsageBuckets(freshInput: 5_000_000),
+                                 cost: WarrenUsageCost(nanoUSD: 1_000_000_000, calls: 17, pricedCalls: 17)),
+            ],
             pricesFetchedAt: Date()
         )
+    }
+
+    @MainActor
+    func testOverviewPanelLaysOutSummaryHeatmapAndBreakdowns() {
+        var range = WarrenUsageRange.month
+        var selected: String?
+        let hosting = mount(
+            WarrenDesktopUsagePanel(
+                stats: sampleStats(days: 30, peak: 5_000_000),
+                state: .loaded,
+                tokens: .dark,
+                range: Binding(get: { range }, set: { range = $0 }),
+                selectedDay: Binding(get: { selected }, set: { selected = $0 }),
+                onLoad: { _, _, _ in },
+                onOpenDetail: { selected = $0 },
+                mode: .overview
+            )
+        )
+        XCTAssertGreaterThan(hosting.fittingSize.height, 0)
+        XCTAssertFalse(hosting.subviews.isEmpty)
     }
 
     @MainActor
@@ -97,12 +133,33 @@ final class WarrenDesktopUsageRenderTests: XCTestCase {
                 state: .loaded,
                 tokens: .dark,
                 range: Binding(get: { range }, set: { range = $0 }),
-                onReload: {}
+                selectedDay: .constant(nil),
+                onLoad: { _, _, _ in }
             )
         )
         XCTAssertGreaterThan(hosting.fittingSize.width, 0)
         XCTAssertGreaterThan(hosting.fittingSize.height, 0)
         XCTAssertFalse(hosting.subviews.isEmpty)
+    }
+
+    @MainActor
+    func testDetailPanelLaysOutTheSelectedDayCurveAndBreakdowns() {
+        let stats = sampleStats(days: 30, peak: 5_000_000)
+        var range = WarrenUsageRange.month
+        var selected: String? = stats.days.first?.day
+        let hosting = mount(
+            WarrenDesktopUsagePanel(
+                stats: stats,
+                state: .loaded,
+                tokens: .dark,
+                range: Binding(get: { range }, set: { range = $0 }),
+                selectedDay: Binding(get: { selected }, set: { selected = $0 }),
+                onLoad: { _, _, _ in },
+                mode: .detail
+            )
+        )
+        XCTAssertGreaterThan(hosting.fittingSize.height, 0)
+        XCTAssertEqual(selected, stats.days.first?.day)
     }
 
     @MainActor
@@ -120,7 +177,8 @@ final class WarrenDesktopUsageRenderTests: XCTestCase {
                     state: state,
                     tokens: .dark,
                     range: Binding(get: { range }, set: { range = $0 }),
-                    onReload: {}
+                    selectedDay: .constant(nil),
+                    onLoad: { _, _, _ in }
                 ),
                 height: 400
             )
@@ -152,23 +210,27 @@ final class WarrenDesktopUsageRenderTests: XCTestCase {
     func testCurveMountsWithBothGranularities() {
         let stats = sampleStats(days: 7, peak: 1_000_000)
         var granularity = WarrenUsageCurveGranularity.halfHour
+        var metric = WarrenUsageCurveMetric.tokens
         let hosting = mount(
             WarrenDesktopUsageCurveView(
                 intervals: stats.intervals,
                 day: stats.intervals.last?.day,
                 tokens: .dark,
-                granularity: Binding(get: { granularity }, set: { granularity = $0 })
+                granularity: Binding(get: { granularity }, set: { granularity = $0 }),
+                metric: Binding(get: { metric }, set: { metric = $0 })
             ),
             height: 260
         )
         XCTAssertGreaterThan(hosting.fittingSize.height, 0)
         granularity = .hour
+        metric = .cost
         hosting.rootView = AnyView(
             WarrenDesktopUsageCurveView(
                 intervals: stats.intervals,
                 day: stats.intervals.last?.day,
                 tokens: .dark,
-                granularity: Binding(get: { granularity }, set: { granularity = $0 })
+                granularity: Binding(get: { granularity }, set: { granularity = $0 }),
+                metric: Binding(get: { metric }, set: { metric = $0 })
             ).frame(width: 896, height: 260)
         )
         hosting.layoutSubtreeIfNeeded()

@@ -55,8 +55,8 @@ private extension WarrenDesktopSettingsSection {
         case .workspaces: "arrow.triangle.branch"
         case .notifications: "bell"
         case .externalIDEs: "macwindow"
-        case .usageOverview: "chart.bar"
-        case .usage: "chart.bar"
+        case .usageOverview: "chart.bar.xaxis"
+        case .usage: "chart.line.uptrend.xyaxis"
         case .relay: "point.3.connected.trianglepath.dotted"
         case .lanPairing: "lock.shield"
         case .publicAccess: "globe"
@@ -141,9 +141,10 @@ struct WarrenDesktopSettingsView: View {
     let onSetProjectSetupScript: (ProjectID, String) -> Void
     let usageStats: WarrenUsageStats
     let usageState: WarrenUsageLoadState
-    /// Requests a fetch for the given day range. Optional so hosts that do not
-    /// wire usage simply show the section's empty state.
-    let onLoadUsage: ((Int) -> Void)?
+    /// Requests a fetch for the given day range and optional detail day.
+    /// Optional so hosts that do not wire usage simply show the section's
+    /// empty state.
+    let onLoadUsage: ((Int, String?, Bool) -> Void)?
     /// Replaces only the Host's derived Usage projections from retained Agent
     /// history. The settings page asks for confirmation before invoking it.
     let onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
@@ -207,6 +208,9 @@ struct WarrenDesktopSettingsView: View {
     @State private var usageRebuildConfirmation = false
     @State private var usageRebuildBusy = false
     @State private var usageRebuildError: String?
+    /// The day picked in either Usage surface, shared so Overview can open the
+    /// Detail page on the day the person clicked.
+    @State private var usageSelectedDay: String?
     @State private var copiedSettingsSection: WarrenDesktopSettingsSection?
     @Environment(\.colorScheme) private var colorScheme
 
@@ -269,7 +273,7 @@ struct WarrenDesktopSettingsView: View {
         onSetProjectSetupScript: @escaping (ProjectID, String) -> Void = { _, _ in },
         usageStats: WarrenUsageStats = WarrenUsageStats(),
         usageState: WarrenUsageLoadState = .idle,
-        onLoadUsage: ((Int) -> Void)? = nil,
+        onLoadUsage: ((Int, String?, Bool) -> Void)? = nil,
         onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         initialSettingsSection: WarrenDesktopSettingsSection? = nil,
         publicAccessPrefill: WarrenDesktopPublicAccessPrefill? = nil,
@@ -498,7 +502,7 @@ struct WarrenDesktopSettingsView: View {
             selectedSection = .usageOverview
         } label: {
             HStack(spacing: WarrenSpacing.compact) {
-                Image(systemName: "chart.bar")
+                Image(systemName: WarrenDesktopSettingsSection.usageOverview.iconName)
                     .font(.system(size: 12, weight: .light))
                     .frame(width: 16)
                     .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
@@ -1100,11 +1104,15 @@ struct WarrenDesktopSettingsView: View {
                 state: usageState,
                 tokens: tokens,
                 range: $usageRange,
-                onReload: { onLoadUsage?(usageRange.days) }
+                selectedDay: $usageSelectedDay,
+                onLoad: { days, day, force in onLoadUsage?(days, day, force) },
+                onOpenDetail: { _ in selectedSection = .usage }
             )
             // Fetch on first appearance and whenever the panel is revisited, so
             // reopening settings does not show a figure from an earlier session.
-            .onAppear { onLoadUsage?(usageRange.days) }
+            // The model reuses a payload for the same range and day, so moving
+            // between the two Usage pages does not refetch.
+            .onAppear { onLoadUsage?(usageRange.days, usageSelectedDay, false) }
 
             usageRebuildSection(tokens: tokens)
         }
@@ -1129,9 +1137,10 @@ struct WarrenDesktopSettingsView: View {
                 state: usageState,
                 tokens: tokens,
                 range: $usageRange,
-                onReload: { onLoadUsage?(usageRange.days) }
+                selectedDay: $usageSelectedDay,
+                onLoad: { days, day, force in onLoadUsage?(days, day, force) }
             )
-            .onAppear { onLoadUsage?(usageRange.days) }
+            .onAppear { onLoadUsage?(usageRange.days, usageSelectedDay, false) }
         }
     }
 
@@ -1182,7 +1191,7 @@ struct WarrenDesktopSettingsView: View {
                 usageRebuildBusy = false
                 switch result {
                 case .success:
-                    onLoadUsage?(usageRange.days)
+                    onLoadUsage?(usageRange.days, usageSelectedDay, true)
                 case .failure(let error):
                     usageRebuildError = error.localizedDescription
                 }

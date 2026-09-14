@@ -1,22 +1,76 @@
 import Foundation
 import WarrenDomain
 
-/// One URLSession is shared by native Relay pairing and the WebSocket client.
-/// Besides preserving the HttpOnly refresh cookie, waiting for connectivity
-/// avoids turning a short Wi‑Fi handoff into a tight reconnect loop on iOS.
-/// The session still uses Foundation's normal proxy and TLS policy; no
-/// certificate or proxy bypass is installed here.
+/// Sessions shared by native Relay pairing and the WebSocket client. Besides
+/// preserving the HttpOnly refresh cookie, waiting for connectivity avoids
+/// turning a short Wi‑Fi handoff into a tight reconnect loop on iOS. A
+/// loopback endpoint is the exception: its connectivity is never temporarily
+/// unavailable, so a refused connection must fail immediately instead of
+/// being suspended until the handshake deadline. The sessions still use
+/// Foundation's normal proxy and TLS policy; no certificate or proxy bypass is
+/// installed here.
 public enum WarrenRemoteNetworking {
-    public static let session: URLSession = {
+    /// Session for Relay and non-loopback endpoints, where the network path can
+    /// genuinely disappear for a while (for example a Wi‑Fi handoff).
+    public static let session: URLSession = makeSession(waitsForConnectivity: true)
+
+    /// Session for loopback endpoints (the local daemon and SSH tunnels). A
+    /// refused loopback connection means the listener is down; waiting for
+    /// connectivity would suspend the WebSocket handshake even after the
+    /// listener returns, which showed up as a false "Migrating runtime
+    /// sessions…" spinner during a Ghostline handoff.
+    public static let loopbackSession: URLSession = makeSession(waitsForConnectivity: false)
+
+    /// Hard deadline for the authenticated welcome on the shared session. It
+    /// must tolerate DNS, TLS, and proxy negotiation on mobile networks.
+    public static let defaultWelcomeTimeout: Duration = .seconds(30)
+
+    /// Hard deadline for the authenticated welcome on a loopback endpoint.
+    /// There is no DNS, TLS, or proxy step, so a welcome that has not arrived
+    /// within a few seconds means the listener is gone and the caller should
+    /// retry rather than keep the startup spinner running.
+    public static let loopbackWelcomeTimeout: Duration = .seconds(3)
+
+    /// Returns the session that matches the endpoint's network path.
+    public static func session(for configuration: WarrenRemoteEndpointConfiguration) -> URLSession {
+        isLoopback(configuration) ? loopbackSession : session
+    }
+
+    /// Returns the welcome deadline that matches the endpoint's network path.
+    public static func welcomeTimeout(for configuration: WarrenRemoteEndpointConfiguration) -> Duration {
+        isLoopback(configuration) ? loopbackWelcomeTimeout : defaultWelcomeTimeout
+    }
+
+    /// A Relay endpoint always uses a remote path. Direct and SSH endpoints are
+    /// loopback only when their host is local, which also covers the ephemeral
+    /// port an SSH tunnel binds on the client machine.
+    public static func isLoopback(_ configuration: WarrenRemoteEndpointConfiguration) -> Bool {
+        guard !configuration.isRelay,
+              let host = URLComponents(string: configuration.url)?.host else {
+            return false
+        }
+        return isLoopbackHost(host)
+    }
+
+    public static func isLoopbackHost(_ host: String) -> Bool {
+        let normalized = host
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            .lowercased()
+        return normalized == "localhost"
+            || normalized == "::1"
+            || normalized.hasPrefix("127.")
+    }
+
+    private static func makeSession(waitsForConnectivity: Bool) -> URLSession {
         let configuration = URLSessionConfiguration.default
-        configuration.waitsForConnectivity = true
+        configuration.waitsForConnectivity = waitsForConnectivity
         configuration.timeoutIntervalForRequest = 30
         configuration.timeoutIntervalForResource = 24 * 60 * 60
         configuration.httpShouldSetCookies = true
         configuration.httpCookieAcceptPolicy = .always
         configuration.httpCookieStorage = HTTPCookieStorage.shared
         return URLSession(configuration: configuration)
-    }()
+    }
 }
 
 /// The endpoint description used by native clients.

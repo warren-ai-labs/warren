@@ -85,7 +85,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onSetProjectSetupScript: (ProjectID, String) -> Void
     private let usageStats: WarrenUsageStats
     private let usageState: WarrenUsageLoadState
-    private let onLoadUsage: ((Int) -> Void)?
+    private let onLoadUsage: ((Int, String?, Bool) -> Void)?
     private let onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     private let embeddedEditorAvailable: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
@@ -234,7 +234,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onSetProjectSetupScript: @escaping (ProjectID, String) -> Void = { _, _ in },
         usageStats: WarrenUsageStats = WarrenUsageStats(),
         usageState: WarrenUsageLoadState = .idle,
-        onLoadUsage: ((Int) -> Void)? = nil,
+        onLoadUsage: ((Int, String?, Bool) -> Void)? = nil,
         onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         embeddedEditorAvailable: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },

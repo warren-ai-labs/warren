@@ -1,6 +1,49 @@
 import Foundation
 import WarrenDesktop
 
+/// Parameters for one `usage.stats` request.
+///
+/// Extracted from the model so the trailing-window math and the cache key are
+/// testable without a live transport. Days are the Host's local calendar days;
+/// the client only names the window and must not reinterpret the boundaries.
+struct WarrenUsageStatsRequest: Equatable {
+    let fromDay: String
+    let toDay: String
+    /// The detail day, or nil to let the Host pick the most recent day with
+    /// intraday data.
+    let intervalDay: String?
+
+    static func window(
+        days: Int,
+        selectedDay: String?,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> WarrenUsageStatsRequest {
+        let start = calendar.date(byAdding: .day, value: -(max(days, 1) - 1), to: now) ?? now
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        let day = (selectedDay?.isEmpty ?? true) ? nil : selectedDay
+        return WarrenUsageStatsRequest(
+            fromDay: formatter.string(from: start),
+            toDay: formatter.string(from: now),
+            intervalDay: day
+        )
+    }
+
+    /// Identifies a payload for cache reuse. Switching Usage views with the same
+    /// window and day must not refetch.
+    var cacheKey: String { "\(fromDay)..\(toDay)..\(intervalDay ?? "-")" }
+
+    var parameters: [String: String] {
+        var params = ["fromDay": fromDay, "toDay": toDay]
+        if let intervalDay { params["intervalDay"] = intervalDay }
+        return params
+    }
+}
+
 /// Wire shape of `usage.stats`, decoded into the desktop presentation model.
 ///
 /// Kept as its own Codable layer rather than making the presentation types
@@ -134,6 +177,10 @@ struct WarrenUsageStatsResponse: Decodable {
     let providers: [Group]
     let models: [Group]
     let projects: [Group]
+    let detailDay: String?
+    let dayProviders: [Group]
+    let dayModels: [Group]
+    let dayProjects: [Group]
     let pricesFetchedAt: String?
 
     init(from decoder: Decoder) throws {
@@ -149,12 +196,17 @@ struct WarrenUsageStatsResponse: Decodable {
         providers = try container.decodeIfPresent([Group].self, forKey: .providers) ?? []
         models = try container.decodeIfPresent([Group].self, forKey: .models) ?? []
         projects = try container.decodeIfPresent([Group].self, forKey: .projects) ?? []
+        detailDay = try container.decodeIfPresent(String.self, forKey: .detailDay)
+        dayProviders = try container.decodeIfPresent([Group].self, forKey: .dayProviders) ?? []
+        dayModels = try container.decodeIfPresent([Group].self, forKey: .dayModels) ?? []
+        dayProjects = try container.decodeIfPresent([Group].self, forKey: .dayProjects) ?? []
         pricesFetchedAt = try container.decodeIfPresent(String.self, forKey: .pricesFetchedAt)
     }
 
     private enum CodingKeys: String, CodingKey {
         case fromDay, toDay, total, cost, days, intervals, intervalBucketMinutes
-        case providers, models, projects, pricesFetchedAt
+        case providers, models, projects, detailDay
+        case dayProviders, dayModels, dayProjects, pricesFetchedAt
     }
 }
 
@@ -209,6 +261,10 @@ extension WarrenUsageStatsResponse {
             providers: providers.map(\.model),
             models: models.map(\.model),
             projects: projects.map(\.model),
+            detailDay: detailDay.flatMap { $0.isEmpty ? nil : $0 },
+            dayProviders: dayProviders.map(\.model),
+            dayModels: dayModels.map(\.model),
+            dayProjects: dayProjects.map(\.model),
             pricesFetchedAt: pricesFetchedAt.flatMap(Self.parseTimestamp)
         )
     }

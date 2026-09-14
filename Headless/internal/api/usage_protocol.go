@@ -11,6 +11,12 @@ package api
 type UsageStatsRequest struct {
 	FromDay string `json:"fromDay,omitempty"`
 	ToDay   string `json:"toDay,omitempty"`
+	// IntervalDay narrows the intraday payload to one local day. Clients show a
+	// single day's curve at a time, so sending the whole range's five-minute
+	// buckets would move data that is never drawn. Empty means "the most recent
+	// day that has intraday data", which is what the client shows before the
+	// person picks a day.
+	IntervalDay string `json:"intervalDay,omitempty"`
 }
 
 // UsageRebuildResult is returned by the explicit Usage maintenance action.
@@ -112,13 +118,23 @@ type UsageStatsResult struct {
 	Total UsageBuckets    `json:"total"`
 	Cost  UsageCost       `json:"cost"`
 	Days  []UsageDayStats `json:"days"`
-	// Intervals are the canonical 5-minute buckets. Clients may merge adjacent
-	// buckets for a coarser display without another Host request.
+	// DetailDay is the local day the intraday payload describes. When the
+	// request named no IntervalDay this is the most recent day with data, so the
+	// client can label the curve without a second round trip.
+	DetailDay string `json:"detailDay,omitempty"`
+	// Intervals are the canonical 5-minute buckets for DetailDay. Clients may
+	// merge adjacent buckets for a coarser display without another Host request.
 	Intervals             []UsageIntervalStats `json:"intervals"`
 	IntervalBucketMinutes int                  `json:"intervalBucketMinutes"`
 	Providers             []UsageGroupStats    `json:"providers"`
 	Models                []UsageGroupStats    `json:"models"`
 	Projects              []UsageGroupStats    `json:"projects"`
+	// DayProviders, DayModels, and DayProjects break DetailDay down by the same
+	// dimensions as the range, so selecting a day answers "what cost this day"
+	// without shipping per-day rows for every day in the range.
+	DayProviders []UsageGroupStats `json:"dayProviders,omitempty"`
+	DayModels    []UsageGroupStats `json:"dayModels,omitempty"`
+	DayProjects  []UsageGroupStats `json:"dayProjects,omitempty"`
 	// PricesFetchedAt is when the unit prices behind Cost were retrieved. Zero
 	// means no price table was available and every amount is zero.
 	PricesFetchedAt string `json:"pricesFetchedAt,omitempty"`

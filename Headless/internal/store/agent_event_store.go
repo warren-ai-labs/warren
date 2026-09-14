@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
 )
@@ -21,6 +22,15 @@ type AgentEventStore struct {
 	// has no host-state dependency of its own, so the Service injects this and
 	// usage accumulation stays inert until it does.
 	usageAttribution UsageAttributionResolver
+	// usageRepriceDirty records that a write has added or replaced usage rows
+	// whose cost has not been computed yet. Repricing is a full scan of both
+	// Usage tables, so it is skipped unless a write or a price change makes it
+	// necessary.
+	usageRepriceDirty bool
+	// usageRepricedPriceAt is the price table version the stored costs were
+	// computed from. A different version forces a restatement even when no new
+	// usage arrived.
+	usageRepricedPriceAt time.Time
 }
 
 const (

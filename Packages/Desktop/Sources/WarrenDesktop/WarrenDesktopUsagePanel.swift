@@ -40,35 +40,52 @@ public enum WarrenUsageLoadState: Equatable, Sendable {
 
 /// Which part of Usage a settings page should render.
 public enum WarrenUsagePanelMode: Sendable {
+    /// Range totals, the activity heatmap, and the range breakdowns.
     case overview
+    /// One day: its intraday curve and its own breakdowns.
     case detail
 }
 
-/// The detailed intraday Usage panel.
+/// The Usage panels.
+///
+/// One view drives both settings surfaces so the range picker, heatmap, and
+/// day scoping have a single implementation. The Overview heatmap and the
+/// Detail heatmap are the same control: picking a day in either one selects it,
+/// so there is never a day the UI shows but cannot fetch.
 public struct WarrenDesktopUsagePanel: View {
     let stats: WarrenUsageStats
     let state: WarrenUsageLoadState
     let tokens: WarrenColorTokens
     @Binding var range: WarrenUsageRange
-    let onReload: () -> Void
+    /// The day the person picked, or nil to follow the Host's most recent day.
+    @Binding var selectedDay: String?
+    /// Requests a fetch for a day range and an optional detail day.
+    let onLoad: (_ days: Int, _ day: String?, _ force: Bool) -> Void
+    /// Switches to the detail surface. Overview uses it to open the day the
+    /// person clicked instead of leaving the click inert.
+    let onOpenDetail: ((String) -> Void)?
     let mode: WarrenUsagePanelMode
 
-    @State private var selectedDay: String?
     @State private var curveGranularity: WarrenUsageCurveGranularity = .halfHour
+    @State private var curveMetric: WarrenUsageCurveMetric = .tokens
 
     public init(
         stats: WarrenUsageStats,
         state: WarrenUsageLoadState,
         tokens: WarrenColorTokens,
         range: Binding<WarrenUsageRange>,
-        onReload: @escaping () -> Void,
+        selectedDay: Binding<String?>,
+        onLoad: @escaping (_ days: Int, _ day: String?, _ force: Bool) -> Void,
+        onOpenDetail: ((String) -> Void)? = nil,
         mode: WarrenUsagePanelMode = .detail
     ) {
         self.stats = stats
         self.state = state
         self.tokens = tokens
         self._range = range
-        self.onReload = onReload
+        self._selectedDay = selectedDay
+        self.onLoad = onLoad
+        self.onOpenDetail = onOpenDetail
         self.mode = mode
     }
 
@@ -78,16 +95,15 @@ public struct WarrenDesktopUsagePanel: View {
         )
     }
 
-    private var selectedDayStats: WarrenUsageDay? {
-        guard let selectedDay else { return nil }
-        return stats.days.first { $0.day == selectedDay }
+    /// The day every detail surface renders. Falls back to the Host's default
+    /// so the curve has something to draw before a day is picked.
+    private var detailDay: String? {
+        stats.resolvedDetailDay(selected: selectedDay)
     }
 
-    private var curveDay: String? {
-        if let selectedDay {
-            return selectedDay
-        }
-        return stats.intervals.map(\.day).max() ?? stats.days.map(\.day).max()
+    private var detailDayStats: WarrenUsageDay? {
+        guard let detailDay else { return nil }
+        return stats.days.first { $0.day == detailDay }
     }
 
     public var body: some View {
@@ -113,7 +129,7 @@ public struct WarrenDesktopUsagePanel: View {
         .onChange(of: range) { _ in
             // A day selected in one range may not exist in the next.
             selectedDay = nil
-            onReload()
+            onLoad(range.days, nil, false)
         }
     }
 
@@ -127,54 +143,108 @@ public struct WarrenDesktopUsagePanel: View {
         }
     }
 
+    // MARK: - Overview
+
     private var overviewContent: some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.large) {
-            WarrenDesktopUsageHeatmapView(
-                heatmap: heatmap, tokens: tokens, selectedDay: .constant(nil)
-            )
-            summaryRow
-            breakdowns
+            summaryGrid
+            heatmapCard(subtitle: "Every day in range, shaded by tokens")
+            breakdownHint
+            breakdowns(providers: stats.providers, models: stats.models, projects: stats.projects)
             footnote
         }
     }
 
+    private var breakdownHint: some View {
+        Text("Click a day above to open its intraday curve and breakdown.")
+            .font(WarrenTypography.settingsMeta)
+            .foregroundStyle(tokens.mutedForeground)
+    }
+
+    // MARK: - Detail
+
     private var detailContent: some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.large) {
-            dayPicker
+            heatmapCard(subtitle: "Select a day to inspect")
             detailStrip
             WarrenDesktopUsageCurveView(
                 intervals: stats.intervals,
-                day: curveDay,
+                day: detailDay,
                 baseBucketMinutes: stats.intervalBucketMinutes,
                 tokens: tokens,
-                granularity: $curveGranularity
+                granularity: $curveGranularity,
+                metric: $curveMetric
             )
+            dayBreakdowns
+            footnote
         }
     }
 
-    private var dayPicker: some View {
-        let days = stats.days.map(\.day).sorted().reversed()
-        return Group {
-            if !days.isEmpty {
-                Picker("Day", selection: selectedDayBinding) {
-                    ForEach(Array(days), id: \.self) { day in
-                        Text(WarrenUsageFormatting.dayLabel(day)).tag(day)
-                    }
+    /// Shows the selected day, and its cost and token composition, so the strip
+    /// answers "what am I looking at" before the curve is read.
+    private var detailStrip: some View {
+        // When a day is named but has no rows, show zeros rather than the range
+        // total under a day heading: a title that disagrees with its figures is
+        // worse than an empty day.
+        let buckets = detailDayStats?.buckets ?? WarrenUsageBuckets()
+        let cost = detailDayStats?.cost ?? WarrenUsageCost()
+        let title = detailDay.map { WarrenUsageFormatting.dayLabel($0) }
+            ?? "\(range.label) total"
+        let share = WarrenUsageFormatting.percent(buckets.cacheHitRate ?? 0)
+
+        return VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
+            HStack(spacing: WarrenSpacing.small) {
+                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                    Text(title)
+                        .font(WarrenTypography.settingsBodyEmphasis)
+                    Text("Cache hit \(share) · \(WarrenUsageFormatting.tokens(cost.calls)) calls")
+                        .font(WarrenTypography.settingsMeta)
+                        .foregroundStyle(tokens.mutedForeground)
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .accessibilityLabel("Usage day")
-                .accessibilityIdentifier("usage.day")
+                Spacer(minLength: 0)
+                if selectedDay != nil {
+                    Button("Show latest") {
+                        selectedDay = nil
+                        onLoad(range.days, nil, false)
+                    }
+                    .buttonStyle(.plain)
+                    .font(WarrenTypography.settingsGroupLabel)
+                    .foregroundStyle(tokens.link)
+                }
+                Text(WarrenUsageFormatting.money(cost))
+                    .font(WarrenTypography.settingsSectionTitle)
+                    .foregroundStyle(tokens.highlight)
+                    .monospacedDigit()
             }
+            bucketBar(buckets)
+            bucketLegend(buckets)
         }
+        .padding(WarrenSpacing.medium)
+        .background(
+            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+                .fill(tokens.chromeSurface)
+        )
+        .accessibilityIdentifier("usage.detail")
     }
 
-    private var selectedDayBinding: Binding<String> {
-        Binding(
-            get: { selectedDay ?? curveDay ?? "" },
-            set: { selectedDay = $0.isEmpty ? nil : $0 }
+    private var dayBreakdowns: some View {
+        // The Host narrows these to the selected day. Against an older Host that
+        // sends no day groups at all (`detailDay` absent), fall back to the range
+        // breakdowns rather than showing an empty section. A new Host that names
+        // a quiet day legitimately sends empty groups, and that must stay empty.
+        let hasDayScope = stats.detailDay != nil
+        let providers = hasDayScope ? stats.dayProviders : stats.providers
+        let models = hasDayScope ? stats.dayModels : stats.models
+        let projects = hasDayScope ? stats.dayProjects : stats.projects
+        return breakdowns(
+            providers: providers,
+            models: models,
+            projects: projects,
+            heading: hasDayScope ? "Day breakdown" : "Range breakdown"
         )
     }
+
+    // MARK: - Shared pieces
 
     private var rangePicker: some View {
         HStack(spacing: WarrenSpacing.medium) {
@@ -194,7 +264,7 @@ public struct WarrenDesktopUsagePanel: View {
                 ProgressView().controlSize(.small)
             }
             Button {
-                onReload()
+                onLoad(range.days, selectedDay, true)
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
@@ -204,43 +274,124 @@ public struct WarrenDesktopUsagePanel: View {
         }
     }
 
-    /// Shows the selected day, or the whole range when no day is selected, so
-    /// the same row answers "what am I looking at" in both modes.
-    private var detailStrip: some View {
-        let buckets = selectedDayStats?.buckets ?? stats.total
-        let cost = selectedDayStats?.cost ?? stats.cost
-        let title = selectedDayStats.map { WarrenUsageFormatting.dayLabel($0.day) }
-            ?? "\(range.label) total"
-
-        return VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-            HStack(spacing: WarrenSpacing.compact) {
-                Text(title)
+    private func heatmapCard(subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Activity")
                     .font(WarrenTypography.settingsBodyEmphasis)
-                if selectedDay != nil {
-                    Button("Clear") { selectedDay = nil }
-                        .buttonStyle(.plain)
-                        .font(WarrenTypography.settingsGroupLabel)
-                        .foregroundStyle(tokens.link)
-                }
+                Text(subtitle)
+                    .font(WarrenTypography.settingsMeta)
+                    .foregroundStyle(tokens.mutedForeground)
                 Spacer(minLength: 0)
-                Text(WarrenUsageFormatting.money(cost))
-                    .font(WarrenTypography.settingsBodyEmphasis)
-                    .foregroundStyle(tokens.highlight)
+                if stats.fromDay.isEmpty == false {
+                    Text("\(WarrenUsageFormatting.dayLabel(stats.fromDay)) – \(WarrenUsageFormatting.dayLabel(stats.toDay))")
+                        .font(WarrenTypography.settingsMeta)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .lineLimit(1)
+                }
             }
-            bucketBar(buckets)
-            HStack(spacing: WarrenSpacing.standard) {
-                bucketKey("Fresh input", buckets.freshInput, tokens.highlight)
-                bucketKey("Cache write", buckets.cacheWrite, tokens.warning)
-                bucketKey("Cache read", buckets.cacheRead, tokens.info)
-                bucketKey("Output", buckets.output, tokens.success)
-            }
+            WarrenDesktopUsageHeatmapView(
+                heatmap: heatmap,
+                tokens: tokens,
+                selectedDay: heatmapSelection
+            )
         }
         .padding(WarrenSpacing.medium)
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
                 .fill(tokens.chromeSurface)
         )
-        .accessibilityIdentifier("usage.detail")
+    }
+
+    /// The heatmap writes through the same selection the detail surface reads.
+    /// Overview additionally opens the detail page so a click leads somewhere;
+    /// that page fetches on appear, so Overview does not request twice.
+    private var heatmapSelection: Binding<String?> {
+        Binding(
+            get: { selectedDay },
+            set: { day in
+                guard let day else {
+                    selectedDay = nil
+                    return
+                }
+                selectedDay = day
+                if mode == .overview, let onOpenDetail {
+                    onOpenDetail(day)
+                } else {
+                    onLoad(range.days, day, false)
+                }
+            }
+        )
+    }
+
+    private var summaryGrid: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 148, maximum: 320), spacing: WarrenSpacing.medium)],
+            alignment: .leading,
+            spacing: WarrenSpacing.medium
+        ) {
+            metricCard(
+                "Cost",
+                WarrenUsageFormatting.money(stats.cost),
+                icon: "dollarsign.circle",
+                accent: tokens.highlight
+            )
+            metricCard(
+                "Tokens",
+                WarrenUsageFormatting.tokens(stats.total.total),
+                icon: "number",
+                accent: tokens.info
+            )
+            metricCard(
+                "Calls",
+                WarrenUsageFormatting.tokens(stats.cost.calls),
+                icon: "arrow.left.arrow.right",
+                accent: tokens.success
+            )
+            metricCard(
+                "Cache hit",
+                stats.total.cacheHitRate.map(WarrenUsageFormatting.percent) ?? "—",
+                icon: "bolt.horizontal.circle",
+                accent: tokens.warning
+            )
+            metricCard(
+                "Per call",
+                stats.cost.calls > 0
+                    ? WarrenUsageFormatting.money(stats.cost.usd / Double(stats.cost.calls))
+                    : "—",
+                icon: "divide.circle",
+                accent: tokens.link
+            )
+        }
+    }
+
+    private func metricCard(_ label: String, _ value: String, icon: String, accent: Color) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+            HStack(spacing: WarrenSpacing.xs) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(accent)
+                    .accessibilityHidden(true)
+                Text(label)
+                    .font(WarrenTypography.settingsGroupLabel)
+                    .foregroundStyle(tokens.mutedForeground)
+            }
+            Text(value)
+                .font(WarrenTypography.settingsSectionTitle)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(WarrenSpacing.medium)
+        .background(
+            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+                .fill(tokens.fillHover)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+                .strokeBorder(accent.opacity(0.18), lineWidth: 1)
+        )
     }
 
     /// Proportional bar over the four disjoint token classes.
@@ -261,61 +412,66 @@ public struct WarrenDesktopUsagePanel: View {
                 }
             }
         }
-        .frame(height: 6)
-        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        .frame(height: 8)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .accessibilityHidden(true)
     }
 
-    private func bucketKey(_ label: String, _ value: Int64, _ color: Color) -> some View {
-        HStack(spacing: WarrenSpacing.xs) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(label)
-                .font(WarrenTypography.settingsGroupLabel)
-                .foregroundStyle(tokens.mutedForeground)
-            Text(WarrenUsageFormatting.tokens(value))
-                .font(WarrenTypography.settingsGroupLabel)
+    private func bucketLegend(_ buckets: WarrenUsageBuckets) -> some View {
+        let total = max(buckets.total, 1)
+        return HStack(spacing: WarrenSpacing.standard) {
+            bucketKey("Fresh input", buckets.freshInput, total, tokens.highlight)
+            bucketKey("Cache write", buckets.cacheWrite, total, tokens.warning)
+            bucketKey("Cache read", buckets.cacheRead, total, tokens.info)
+            bucketKey("Output", buckets.output, total, tokens.success)
         }
     }
 
-    private var summaryRow: some View {
-        HStack(alignment: .top, spacing: WarrenSpacing.standard) {
-            metric("Tokens", WarrenUsageFormatting.tokens(stats.total.total))
-            metric("Calls", WarrenUsageFormatting.tokens(stats.cost.calls))
-            metric(
-                "Cache hit",
-                stats.total.cacheHitRate.map(WarrenUsageFormatting.percent) ?? "—"
-            )
-            metric(
-                "Per call",
-                stats.cost.calls > 0
-                    ? WarrenUsageFormatting.money(stats.cost.usd / Double(stats.cost.calls))
-                    : "—"
-            )
-        }
-    }
-
-    private func metric(_ label: String, _ value: String) -> some View {
+    private func bucketKey(_ label: String, _ value: Int64, _ total: Int64, _ color: Color) -> some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-            Text(label)
-                .font(WarrenTypography.settingsGroupLabel)
-                .foregroundStyle(tokens.mutedForeground)
-            Text(value).font(WarrenTypography.settingsSectionTitle)
+            HStack(spacing: WarrenSpacing.xs) {
+                Circle().fill(color).frame(width: 6, height: 6)
+                Text(label)
+                    .font(WarrenTypography.settingsGroupLabel)
+                    .foregroundStyle(tokens.mutedForeground)
+            }
+            HStack(spacing: WarrenSpacing.xs) {
+                Text(WarrenUsageFormatting.tokens(value))
+                    .font(WarrenTypography.settingsSupporting)
+                    .monospacedDigit()
+                Text(WarrenUsageFormatting.percent(Double(value) / Double(total)))
+                    .font(WarrenTypography.settingsMeta)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .monospacedDigit()
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var breakdowns: some View {
-        // Three dimensions side by side rather than behind tabs: they answer
-        // different questions about the same range and are usually read together.
-        HStack(alignment: .top, spacing: WarrenSpacing.large) {
-            breakdown("By agent", groups: stats.providers)
-            breakdown("By model", groups: stats.models)
-            breakdown("By project", groups: stats.projects)
+    private func breakdowns(
+        providers: [WarrenUsageGroup],
+        models: [WarrenUsageGroup],
+        projects: [WarrenUsageGroup],
+        heading: String? = nil
+    ) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
+            if let heading {
+                Text(heading)
+                    .font(WarrenTypography.settingsBodyEmphasis)
+            }
+            // Three dimensions side by side rather than behind tabs: they answer
+            // different questions about the same range and are usually read together.
+            HStack(alignment: .top, spacing: WarrenSpacing.large) {
+                breakdown("By agent", groups: providers)
+                breakdown("By model", groups: models)
+                breakdown("By project", groups: projects)
+            }
         }
     }
 
     private func breakdown(_ title: String, groups: [WarrenUsageGroup]) -> some View {
         let peak = groups.map(\.buckets.total).max() ?? 0
+        let total = groups.map(\.buckets.total).reduce(0, +)
         return VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
             Text(title)
                 .font(WarrenTypography.settingsGroupLabel)
@@ -326,7 +482,7 @@ public struct WarrenDesktopUsagePanel: View {
             } else {
                 // Bounded so one dimension cannot push the others off screen.
                 ForEach(groups.prefix(6)) { group in
-                    groupRow(group, peak: peak)
+                    groupRow(group, peak: peak, total: total)
                 }
                 if groups.count > 6 {
                     Text("+\(groups.count - 6) more")
@@ -338,14 +494,19 @@ public struct WarrenDesktopUsagePanel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func groupRow(_ group: WarrenUsageGroup, peak: Int64) -> some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+    private func groupRow(_ group: WarrenUsageGroup, peak: Int64, total: Int64) -> some View {
+        let share = total > 0 ? Double(group.buckets.total) / Double(total) : 0
+        return VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
             HStack(spacing: WarrenSpacing.small) {
                 Text(group.displayName)
                     .font(WarrenTypography.settingsSupporting)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: WarrenSpacing.xs)
+                Text(WarrenUsageFormatting.percent(share))
+                    .font(WarrenTypography.settingsMeta)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .monospacedDigit()
                 Text(WarrenUsageFormatting.money(group.cost))
                     .font(WarrenTypography.settingsGroupLabel)
                     .foregroundStyle(tokens.mutedForeground)
@@ -394,12 +555,18 @@ public struct WarrenDesktopUsagePanel: View {
     }
 
     private func placeholder(_ text: String) -> some View {
-        Text(text)
-            .font(WarrenTypography.settingsSupporting)
-            .foregroundStyle(tokens.mutedForeground)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, WarrenSpacing.large)
-            .accessibilityIdentifier("usage.placeholder")
+        HStack(spacing: WarrenSpacing.compact) {
+            Image(systemName: "chart.bar.xaxis")
+                .font(.system(size: 14, weight: .light))
+                .foregroundStyle(tokens.mutedForeground)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, WarrenSpacing.large)
+        .accessibilityIdentifier("usage.placeholder")
     }
 
     private func failureNotice(_ message: String) -> some View {
@@ -407,7 +574,7 @@ public struct WarrenDesktopUsagePanel: View {
             Label(message, systemImage: "exclamationmark.triangle")
                 .font(WarrenTypography.settingsSupporting)
                 .foregroundStyle(tokens.destructive)
-            Button("Try again", action: onReload)
+            Button("Try again") { onLoad(range.days, selectedDay, true) }
                 .buttonStyle(.bordered)
                 .font(WarrenTypography.settingsSupporting)
         }
@@ -424,20 +591,26 @@ public struct WarrenDesktopUsageOverviewPanel: View {
     private let state: WarrenUsageLoadState
     private let tokens: WarrenColorTokens
     @Binding private var range: WarrenUsageRange
-    private let onReload: () -> Void
+    @Binding private var selectedDay: String?
+    private let onLoad: (Int, String?, Bool) -> Void
+    private let onOpenDetail: ((String) -> Void)?
 
     public init(
         stats: WarrenUsageStats,
         state: WarrenUsageLoadState,
         tokens: WarrenColorTokens,
         range: Binding<WarrenUsageRange>,
-        onReload: @escaping () -> Void
+        selectedDay: Binding<String?>,
+        onLoad: @escaping (Int, String?, Bool) -> Void,
+        onOpenDetail: ((String) -> Void)? = nil
     ) {
         self.stats = stats
         self.state = state
         self.tokens = tokens
         self._range = range
-        self.onReload = onReload
+        self._selectedDay = selectedDay
+        self.onLoad = onLoad
+        self.onOpenDetail = onOpenDetail
     }
 
     public var body: some View {
@@ -446,7 +619,9 @@ public struct WarrenDesktopUsageOverviewPanel: View {
             state: state,
             tokens: tokens,
             range: $range,
-            onReload: onReload,
+            selectedDay: $selectedDay,
+            onLoad: onLoad,
+            onOpenDetail: onOpenDetail,
             mode: .overview
         )
     }
