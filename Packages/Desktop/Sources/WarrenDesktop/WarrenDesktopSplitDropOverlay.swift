@@ -9,114 +9,82 @@ public enum SplitDropTarget: String, Sendable, Equatable {
     case center
 }
 
+/// The activation rectangles for a pane's tab drop zones.
+///
+/// Pure geometry, so the regions a drop is accepted in are asserted directly
+/// rather than inferred from a rendered view. The edge strips own the outer
+/// quarter of the pane and the center owns what is left, so the five targets
+/// tile the pane without overlapping.
+enum WarrenDesktopSplitDropZones {
+    struct Rects: Equatable {
+        let top: CGRect
+        let bottom: CGRect
+        let left: CGRect
+        let right: CGRect
+        let center: CGRect
+    }
+
+    static let edgeRatio: CGFloat = 0.25
+    static let minimumEdgeLength: CGFloat = 40
+
+    static func rects(in size: CGSize) -> Rects {
+        let w = size.width
+        let h = size.height
+        let ew = max(w * edgeRatio, minimumEdgeLength)
+        let eh = max(h * edgeRatio, minimumEdgeLength)
+        let middleWidth = max(0, w - ew * 2)
+        let middleHeight = max(0, h - eh * 2)
+        return Rects(
+            top: CGRect(x: 0, y: 0, width: w, height: eh),
+            bottom: CGRect(x: 0, y: h - eh, width: w, height: eh),
+            left: CGRect(x: 0, y: eh, width: ew, height: middleHeight),
+            right: CGRect(x: w - ew, y: eh, width: ew, height: middleHeight),
+            center: CGRect(x: ew, y: eh, width: middleWidth, height: middleHeight)
+        )
+    }
+}
+
 /// Tab drop zones layered over a pane's terminal.
 ///
-/// The zones must never take a hit-test shape. `Color.clear` alone is not a
-/// mouse target, so clicks, selection drags, and terminal mouse reporting keep
-/// reaching the AppKit terminal underneath; adding `contentShape` here makes
-/// the SwiftUI host swallow every click over the terminal body.
-/// `WarrenDesktopSplitDropOverlayHitTestTests` pins that invariant.
+/// This view is presentation only. The drop is resolved by the native tab drag
+/// session (`WarrenDesktopTabDragHandleView`), which reads the pane under the
+/// pointer and performs the split itself; a SwiftUI `dropDestination` over the
+/// AppKit terminal is never delivered. The zones must never take a hit-test
+/// shape: `contentShape` here makes the SwiftUI host swallow every click over
+/// the terminal body, which breaks click-to-position, selection drags, and
+/// terminal mouse reporting. `WarrenDesktopSplitDropOverlayHitTestTests` pins
+/// that invariant.
 struct WarrenDesktopSplitDropOverlay: View {
+    let paneID: String
     let canSplit: Bool
-    let onDrop: (String, SplitDropTarget) -> Void
 
-    @State private var activeTarget: SplitDropTarget?
+    /// Observed rather than read through the plain environment value: the
+    /// preview has to redraw when the in-flight drag moves to another zone, and
+    /// only an observed object republishes changes to SwiftUI.
+    @EnvironmentObject private var drag: WarrenDesktopTabDrag
     @Environment(\.colorScheme) private var colorScheme
+
+    /// The zone the in-flight tab drag is over for this pane, if any.
+    private var activeTarget: SplitDropTarget? {
+        guard let splitTarget = drag.splitTarget, splitTarget.paneID == paneID else {
+            return nil
+        }
+        return splitTarget.target
+    }
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         GeometryReader { proxy in
-            let w = proxy.size.width
-            let h = proxy.size.height
-            let edgeRatio: CGFloat = 0.25
-            let ew = max(w * edgeRatio, 40)
-            let eh = max(h * edgeRatio, 40)
-
             ZStack {
-                // Visual highlight preview for currently hovered target zone
+                // Marks this pane's drop area for the native drag session.
+                // Without it the drag source cannot name the pane it is over.
+                WarrenDesktopPaneDropMarker(paneID: paneID, canSplit: canSplit)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+
+                // Visual highlight preview for the currently hovered target zone
                 if let target = activeTarget {
-                    dropPreview(for: target, size: CGSize(width: w, height: h), tokens: tokens)
+                    dropPreview(for: target, size: proxy.size, tokens: tokens)
                         .transition(.opacity)
-                }
-
-                if canSplit {
-                    // Top drop zone (split above)
-                    Color.clear
-                        .frame(width: w, height: eh)
-                        .position(x: w / 2, y: eh / 2)
-                        .dropDestination(for: String.self) { items, _ in
-                            guard let tabID = items.first else { return false }
-                            onDrop(tabID, .top)
-                            return true
-                        } isTargeted: { targeted in
-                            if targeted { activeTarget = .top }
-                            else if activeTarget == .top { activeTarget = nil }
-                        }
-
-                    // Bottom drop zone (split below)
-                    Color.clear
-                        .frame(width: w, height: eh)
-                        .position(x: w / 2, y: h - eh / 2)
-                        .dropDestination(for: String.self) { items, _ in
-                            guard let tabID = items.first else { return false }
-                            onDrop(tabID, .bottom)
-                            return true
-                        } isTargeted: { targeted in
-                            if targeted { activeTarget = .bottom }
-                            else if activeTarget == .bottom { activeTarget = nil }
-                        }
-
-                    // Left drop zone (split left)
-                    Color.clear
-                        .frame(width: ew, height: max(0, h - eh * 2))
-                        .position(x: ew / 2, y: h / 2)
-                        .dropDestination(for: String.self) { items, _ in
-                            guard let tabID = items.first else { return false }
-                            onDrop(tabID, .left)
-                            return true
-                        } isTargeted: { targeted in
-                            if targeted { activeTarget = .left }
-                            else if activeTarget == .left { activeTarget = nil }
-                        }
-
-                    // Right drop zone (split right)
-                    Color.clear
-                        .frame(width: ew, height: max(0, h - eh * 2))
-                        .position(x: w - ew / 2, y: h / 2)
-                        .dropDestination(for: String.self) { items, _ in
-                            guard let tabID = items.first else { return false }
-                            onDrop(tabID, .right)
-                            return true
-                        } isTargeted: { targeted in
-                            if targeted { activeTarget = .right }
-                            else if activeTarget == .right { activeTarget = nil }
-                        }
-
-                    // Center drop zone (replace tab)
-                    Color.clear
-                        .frame(width: max(0, w - ew * 2), height: max(0, h - eh * 2))
-                        .position(x: w / 2, y: h / 2)
-                        .dropDestination(for: String.self) { items, _ in
-                            guard let tabID = items.first else { return false }
-                            onDrop(tabID, .center)
-                            return true
-                        } isTargeted: { targeted in
-                            if targeted { activeTarget = .center }
-                            else if activeTarget == .center { activeTarget = nil }
-                        }
-                } else {
-                    // Maximum panes reached: allow replacing the pane tab
-                    Color.clear
-                        .frame(width: w, height: h)
-                        .position(x: w / 2, y: h / 2)
-                        .dropDestination(for: String.self) { items, _ in
-                            guard let tabID = items.first else { return false }
-                            onDrop(tabID, .center)
-                            return true
-                        } isTargeted: { targeted in
-                            if targeted { activeTarget = .center }
-                            else if activeTarget == .center { activeTarget = nil }
-                        }
                 }
             }
         }

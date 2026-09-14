@@ -132,9 +132,10 @@ type Service struct {
 	// lock instead of wedging the session until the
 	// daemon restarts.
 	CommandTimeout time.Duration
-	// ProbeForeground enables live foreground process metadata from runtime
-	// adapters that support it. Disabled by default so roster snapshots stay
-	// cheap; clients fall back to launch command and workspace path.
+	// ProbeForeground enables the runtime's OS-level foreground process probe
+	// (process name and command line). The metadata loop runs regardless so the
+	// shell's OSC 7 working directory always reaches the roster; this flag only
+	// controls the extra probe cost.
 	ProbeForeground bool
 	// ClientsActive reports whether any client can observe roster snapshots.
 	// The merge projection only refreshes while clients are connected; nil
@@ -170,6 +171,13 @@ type Service struct {
 	peerOutputs  map[*wsPeer]map[string]*peerOutputStream
 	agentPeers   map[string]map[*wsPeer]struct{}
 	focusedPeers map[string]*wsPeer
+	// resizePeers is the authoritative per-session viewport owner. It is
+	// deliberately separate from focusedPeers/controlPeers: a split window
+	// shows several sessions at once, and a passive pane must be able to size
+	// its own PTY without taking keyboard input away from whichever client is
+	// actively using that session. The focused peer owns the size; when no
+	// peer owns it, any output subscriber may adopt it.
+	resizePeers map[string]*wsPeer
 	// controlPeers is the authoritative per-session mutation lease. Terminal
 	// focus normally owns the same lease, but Agent-only actions may claim it
 	// before a terminal output subscription exists.
@@ -207,8 +215,13 @@ type Service struct {
 	liveActivityPublisher   LiveActivityPublisher
 	liveActivityDigest      []byte
 
-	lifecycleOnce               sync.Once
-	lifecycleCancel             context.CancelFunc
+	lifecycleOnce   sync.Once
+	lifecycleCancel context.CancelFunc
+	// agentStoreMu guards the one-time open of AgentStorePath. Opening the
+	// agent journal is expensive, so it must never run inside outputMu:
+	// roster snapshots and terminal attaches call lazyInit on their hot path
+	// and would otherwise stall for the whole open.
+	agentStoreMu                sync.Mutex
 	canonicalCommandsReconciled bool
 	usageAttributionInstalled   bool
 	// usagePrices caches the unit price table behind cost figures. Shared so a
@@ -347,6 +360,15 @@ type RuntimeCreatedLister interface {
 	ListCreated(context.Context) (map[string]time.Time, error)
 }
 
+// RuntimeSizeProvider reports the current PTY grid size for a runtime. The
+// lifecycle loop seeds the shared-size cache from it after a restart so a
+// client focus whose size is unchanged can skip a resize round trip -- which
+// otherwise holds the session broadcast lock while the freshly handed-off
+// Ghostline server is still adopting sessions.
+type RuntimeSizeProvider interface {
+	Size(context.Context, string) (ghostline.Size, error)
+}
+
 // CursorOutputRuntime is implemented by Ghostline v1. The service owns one
 // reader per session and treats Cursor as an opaque durable token; the
 // browser-facing output protocol deliberately continues to use its own
@@ -421,9 +443,16 @@ func (s *Service) newQueryResponder() *ghostline.QueryResponder {
 }
 
 func (s *Service) lazyInit() {
+	startedAt := time.Now()
 	s.outputMu.Lock()
-	defer s.outputMu.Unlock()
+	waited := time.Since(startedAt)
 	s.lazyInitLocked()
+	s.outputMu.Unlock()
+	if waited >= 100*time.Millisecond {
+		// lazyInit is on the roster and terminal-attach hot paths; a long wait
+		// here means another goroutine is holding outputMu across slow work.
+		s.logInfo("slow lazy init lock wait", "duration", waited)
+	}
 }
 
 func (s *Service) lazyInitLocked() {
@@ -441,6 +470,9 @@ func (s *Service) lazyInitLocked() {
 	}
 	if s.focusedPeers == nil {
 		s.focusedPeers = map[string]*wsPeer{}
+	}
+	if s.resizePeers == nil {
+		s.resizePeers = map[string]*wsPeer{}
 	}
 	if s.controlPeers == nil {
 		s.controlPeers = map[string]*wsPeer{}
@@ -460,20 +492,36 @@ func (s *Service) lazyInitLocked() {
 	if s.metadataCache == nil {
 		s.metadataCache = &metadataCache{}
 	}
+}
+
+// agentStore returns the durable agent journal, opening it once on first use.
+//
+// It is deliberately separate from lazyInit/outputMu. Opening the journal can
+// take seconds on a large database, and lazyInit runs on the roster and
+// terminal-attach hot paths, so doing it there stalled them for the whole
+// open. Callers that actually need the journal come through here; callers that
+// do not never pay for it.
+func (s *Service) agentStore() *store.AgentEventStore {
+	s.agentStoreMu.Lock()
+	defer s.agentStoreMu.Unlock()
+	initStartedAt := time.Now()
 	if s.AgentStore == nil && strings.TrimSpace(s.AgentStorePath) != "" {
 		path := resolvePath(expandHome(s.AgentStorePath))
 		if agentStore, err := store.OpenAgentEventStore(path); err == nil {
 			s.AgentStore = agentStore
 		}
 	}
-	if s.AgentStore != nil && !s.usageAttributionInstalled {
+	if s.AgentStore == nil {
+		return nil
+	}
+	if !s.usageAttributionInstalled {
 		// The journal owns no host state, so it cannot map a stream to a
 		// project on its own. Injecting the lookup keeps spend attributable
 		// while leaving stores built by tests and embedders inert.
 		s.AgentStore.SetUsageAttributionResolver(s.usageAttributionForStream)
 		s.usageAttributionInstalled = true
 	}
-	if s.AgentStore != nil && !s.canonicalCommandsReconciled {
+	if !s.canonicalCommandsReconciled {
 		if _, err := s.AgentStore.ReconcilePendingCanonicalCommands(
 			context.Background(), time.Now().UTC(), canonicalCommandRecoveryAge,
 		); err != nil {
@@ -482,6 +530,10 @@ func (s *Service) lazyInitLocked() {
 			s.canonicalCommandsReconciled = true
 		}
 	}
+	if elapsed := time.Since(initStartedAt); elapsed >= 500*time.Millisecond {
+		s.logInfo("slow agent store init", "duration", elapsed)
+	}
+	return s.AgentStore
 }
 
 // initMergeState initializes the merge projection fields exactly once. Every
@@ -517,12 +569,17 @@ func (s *Service) Start(parent context.Context) {
 		}
 		ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 		s.lifecycleCancel = cancel
+		// Open the agent journal off the request path: roster snapshots and
+		// terminal attaches must never wait for this. Agent traffic that
+		// arrives before it is ready blocks on agentStore's own mutex.
+		go s.agentStore()
 		go s.lifecycleLoop(ctx)
 		go s.liveActivityLoop(ctx)
 		go s.mergeLoop(ctx)
-		if s.ProbeForeground {
-			go s.metadataLoop(ctx)
-		}
+		// Run the metadata loop regardless of ProbeForeground: the OSC 7
+		// working directory is cheap and must reach the roster, while the OS
+		// foreground probe only adds data when the runtime was started with it.
+		go s.metadataLoop(ctx)
 	})
 }
 
@@ -720,6 +777,7 @@ func (s *Service) reconcile(ctx context.Context) {
 			}
 		}
 		_, _ = s.ensureOutput(ctx, session)
+		s.seedRuntimeSize(probeContext, adopted)
 		s.applyAgentState(session)
 		_, _ = s.ensureAgentWithState(probeContext, session, &state)
 	}
@@ -945,6 +1003,7 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	// the single lifecycle loop so additional observers cannot multiply process
 	// launches, runtime RPCs, or Session writes.
 	state, revision := s.Store.SnapshotVersion()
+	storeElapsed := time.Since(startedAt)
 	for index := range state.Tasks {
 		state.Tasks[index].CreationRequestID = ""
 		state.Tasks[index].CreationRequestHash = ""
@@ -987,6 +1046,7 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		}
 		return state.Sessions[i].CreatedAt.Before(state.Sessions[j].CreatedAt)
 	})
+	agentsStartedAt := time.Now()
 	for i := range state.Sessions {
 		session := &state.Sessions[i]
 		session.OutputCursor = ""
@@ -1011,9 +1071,10 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		if session.Lifecycle != "running" {
 			continue
 		}
-		if s.ProbeForeground && s.metadataCache != nil {
+		if s.metadataCache != nil {
 			if metadata, ok := s.metadataCache.get(session.ID); ok {
 				session.Process = metadata.Process
+				session.CommandLine = metadata.CommandLine
 				session.Directory = metadata.Directory
 			}
 		}
@@ -1030,6 +1091,8 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		s.logInfo(
 			"slow roster snapshot",
 			"duration", elapsed,
+			"store", storeElapsed,
+			"agents", time.Since(agentsStartedAt),
 			"projects", len(state.Projects),
 			"workspaces", len(state.Workspaces),
 			"sessions", len(state.Sessions),
@@ -4703,23 +4766,24 @@ func canonicalProjectionFromEvent(status api.AgentStatus, turn api.AgentTurn, ev
 // committed after it are replayed from the same journal before the projection
 // becomes visible to command validation and roster consumers.
 func (s *Service) restoreCanonicalProjection(executionID string) (api.AgentStatus, api.AgentTurn, bool) {
-	if s.AgentStore == nil || strings.TrimSpace(executionID) == "" {
+	agentStore := s.agentStore()
+	if agentStore == nil || strings.TrimSpace(executionID) == "" {
 		return api.AgentStatus{}, api.AgentTurn{Status: api.AgentTurnIdle}, false
 	}
 	status := api.AgentStatus{}
 	turn := api.AgentTurn{Status: api.AgentTurnIdle}
 	var after uint64
-	if checkpoint, ok, err := s.AgentStore.CanonicalCheckpoint(context.Background(), executionID); err == nil && ok {
+	if checkpoint, ok, err := agentStore.CanonicalCheckpoint(context.Background(), executionID); err == nil && ok {
 		status, turn = canonicalProjectionFromState(checkpoint.State)
 		after = checkpoint.Sequence
 	}
-	result, err := s.AgentStore.QueryCanonicalEvents(context.Background(), executionID, after, 0, agentHistoryMaxLimit)
+	result, err := agentStore.QueryCanonicalEvents(context.Background(), executionID, after, 0, agentHistoryMaxLimit)
 	if err != nil {
 		// A checkpoint at or before the retention boundary can be rebuilt from
 		// the retained tail. Do not make a cold start fail merely because the
 		// cache was pruned between the two reads.
 		if _, boundary := err.(*store.CanonicalHistoryBoundary); boundary {
-			result, err = s.AgentStore.QueryCanonicalEvents(context.Background(), executionID, 0, 0, agentHistoryMaxLimit)
+			result, err = agentStore.QueryCanonicalEvents(context.Background(), executionID, 0, 0, agentHistoryMaxLimit)
 		}
 	}
 	if err != nil {
@@ -4856,8 +4920,8 @@ func (s *Service) appendCanonicalEventsLockedWithCheckpoint(sessionID string, en
 		}
 		entry.executionID = streamID
 	}
-	if s.AgentStore != nil {
-		assigned, err := s.AgentStore.AppendCanonicalEventsWithCheckpoint(context.Background(), streamID, streamID, events, checkpoint)
+	if agentStore := s.agentStore(); agentStore != nil {
+		assigned, err := agentStore.AppendCanonicalEventsWithCheckpoint(context.Background(), streamID, streamID, events, checkpoint)
 		if err != nil {
 			return nil, err
 		}
@@ -5258,6 +5322,10 @@ func (s *Service) tryStartSessionTitle(sessionID string) {
 		return
 	}
 	entry.titleGenerationStarted = true
+	// Capture the conversation generation so a request that outlives a
+	// `/clear`, `/new`, or provider rebind cannot name the replacement
+	// conversation.
+	generation := strings.TrimSpace(entry.executionID)
 	input = sessiontitle.Input{
 		User:      entry.titleUser,
 		Assistant: entry.titleAssistant,
@@ -5270,7 +5338,7 @@ func (s *Service) tryStartSessionTitle(sessionID string) {
 		Model:   s.Settings.OpenAIModel,
 		APIKey:  s.Settings.OpenAIKey,
 	}
-	go s.generateSessionTitle(sessionID, config, input)
+	go s.generateSessionTitle(sessionID, generation, config, input)
 }
 
 func (s *Service) titleGenerationConfigured() bool {
@@ -5338,7 +5406,7 @@ func appendTitleMessage(value, provider, messageID *string, event api.AgentEvent
 	return true
 }
 
-func (s *Service) generateSessionTitle(sessionID string, config sessiontitle.Config, input sessiontitle.Input) {
+func (s *Service) generateSessionTitle(sessionID, generation string, config sessiontitle.Config, input sessiontitle.Input) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	titleValue, err := (sessiontitle.Generator{Config: config}).Generate(ctx, input)
@@ -5355,6 +5423,11 @@ func (s *Service) generateSessionTitle(sessionID string, config sessiontitle.Con
 			// CustomTitle is also the durable automatic display override. A
 			// manual rename that wins the race must never be overwritten.
 			if strings.TrimSpace(session.CustomTitle) != "" || session.Lifecycle != "running" {
+				return nil
+			}
+			// A request captured for a replaced provider conversation must never
+			// name the current one after `/clear`, `/new`, or a rebind.
+			if generation != "" && strings.TrimSpace(session.AgentExecutionID) != generation {
 				return nil
 			}
 			session.CustomTitle = titleValue
@@ -5452,8 +5525,8 @@ func (s *Service) agentHistory(sessionID string) []api.AgentEvent {
 }
 
 func (s *Service) canonicalHistoryPage(ctx context.Context, streamID string, after, before uint64, limit int) (api.AgentEventsHistoryResult, error) {
-	if s.AgentStore != nil {
-		result, err := s.AgentStore.QueryCanonicalEvents(ctx, streamID, after, before, limit)
+	if agentStore := s.agentStore(); agentStore != nil {
+		result, err := agentStore.QueryCanonicalEvents(ctx, streamID, after, before, limit)
 		if boundary, ok := err.(*store.CanonicalHistoryBoundary); ok {
 			// Older databases may have journal rows but no checkpoint row. Resolve
 			// the active Session projection as a compatibility fallback; the
@@ -5571,7 +5644,7 @@ func (s *Service) canonicalExecutionForSession(sessionID string) (api.AgentExecu
 	if executionID == "" {
 		executionID = s.canonicalExecutionID(sessionID)
 	}
-	if status.Activity == "" && s.AgentStore != nil {
+	if status.Activity == "" && s.agentStore() != nil {
 		restoredStatus, restoredTurn, restored := s.restoreCanonicalProjection(executionID)
 		if restored {
 			status, turn = restoredStatus, restoredTurn
@@ -5689,8 +5762,8 @@ func (s *Service) sessionForCanonicalStream(streamID string) (api.Session, bool)
 }
 
 func (s *Service) canonicalProjectionCheckpoint(sessionID string, sequence uint64) api.AgentProjectionCheckpoint {
-	if s.AgentStore != nil {
-		if checkpoint, ok, err := s.AgentStore.CanonicalCheckpoint(context.Background(), s.canonicalExecutionID(sessionID)); err == nil && ok &&
+	if agentStore := s.agentStore(); agentStore != nil {
+		if checkpoint, ok, err := agentStore.CanonicalCheckpoint(context.Background(), s.canonicalExecutionID(sessionID)); err == nil && ok &&
 			(checkpoint.Sequence == sequence || sequence == 0) {
 			return checkpoint
 		}
@@ -7044,6 +7117,9 @@ func (s *Service) detachPeer(peer *wsPeer, sessionID string) {
 	if s.controlPeers[sessionID] == peer {
 		delete(s.controlPeers, sessionID)
 	}
+	if s.resizePeers[sessionID] == peer {
+		delete(s.resizePeers, sessionID)
+	}
 	s.outputMu.Unlock()
 }
 
@@ -7122,16 +7198,21 @@ func (s *Service) focusPeerLocked(
 		return false, nil
 	}
 	if !focused {
+		s.outputMu.Lock()
 		if owner == peer {
-			s.outputMu.Lock()
 			if s.focusedPeers[session.ID] == peer {
 				delete(s.focusedPeers, session.ID)
 			}
 			if s.controlPeers[session.ID] == peer {
 				delete(s.controlPeers, session.ID)
 			}
-			s.outputMu.Unlock()
 		}
+		// A pane may have adopted the viewport owner without ever taking
+		// keyboard focus, so release that adoption on blur as well.
+		if s.resizePeers[session.ID] == peer {
+			delete(s.resizePeers, session.ID)
+		}
+		s.outputMu.Unlock()
 		return false, nil
 	}
 	if resizeSpecified {
@@ -7149,13 +7230,24 @@ func (s *Service) focusPeerLocked(
 	}
 	s.focusedPeers[session.ID] = peer
 	s.controlPeers[session.ID] = peer
+	// Focus owns the viewport, so the keyboard target is also the pane whose
+	// size the shared runtime follows while it stays focused.
+	s.resizePeers[session.ID] = peer
 	s.outputMu.Unlock()
 	return resized, nil
 }
 
-// resizeFocusedLocked only lets the current focused peer mutate the shared
-// runtime size. A background endpoint receives a successful no-op so stale
-// browser resize callbacks do not surface as terminal errors.
+// resizeFocusedLocked arbitrates the shared runtime size independently of the
+// input lease.
+//
+// A split window shows several Sessions at once, so a pane that is not the
+// keyboard target still has to follow its own viewport. The peer that last
+// resized owns the size (matching tmux's "latest active client" default); any
+// output subscriber may adopt an unowned size. Taking the size never grants
+// keyboard input or control, so resizing a passive pane can never mute another
+// client that is actively typing into the same Session. A non-owner receives a
+// successful no-op so stale browser resize callbacks do not surface as terminal
+// errors.
 func (s *Service) resizeFocusedLocked(
 	ctx context.Context,
 	peer *wsPeer,
@@ -7164,12 +7256,31 @@ func (s *Service) resizeFocusedLocked(
 ) (bool, error) {
 	s.lazyInit()
 	s.outputMu.Lock()
-	focused := s.focusedPeers[session.ID] == peer
+	owner := s.resizePeers[session.ID]
+	_, registered := s.peers[session.ID][peer]
 	s.outputMu.Unlock()
-	if !focused {
+	if !registered || (owner != nil && owner != peer) {
 		return false, nil
 	}
-	return s.resizeRuntime(ctx, session, columns, rows)
+	resized, err := s.resizeRuntime(ctx, session, columns, rows)
+	if err != nil {
+		return false, err
+	}
+	if !resized {
+		return false, nil
+	}
+	s.outputMu.Lock()
+	// A peer can disconnect while Runtime.Resize is in flight. Do not hand the
+	// viewport to a socket that is no longer subscribed.
+	if _, stillRegistered := s.peers[session.ID][peer]; !stillRegistered {
+		s.outputMu.Unlock()
+		return false, nil
+	}
+	if s.resizePeers[session.ID] == nil {
+		s.resizePeers[session.ID] = peer
+	}
+	s.outputMu.Unlock()
+	return true, nil
 }
 
 // resizeRuntime applies a new viewport to the shared runtime and records the
@@ -7180,11 +7291,7 @@ func (s *Service) resizeFocusedLocked(
 // answer same-size focus/resize requests as accurate no-ops.
 func (s *Service) resizeRuntime(ctx context.Context, session api.Session, columns, rows int) (bool, error) {
 	size := ghostline.Size{Columns: columns, Rows: rows}
-	s.lazyInit()
-	s.outputMu.Lock()
-	current, known := s.runtimeSizes[session.ID]
-	s.outputMu.Unlock()
-	if known && current == size {
+	if current, known := s.runtimeSizeFor(session.ID); known && current == size {
 		return false, nil
 	}
 	adapter := s.runtimeFor(session)
@@ -7194,11 +7301,47 @@ func (s *Service) resizeRuntime(ctx context.Context, session api.Session, column
 	if err := adapter.Resize(ctx, session.Runtime, columns, rows); err != nil {
 		return false, err
 	}
-	s.outputMu.Lock()
-	s.runtimeSizes[session.ID] = size
-	s.outputMu.Unlock()
+	s.rememberRuntimeSize(session.ID, size)
 	s.updateResponderSize(session.ID, columns, rows)
 	return true, nil
+}
+
+// runtimeSizeFor reports the last observed PTY grid size for a session.
+func (s *Service) runtimeSizeFor(sessionID string) (ghostline.Size, bool) {
+	s.lazyInit()
+	s.outputMu.Lock()
+	defer s.outputMu.Unlock()
+	size, ok := s.runtimeSizes[sessionID]
+	return size, ok
+}
+
+// rememberRuntimeSize caches the PTY grid size for a session. Seeding it from
+// the runtime after a restart lets the first client focus skip a redundant
+// resize, so the resize round trip cannot hold the session broadcast lock
+// while the shared runtime is still warming up.
+func (s *Service) rememberRuntimeSize(sessionID string, size ghostline.Size) {
+	s.lazyInit()
+	s.outputMu.Lock()
+	s.runtimeSizes[sessionID] = size
+	s.outputMu.Unlock()
+}
+
+// seedRuntimeSize records the runtime's current size when it is not yet known.
+// It runs on the lifecycle loop, never on the client path, so a slow probe
+// delays only the seed and is retried on the next reconcile tick.
+func (s *Service) seedRuntimeSize(ctx context.Context, session api.Session) {
+	if _, known := s.runtimeSizeFor(session.ID); known {
+		return
+	}
+	provider, ok := s.runtimeFor(session).(RuntimeSizeProvider)
+	if !ok {
+		return
+	}
+	size, err := provider.Size(ctx, session.Runtime)
+	if err != nil || size.Columns <= 0 || size.Rows <= 0 {
+		return
+	}
+	s.rememberRuntimeSize(session.ID, size)
 }
 
 func (s *Service) updateResponderSize(sessionID string, columns, rows int) {
@@ -7305,6 +7448,7 @@ func (s *Service) stopOutput(sessionID string, notify bool) {
 	delete(s.agentPeers, sessionID)
 	delete(s.focusedPeers, sessionID)
 	delete(s.controlPeers, sessionID)
+	delete(s.resizePeers, sessionID)
 	delete(s.runtimeSizes, sessionID)
 	s.outputMu.Unlock()
 	for _, peer := range peers {

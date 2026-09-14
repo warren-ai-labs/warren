@@ -142,9 +142,12 @@ type Session struct {
 	// live handler has been rehydrated after a Host restart.
 	AgentProvider string `json:"agentProvider,omitempty"`
 	Command       string `json:"command,omitempty"`
-	// Process and Directory are live runtime metadata overlaid on roster
-	// snapshots only; they are never persisted with the session record.
+	// Process, CommandLine, and Directory are live runtime metadata overlaid
+	// on roster snapshots only; they are never persisted with the session
+	// record. Directory comes from the shell's OSC 7 report; Process and
+	// CommandLine come from the runtime's foreground probe.
 	Process     string `json:"process,omitempty"`
+	CommandLine string `json:"commandLine,omitempty"`
 	Directory   string `json:"directory,omitempty"`
 	Runtime     string `json:"runtime"`
 	RuntimeKind string `json:"runtimeKind,omitempty"`

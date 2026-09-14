@@ -132,8 +132,11 @@ display set uses the legacy `PROJECTS` tree without a Host header or tint.
 - Headless Go's `/v1/ws` exposes one request/response control protocol.
   `session.subscribe` creates an output subscription and carries the
   `epoch/sequence` recovery anchor; `session.focus` claims or releases the
-  control lease with an optional `cols/rows` viewport. The Host only lets the
-  focused peer resize the shared PTY; background `session.resize` requests are
+  input control lease with an optional `cols/rows` viewport. Viewport ownership
+  is arbitrated separately from input: the focused peer owns the shared PTY
+  size, and any output subscriber may adopt it while it is unowned, so a
+  passive split pane tracks its own pane without stealing another client's
+  typing. Background `session.resize` requests that lose the arbitration are
   safe no-ops, and `session.unsubscribe` releases the subscription and focus.
   Control messages and DENB output frames match the daemon protocol used by
   Desktop, iOS, Web, and CLI clients.

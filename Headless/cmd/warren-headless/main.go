@@ -87,7 +87,7 @@ func main() {
 	ghostlineSocket := flag.String("ghostline-socket", env("WARREN_GHOSTLINE_SOCKET", filepath.Join(configDir, "ghostline.sock")), "ghostline server socket path")
 	ghostlineServe := flag.Bool("ghostline-serve", false, "internal: run the ghostline session server (spawned by the daemon)")
 	ghostlineAdoptFrom := flag.String("adopt-from", "", "internal: adopt sessions from this old server admin socket")
-	ghostlineProbeForeground := flag.Bool("ghostline-probe-foreground", envBool("WARREN_GHOSTLINE_PROBE_FOREGROUND", false), "probe OS-level foreground metadata in ghostline (default off)")
+	ghostlineProbeForeground := flag.Bool("ghostline-probe-foreground", envBool("WARREN_GHOSTLINE_PROBE_FOREGROUND", true), "probe OS-level foreground process metadata in ghostline (default on)")
 	settingsFile := flag.String("settings-file", env("WARREN_SETTINGS_FILE", filepath.Join(configDir, "settings.json")), "headless settings file")
 	logFile := flag.String("log-file", env("WARREN_LOG_FILE", filepath.Join(configDir, "headless.log")), "daemon log file (empty disables file logging)")
 	worktreeRoot := flag.String("worktree-root", env("WARREN_WORKTREE_ROOT", "~/.warren/worktrees"), "worktree root")

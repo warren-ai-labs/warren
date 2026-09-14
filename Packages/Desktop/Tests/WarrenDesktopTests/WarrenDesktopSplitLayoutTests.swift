@@ -1,4 +1,5 @@
 import XCTest
+import WarrenClientCore
 @testable import WarrenDesktop
 
 final class WarrenDesktopSplitLayoutTests: XCTestCase {
@@ -86,6 +87,212 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
         XCTAssertNotNil(collapsed)
         XCTAssertEqual(collapsed?.count, 1)
         XCTAssertEqual(collapsed?.allPaneIDs, ["pane-1"])
+    }
+
+    /// While the tree lists Sessions the bar answers "what is on screen", not
+    /// "what Sessions exist". A workspace running four with one visible shows
+    /// one entry.
+    func testPaneBarListsOnlyVisiblePanesInPaneOrder() {
+        let tabs = (1...4).map { ClientTab(id: "tab-\($0)", title: "Tab \($0)", kind: .shell) }
+        let single = SplitLayoutTree.leaf(SplitPaneItem(id: "pane-1", tabID: "tab-3"))
+
+        XCTAssertEqual(
+            WarrenDesktopPaneBar.tabs(
+                visibleIn: single,
+                from: tabs,
+                selected: tabs[2],
+                mode: .rich
+            ).map(\.id),
+            ["tab-3"]
+        )
+
+        let twoPanes = single.split(targetPaneID: "pane-1", newTabID: "tab-1", axis: .horizontal)
+        XCTAssertEqual(
+            WarrenDesktopPaneBar.tabs(
+                visibleIn: twoPanes,
+                from: tabs,
+                selected: tabs[2],
+                mode: .rich
+            ).map(\.id),
+            ["tab-3", "tab-1"]
+        )
+    }
+
+    /// Compact mode hides Session leaves, so the bar takes the Session list back.
+    /// Without this, toggling the tree's density silently strips access to every
+    /// Session that is not currently in a pane.
+    func testPaneBarListsEverySessionWhenTheTreeStopsListingThem() {
+        let tabs = (1...4).map { ClientTab(id: "tab-\($0)", title: "Tab \($0)", kind: .shell) }
+        let single = SplitLayoutTree.leaf(SplitPaneItem(id: "pane-1", tabID: "tab-3"))
+
+        XCTAssertEqual(
+            WarrenDesktopPaneBar.tabs(
+                visibleIn: single,
+                from: tabs,
+                selected: tabs[2],
+                mode: .compact
+            ).map(\.id),
+            ["tab-1", "tab-2", "tab-3", "tab-4"],
+            "The projection's order is the one the user reordered by dragging"
+        )
+
+        // The one entry is not redundant here: it may be the only way back to a
+        // Session with no pane, so the track still has to appear.
+        XCTAssertTrue(
+            WarrenDesktopPaneBar.showsTrack(
+                entryCount: 1,
+                embeddedEditorTabVisible: false,
+                mode: .compact
+            )
+        )
+        XCTAssertFalse(
+            WarrenDesktopPaneBar.showsTrack(
+                entryCount: 0,
+                embeddedEditorTabVisible: false,
+                mode: .compact
+            )
+        )
+    }
+
+    /// Closing the last pane is a view operation: the Session keeps running, so
+    /// the projection still carries its Tab and the bar falls back to it rather
+    /// than blinking empty while the tree catches up.
+    func testPaneBarFallsBackToTheSelectedTabWhenNoPaneIsLive() {
+        let tabs = [ClientTab(id: "tab-1", title: "Tab 1", kind: .shell)]
+        let stale = SplitLayoutTree.leaf(SplitPaneItem(id: "pane-1", tabID: "tab-gone"))
+
+        XCTAssertEqual(
+            WarrenDesktopPaneBar.tabs(
+                visibleIn: stale,
+                from: tabs,
+                selected: tabs[0],
+                mode: .rich
+            ).map(\.id),
+            ["tab-1"]
+        )
+        XCTAssertTrue(
+            WarrenDesktopPaneBar.tabs(
+                visibleIn: stale,
+                from: tabs,
+                selected: nil,
+                mode: .rich
+            ).isEmpty
+        )
+        // The switcher falls back the same way, so an empty scope with a
+        // selection pending still renders one reachable entry.
+        XCTAssertEqual(
+            WarrenDesktopPaneBar.tabs(
+                visibleIn: stale,
+                from: [],
+                selected: tabs[0],
+                mode: .compact
+            ).map(\.id),
+            ["tab-1"]
+        )
+    }
+
+    /// A scope the user emptied keeps nothing on screen. The tree falls back to
+    /// a leaf that names no Session, so the bar filters it out instead of
+    /// redrawing an identity for a Session that is not being shown. Falling back
+    /// to the workspace's first Tab instead made the last close look like a
+    /// no-op.
+    func testClearedScopeLeavesThePaneBarEmpty() {
+        let tabs = [ClientTab(id: "tab-1", title: "Tab 1", kind: .shell)]
+        let empty = SplitLayoutTree.leaf(SplitPaneItem(id: "pane-empty", tabID: "empty"))
+
+        XCTAssertTrue(
+            WarrenDesktopPaneBar.tabs(
+                visibleIn: empty,
+                from: tabs,
+                selected: nil,
+                mode: .rich
+            ).isEmpty
+        )
+        XCTAssertNil(
+            empty.reconcile(validTabIDs: Set(tabs.map(\.id)), fallbackTabID: nil),
+            "with no selected Tab there is nothing to fall back to"
+        )
+    }
+
+    /// The mode owns exactly one decision — which surface lists Sessions — and
+    /// the presentation is both of its consequences. Resolving them together is
+    /// what keeps the track and the identity slot from both claiming the row or
+    /// both giving it up. The solo identity is also built only when it will be
+    /// shown, so a Session-switcher mode never pays for it.
+    func testPaneBarPresentationIsTrackXorIdentity() {
+        let tabs = (1...3).map { ClientTab(id: "tab-\($0)", title: "Tab \($0)", kind: .shell) }
+        let onePane = SplitLayoutTree.leaf(SplitPaneItem(id: "pane-1", tabID: "tab-1"))
+        let twoPanes = onePane.split(targetPaneID: "pane-1", newTabID: "tab-2", axis: .horizontal)
+        var soloBuilds = 0
+        let solo: ([ClientTab]) -> WarrenDesktopSoloPaneIdentity.Model? = { entries in
+            soloBuilds += 1
+            return entries.first.map {
+                WarrenDesktopSoloPaneIdentity.Model(
+                    tabID: $0.id,
+                    title: $0.title,
+                    fullTitle: $0.title,
+                    providerPresetID: nil,
+                    activity: nil,
+                    canClose: true
+                )
+            }
+        }
+
+        let richSolo = WarrenDesktopPaneBar.presentation(
+            visibleIn: onePane,
+            from: tabs,
+            selected: tabs[0],
+            mode: .rich,
+            includesEditorTab: false,
+            solo: solo
+        )
+        XCTAssertFalse(richSolo.showsTrack)
+        XCTAssertEqual(richSolo.solo?.tabID, "tab-1")
+        XCTAssertEqual(richSolo.listings.map(\.id), ["tab-1"])
+
+        let richSplit = WarrenDesktopPaneBar.presentation(
+            visibleIn: twoPanes,
+            from: tabs,
+            selected: tabs[0],
+            mode: .rich,
+            includesEditorTab: false,
+            solo: solo
+        )
+        XCTAssertTrue(richSplit.showsTrack)
+        XCTAssertNil(richSplit.solo)
+        XCTAssertEqual(richSplit.listings.map(\.id), ["tab-1", "tab-2"])
+
+        // Compact hands the Session list to the bar, so even one entry is a
+        // track and the identity slot stays empty.
+        let compact = WarrenDesktopPaneBar.presentation(
+            visibleIn: onePane,
+            from: tabs,
+            selected: tabs[0],
+            mode: .compact,
+            includesEditorTab: false,
+            solo: solo
+        )
+        XCTAssertTrue(compact.showsTrack)
+        XCTAssertNil(compact.solo)
+        XCTAssertEqual(compact.listings.map(\.id), ["tab-1", "tab-2", "tab-3"])
+
+        XCTAssertEqual(soloBuilds, 1, "the identity is built only when no track is drawn")
+    }
+
+    /// The split view recurses into subtrees, so at a leaf `tree.count` is 1 no
+    /// matter how many panes the layout holds. Pane chrome derived from it was
+    /// therefore off in every split, which is why the root count is carried down
+    /// explicitly rather than recomputed.
+    func testLeafSubtreeCountIsNotTheLayoutPaneCount() {
+        let initial = SplitLayoutTree.leaf(SplitPaneItem(id: "pane-1", tabID: "tab-1"))
+        let twoPanes = initial.split(targetPaneID: "pane-1", newTabID: "tab-2", axis: .horizontal)
+
+        XCTAssertEqual(twoPanes.count, 2)
+        guard case .split(_, _, let first, let second) = twoPanes else {
+            return XCTFail("Expected a split")
+        }
+        XCTAssertEqual(first.count, 1)
+        XCTAssertEqual(second.count, 1)
     }
 
     func testMaximizePane() {

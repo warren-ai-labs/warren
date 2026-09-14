@@ -11,7 +11,6 @@ export function rosterFromMessage(message = {}) {
     revision: normalizeRevision(source?.revision),
     schema: source?.schema,
     host: isRecord(source?.host) ? source.host : {},
-    tasks: arrayOrEmpty(source?.tasks),
     projects: arrayOrEmpty(source?.projects),
     workspaces: arrayOrEmpty(source?.workspaces),
     terminalGroups: arrayOrEmpty(source?.terminalGroups),
@@ -35,9 +34,8 @@ export function applyRosterDelta(roster, message = {}) {
     return null;
   }
 
-  const entityKeys = ["tasks", "projects", "workspaces", "terminalGroups", "sessions"];
+  const entityKeys = ["projects", "workspaces", "terminalGroups", "sessions"];
   const entityIDs = {
-    tasks: value => value?.id,
     projects: value => value?.id,
     workspaces: value => value?.id,
     terminalGroups: value => value?.id,
@@ -64,7 +62,6 @@ export function applyRosterDelta(roster, message = {}) {
     revision,
     schema: current.schema,
     host: isRecord(message.host) ? message.host : current.host,
-    tasks: applyEntityChanges(current.tasks, message.tasks, value => value?.id),
     projects: applyEntityChanges(current.projects, message.projects, value => value?.id),
     workspaces: applyEntityChanges(current.workspaces, message.workspaces, value => value?.id),
     terminalGroups: applyEntityChanges(
@@ -90,7 +87,6 @@ export function updateSessionAgentStatus(catalog, sessionID, agentStatus) {
     revision: catalog.revision,
     schema: catalog.schema,
     host: catalog.host,
-    tasks: catalog.tasks,
     projects: catalog.projects,
     workspaces: catalog.workspaces,
     terminalGroups: catalog.terminalGroups,
@@ -102,9 +98,7 @@ export function buildCatalog(input = rosterFromMessage()) {
   const roster = isRecord(input) && Array.isArray(input.tabs) ? input : rosterFromMessage(input);
   const sessions = new Map();
   const tabsByWorkspace = new Map();
-  const workspacesByTask = new Map();
   const workspacesByProject = new Map();
-  const tasks = arrayOrEmpty(roster.tasks).sort(pinnedFirst);
   const projects = arrayOrEmpty(roster.projects).sort(pinnedFirst);
   const workspaces = arrayOrEmpty(roster.workspaces).sort(pinnedFirst);
   const tabs = arrayOrEmpty(roster.tabs).sort(pinnedFirst);
@@ -114,19 +108,16 @@ export function buildCatalog(input = rosterFromMessage()) {
     append(tabsByWorkspace, tab.workspace, tab);
   }
   for (const workspace of workspaces) {
-    if (workspace.task) append(workspacesByTask, workspace.task, workspace);
     append(workspacesByProject, workspace.project, workspace);
   }
 
   const projectsByID = new Map(projects.map(project => [project.id, project]));
   return {
     ...roster,
-    tasks,
     projects,
     workspaces,
     sessions,
     tabsByWorkspace,
-    workspacesByTask,
     workspacesByProject,
     projectsByID,
   };
@@ -155,7 +146,6 @@ export function moveInCatalog(catalog, kind, id, beforeID) {
     revision: catalog.revision,
     schema: catalog.schema,
     host: catalog.host,
-    tasks: catalog.tasks,
     projects: kind === "projects" ? next : catalog.projects,
     workspaces: kind === "workspaces" ? next : catalog.workspaces,
     terminalGroups: catalog.terminalGroups,
@@ -204,7 +194,6 @@ function normalizeRoster(roster) {
     revision: normalizeRevision(roster?.revision),
     schema: Number.isSafeInteger(roster?.schema) ? roster.schema : null,
     host: isRecord(roster?.host) ? roster.host : {},
-    tasks: arrayOrEmpty(roster?.tasks),
     projects: arrayOrEmpty(roster?.projects),
     workspaces: arrayOrEmpty(roster?.workspaces),
     terminalGroups: arrayOrEmpty(roster?.terminalGroups),
@@ -224,6 +213,7 @@ function sessionToTab(session = {}) {
     command: session.command || "",
     lifecycle: session.lifecycle,
     process: session.process || session.command || "",
+    commandLine: session.commandLine || "",
     directory: session.directory || "",
     agentSessionId: session.agentSessionId || "",
     agentExecutionId: session.agentExecutionId || "",

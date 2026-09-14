@@ -55,7 +55,23 @@ public enum WarrenLayoutMetrics {
     public static let activeTabIndicatorHeight: CGFloat = 1.5
 
     public static let sidebarRowIconSlotSize: CGFloat = 18
+    /// Leaf rows use a smaller glyph slot than the resource rows above them.
+    ///
+    /// A leaf is the densest row in the rail — icon, title, state marker, and
+    /// often a reason — so its icon is sized to identify a provider at a glance
+    /// rather than to anchor a tier. Matching the 18pt resource slot here is
+    /// what made the leaf read as cramped: the glyph filled the row's height
+    /// and left the title with no visual margin.
+    public static let sidebarLeafIconSlotSize: CGFloat = 14
     public static let sidebarActionButtonSize: CGFloat = 24
+    /// One rail width for every vertical line in the sidebar tree.
+    ///
+    /// A Host section rule and a workspace-to-Session guide are the same kind
+    /// of line at two nesting levels, so they share one width and differ only
+    /// in hue. Giving the Host rule its own 2pt weight made the sidebar read as
+    /// two unrelated structures, and made the thinner Session rail look faint
+    /// beside it.
+    public static let sidebarRailWidth: CGFloat = 1.5
 
     /// One indent step in the sidebar tree.
     ///
@@ -103,8 +119,9 @@ public enum WarrenLayoutMetrics {
     // Superset settings and command-palette measurements.
     /// Superset's settings sidebar is `w-56`.
     public static let settingsNavigationWidth: CGFloat = 224
-    /// Superset's settings content column is `max-w-4xl`.
+    /// Superset's settings content column is `max-w-4xl` (896) or `max-w-5xl` (1024) for wide views.
     public static let settingsContentMaxWidth: CGFloat = 896
+    public static let settingsContentWideMaxWidth: CGFloat = 1024
     /// Superset's command dialog uses `max-w-[720px]`.
     public static let commandPaletteWidth: CGFloat = 720
     public static let commandPaletteResultsMaxHeight: CGFloat = 560

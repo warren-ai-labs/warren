@@ -83,7 +83,8 @@ Tasks support the complete lifecycle:
 - Detach a Workspace or remove a Task without deleting the Workspace, Git checkout,
   worktree, terminal Session, or runtime it contains.
 
-The CLI exposes the same model as the Desktop and Web clients:
+The Desktop and CLI expose this model; the Web client renders the Project tree
+only:
 
 ```sh
 warren task create --name "Cross-repository delivery" --source tapd --external-id 12345

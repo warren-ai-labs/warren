@@ -86,6 +86,7 @@ struct WarrenCompositionRoot: View {
     @State private var localEndpointWaitGeneration: UInt64 = 0
     @State private var pendingSidebarSelection: WarrenDesktopSidebarResourceSelection?
     @State private var pendingSidebarOpenWorkspace: WarrenDesktopHostResourceRef<WorkspaceID>?
+    @State private var pendingSidebarOpenSession: WarrenDesktopHostResourceRef<TerminalSessionID>?
 
     @MainActor
     init() {
@@ -183,6 +184,9 @@ struct WarrenCompositionRoot: View {
             },
             onNoticeRead: { remoteModel.markNoticeRead($0) },
             onNoticeDismiss: { remoteModel.dismissNotice($0) },
+            onActiveScreenSessionsWillChange: { sessions in
+                surfaceManager.prepareForVisibilityChange(sessionIDs: sessions)
+            },
             onActiveScreenSessionsChanged: { sessions in
                 surfaceManager.activateMultiple(sessionIDs: sessions)
                 remoteModel.ensureVisibleSessions(sessions)
@@ -199,6 +203,7 @@ struct WarrenCompositionRoot: View {
             displayConfigurationError: multiHostSidebar.configurationError,
             onSelectSidebarResource: selectSidebarResource,
             onOpenSidebarWorkspace: openSidebarWorkspace,
+            onOpenSidebarSession: openSidebarSession,
             onRetrySidebarHost: retrySidebarHost,
             onAddSSHHost: {
                 // Present immediately with a loading state; parsing a large
@@ -783,6 +788,7 @@ struct WarrenCompositionRoot: View {
         if !preservingPendingSidebarSelection {
             pendingSidebarSelection = nil
             pendingSidebarOpenWorkspace = nil
+            pendingSidebarOpenSession = nil
         }
         WarrenHangDiagnostics.logEndpointSwitch(from: selectedEndpointID, to: id)
         selectedEndpointID = id
@@ -843,6 +849,7 @@ struct WarrenCompositionRoot: View {
         // Otherwise an old pending open could fire after the user promotes a
         // different Host.
         pendingSidebarOpenWorkspace = nil
+        pendingSidebarOpenSession = nil
         if selection.endpointID != selectedEndpointID {
             pendingSidebarSelection = selection
             selectEndpoint(
@@ -883,6 +890,7 @@ struct WarrenCompositionRoot: View {
         guard endpointOptions.contains(where: { $0.id == reference.endpointID }) else {
             return
         }
+        pendingSidebarOpenSession = nil
         if reference.endpointID != selectedEndpointID {
             pendingSidebarSelection = .workspace(reference)
             pendingSidebarOpenWorkspace = reference
@@ -906,8 +914,56 @@ struct WarrenCompositionRoot: View {
         handle(.openWorkspace(reference.id))
     }
 
+    private func openSidebarSession(
+        _ reference: WarrenDesktopHostResourceRef<TerminalSessionID>
+    ) {
+        guard endpointOptions.contains(where: { $0.id == reference.endpointID }) else {
+            return
+        }
+        // A session row is a stronger open request than a workspace row. Clear
+        // any older pending resource so a slow Host switch cannot activate the
+        // wrong UUID after the user has chosen a different Agent.
+        pendingSidebarSelection = nil
+        pendingSidebarOpenWorkspace = nil
+        if reference.endpointID != selectedEndpointID {
+            pendingSidebarOpenSession = reference
+            selectEndpoint(reference.endpointID, preservingPendingSidebarSelection: true)
+            return
+        }
+        pendingSidebarOpenSession = reference
+        applySidebarSessionOpen(reference)
+    }
+
+    private func applySidebarSessionOpen(
+        _ reference: WarrenDesktopHostResourceRef<TerminalSessionID>
+    ) {
+        guard reference.endpointID == selectedEndpointID else { return }
+        guard remoteModel.isReady(for: reference.endpointID) else { return }
+        guard let session = activeProjection.sessions.first(where: { $0.id == reference.id }),
+              session.state.isActive else {
+            // Once the Host is ready, a missing or no-longer-live row is
+            // authoritative. Drop it instead of retrying the stale UUID on
+            // every roster update. Every live Session the tree lists is
+            // openable: the rich tree's leaves include plain shells, and
+            // requiring an Agent binding left those rows inert.
+            if pendingSidebarOpenSession == reference {
+                pendingSidebarOpenSession = nil
+            }
+            return
+        }
+        pendingSidebarOpenSession = nil
+        handle(.openSession(reference.id))
+    }
+
     private func applyPendingSidebarSelectionIfReady() {
         guard remoteModel.isReady(for: selectedEndpointID) else { return }
+        if let pendingSession = pendingSidebarOpenSession,
+           pendingSession.endpointID == selectedEndpointID {
+            applySidebarSessionOpen(pendingSession)
+            if pendingSidebarOpenSession != nil {
+                return
+            }
+        }
         if let pendingOpen = pendingSidebarOpenWorkspace,
            pendingOpen.endpointID == selectedEndpointID {
             applySidebarWorkspaceOpen(pendingOpen)
@@ -1683,7 +1739,7 @@ private struct WarrenTerminalSearchBar: View {
 
             TextField("Find", text: $query)
                 .textFieldStyle(.plain)
-                .font(WarrenTypography.code)
+                .font(WarrenTypography.terminalSearchField)
                 .focused($fieldFocused)
                 .frame(width: 170)
                 .onSubmit {

@@ -89,7 +89,7 @@ struct WarrenDesktopTerminalGroupRow: View {
                     .accessibilityHidden(true)
 
                 Text(group.group.name.isEmpty ? "Terminal Group" : group.group.name)
-                    .font(WarrenTypography.navigationItem)
+                    .font(WarrenTypography.sidebarContainerRow)
                     .foregroundStyle(tokens.projectText)
                     .lineLimit(1)
                     .truncationMode(.middle)

@@ -360,17 +360,36 @@ public final class TerminalSurfaceManager {
     /// subscribing before the host becomes active can capture an intermediate
     /// grid and force a second SIGWINCH immediately after the first frame.
     public func isActive(_ sessionID: TerminalSessionID) -> Bool {
-        policy.residency(of: sessionID) == .active
+        guard requestedActiveSessionIDs?.contains(sessionID) != false else {
+            return false
+        }
+        return policy.residency(of: sessionID) == .active
     }
 
-    public func activateMultiple(sessionIDs: Set<TerminalSessionID>) {
+    /// Publishes the next visible set before SwiftUI commits its layout.
+    ///
+    /// The Desktop changes the Editor/Terminal mode in the same transaction
+    /// that changes the content area's height. Marking the set first lets
+    /// `hostDidLayout` ignore the transient hidden-terminal geometry and lets
+    /// the caller finish the residency transition after the final layout.
+    public func prepareForVisibilityChange(sessionIDs: Set<TerminalSessionID>) {
         let previousActiveIDs = policy.activeSessionIDs.isEmpty
             ? Set([policy.activeSessionID].compactMap { $0 })
             : policy.activeSessionIDs
+        requestedActiveSessionIDs = sessionIDs
         for sessionID in previousActiveIDs.subtracting(sessionIDs).sorted(by: { $0.description < $1.description }) {
             demote(sessionID)
         }
-        requestedActiveSessionIDs = sessionIDs
+        // A pending geometry debounce belongs to the previous presentation.
+        // Let the next visible-set reconciliation derive its viewport from the
+        // final host bounds instead of replaying that stale resize.
+        resizeDebounceTask?.cancel()
+        resizeDebounceTask = nil
+        resizingUntil = nil
+    }
+
+    public func activateMultiple(sessionIDs: Set<TerminalSessionID>) {
+        prepareForVisibilityChange(sessionIDs: sessionIDs)
         let primary = policy.activeSessionID.flatMap {
             sessionIDs.contains($0) ? $0 : nil
         }
@@ -423,7 +442,7 @@ public final class TerminalSurfaceManager {
     @discardableResult
     public func prepareForRecovery(_ sessionID: TerminalSessionID) -> Bool {
         guard let entry = entries[sessionID],
-              policy.residency(of: sessionID) == .active else {
+              isActive(sessionID) else {
             scheduleReconciliation(.recoveryPrepare)
             return false
         }
@@ -462,7 +481,7 @@ public final class TerminalSurfaceManager {
         // otherwise typing into a freshly clicked pane is silently dropped.
         view.onDidBecomeFirstResponder = { [weak self] in
             guard let self else { return }
-            guard self.policy.residency(of: sessionID) == .active,
+            guard self.isActive(sessionID),
                   self.latestIntent.activeSessionID != sessionID else { return }
             self.onFocusRequested?(sessionID)
         }
@@ -634,6 +653,13 @@ public final class TerminalSurfaceManager {
     public func hostDidLayout(_ host: TerminalHostContainerView, size: CGSize) {
         let sessionID = host.targetSessionID
         guard let sessionID, let entry = entries[sessionID] else { return }
+        // A hidden terminal host still participates in SwiftUI/AppKit layout
+        // while the embedded Editor is visible. Its content size is not a
+        // canonical PTY viewport until the terminal is shown again.
+        if let requestedActiveSessionIDs,
+           !requestedActiveSessionIDs.contains(sessionID) {
+            return
+        }
         if entry.view.superview === host && entry.view.frame.size != size {
             entry.view.setFrameSize(size)
             entry.view.fitToSize()
@@ -673,7 +699,7 @@ public final class TerminalSurfaceManager {
         resizeDebounceTask?.cancel()
         resizeDebounceTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(50))
-            guard let self else { return }
+            guard !Task.isCancelled, let self else { return }
             self.resizeDebounceTask = nil
             self.scheduleReconciliation(.geometry)
         }
@@ -711,7 +737,7 @@ public final class TerminalSurfaceManager {
             ])
             return
         }
-        guard policy.residency(of: sessionID) == .active else {
+        guard isActive(sessionID) else {
             // Keep the request until the lifecycle transition activates this
             // surface. A network recovery can complete before SwiftUI's
             // reconciliation turn; dropping the request here leaves the
@@ -774,7 +800,7 @@ public final class TerminalSurfaceManager {
         entry.preserveDisplayDuringRecovery = false
         entry.skipNextWarmPromotionRedraw = false
         entry.recoveryPhase = .ready
-        if policy.residency(of: sessionID) == .active,
+        if isActive(sessionID),
            let host = activeHost(sessionID) {
             if preservingDisplay {
                 // Do not blank the frame that was kept visible during the
@@ -989,6 +1015,7 @@ public final class TerminalSurfaceManager {
             }
         } else {
             evicted = policy.deactivate()
+            removeWindowObservers()
         }
         evicted.forEach(dispose)
 
@@ -1700,7 +1727,7 @@ public final class TerminalSurfaceManager {
         requiresVisibleView: Bool = true
     ) -> Bool {
         let isHostMatching = (self.host === host && policy.activeSessionID == sessionID) || (activeHost(sessionID) === host)
-        let transitionIsCurrent = (policy.residency(of: sessionID) == .active)
+        let transitionIsCurrent = isActive(sessionID)
             && entries[sessionID] === entry
             && entry.transitionGeneration == generation
             && transitionGeneration == generation

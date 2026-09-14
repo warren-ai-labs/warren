@@ -5,7 +5,6 @@ import {
   buildCatalog,
   moveInCatalog,
   rosterFromMessage,
-  updateSessionAgentStatus,
   workspaceTabs,
 } from "./catalog.js";
 import {
@@ -37,38 +36,6 @@ test("catalog indexes workspaces and open tabs", () => {
   assert.equal(tab.workspace, "workspace");
   assert.equal(tab.tabID, "session");
   assert.equal(tab.title, "Shell");
-});
-
-test("catalog indexes task workspaces across projects", () => {
-  const catalog = buildCatalog({
-    tasks: [{ id: "task", name: "Delivery" }],
-    projects: [{ id: "project-a" }, { id: "project-b" }],
-    workspaces: [
-      { id: "workspace-a", project: "project-a", task: "task" },
-      { id: "workspace-b", project: "project-b", task: "task" },
-      { id: "workspace-unassigned", project: "project-b" },
-    ],
-    sessions: [],
-  });
-
-  assert.deepEqual(
-    catalog.workspacesByTask.get("task").map(workspace => workspace.id),
-    ["workspace-a", "workspace-b"],
-  );
-  assert.equal(catalog.projectsByID.get("project-b").id, "project-b");
-});
-
-test("live agent status updates preserve task aggregation", () => {
-  const catalog = buildCatalog({
-    tasks: [{ id: "task", name: "Delivery" }],
-    projects: [{ id: "project" }],
-    workspaces: [{ id: "workspace", project: "project", task: "task" }],
-    sessions: [{ id: "session", workspace: "workspace", lifecycle: "running" }],
-  });
-
-  const updated = updateSessionAgentStatus(catalog, "session", { activity: "working" });
-  assert.equal(updated.tasks[0].id, "task");
-  assert.equal(updated.workspacesByTask.get("task")[0].id, "workspace");
 });
 
 test("catalog keeps agent binding fields on sessions", () => {
@@ -134,7 +101,6 @@ test("roster delta applies entity changes and session lifecycle updates", () => 
     state: {
       revision: 3,
       host: { id: "host", name: "before" },
-      tasks: [{ id: "task-a", name: "A" }],
       projects: [{ id: "project-a", name: "A" }, { id: "project-b", name: "B" }],
       workspaces: [{ id: "workspace-a", project: "project-a" }],
       terminalGroups: [{ id: "group-a", name: "A" }],
@@ -150,7 +116,6 @@ test("roster delta applies entity changes and session lifecycle updates", () => 
     baseRevision: 3,
     revision: 4,
     host: { id: "host", name: "after" },
-    tasks: { upsert: [{ id: "task-b", name: "B" }], remove: ["task-a"] },
     projects: { order: ["project-b", "project-a"] },
     workspaces: {
       upsert: [{ id: "workspace-b", project: "project-b" }],
@@ -168,7 +133,6 @@ test("roster delta applies entity changes and session lifecycle updates", () => 
 
   assert.equal(updated.revision, 4);
   assert.equal(updated.host.name, "after");
-  assert.deepEqual(updated.tasks.map(task => task.id), ["task-b"]);
   assert.deepEqual(updated.projects.map(project => project.id), ["project-b", "project-a"]);
   assert.deepEqual(updated.workspaces.map(workspace => workspace.id), ["workspace-b", "workspace-a"]);
   assert.deepEqual(updated.terminalGroups.map(group => group.id), ["group-b"]);
@@ -359,7 +323,7 @@ test("moveInCatalog is a no-op for an unknown id", () => {
 test("terminal title removes empty separators", () => {
   assert.equal(
     renderTerminalTitle("{command} — {directoryName}", { title: "Session" }),
-    "shell",
+    "Session",
   );
   assert.equal(
     renderTerminalTitle("{command} — {directoryName}", { process: "codex", directory: "/work/warren" }),
@@ -383,13 +347,43 @@ test("compact pane titles abbreviate parent directories and preserve full titles
   assert.equal(
     renderCompactTerminalTitle(
       "{command} — {directory}",
-      { process: "zsh", directory },
+      { process: "npm", directory },
     ),
-    "zsh — /U/l/W/g/a/warren",
+    "npm — /U/l/W/g/a/warren",
   );
   assert.equal(
-    renderTerminalTitle("{command} — {directory}", { process: "zsh", directory }),
-    `zsh — ${directory}`,
+    renderTerminalTitle("{command} — {directory}", { process: "npm", directory }),
+    `npm — ${directory}`,
+  );
+});
+
+test("foreground command line wins over the bare process name", () => {
+  assert.equal(
+    renderTerminalTitle(defaultTitleTemplate, {
+      title: "Shell",
+      kind: "shell",
+      process: "npm",
+      commandLine: "npm run dev",
+      directory: "/work/warren",
+    }),
+    "Shell · /work/warren · npm run dev",
+  );
+});
+
+test("interactive shell foreground reads as its directory", () => {
+  assert.equal(
+    renderCompactTerminalTitle(
+      "{command} — {directory}",
+      { process: "zsh", commandLine: "-zsh", directory: "/Users/lisongjian/Workspace/gh/abcdlsj/warren" },
+    ),
+    "/U/l/W/g/a/warren",
+  );
+  assert.equal(
+    terminalTabTitle(
+      { title: "Shell", kind: "shell", process: "zsh", commandLine: "-zsh", directory: "/work/warren" },
+      {},
+    ),
+    "warren",
   );
 });
 

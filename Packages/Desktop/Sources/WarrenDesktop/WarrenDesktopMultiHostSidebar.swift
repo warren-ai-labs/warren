@@ -37,9 +37,10 @@ public enum WarrenDesktopSidebarResourceSelection: Hashable, Sendable {
 
 /// The value projection for one endpoint in the aggregated sidebar.
 ///
-/// Only Projects and Workspaces are represented here. Tasks, terminal groups,
-/// sessions, and the foreground terminal remain owned by the selected endpoint
-/// in the existing single-host projection.
+/// Projects and Workspaces are the primary rows here. Live Agent session
+/// metadata is carried only for the rich child rows; Tasks, terminal groups,
+/// and the foreground terminal remain owned by the selected endpoint in the
+/// existing single-host projection.
 public struct WarrenDesktopSidebarHostProjection: Identifiable, Hashable, Sendable {
     public let endpointID: String
     public let endpointLabel: String
@@ -51,6 +52,9 @@ public struct WarrenDesktopSidebarHostProjection: Identifiable, Hashable, Sendab
     /// section in v1.
     public let tasks: [WarrenTask]
     public let workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary]
+    /// Live Sessions grouped by workspace, used as the tree's leaves in the
+    /// rich workspace mode. Ended sessions are omitted.
+    public let activeSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]]
     public let activeWorkspaceIDs: Set<WorkspaceID>
     public let lastError: String?
 
@@ -76,6 +80,7 @@ public struct WarrenDesktopSidebarHostProjection: Identifiable, Hashable, Sendab
         projectGroups: [WarrenDesktopProjectGroup] = [],
         tasks: [WarrenTask] = [],
         workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary] = [:],
+        activeSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] = [:],
         activeWorkspaceIDs: Set<WorkspaceID> = [],
         lastError: String? = nil
     ) {
@@ -86,6 +91,7 @@ public struct WarrenDesktopSidebarHostProjection: Identifiable, Hashable, Sendab
         self.projectGroups = projectGroups
         self.tasks = tasks
         self.workspaceActivitySummaries = workspaceActivitySummaries
+        self.activeSessionsByWorkspaceID = activeSessionsByWorkspaceID
         self.activeWorkspaceIDs = activeWorkspaceIDs
         self.lastError = lastError
     }
@@ -96,6 +102,14 @@ public struct WarrenDesktopSidebarHostProjection: Identifiable, Hashable, Sendab
 
     public func workspaceReference(_ workspaceID: WorkspaceID) -> WarrenDesktopHostResourceRef<WorkspaceID> {
         WarrenDesktopHostResourceRef(endpointID: endpointID, id: workspaceID)
+    }
+
+    public func sessionReference(_ sessionID: TerminalSessionID) -> WarrenDesktopHostResourceRef<TerminalSessionID> {
+        WarrenDesktopHostResourceRef(endpointID: endpointID, id: sessionID)
+    }
+
+    public func activeSessions(in workspaceID: WorkspaceID) -> [WarrenDesktopSession] {
+        activeSessionsByWorkspaceID[workspaceID] ?? []
     }
 }
 
@@ -143,10 +157,13 @@ public struct WarrenDesktopSidebarProjection: Equatable, Sendable {
 public enum WarrenDesktopHostTint {
     /// A rule is a thin shape rather than a large wash, so it carries the tint
     /// at a much higher opacity: the same hue that vanished as a 4% background
-    /// is clearly visible as a 2pt line, and it identifies the Host without
+    /// is clearly visible as a line, and it identifies the Host without
     /// tinting the rows themselves.
-    public static let ruleWidth: CGFloat = 2
-    public static let ruleOpacity = 0.55
+    ///
+    /// Width and opacity are shared with the Session rail so the sidebar draws
+    /// one kind of vertical line; only the hue changes at the Host level.
+    public static let ruleWidth: CGFloat = WarrenLayoutMetrics.sidebarRailWidth
+    public static let ruleOpacity = 0.30
 
     public static func color(
         for endpointID: String,

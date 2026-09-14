@@ -215,81 +215,14 @@ public enum WarrenDesktopNavigationReducer {
                 action: .selectTab(replacement.id),
                 in: projection
             )
-        case .closeTab(let tabID):
-            var nextMemory = state.memory
-            forget(tabID: tabID, from: &nextMemory)
-            guard state.selectedTabID == tabID else {
-                return WarrenDesktopNavigationState(
-                    selection: state.selection,
-                    selectedTabID: state.selectedTabID,
-                    memory: nextMemory
-                )
-            }
-            let tabs = tabs(for: state.selection, projection: projection)
-            guard let index = tabs.firstIndex(where: { $0.id == tabID }) else {
-                return WarrenDesktopNavigationState(
-                    selection: state.selection,
-                    selectedTabID: nil,
-                    memory: nextMemory
-                )
-            }
-            let remaining = tabs.enumerated().filter { $0.element.id != tabID }
-            let replacement = recentTab(for: state.selection, in: remaining.map(\.element), memory: nextMemory)
-                ?? remaining.first(where: { $0.offset >= index })?.element
-                ?? remaining.last?.element
-            guard let replacement else {
-                return WarrenDesktopNavigationState(
-                    selection: state.selection,
-                    selectedTabID: nil,
-                    memory: nextMemory
-                )
-            }
-            return reduce(
-                WarrenDesktopNavigationState(
-                    selection: state.selection,
-                    selectedTabID: state.selectedTabID,
-                    memory: nextMemory
-                ),
-                action: .selectTab(replacement.id),
-                in: projection
-            )
-        case .closeOtherTabs(let tabID):
-            var nextMemory = state.memory
-            switch state.selection {
-            case .workspace(let workspaceID):
-                nextMemory.tabHistoryByWorkspaceID[workspaceID.description] = [tabID]
-                nextMemory.tabByWorkspaceID[workspaceID.description] = tabID
-            case .terminalGroup(let groupID):
-                nextMemory.tabHistoryByTerminalGroupID[groupID.description] = [tabID]
-                nextMemory.tabByTerminalGroupID[groupID.description] = tabID
-            case .project, nil:
-                break
-            }
-            return reduce(
-                WarrenDesktopNavigationState(
-                    selection: state.selection,
-                    selectedTabID: state.selectedTabID,
-                    memory: nextMemory
-                ),
-                action: .selectTab(tabID),
-                in: projection
-            )
-        case .closeAllTabs:
-            var nextMemory = state.memory
-            switch state.selection {
-            case .workspace(let workspaceID):
-                nextMemory.tabHistoryByWorkspaceID.removeValue(forKey: workspaceID.description)
-                nextMemory.tabByWorkspaceID.removeValue(forKey: workspaceID.description)
-            case .terminalGroup(let groupID):
-                nextMemory.tabHistoryByTerminalGroupID.removeValue(forKey: groupID.description)
-                nextMemory.tabByTerminalGroupID.removeValue(forKey: groupID.description)
-            case .project, nil:
-                break
-            }
+        case .clearSelectedTab:
+            // Emptying the view is not forgetting. The scope's tab history is
+            // what puts the user back where they were when they return, and the
+            // Sessions behind it are all still running.
             return WarrenDesktopNavigationState(
                 selection: state.selection,
                 selectedTabID: nil,
-                memory: nextMemory
+                memory: state.memory
             )
         case .restoreNavigation(let restoredState):
             return reconcile(restoredState, with: projection)
@@ -323,7 +256,7 @@ public enum WarrenDesktopNavigationReducer {
              .renameTask, .renameProject, .renameWorkspace,
              .attachWorkspaceToTask, .detachWorkspaceFromTask, .deleteTask,
              .renameSession,
-             .setProjectPinned, .setWorkspacePinned, .setSessionPinned,
+             .setTaskPinned, .setProjectPinned, .setWorkspacePinned, .setSessionPinned,
              .dismissActivity,
              .moveTab, .moveSession, .moveProject, .moveWorkspace,
              .requestNewSession, .launchSession,

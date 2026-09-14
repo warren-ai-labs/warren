@@ -192,6 +192,17 @@ func (r *GhostlineRuntime) Resize(ctx context.Context, name string, columns, row
 	return session.Resize(ctx, ghostline.Size{Columns: columns, Rows: rows})
 }
 
+// Size reports the runtime's current PTY grid size. The daemon seeds its
+// shared-size cache from this after a restart so a client focus with the same
+// size can skip a redundant resize round trip.
+func (r *GhostlineRuntime) Size(ctx context.Context, name string) (ghostline.Size, error) {
+	session, err := r.session(ctx, name)
+	if err != nil {
+		return ghostline.Size{}, fmt.Errorf("ghostline session %s: %w", name, err)
+	}
+	return session.Size(ctx)
+}
+
 func (r *GhostlineRuntime) Kill(ctx context.Context, name string) error {
 	session, err := r.session(ctx, name)
 	if errors.Is(err, ghostline.ErrSessionNotFound) {
@@ -254,7 +265,7 @@ func (r *GhostlineRuntime) Metadata(ctx context.Context, name string) (runtime.R
 	if err != nil {
 		return runtime.RuntimeMetadata{}, err
 	}
-	return runtime.RuntimeMetadata{Process: metadata.Process, Directory: metadata.Directory}, nil
+	return runtime.RuntimeMetadata{Process: metadata.Process, CommandLine: metadata.CommandLine, Directory: metadata.Directory}, nil
 }
 
 // Checkpoint captures a v1 replay together with an opaque output cursor. The

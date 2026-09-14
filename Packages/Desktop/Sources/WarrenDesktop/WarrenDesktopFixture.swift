@@ -127,6 +127,14 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     public let customTitle: String?
     public let pinned: Bool
     public let kind: TerminalSessionKind
+    /// The Agent provider family the Host has bound to this Session, when it
+    /// differs from the durable `kind`.
+    ///
+    /// A shell can become Agent-backed after launch: the user starts `claude`
+    /// inside it and the Host records the binding. The Session's Warren kind
+    /// stays `.shell` — that is what was launched, and Warren does not rewrite
+    /// history — so presentation must read the binding to name the provider.
+    public let agentProvider: TerminalSessionKind?
     public let state: WarrenDesktopSessionState
     public let agentStatus: AgentStatus?
     /// The last client-observed activity transition. This is intentionally
@@ -134,14 +142,33 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     /// activity timestamp.
     public let activityUpdatedAt: Date?
     public let runtimeProcess: String
+    /// The foreground command line including arguments, e.g. `npm run dev`.
+    /// Empty when the Host has no foreground probe data.
+    public let runtimeCommandLine: String
     public let workingDirectory: String
 
     public var activity: AgentActivityState? { agentStatus?.activity }
 
+    /// The kind every presentation surface should name and draw an icon for.
+    ///
+    /// This resolves the Agent binding over the durable kind, so a `claude`
+    /// running inside a shell Session reads as Claude Code instead of as a
+    /// plain terminal. Behavior that depends on what Warren launched must keep
+    /// using `kind`.
+    public var presentedKind: TerminalSessionKind {
+        guard let agentProvider else { return kind }
+        switch kind {
+        case .shell, .custom:
+            return agentProvider
+        case .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae:
+            return kind
+        }
+    }
+
     /// Warren's structured Agent view is available for integrated providers
     /// and for a shell that the Host has promoted through an Agent binding.
     public var isAgentSession: Bool {
-        switch kind {
+        switch presentedKind {
         case .claude, .codex, .opencode, .pi, .qoder, .antigravity:
             true
         case .shell, .custom:
@@ -167,11 +194,13 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         customTitle: String? = nil,
         pinned: Bool = false,
         kind: TerminalSessionKind = .shell,
+        agentProvider: TerminalSessionKind? = nil,
         state: WarrenDesktopSessionState = .attached,
         activity: AgentActivityState? = nil,
         agentStatus: AgentStatus? = nil,
         activityUpdatedAt: Date? = nil,
         runtimeProcess: String = "",
+        runtimeCommandLine: String = "",
         workingDirectory: String = ""
     ) {
         precondition(
@@ -186,10 +215,12 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         self.customTitle = customTitle
         self.pinned = pinned
         self.kind = kind
+        self.agentProvider = agentProvider
         self.state = state
         self.agentStatus = agentStatus ?? activity.map { AgentStatus(activity: $0) }
         self.activityUpdatedAt = activityUpdatedAt
         self.runtimeProcess = runtimeProcess
+        self.runtimeCommandLine = runtimeCommandLine
         self.workingDirectory = workingDirectory
     }
 
@@ -210,35 +241,16 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             customTitle: customTitle,
             pinned: pinned,
             kind: kind,
+            agentProvider: agentProvider,
             state: state,
             agentStatus: agentStatus,
             activityUpdatedAt: activityUpdatedAt ?? self.activityUpdatedAt,
             runtimeProcess: runtimeProcess,
+            runtimeCommandLine: runtimeCommandLine,
             workingDirectory: workingDirectory
         )
     }
 
-}
-
-/// A running Agent collection grouped by its owning Workspace. The project
-/// and workspace remain outside the child rows so several sessions can share
-/// one context without repeating it for every activity item.
-public struct WarrenDesktopActiveAgentGroup: Identifiable, Hashable, Sendable {
-    public let project: Project
-    public let workspace: Workspace
-    public let sessions: [WarrenDesktopSession]
-
-    public var id: WorkspaceID { workspace.id }
-
-    public init(
-        project: Project,
-        workspace: Workspace,
-        sessions: [WarrenDesktopSession]
-    ) {
-        self.project = project
-        self.workspace = workspace
-        self.sessions = sessions
-    }
 }
 
 public enum WarrenDesktopSessionState: String, Hashable, Sendable {
@@ -325,6 +337,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     private let firstWorkspaceIDByProjectID: [ProjectID: WorkspaceID]
     private let activityByWorkspaceID: [WorkspaceID: AgentActivityState]
     private let workspaceActivitySummariesByID: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary]
+    private let activeSessionsByWorkspaceIDStorage: [WorkspaceID: [WarrenDesktopSession]]
     private let activityByTerminalGroupID: [TerminalGroupID: AgentActivityState]
     private let terminalGroupsByID: [TerminalGroupID: TerminalGroup]
     public let connectionState: WarrenDesktopConnectionState
@@ -344,6 +357,20 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     /// the number of visible tabs whose agent is actively working.
     public var workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary] {
         workspaceActivitySummariesByID
+    }
+
+    /// Live Sessions grouped by Workspace for the rich sidebar rows.
+    ///
+    /// Every live Session is included, Agent or plain shell, because the rich
+    /// presentation makes the Session the leaf of the navigation tree: a tree
+    /// that hides half of a Workspace's Sessions misreports what the Host is
+    /// running. Ended Sessions are omitted; they own no runtime to navigate to.
+    public func activeSessions(in workspaceID: WorkspaceID) -> [WarrenDesktopSession] {
+        activeSessionsByWorkspaceIDStorage[workspaceID] ?? []
+    }
+
+    public var activeSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] {
+        activeSessionsByWorkspaceIDStorage
     }
 
     /// Workspace IDs that have at least one active or attached terminal session.
@@ -509,7 +536,12 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         self.tabsByTerminalGroupID = tabsByTerminalGroupID
 
         var activityByWorkspaceID: [WorkspaceID: AgentActivityState] = [:]
+        var activeSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] = [:]
         for session in sessions {
+            if session.state.isActive,
+               let workspaceID = resolvedSessionWorkspaceIDs[session.id] ?? session.workspaceID {
+                activeSessionsByWorkspaceID[workspaceID, default: []].append(session)
+            }
             guard let workspaceID = session.workspaceID,
                   let activity = session.activity else { continue }
             guard let current = activityByWorkspaceID[workspaceID],
@@ -540,6 +572,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             )
         }
         self.workspaceActivitySummariesByID = workspaceActivitySummariesByID
+        self.activeSessionsByWorkspaceIDStorage = activeSessionsByWorkspaceID
 
         var activityByTerminalGroupID: [TerminalGroupID: AgentActivityState] = [:]
         for session in sessions {
@@ -672,28 +705,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
 
     public func sessions(in terminalGroupID: TerminalGroupID) -> [WarrenDesktopSession] {
         sessionsByTerminalGroupID[terminalGroupID] ?? []
-    }
-
-    /// Returns active Agent sessions grouped in the same order as the project
-    /// tree. Ended sessions and plain shells stay out of this focused view.
-    public func activeAgentGroups() -> [WarrenDesktopActiveAgentGroup] {
-        var sessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] = [:]
-
-        for session in sessions where session.state.isActive && session.isAgentSession {
-            guard let workspaceID = sessionWorkspaceIDs[session.id] else { continue }
-            sessionsByWorkspaceID[workspaceID, default: []].append(session)
-        }
-
-        return groups.flatMap { group in
-            group.workspaces.compactMap { workspace in
-                guard let sessions = sessionsByWorkspaceID[workspace.id] else { return nil }
-                return WarrenDesktopActiveAgentGroup(
-                    project: group.project,
-                    workspace: workspace,
-                    sessions: sessions
-                )
-            }
-        }
     }
 
     /// Returns the most actionable state for a Workspace. A failure or input
@@ -1022,6 +1033,7 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     case deleteProject(ProjectID)
     case deleteWorkspace(WorkspaceID, removeLocalWorktree: Bool)
     case renameSession(TerminalSessionID, String)
+    case setTaskPinned(TaskID, Bool)
     case setProjectPinned(ProjectID, Bool)
     case setWorkspacePinned(WorkspaceID, Bool)
     case setSessionPinned(TerminalSessionID, Bool)
@@ -1037,6 +1049,9 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     case openSession(TerminalSessionID)
     case deleteSession(TerminalSessionID)
     case selectTab(String)
+    /// Leaves the current scope with nothing on screen. The Sessions it owns
+    /// keep running; only the view is emptied.
+    case clearSelectedTab
     case moveTab(String, before: String?)
     case moveSession(TerminalSessionID, to: WarrenDesktopSessionMoveDestination)
     case requestNewSession(WorkspaceID)
@@ -1048,9 +1063,6 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     case setTerminalGroupHome(TerminalGroupID, String?)
     case deleteTerminalGroup(TerminalGroupID)
     case moveTerminalGroup(TerminalGroupID, before: TerminalGroupID?)
-    case closeTab(String)
-    case closeOtherTabs(String)
-    case closeAllTabs
     case restoreNavigation(WarrenDesktopNavigationState)
     case toggleSidebar
     case openNotifications

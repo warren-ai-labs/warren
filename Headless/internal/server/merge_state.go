@@ -155,6 +155,7 @@ func (s *Service) refreshMergeStates(ctx context.Context) {
 		return
 	}
 	s.initMergeState()
+	refreshStartedAt := time.Now()
 	refreshCtx, cancel := context.WithTimeout(ctx, mergeRefreshTimeout)
 	defer cancel()
 
@@ -246,6 +247,12 @@ func (s *Service) refreshMergeStates(ctx context.Context) {
 	// requests stop waking the loop; the next tick retries.
 	s.mergeDirty.Store(false)
 	s.mergeLastRefresh.Store(time.Now().UnixNano())
+	if elapsed := time.Since(refreshStartedAt); elapsed >= time.Second {
+		// A slow pass spawns git for many worktrees and can saturate the disk
+		// that roster metadata reads share. Log it so a startup stall can be
+		// attributed to the merge projection instead of a renderer bug.
+		s.logInfo("slow merge refresh", "duration", elapsed, "workspaces", len(workspaceTasks))
+	}
 }
 
 // checkWorkspaceMerge resolves one workspace's merge state. The stored branch

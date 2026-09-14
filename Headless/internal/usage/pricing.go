@@ -157,7 +157,7 @@ func (f *PriceFetcher) fetch(ctx context.Context) (*PriceTable, error) {
 	}
 	client := f.Client
 	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
+		client = &http.Client{Timeout: 4 * time.Second}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

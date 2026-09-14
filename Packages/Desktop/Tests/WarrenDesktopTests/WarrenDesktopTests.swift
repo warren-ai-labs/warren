@@ -58,14 +58,18 @@ private final class SidebarHostRowsTestState: ObservableObject {
 private struct SidebarHostRowsTestHarness: View {
     @ObservedObject var state: SidebarHostRowsTestState
     let activeEndpointID: String
+    var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode = .compact
+    var selectedTabID: String? = nil
 
     var body: some View {
         WarrenDesktopSidebarHostRows(
             hosts: state.hosts,
             showsActiveOnly: false,
+            workspaceDisplayMode: workspaceDisplayMode,
             isCollapsed: false,
             selection: state.selection,
             activeEndpointID: activeEndpointID,
+            selectedTabID: selectedTabID,
             deletingProjectIDs: [],
             deletingWorkspaceIDs: [],
             onAction: { _ in },
@@ -83,10 +87,15 @@ private struct SidebarHostRowsTestHarness: View {
 @MainActor
 private func makeTabBar(
     tabs: [ClientTab],
-    selectedTabID: String?
+    selectedTabID: String?,
+    soloPane: WarrenDesktopSoloPaneIdentity.Model? = nil
 ) -> WarrenDesktopTabBar {
     WarrenDesktopTabBar(
-        tabs: tabs,
+        presentation: WarrenDesktopPaneBarPresentation(
+            listings: tabs,
+            showsTrack: soloPane == nil,
+            solo: soloPane
+        ),
         tabTitles: Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0.title) }),
         tabActivities: [:],
         pinnedSessionIDs: [],
@@ -142,6 +151,113 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertFalse(WarrenDesktopChromeMode.workspace.showsIndependentTopBar)
         XCTAssertTrue(WarrenDesktopChromeMode.dashboard.showsIndependentTopBar)
 
+    }
+
+    /// The toggle names its effect on the tree. A speech bubble claimed every
+    /// leaf is a conversation, which a plain shell is not.
+    func testWorkspaceDisplayModeDescribesItsEffectOnTheTree() {
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceDisplayMode(rawValue: "rich"),
+            .rich
+        )
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceDisplayMode.compact.toggleLabel,
+            "Show Sessions in the navigation tree"
+        )
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceDisplayMode.rich.toggleHint,
+            "List each workspace without its running Sessions"
+        )
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceDisplayMode.rich.systemImage,
+            "list.bullet.indent"
+        )
+        XCTAssertNotEqual(
+            WarrenDesktopWorkspaceDisplayMode.rich.systemImage,
+            WarrenDesktopWorkspaceDisplayMode.compact.systemImage
+        )
+    }
+
+    /// Rich mode is denser, so it needs more separation between project
+    /// subtrees, not less.
+    func testRichModeSeparatesProjectSubtreesMoreThanCompact() {
+        XCTAssertGreaterThan(
+            WarrenDesktopWorkspaceDisplayMode.rich.projectGroupSpacing,
+            WarrenDesktopWorkspaceDisplayMode.compact.projectGroupSpacing
+        )
+        XCTAssertGreaterThan(
+            WarrenDesktopWorkspaceDisplayMode.compact.projectGroupSpacing,
+            WarrenSpacing.xxs
+        )
+    }
+
+    /// Indent is width taken from row titles, so a tier only spends a step when
+    /// nothing cheaper separates it. Only the Session leaf does: everything
+    /// above it is told apart by weight, brightness, or glyph.
+    func testOnlyTheSessionLeafSpendsAnIndentStep() {
+        let step = WarrenLayoutMetrics.sidebarIndentStep
+        let rowInset = WarrenSpacing.compact
+
+        XCTAssertEqual(WarrenDesktopSidebarIndent.host, WarrenDesktopSidebarIndent.section)
+        XCTAssertEqual(
+            WarrenDesktopSidebarIndent.project + rowInset,
+            WarrenDesktopSidebarIndent.section
+        )
+        XCTAssertEqual(
+            WarrenDesktopSidebarIndent.workspace,
+            WarrenDesktopSidebarIndent.project,
+            "A workspace says it is inside a project by weight, not position"
+        )
+        XCTAssertEqual(WarrenDesktopSidebarIndent.task, WarrenDesktopSidebarIndent.project)
+        XCTAssertEqual(WarrenDesktopSidebarIndent.terminalGroup, WarrenDesktopSidebarIndent.project)
+        // The leaf spends one step so it reads as nested, plus the small gap
+        // that keeps its icon clear of the rail drawn from the parent glyph.
+        XCTAssertEqual(
+            WarrenDesktopSidebarIndent.session - WarrenDesktopSidebarIndent.workspace,
+            step + WarrenDesktopSidebarIndent.sessionGuideGap
+        )
+        // That gap moves the icon, not the title: the glyph-to-title spacing
+        // gives back exactly what the indent adds, so the readable column keeps
+        // the width it had before the rail was separated from the leaf.
+        XCTAssertEqual(
+            WarrenDesktopSidebarIndent.session
+                + WarrenLayoutMetrics.sidebarLeafIconSlotSize
+                + (WarrenSpacing.compact - WarrenDesktopSidebarIndent.sessionGuideGap),
+            WarrenLayoutMetrics.sidebarLeadingInset(depth: 1)
+                + WarrenLayoutMetrics.sidebarLeafIconSlotSize
+        )
+
+        // The whole tree now fits in the width one workspace row used to need,
+        // which is what the collapse was for.
+        XCTAssertLessThanOrEqual(
+            WarrenDesktopSidebarIndent.session,
+            WarrenLayoutMetrics.sidebarLeadingInset(depth: 1)
+        )
+
+        // The rail descends through the gutter every row starts from, so its
+        // center is the depth-0 content leading edge: the same edge section
+        // labels, Host titles, and the project and workspace glyph slots use.
+        // Anchoring it on the parent glyph's center instead left only three
+        // points of branch, which read as a stub against the leaf icon.
+        XCTAssertEqual(
+            WarrenDesktopSidebarIndent.sessionGuide,
+            WarrenLayoutMetrics.sidebarLeadingInset(depth: 0)
+        )
+        // The gutter is what makes the elbow a real branch: the rail sits a
+        // full indent step left of the leaf content it connects to.
+        XCTAssertEqual(
+            WarrenDesktopSidebarIndent.session + WarrenSpacing.compact
+                - WarrenDesktopSidebarIndent.sessionGuide,
+            WarrenLayoutMetrics.sidebarIndentStep + WarrenSpacing.xxs
+        )
+    }
+
+    /// The weight is what replaced the indent, so a container row and the rows
+    /// inside it must not resolve to the same font.
+    func testContainerRowsCarryHeavierWeightThanWhatTheyContain() {
+        XCTAssertEqual(WarrenTypography.sidebarContainerRow, WarrenTypography.navigationGroup)
+        XCTAssertNotEqual(WarrenTypography.sidebarContainerRow, WarrenTypography.workspaceRow)
+        XCTAssertEqual(WarrenTypography.workspaceRow, WarrenTypography.navigationItem)
     }
 
     func testWorkspaceTabTrailingControlsHaveStableOrder() {
@@ -1742,6 +1858,49 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(state.width, WarrenLayoutMetrics.sidebarMaximumWidth)
     }
 
+    /// The width policy and `setWidth` both existed from the start, but nothing
+    /// ever called them: the rail was pinned at 280pt with the collapse button
+    /// as the only escape. The handle is what connects them, so it has to be in
+    /// the tree and it has to drive a real resize.
+    @MainActor
+    func testSidebarResizeHandleDrivesTheWidthPolicy() throws {
+        var state = WarrenDesktopSidebarState()
+        var resets = 0
+        let recorder = WarrenSemanticRecorder()
+        let handle = WarrenDesktopSidebarResizeHandle(
+            width: state.renderedWidth,
+            onResize: { state.setWidth($0) },
+            onReset: { resets += 1 }
+        )
+        .frame(height: 400)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: handle)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 20, height: 400)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let node = recorder.snapshot().nodes.first { $0.id == "sidebar.resize" }
+        XCTAssertNotNil(node, "The rail's only resize affordance must be reachable")
+        XCTAssertEqual(node?.value, "280 points")
+
+        // The handle only ever forwards a proposal; the policy owns clamping and
+        // the collapse snap, so a drag past either end cannot strand the rail.
+        state.setWidth(state.renderedWidth + 200)
+        XCTAssertEqual(state.width, WarrenLayoutMetrics.sidebarMaximumWidth)
+        state.setWidth(WarrenLayoutMetrics.sidebarSnapThreshold - 1)
+        XCTAssertTrue(state.isCollapsed)
+
+        try recorder.perform(.press, on: "sidebar.resize")
+        XCTAssertEqual(resets, 1, "Double-click is the way out of a drag gone wrong")
+
+        // The strip has to be wide enough to catch a pointer without eating the
+        // click target of the rows beside it.
+        XCTAssertGreaterThan(WarrenDesktopSidebarResizeHandle.hitWidth, WarrenSpacing.hairline)
+        XCTAssertLessThanOrEqual(WarrenDesktopSidebarResizeHandle.hitWidth, WarrenSpacing.compact)
+    }
+
     func testPreviewFixtureKeepsStableRowsAndRelationships() {
         let fixture = WarrenDesktopFixture.preview
         XCTAssertEqual(fixture.groups.count, 2)
@@ -2421,7 +2580,7 @@ final class WarrenDesktopTests: XCTestCase {
             selection: .workspace(workspaceID),
             selectedTabID: "tab-main"
         )))
-        actions(.closeTab("tab-main"))
+        actions(.clearSelectedTab)
         actions(.toggleSidebar)
         actions(.dismissActivity(sessionID, .working))
 
@@ -2443,7 +2602,7 @@ final class WarrenDesktopTests: XCTestCase {
                     selection: .workspace(workspaceID),
                     selectedTabID: "tab-main"
                 )),
-                .closeTab("tab-main"),
+                .clearSelectedTab,
                 .toggleSidebar,
                 .dismissActivity(sessionID, .working),
             ]
@@ -2825,6 +2984,72 @@ final class WarrenDesktopTests: XCTestCase {
                 workspace: nil
             ),
             "codex · superset"
+        )
+    }
+
+    func testTabTitleShowsForegroundCommandLine() {
+        let workspaceID = WorkspaceID()
+        let sessionID = TerminalSessionID()
+        let tab = ClientTab(
+            id: "tab-cmdline",
+            title: "Shell",
+            sessionID: sessionID,
+            kind: .shell
+        )
+        let session = WarrenDesktopSession(
+            id: sessionID,
+            workspaceID: workspaceID,
+            title: "Shell",
+            kind: .shell,
+            runtimeProcess: "npm",
+            runtimeCommandLine: "npm run dev",
+            workingDirectory: "/Users/me/Workspace/warren"
+        )
+
+        XCTAssertEqual(
+            WarrenDesktopTabTitle.displayTitle(
+                tab: tab,
+                session: session,
+                workspace: nil
+            ),
+            "npm run dev · warren"
+        )
+    }
+
+    func testTabTitleTreatsForegroundShellAsPrompt() {
+        let workspaceID = WorkspaceID()
+        let sessionID = TerminalSessionID()
+        let tab = ClientTab(
+            id: "tab-shell-prompt",
+            title: "Shell",
+            sessionID: sessionID,
+            kind: .shell
+        )
+        let session = WarrenDesktopSession(
+            id: sessionID,
+            workspaceID: workspaceID,
+            title: "Shell",
+            kind: .shell,
+            runtimeProcess: "zsh",
+            runtimeCommandLine: "-zsh",
+            workingDirectory: "/Users/me/Workspace/warren"
+        )
+
+        XCTAssertEqual(
+            WarrenDesktopTabTitle.displayTitle(
+                tab: tab,
+                session: session,
+                workspace: nil
+            ),
+            "warren"
+        )
+        XCTAssertEqual(
+            WarrenDesktopTabTitle.resolvedCommand(
+                kind: .shell,
+                process: "zsh",
+                commandLine: "-zsh"
+            ),
+            ""
         )
     }
 
@@ -3263,34 +3488,39 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(reconciled.selectedTabID, "tab-main")
     }
 
-    func testClosingTabReturnsToTheMostRecentlyVisitedTabInSameScope() {
+    /// Taking the last pane off screen leaves the workspace selected with no
+    /// live pane, and keeps the visit memory so the next split or selection can
+    /// still fall back to the tab the user was last in.
+    func testClearingTheSelectedTabKeepsScopeAndVisitMemory() {
         let fixture = WarrenDesktopFixture.preview
         let workspaceID = fixture.groups[0].workspaces[0].id
         let tab1 = ClientTab(id: "tab-1", title: "Tab 1", kind: .shell)
         let tab2 = ClientTab(id: "tab-2", title: "Tab 2", kind: .shell)
-        let tab3 = ClientTab(id: "tab-3", title: "Tab 3", kind: .shell)
         let projection = WarrenDesktopProjection(
             host: fixture.host,
             groups: fixture.groups,
             sessions: fixture.sessions,
-            tabs: [tab1, tab2, tab3],
+            tabs: [tab1, tab2],
             sessionWorkspaceIDs: fixture.projection.sessionWorkspaceIDs,
-            tabWorkspaceIDs: [tab1.id: workspaceID, tab2.id: workspaceID, tab3.id: workspaceID]
+            tabWorkspaceIDs: [tab1.id: workspaceID, tab2.id: workspaceID]
         )
 
-        // Visit tab 1, then tab 2, then tab 3
-        let state1 = WarrenDesktopNavigationReducer.reduce(.init(), action: .selectTab(tab1.id), in: projection)
-        let state2 = WarrenDesktopNavigationReducer.reduce(state1, action: .selectTab(tab2.id), in: projection)
-        let state3 = WarrenDesktopNavigationReducer.reduce(state2, action: .selectTab(tab3.id), in: projection)
-        XCTAssertEqual(state3.selectedTabID, tab3.id)
+        let visited1 = WarrenDesktopNavigationReducer.reduce(.init(), action: .selectTab(tab1.id), in: projection)
+        let visited2 = WarrenDesktopNavigationReducer.reduce(visited1, action: .selectTab(tab2.id), in: projection)
+        let cleared = WarrenDesktopNavigationReducer.reduce(visited2, action: .clearSelectedTab, in: projection)
 
-        // Close tab 3 -> should return to tab 2 (MRU), not tab 1
-        let afterClose3 = WarrenDesktopNavigationReducer.reduce(state3, action: .closeTab(tab3.id), in: projection)
-        XCTAssertEqual(afterClose3.selectedTabID, tab2.id)
+        XCTAssertEqual(cleared.selection, .workspace(workspaceID))
+        XCTAssertNil(cleared.selectedTabID)
+        XCTAssertEqual(cleared.memory, visited2.memory)
 
-        // Close tab 2 -> should return to tab 1 (MRU)
-        let afterClose2 = WarrenDesktopNavigationReducer.reduce(afterClose3, action: .closeTab(tab2.id), in: projection)
-        XCTAssertEqual(afterClose2.selectedTabID, tab1.id)
+        // The Session is untouched, so selecting the workspace again picks the
+        // most recently visited tab back up.
+        let reselected = WarrenDesktopNavigationReducer.reduce(
+            cleared,
+            action: .selectWorkspace(workspaceID),
+            in: projection
+        )
+        XCTAssertEqual(reselected.selectedTabID, tab2.id)
     }
 
     func testDeletingSessionReturnsToTheMostRecentlyVisitedTab() {
@@ -3416,55 +3646,51 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(projection.session(id: failed.id), failed)
     }
 
-    func testActiveAgentGroupsFilterRunningSessionsAndAggregateByWorkspace() {
+
+
+    @MainActor
+    func testRichWorkspaceRowsShowEveryLiveSessionAsALeaf() throws {
         let host = WarrenDomain.Host(name: "Agent Host")
-        let firstProject = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
-        let secondProject = Project(hostID: host.id, name: "Web", rootPath: "/tmp/web")
-        let firstWorkspace = Workspace(
-            projectID: firstProject.id,
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let workspace = Workspace(
+            projectID: project.id,
             name: "feature",
-            path: "/tmp/api-feature",
-            branch: "feature"
+            path: "/tmp/api-feature"
         )
-        let secondWorkspace = Workspace(
-            projectID: secondProject.id,
-            name: "main",
-            path: "/tmp/web-main",
-            branch: "main"
-        )
-        let runningCodex = WarrenDesktopSession(
+        let codex = WarrenDesktopSession(
             id: TerminalSessionID(),
-            workspaceID: firstWorkspace.id,
+            workspaceID: workspace.id,
+            tabID: "tab.codex",
             title: "Implement API",
             kind: .codex,
-            state: .attached
-        )
-        let runningClaude = WarrenDesktopSession(
-            id: TerminalSessionID(),
-            workspaceID: firstWorkspace.id,
-            title: "Review API",
-            kind: .claude,
-            state: .reconnecting,
-            activity: .ready
-        )
-        let runningShellOverlay = WarrenDesktopSession(
-            id: TerminalSessionID(),
-            workspaceID: secondWorkspace.id,
-            title: "Web checks",
-            kind: .shell,
-            state: .connecting,
             activity: .working
         )
+        let claude = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Review API",
+            kind: .claude,
+            activity: .ready
+        )
+        // A shell the Host promoted through an Agent binding reports activity.
+        let promotedShell = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Bound shell",
+            kind: .shell,
+            activity: .working
+        )
+        // A shell with no Agent binding reports no activity, but it is still a
+        // live Session and therefore still a leaf of the tree.
         let plainShell = WarrenDesktopSession(
             id: TerminalSessionID(),
-            workspaceID: secondWorkspace.id,
-            title: "Shell",
-            kind: .shell,
-            state: .attached
+            workspaceID: workspace.id,
+            title: "Plain shell",
+            kind: .shell
         )
-        let endedAgent = WarrenDesktopSession(
+        let ended = WarrenDesktopSession(
             id: TerminalSessionID(),
-            workspaceID: secondWorkspace.id,
+            workspaceID: workspace.id,
             title: "Ended",
             kind: .codex,
             state: .exited,
@@ -3472,53 +3698,272 @@ final class WarrenDesktopTests: XCTestCase {
         )
         let projection = WarrenDesktopProjection(
             host: host,
-            projects: [firstProject, secondProject],
-            workspaces: [firstWorkspace, secondWorkspace],
-            sessions: [
-                runningClaude,
-                plainShell,
-                runningCodex,
-                endedAgent,
-                runningShellOverlay,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [codex, claude, promotedShell, plainShell, ended]
+        )
+        let recorder = WarrenSemanticRecorder()
+        var actions: [WarrenDesktopAction] = []
+        let rows = WarrenDesktopSidebarRows(
+            taskGroups: [],
+            groups: projection.groups,
+            terminalGroups: [],
+            workspaceActivitySummaries: projection.workspaceActivitySummaries,
+            activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
+            workspaceDisplayMode: .rich,
+            tree: .constant(WarrenDesktopSidebarTreeState(
+                expandedProjectIDs: [project.id]
+            )),
+            isCollapsed: false,
+            selection: .workspace(workspace.id),
+            selectedTabID: "tab.codex",
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
+            isInteractionDisabled: false,
+            onAddProject: {},
+            onRequestTaskCreate: {},
+            onFocusTask: { _ in },
+            onRequestTerminalGroupCreate: {},
+            onRequestTerminalGroupEdit: { _ in },
+            onAction: { actions.append($0) },
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in }
+        )
+        .frame(width: 420, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: rows)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let richNodes = recorder.snapshot().nodes.filter {
+            $0.id.hasPrefix("workspace-session.project-list.")
+        }
+        XCTAssertEqual(richNodes.count, 4)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: richNodes.map { ($0.label, $0.value) }),
+            [
+                // The open Session is the selected row, so its value carries the
+                // selection the same way every other navigation row does.
+                "Codex Session Implement API": "Working · API · feature · Selected",
+                "Claude Code Session Review API": "Idle · API · feature",
+                "Shell Session Bound shell": "Working · API · feature",
+                "Shell Session Plain shell": "API · feature",
             ]
         )
+        XCTAssertTrue(
+            richNodes.first { $0.label.contains("Implement API") }?.isSelected == true
+        )
+        XCTAssertFalse(richNodes.contains { $0.label.contains("Ended") })
 
-        let groups = projection.activeAgentGroups()
-        XCTAssertEqual(groups.map(\.workspace.id), [firstWorkspace.id, secondWorkspace.id])
-        XCTAssertEqual(groups.map(\.project.id), [firstProject.id, secondProject.id])
-        XCTAssertEqual(groups[0].sessions.map(\.id), [runningClaude.id, runningCodex.id])
-        XCTAssertEqual(groups[1].sessions.map(\.id), [runningShellOverlay.id])
+        try recorder.perform(
+            .press,
+            on: "workspace-session.project-list.\(workspace.id.description).\(codex.id.description)"
+        )
+        XCTAssertEqual(actions, [.openSession(codex.id)])
     }
 
+    /// Opening a Session keeps its workspace as the navigation scope, so both
+    /// rows match the selection. Only the leaf may claim it: it is the row the
+    /// user clicked and the more specific answer to "where am I". The workspace
+    /// states containment instead, so the rail still says which workspace is
+    /// live without stealing the highlight from the row below it.
     @MainActor
-    func testActiveSessionRowsStayFlatAndRepeatProjectWorkspaceContext() throws {
+    func testSelectingASessionLeafMovesTheHighlightOffItsWorkspace() throws {
         let host = WarrenDomain.Host(name: "Agent Host")
         let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
         let workspace = Workspace(
             projectID: project.id,
             name: "feature",
-            path: "/tmp/api-feature",
-            branch: "feature"
+            path: "/tmp/api-feature"
         )
-        let working = WarrenDesktopSession(
+        let session = WarrenDesktopSession(
             id: TerminalSessionID(),
             workspaceID: workspace.id,
+            tabID: "tab.codex",
             title: "Implement API",
             kind: .codex,
             activity: .working
-        )
-        let ready = WarrenDesktopSession(
-            id: TerminalSessionID(),
-            workspaceID: workspace.id,
-            title: "Review API",
-            kind: .claude,
-            activity: .ready
         )
         let projection = WarrenDesktopProjection(
             host: host,
             projects: [project],
             workspaces: [workspace],
-            sessions: [working, ready]
+            sessions: [session]
+        )
+
+        func nodes(selectedTabID: String?) throws -> [String: WarrenSemanticNode] {
+            let recorder = WarrenSemanticRecorder()
+            let rows = WarrenDesktopSidebarRows(
+                taskGroups: [],
+                groups: projection.groups,
+                terminalGroups: [],
+                workspaceActivitySummaries: projection.workspaceActivitySummaries,
+                activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
+                workspaceDisplayMode: .rich,
+                tree: .constant(WarrenDesktopSidebarTreeState(
+                    expandedProjectIDs: [project.id]
+                )),
+                isCollapsed: false,
+                selection: .workspace(workspace.id),
+                selectedTabID: selectedTabID,
+                deletingProjectIDs: [],
+                deletingWorkspaceIDs: [],
+                endpointCapabilities: .local,
+                isInteractionDisabled: false,
+                onAddProject: {},
+                onRequestTaskCreate: {},
+                onFocusTask: { _ in },
+                onRequestTerminalGroupCreate: {},
+                onRequestTerminalGroupEdit: { _ in },
+                onAction: { _ in },
+                onRequestRename: { _ in },
+                onRequestDeletion: { _ in }
+            )
+            .frame(width: 420, height: 500)
+            .warrenSemanticObservationRoot(recorder: recorder)
+            .environment(\.warrenSemanticRecorder, recorder)
+
+            let hostingView = NSHostingView(rootView: rows)
+            hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+            hostingView.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            return Dictionary(
+                recorder.snapshot().nodes.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+
+        let workspaceID = "workspace.project-list.\(workspace.id.description)"
+        let leafID = "workspace-session.project-list."
+            + "\(workspace.id.description).\(session.id.description)"
+
+        let withLeafOpen = try nodes(selectedTabID: "tab.codex")
+        XCTAssertEqual(withLeafOpen[leafID]?.isSelected, true)
+        XCTAssertEqual(withLeafOpen[workspaceID]?.isSelected, false)
+        XCTAssertEqual(
+            withLeafOpen[workspaceID]?.value,
+            "Contains the selected session · Not selected"
+        )
+
+        // With no Session open the workspace is the deepest live row, so it
+        // takes the selection back rather than leaving the rail unanswered.
+        let withNoLeafOpen = try nodes(selectedTabID: nil)
+        XCTAssertEqual(withNoLeafOpen[leafID]?.isSelected, false)
+        XCTAssertEqual(withNoLeafOpen[workspaceID]?.isSelected, true)
+    }
+
+    /// The multi-Host sections are a second implementation of the same tree, so
+    /// they carry the same rule: the leaf takes the selection, its workspace
+    /// states containment. A background Host has nothing open, so none of its
+    /// leaves draw as selected even where the tab IDs would collide.
+    @MainActor
+    func testHostSectionLeafTakesTheSelectionFromItsWorkspace() throws {
+        let localHost = WarrenDomain.Host(name: "Local")
+        let project = Project(hostID: localHost.id, name: "API", rootPath: "/tmp/api")
+        let workspace = Workspace(projectID: project.id, name: "feature", path: "/tmp/a")
+        let session = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            tabID: "tab.codex",
+            title: "Implement API",
+            kind: .codex,
+            activity: .working
+        )
+        func projection(endpointID: String) -> WarrenDesktopSidebarHostProjection {
+            WarrenDesktopSidebarHostProjection(
+                endpointID: endpointID,
+                endpointLabel: endpointID.capitalized,
+                host: localHost,
+                connectionState: .attached,
+                projectGroups: [
+                    WarrenDesktopProjectGroup(project: project, workspaces: [workspace]),
+                ],
+                activeSessionsByWorkspaceID: [workspace.id: [session]],
+                activeWorkspaceIDs: [workspace.id]
+            )
+        }
+
+        func nodes(activeEndpointID: String) throws -> [String: WarrenSemanticNode] {
+            let recorder = WarrenSemanticRecorder()
+            let state = SidebarHostRowsTestState(
+                hosts: [projection(endpointID: "local"), projection(endpointID: "remote")],
+                selection: .workspace(
+                    WarrenDesktopHostResourceRef(endpointID: "local", id: workspace.id)
+                )
+            )
+            let rows = SidebarHostRowsTestHarness(
+                state: state,
+                activeEndpointID: activeEndpointID,
+                workspaceDisplayMode: .rich,
+                selectedTabID: "tab.codex"
+            )
+            .frame(width: 420, height: 600)
+            .warrenSemanticObservationRoot(recorder: recorder)
+            .environment(\.warrenSemanticRecorder, recorder)
+
+            let hostingView = NSHostingView(rootView: rows)
+            hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 600)
+            hostingView.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            return Dictionary(
+                recorder.snapshot().nodes.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+
+        let localWorkspaceID = "workspace.host.local.\(workspace.id.description)"
+        let localLeafID = "workspace-session.host.local."
+            + "\(workspace.id.description).\(session.id.description)"
+        let remoteLeafID = "workspace-session.host.remote."
+            + "\(workspace.id.description).\(session.id.description)"
+
+        let onLocal = try nodes(activeEndpointID: "local")
+        XCTAssertEqual(onLocal[localLeafID]?.isSelected, true)
+        XCTAssertEqual(onLocal[localWorkspaceID]?.isSelected, false)
+        // The two Hosts here project the same tab ID, so a leaf that matched on
+        // the tab alone would light up in both sections at once.
+        XCTAssertNotEqual(
+            onLocal[remoteLeafID]?.isSelected,
+            true,
+            "A background Host has nothing open, so no leaf of its own is selected"
+        )
+
+        // With the selected workspace's Host in the background, nothing there is
+        // open either, so its workspace row takes the selection back.
+        let onRemote = try nodes(activeEndpointID: "remote")
+        XCTAssertEqual(onRemote[localLeafID]?.isSelected, false)
+        XCTAssertEqual(onRemote[localWorkspaceID]?.isSelected, true)
+    }
+
+    /// The collapsed rail is 32pt of glyphs. A leaf there has no parent row to
+    /// sit under and no room for its title, so rich mode falls back to the
+    /// workspace's aggregate marker until the rail is expanded.
+    @MainActor
+    func testCollapsedRailListsNoSessionLeaves() throws {
+        let host = WarrenDomain.Host(name: "Agent Host")
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "feature",
+            path: "/tmp/api-feature"
+        )
+        let session = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            tabID: "tab.codex",
+            title: "Implement API",
+            kind: .codex,
+            activity: .working
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [session]
         )
         let recorder = WarrenSemanticRecorder()
         let rows = WarrenDesktopSidebarRows(
@@ -3526,7 +3971,127 @@ final class WarrenDesktopTests: XCTestCase {
             groups: projection.groups,
             terminalGroups: [],
             workspaceActivitySummaries: projection.workspaceActivitySummaries,
-            activeAgentGroups: projection.activeAgentGroups(),
+            activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
+            workspaceDisplayMode: .rich,
+            tree: .constant(WarrenDesktopSidebarTreeState(
+                expandedProjectIDs: [project.id]
+            )),
+            isCollapsed: true,
+            selection: .workspace(workspace.id),
+            selectedTabID: "tab.codex",
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
+            isInteractionDisabled: false,
+            onAddProject: {},
+            onRequestTaskCreate: {},
+            onFocusTask: { _ in },
+            onRequestTerminalGroupCreate: {},
+            onRequestTerminalGroupEdit: { _ in },
+            onAction: { _ in },
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in }
+        )
+        .frame(width: WarrenLayoutMetrics.sidebarCollapsedWidth, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: rows)
+        hostingView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: WarrenLayoutMetrics.sidebarCollapsedWidth,
+            height: 500
+        )
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let nodes = recorder.snapshot().nodes
+        XCTAssertFalse(nodes.contains { $0.id.hasPrefix("workspace-session.") })
+        XCTAssertTrue(
+            nodes.contains { $0.id == "workspace.project-list.\(workspace.id.description)" },
+            "The workspace glyph still stands in for its Sessions"
+        )
+    }
+
+    /// A shell that the Host bound to an Agent must be named and drawn as that
+    /// provider. Reading only the durable launch kind made every Agent started
+    /// inside a shell render as a plain terminal.
+    func testSessionPresentationFollowsTheBoundAgentProvider() {
+        let workspaceID = WorkspaceID()
+        let boundShell = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspaceID,
+            title: "Implement API",
+            kind: .shell,
+            agentProvider: .claude,
+            activity: .working
+        )
+        XCTAssertEqual(boundShell.presentedKind, .claude)
+        XCTAssertEqual(boundShell.kind, .shell, "The durable launch kind must not be rewritten")
+        XCTAssertTrue(boundShell.isAgentSession)
+
+        // A dedicated Agent Session keeps its own kind even if the Host also
+        // reports a provider for it.
+        let codex = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspaceID,
+            title: "Review",
+            kind: .codex,
+            agentProvider: .claude
+        )
+        XCTAssertEqual(codex.presentedKind, .codex)
+
+        let plainShell = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspaceID,
+            title: "Shell",
+            kind: .shell
+        )
+        XCTAssertEqual(plainShell.presentedKind, .shell)
+        XCTAssertFalse(plainShell.isAgentSession)
+    }
+
+    /// The leaf names the provider and reports what the Session is actually
+    /// doing: why an Agent is blocked, or what a plain shell is running. A
+    /// shell with no Agent binding contributes no activity word.
+    @MainActor
+    func testRichSessionRowsReportAttentionReasonAndShellProcess() throws {
+        let host = WarrenDomain.Host(name: "Agent Host")
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let workspace = Workspace(projectID: project.id, name: "feature", path: "/tmp/api-feature")
+        let blocked = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Implement API",
+            kind: .shell,
+            agentProvider: .claude,
+            agentStatus: AgentStatus(
+                activity: .blocked,
+                attention: AgentAttention(kind: .approval, reason: "Approve running tests")
+            )
+        )
+        let shell = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Shell",
+            kind: .shell,
+            runtimeProcess: "npm run dev"
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [blocked, shell]
+        )
+        let recorder = WarrenSemanticRecorder()
+        let rows = WarrenDesktopSidebarRows(
+            taskGroups: [],
+            groups: projection.groups,
+            terminalGroups: [],
+            workspaceActivitySummaries: projection.workspaceActivitySummaries,
+            activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
+            workspaceDisplayMode: .rich,
             tree: .constant(WarrenDesktopSidebarTreeState(
                 expandedProjectIDs: [project.id]
             )),
@@ -3554,176 +4119,392 @@ final class WarrenDesktopTests: XCTestCase {
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
-        let activeNodes = recorder.snapshot().nodes.filter {
-            $0.id.hasPrefix("active-agent.")
-        }
-        XCTAssertEqual(activeNodes.count, 2)
+        let rowsByLabel = Dictionary(
+            uniqueKeysWithValues: recorder.snapshot().nodes
+                .filter { $0.id.hasPrefix("workspace-session.") }
+                .map { ($0.label, $0.value) }
+        )
         XCTAssertEqual(
-            Dictionary(uniqueKeysWithValues: activeNodes.map { ($0.label, $0.value) }),
-            [
-                "Agent Session Implement API": "Working · API · feature",
-                "Agent Session Review API": "Idle · API · feature",
-            ]
+            rowsByLabel["Claude Code Session Implement API"],
+            "Approval needed · Approve running tests · API · feature",
+            "A bound Agent names its provider and explains what it is waiting for"
+        )
+        XCTAssertEqual(
+            rowsByLabel["Shell Session Shell"],
+            "npm run dev · API · feature",
+            "A plain shell reports its process without claiming an activity it cannot observe"
         )
     }
 
+    /// The tab strip no longer lists a workspace's other Sessions, so the leaf
+    /// is the only place a Session can be renamed, pinned, or ended. A leaf
+    /// without those actions would strand them.
+    func testSessionLeafOwnsEveryPerSessionAction() {
+        let titles = WarrenDesktopWorkspaceSessionRow.contextMenuActions(
+            isPinned: false,
+            onTogglePin: {},
+            onRename: {},
+            onEnd: {}
+        ).compactMap { action -> String? in
+            guard case .button(let title, _, _) = action else { return nil }
+            return title
+        }
+        XCTAssertEqual(titles, ["Pin Session", "Rename Session", "End Session…"])
+
+        XCTAssertTrue(
+            WarrenDesktopWorkspaceSessionRow.contextMenuActions(
+                isPinned: false,
+                onTogglePin: nil,
+                onRename: nil,
+                onEnd: nil
+            ).isEmpty,
+            "A background Host's leaf stays navigable but offers no mutations"
+        )
+
+        let pinned = WarrenDesktopWorkspaceSessionRow.contextMenuActions(
+            isPinned: true,
+            onTogglePin: {},
+            onRename: nil,
+            onEnd: nil
+        )
+        guard case .button(let pinTitle, _, _) = pinned.first else {
+            return XCTFail("Expected a pin action")
+        }
+        XCTAssertEqual(pinTitle, "Unpin Session")
+    }
+
+    /// A single pane gives the bar nothing to switch between, and its chip
+    /// repeats a title the pane header carries and the sidebar leaf highlights.
+    /// Chips are earned by having a second pane to choose.
+    func testPaneBarShowsItsTrackOnlyWhenThereIsAPaneToChoose() {
+        XCTAssertFalse(
+            WarrenDesktopPaneBar.showsTrack(
+                entryCount: 1,
+                embeddedEditorTabVisible: false,
+                mode: .rich
+            )
+        )
+        XCTAssertTrue(
+            WarrenDesktopPaneBar.showsTrack(
+                entryCount: 2,
+                embeddedEditorTabVisible: false,
+                mode: .rich
+            )
+        )
+        // The editor is a second surface to switch to, so it brings the track
+        // back even with one terminal pane on screen.
+        XCTAssertTrue(
+            WarrenDesktopPaneBar.showsTrack(
+                entryCount: 1,
+                embeddedEditorTabVisible: true,
+                mode: .rich
+            )
+        )
+        XCTAssertFalse(
+            WarrenDesktopPaneBar.showsTrack(
+                entryCount: 0,
+                embeddedEditorTabVisible: true,
+                mode: .rich
+            )
+        )
+    }
+
+    /// The identity slot and the pane track occupy the same row, so exactly one
+    /// of them is drawn. Rich mode with one pane is the case that motivated it:
+    /// the row is free, and the 28pt pane header below the presets was spending
+    /// a third band to say the same thing.
     @MainActor
-    func testActiveSessionsPopoverShowsEveryRunningSessionAsFlatRows() throws {
+    func testTopChromeShowsPaneIdentityExactlyWhenThereIsNoTrack() throws {
+        let identity = WarrenDesktopSoloPaneIdentity.Model(
+            tabID: "tab-1",
+            title: "Implement API",
+            fullTitle: "Implement API · codex · feature",
+            providerPresetID: "codex",
+            activity: .working,
+            canClose: true
+        )
+        let recorder = WarrenSemanticRecorder()
+        let bar = makeTabBar(tabs: [ClientTab(
+            id: "tab-1",
+            title: "Implement API",
+            sessionID: TerminalSessionID(),
+            kind: .codex
+        )], selectedTabID: "tab-1", soloPane: identity)
+            .frame(width: 1000, height: WarrenLayoutMetrics.tabBarHeight)
+            .warrenSemanticObservationRoot(recorder: recorder)
+            .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: bar)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1000, height: WarrenLayoutMetrics.tabBarHeight)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let nodes = recorder.snapshot().nodes
+        XCTAssertTrue(
+            nodes.contains { $0.id == "pane.solo" && $0.label.contains("Implement API") }
+        )
+        XCTAssertFalse(
+            nodes.contains { $0.id.hasPrefix("tab.tab-1") },
+            "The identity replaces the chip rather than sitting beside it"
+        )
+        // Closing is still offered, since the bar's own x went away with the
+        // chip and the pane header is gone in this state.
+        XCTAssertTrue(nodes.contains { $0.id == "pane.solo.close" })
+    }
+
+    /// Every combination of the two tree controls has to leave a Session
+    /// reachable. The failure that motivated this was silent: compact stops
+    /// listing leaves, and the bar had already stopped listing Sessions, so a
+    /// workspace's second Session was in neither surface.
+    func testEveryTreeStateLeavesSessionsReachable() {
+        let sessionTabs = (1...3).map {
+            ClientTab(id: "tab-\($0)", title: "Tab \($0)", kind: .shell)
+        }
+        let onePane = SplitLayoutTree.leaf(SplitPaneItem(id: "pane-1", tabID: "tab-1"))
+
+        for mode in [WarrenDesktopWorkspaceDisplayMode.rich, .compact] {
+            let barEntries = WarrenDesktopPaneBar.tabs(
+                visibleIn: onePane,
+                from: sessionTabs,
+                selected: sessionTabs[0],
+                mode: mode
+            )
+            let reachable = mode.sidebarListsSessions
+                ? Set(sessionTabs.map(\.id))
+                : Set(barEntries.map(\.id))
+            XCTAssertEqual(
+                reachable,
+                Set(sessionTabs.map(\.id)),
+                "\(mode.rawValue) left a Session in neither the tree nor the bar"
+            )
+            XCTAssertTrue(
+                WarrenDesktopPaneBar.showsTrack(
+                    entryCount: barEntries.count,
+                    embeddedEditorTabVisible: false,
+                    mode: mode
+                ) || mode.sidebarListsSessions,
+                "\(mode.rawValue) hid the bar that owns its Session list"
+            )
+        }
+    }
+
+    /// Turning the Sessions on while their projects are closed looks like the
+    /// control did nothing, so it opens the projects that gained rows — and only
+    /// those, since opening the rest would add empty depth.
+    func testTurningOnSessionsOpensOnlyTheProjectsThatGainRows() {
+        let host = WarrenDomain.Host(name: "Host")
+        let withSessions = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let idle = Project(hostID: host.id, name: "Docs", rootPath: "/tmp/docs")
+        let liveWorkspace = Workspace(projectID: withSessions.id, name: "feature", path: "/tmp/a")
+        let idleWorkspace = Workspace(projectID: idle.id, name: "main", path: "/tmp/b")
+        let groups = [
+            WarrenDesktopProjectGroup(project: withSessions, workspaces: [liveWorkspace]),
+            WarrenDesktopProjectGroup(project: idle, workspaces: [idleWorkspace]),
+        ]
+
+        XCTAssertEqual(
+            WarrenDesktopSidebarRows.projectIDsToReveal(
+                filteringToActiveOnly: false,
+                in: groups,
+                activeWorkspaceIDs: [liveWorkspace.id]
+            ),
+            [withSessions.id]
+        )
+
+        // The filter has already dropped everything it hides, so whatever
+        // survives is worth opening.
+        XCTAssertEqual(
+            WarrenDesktopSidebarRows.projectIDsToReveal(
+                filteringToActiveOnly: true,
+                in: groups,
+                activeWorkspaceIDs: [liveWorkspace.id]
+            ),
+            [withSessions.id, idle.id]
+        )
+
+        XCTAssertTrue(
+            WarrenDesktopSidebarRows.projectIDsToReveal(
+                filteringToActiveOnly: false,
+                in: groups,
+                activeWorkspaceIDs: []
+            ).isEmpty,
+            "With no live Session there is nothing to reveal"
+        )
+    }
+
+    /// A pane bar entry only ever takes panes off screen. Offering to end a
+    /// Session here would contradict "walk out and it keeps running", and would
+    /// end it from the one control the user reaches for to tidy the layout.
+    func testPaneBarEntryClosesPanesWithoutEndingTheSession() {
+        var closedPanes = 0
+        var endedSessions = 0
+        let titles = WarrenDesktopTabItem.contextMenuActions(
+            sessionID: TerminalSessionID(),
+            isPinned: false,
+            hasActivity: false,
+            workspaceMoveTargets: [],
+            terminalGroupMoveTargets: [],
+            onMoveSession: { _, _ in endedSessions += 1 },
+            onTogglePin: {},
+            onDismissActivity: {},
+            onRename: {},
+            onClose: { closedPanes += 1 },
+            onCloseOthers: { closedPanes += 1 },
+            onCloseAll: { closedPanes += 1 }
+        ).compactMap { action -> String? in
+            guard case .button(let title, _, let run) = action else { return nil }
+            run()
+            return title
+        }
+
+        XCTAssertEqual(
+            titles,
+            ["Pin Session", "Rename Session", "Close Pane", "Close Other Panes", "Close All Panes"]
+        )
+        XCTAssertEqual(closedPanes, 3)
+        XCTAssertEqual(endedSessions, 0)
+        XCTAssertFalse(titles.contains { $0.localizedCaseInsensitiveContains("End Session") })
+        XCTAssertFalse(titles.contains { $0.localizedCaseInsensitiveContains("Close Tab") })
+    }
+
+    /// A Task-linked workspace appears twice in the tree. Its Agent rows must
+    /// stay in the Projects subtree in both Task states, so a running Session
+    /// neither moves between rows nor disappears when Tasks is collapsed.
+    @MainActor
+    func testRichSessionRowsStayInProjectsTreeForTaskLinkedWorkspaces() throws {
         let host = WarrenDomain.Host(name: "Agent Host")
+        let task = WarrenTask(hostID: host.id, name: "Delivery")
         let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
         let workspace = Workspace(
             projectID: project.id,
-            name: "feature",
-            path: "/tmp/api-feature",
-            branch: "feature"
+            taskID: task.id,
+            name: "delivery-api",
+            path: "/tmp/api-delivery"
         )
-        let terminalGroup = TerminalGroup(hostID: host.id, name: "Operations", home: "/tmp/ops")
-        let workspaceSession = WarrenDesktopSession(
+        let session = WarrenDesktopSession(
             id: TerminalSessionID(),
             workspaceID: workspace.id,
             title: "Implement API",
             kind: .codex,
             activity: .working
         )
-        let workspaceShell = WarrenDesktopSession(
-            id: TerminalSessionID(),
-            workspaceID: workspace.id,
-            title: "Shell",
-            kind: .shell
-        )
-        let terminalSession = WarrenDesktopSession(
-            id: TerminalSessionID(),
-            terminalGroupID: terminalGroup.id,
-            title: "Deploy",
-            kind: .shell,
-            state: .connecting
-        )
-        let endedSession = WarrenDesktopSession(
-            id: TerminalSessionID(),
-            workspaceID: workspace.id,
-            title: "Ended",
-            kind: .codex,
-            state: .exited
-        )
         let projection = WarrenDesktopProjection(
             host: host,
+            tasks: [task],
             projects: [project],
             workspaces: [workspace],
-            sessions: [workspaceSession, workspaceShell, terminalSession, endedSession],
-            terminalGroups: [terminalGroup]
+            sessions: [session]
         )
-        let recorder = WarrenSemanticRecorder()
-        var actions: [WarrenDesktopAction] = []
-        let popup = WarrenDesktopActiveSessionsPopover(
-            projection: projection,
-            onAction: { actions.append($0) },
-            onDismiss: {},
-            width: WarrenLayoutMetrics.activeSessionsPopoverWidth,
-            resultsMaxHeight: 400
-        )
-        .frame(width: WarrenLayoutMetrics.activeSessionsPopoverWidth, height: 500)
-        .warrenSemanticObservationRoot(recorder: recorder)
-        .environment(\.warrenSemanticRecorder, recorder)
 
-        let hostingView = NSHostingView(rootView: popup)
-        hostingView.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: WarrenLayoutMetrics.activeSessionsPopoverWidth,
-            height: 500
-        )
-        hostingView.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        for expandedTaskIDs in [Set<TaskID>(), Set([task.id])] {
+            let recorder = WarrenSemanticRecorder()
+            let rows = WarrenDesktopSidebarRows(
+                taskGroups: projection.taskGroups,
+                groups: projection.groups,
+                terminalGroups: [],
+                workspaceActivitySummaries: projection.workspaceActivitySummaries,
+            activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
+                workspaceDisplayMode: .rich,
+                tree: .constant(WarrenDesktopSidebarTreeState(
+                    expandedTaskIDs: expandedTaskIDs,
+                    expandedProjectIDs: [project.id]
+                )),
+                isCollapsed: false,
+                selection: nil,
+                deletingProjectIDs: [],
+                deletingWorkspaceIDs: [],
+                endpointCapabilities: .local,
+                isInteractionDisabled: false,
+                onAddProject: {},
+                onRequestTaskCreate: {},
+                onFocusTask: { _ in },
+                onRequestTerminalGroupCreate: {},
+                onRequestTerminalGroupEdit: { _ in },
+                onAction: { _ in },
+                onRequestRename: { _ in },
+                onRequestDeletion: { _ in }
+            )
+            .frame(width: 420, height: 500)
+            .warrenSemanticObservationRoot(recorder: recorder)
+            .environment(\.warrenSemanticRecorder, recorder)
 
-        let snapshot = recorder.snapshot()
-        let activeNodes = snapshot.nodes.filter { $0.id.hasPrefix("active-session.") }
-        XCTAssertEqual(activeNodes.count, 3)
-        XCTAssertEqual(
-            Set(activeNodes.map(\.label)),
-            Set(["Session Implement API", "Session Shell", "Session Deploy"])
-        )
-        XCTAssertEqual(
-            Dictionary(uniqueKeysWithValues: activeNodes.map { ($0.label, $0.value) }),
-            [
-                "Session Implement API": "API · feature",
-                "Session Shell": "API · feature",
-                "Session Deploy": "Operations",
-            ]
-        )
-        XCTAssertNil(snapshot.nodes.first { $0.id.hasPrefix("active-agent.") })
+            let hostingView = NSHostingView(rootView: rows)
+            hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+            hostingView.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
-        try recorder.perform(.press, on: "active-session.\(workspaceSession.id.description)")
-        XCTAssertEqual(actions, [.openSession(workspaceSession.id)])
+            XCTAssertEqual(
+                recorder.snapshot().nodes
+                    .filter { $0.id.hasPrefix("workspace-session.") }
+                    .map(\.id),
+                [
+                    "workspace-session.project-list.\(workspace.id.description)"
+                        + ".\(session.id.description)",
+                ],
+                "Task expansion \(expandedTaskIDs.isEmpty ? "collapsed" : "expanded")"
+            )
+        }
     }
 
     @MainActor
-    func testActiveSessionsPopoverPrioritizesRecentlyReadySessions() {
+    func testCompactWorkspaceRowsDoNotRenderAgentChildren() throws {
         let host = WarrenDomain.Host(name: "Agent Host")
         let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
-        let workspace = Workspace(
-            projectID: project.id,
-            name: "feature",
-            path: "/tmp/api-feature",
-            branch: "feature"
-        )
-        let now = Date()
-        let olderReady = WarrenDesktopSession(
+        let workspace = Workspace(projectID: project.id, name: "feature", path: "/tmp/api-feature")
+        let session = WarrenDesktopSession(
             id: TerminalSessionID(),
             workspaceID: workspace.id,
-            title: "Older ready",
-            activity: .ready,
-            activityUpdatedAt: now.addingTimeInterval(-601)
-        )
-        let working = WarrenDesktopSession(
-            id: TerminalSessionID(),
-            workspaceID: workspace.id,
-            title: "Working"
-        )
-        let recentReady = WarrenDesktopSession(
-            id: TerminalSessionID(),
-            workspaceID: workspace.id,
-            title: "Recent ready",
-            activity: .ready,
-            activityUpdatedAt: now.addingTimeInterval(-60)
+            title: "Implement API",
+            kind: .codex,
+            activity: .working
         )
         let projection = WarrenDesktopProjection(
             host: host,
             projects: [project],
             workspaces: [workspace],
-            sessions: [olderReady, working, recentReady]
+            sessions: [session]
         )
         let recorder = WarrenSemanticRecorder()
-        let popup = WarrenDesktopActiveSessionsPopover(
-            projection: projection,
+        let rows = WarrenDesktopSidebarRows(
+            taskGroups: [],
+            groups: projection.groups,
+            terminalGroups: [],
+            workspaceActivitySummaries: projection.workspaceActivitySummaries,
+            activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
+            workspaceDisplayMode: .compact,
+            tree: .constant(WarrenDesktopSidebarTreeState(
+                expandedProjectIDs: [project.id]
+            )),
+            isCollapsed: false,
+            selection: nil,
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
+            isInteractionDisabled: false,
+            onAddProject: {},
+            onRequestTaskCreate: {},
+            onFocusTask: { _ in },
+            onRequestTerminalGroupCreate: {},
+            onRequestTerminalGroupEdit: { _ in },
             onAction: { _ in },
-            onDismiss: {},
-            width: WarrenLayoutMetrics.activeSessionsPopoverWidth,
-            resultsMaxHeight: 400
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in }
         )
-        .frame(width: WarrenLayoutMetrics.activeSessionsPopoverWidth, height: 500)
+        .frame(width: 420, height: 500)
         .warrenSemanticObservationRoot(recorder: recorder)
         .environment(\.warrenSemanticRecorder, recorder)
 
-        let hostingView = NSHostingView(rootView: popup)
-        hostingView.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: WarrenLayoutMetrics.activeSessionsPopoverWidth,
-            height: 500
-        )
+        let hostingView = NSHostingView(rootView: rows)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
-        let orderedLabels = recorder.snapshot().nodes
-            .filter { $0.id.hasPrefix("active-session.") }
-            .sorted { $0.frame.y < $1.frame.y }
-            .map(\.label)
-        XCTAssertEqual(orderedLabels, [
-            "Session Recent ready",
-            "Session Older ready",
-            "Session Working",
-        ])
+        XCTAssertNil(recorder.snapshot().nodes.first {
+            $0.id.hasPrefix("workspace-session.")
+        })
     }
+
+
 
     func testWorkspaceActivityCountsOnlyVisibleWorkingTabs() {
         let fixture = WarrenDesktopFixture.preview
@@ -3823,11 +4604,11 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(selected.selectedTabID, "tab-review")
     }
 
-    func testClosingSelectedTabStaysInsideWorkspace() {
+    func testClearingTheSelectedTabStaysInsideWorkspace() {
         let fixture = WarrenDesktopFixture.preview
         let selected = WarrenDesktopNavigationReducer.reduce(
             .init(selection: .workspace(fixture.groups[0].workspaces[0].id), selectedTabID: "tab-main"),
-            action: .closeTab("tab-main"),
+            action: .clearSelectedTab,
             in: fixture.projection
         )
 
@@ -4061,7 +4842,6 @@ final class WarrenDesktopTests: XCTestCase {
             terminalGroupsCollapsed: true,
             tasksCollapsed: true,
             projectsCollapsed: true,
-            activeSessionsCollapsed: true,
             showsActiveOnly: true
         )
 
@@ -4281,6 +5061,7 @@ final class WarrenDesktopTests: XCTestCase {
             onAttachWorkspace: { _ in },
             onCreateWorkspace: { _ in },
             onRename: {},
+            onTogglePin: {},
             onDelete: {}
         )
         .frame(width: 420, height: WarrenLayoutMetrics.sidebarProjectRowHeight)

@@ -182,7 +182,7 @@ func TestGhostlineRuntimeMetadataProbesForeground(t *testing.T) {
 	if err := runtime.Create(ctx, "warren_ghost_meta_on", directory, "sh", nil); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := runtime.Input(ctx, "warren_ghost_meta_on", []byte("cd "+directory+" && exec sleep 30\r")); err != nil {
+	if err := runtime.Input(ctx, "warren_ghost_meta_on", []byte("cd "+directory+" && printf '\\033]7;file://localhost%s\\033\\\\' \"$PWD\" && exec sleep 30\r")); err != nil {
 		t.Fatalf("Input: %v", err)
 	}
 	wantDirectory, err := filepath.EvalSymlinks(directory)
@@ -192,7 +192,7 @@ func TestGhostlineRuntimeMetadataProbesForeground(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		metadata, err := runtime.Metadata(ctx, "warren_ghost_meta_on")
-		if err == nil && strings.Contains(metadata.Process, "sleep") {
+		if err == nil && strings.Contains(metadata.Process, "sleep") && strings.Contains(metadata.CommandLine, "sleep") {
 			if gotDirectory, resolveErr := filepath.EvalSymlinks(metadata.Directory); resolveErr == nil && gotDirectory == wantDirectory {
 				return
 			}

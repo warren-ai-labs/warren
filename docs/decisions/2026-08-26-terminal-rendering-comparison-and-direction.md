@@ -44,7 +44,9 @@ client keeps its existing screen and asks the running program to repaint (for
 example through `SIGWINCH`); it does not clear the screen and synthesize a full
 scrollback replay in the visible path.
 
-Resize is debounced and deduplicated. It is sent only for the focused peer and
+Resize is debounced and deduplicated. Viewport ownership is arbitrated
+separately from input control: the focused peer owns it, an output subscriber
+may adopt it while it is unowned, and taking it never grants keyboard input. It
 does not implicitly perform a snapshot recovery.
 
 ## What cmux does
@@ -139,7 +141,8 @@ never put full scrollback replay on the first-paint path.
 
 ### Resize path
 
-- Send resize only for the active/focused session.
+- Send resize for every visible pane; the daemon arbitrates the shared size
+  independently of input focus.
 - Coalesce layout callbacks and suppress same-size requests.
 - Apply one size after layout settles.
 - Let the program's `SIGWINCH` redraw update the existing surface.

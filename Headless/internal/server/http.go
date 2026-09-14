@@ -1220,8 +1220,15 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 			}(command, backgroundContext)
 			continue
 		}
+		handleStartedAt := time.Now()
 		if err := peer.handle(request.Context(), command); err != nil {
 			_ = peer.writeError(command.ID, err)
+		}
+		if elapsed := time.Since(handleStartedAt); elapsed >= 500*time.Millisecond {
+			// Synchronous commands run on the WebSocket reader, so a slow one
+			// delays every later command on the same connection (including
+			// session.subscribe, which would leave the terminal black).
+			peer.logInfo("slow command", "method", command.Method, "duration", elapsed)
 		}
 	}
 }
@@ -1406,6 +1413,20 @@ func isSlowMutation(method string) bool {
 func isBackgroundRequest(method string) bool {
 	switch method {
 	case "git.panel", "git.diff", "session.subscribe", "settings.testOpenAI",
+		// A roster projection can walk Agent bindings and wait on lifecycle
+		// locks for seconds during startup. Every client may request one on
+		// connect, so keep it off the reader: otherwise it blocks the
+		// session.subscribe that follows on the same connection and leaves the
+		// freshly mounted terminal black until the roster finishes.
+		"roster",
+		// Agent reads hit the canonical journal (and the session broadcast
+		// lock). They can take seconds while the journal is cold, so they must
+		// not run on the WebSocket reader where they would delay the terminal
+		// attach that follows on the same connection.
+		"agent.execution.get", "agent.events.history", "agent.events.subscribe",
+		// Relay device listing performs a control-plane network round trip and
+		// must not hold up the reader while the desktop reconnects.
+		"relay.devices.list",
 		// Usage stats can refresh unit prices over the network and rescan the
 		// whole rollup; rebuild can scan every retained transcript. Both belong
 		// off the reader so terminal input stays responsive meanwhile.
@@ -2298,8 +2319,8 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 				return p.writeResult(command.ID, execution)
 			}
 		}
-		if p.server.Service.AgentStore != nil {
-			execution, found, err := p.server.Service.AgentStore.CanonicalExecution(ctx, executionID)
+		if agentStore := p.server.Service.agentStore(); agentStore != nil {
+			execution, found, err := agentStore.CanonicalExecution(ctx, executionID)
 			if err != nil {
 				return p.writeCanonicalError(command.ID, err)
 			}

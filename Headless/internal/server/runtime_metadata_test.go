@@ -14,17 +14,18 @@ import (
 
 type metadataRuntime struct {
 	memoryRuntime
-	process   string
-	directory string
-	mu        sync.Mutex
-	calls     int
+	process     string
+	commandLine string
+	directory   string
+	mu          sync.Mutex
+	calls       int
 }
 
 func (r *metadataRuntime) Metadata(context.Context, string) (runtime.RuntimeMetadata, error) {
 	r.mu.Lock()
 	r.calls++
 	r.mu.Unlock()
-	return runtime.RuntimeMetadata{Process: r.process, Directory: r.directory}, nil
+	return runtime.RuntimeMetadata{Process: r.process, CommandLine: r.commandLine, Directory: r.directory}, nil
 }
 
 func (r *metadataRuntime) metadataCalls() int {
@@ -41,7 +42,8 @@ func TestRosterOverlaysRuntimeMetadata(t *testing.T) {
 	}
 	adapter := &metadataRuntime{
 		memoryRuntime: memoryRuntime{sessions: map[string][]byte{"runtime-live": {}}},
-		process:       "codex",
+		process:       "npm",
+		commandLine:   "npm run dev",
 		directory:     "/work/live",
 	}
 	service := &Service{
@@ -76,7 +78,7 @@ func TestRosterOverlaysRuntimeMetadata(t *testing.T) {
 		t.Fatalf("roster sessions = %d, want 1", len(roster.Sessions))
 	}
 	session := roster.Sessions[0]
-	if session.Process != "codex" || session.Directory != "/work/live" {
-		t.Fatalf("roster metadata = %q/%q, want codex//work/live", session.Process, session.Directory)
+	if session.Process != "npm" || session.CommandLine != "npm run dev" || session.Directory != "/work/live" {
+		t.Fatalf("roster metadata = %q/%q/%q, want npm/npm run dev//work/live", session.Process, session.CommandLine, session.Directory)
 	}
 }

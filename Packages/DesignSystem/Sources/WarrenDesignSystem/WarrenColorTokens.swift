@@ -1,5 +1,30 @@
 import SwiftUI
 
+/// How loud each resting sidebar tier is, as a fraction of `mutedForeground`.
+///
+/// The tree's readability rests on one rule: a row never reads louder than the
+/// row that contains it. That rule was documented on five separate color
+/// properties and held by nothing, which is how a Session leaf ended up painted
+/// from `foreground` — off this ladder entirely, and brighter than the workspace
+/// above it. Keeping the tiers here as numbers makes the ordering something a
+/// test can walk.
+///
+/// Selected rows are deliberately absent: selection is drawn from `foreground`,
+/// so it is a different base and not comparable with these.
+public enum WarrenSidebarTextWeight {
+    /// Workspaces, and the resource rows that share their tier.
+    public static let workspace: Double = 1.0
+    /// Session leaves nested under a workspace.
+    public static let leaf: Double = 0.78
+    /// Region headings that name a part of the tree without joining it.
+    public static let section: Double = 0.58
+    /// Row metadata: branches, providers, counts, status words.
+    public static let meta: Double = 0.58
+
+    /// Brightest tier first.
+    public static let descendingTiers: [Double] = [workspace, leaf, section]
+}
+
 /// The dark-only semantic color layer shared by the macOS and iOS clients.
 ///
 /// Values are copied from Superset's default Ember theme. Warren intentionally
@@ -216,7 +241,59 @@ public extension WarrenColorTokens {
     /// step below; idle workspaces use the muted foreground.
     var projectText: Color { foreground.opacity(0.96) }
     var workspaceSelectedText: Color { foreground.opacity(0.90) }
-    var workspaceText: Color { mutedForeground }
+    var workspaceText: Color {
+        mutedForeground.opacity(WarrenSidebarTextWeight.workspace)
+    }
+
+    /// Tree leaves — the Session rows the rich presentation nests under a
+    /// workspace.
+    ///
+    /// A leaf must read as quieter than the row that contains it. Giving it the
+    /// full foreground made a running Session outrank its own workspace, so a
+    /// rail of leaves inverted the tree: the deepest rows were the loudest and
+    /// the eye could not find where one workspace ended. Selection is what lifts
+    /// a leaf back to the top of the gradient, because then it is the live row.
+    var sidebarLeafText: Color {
+        mutedForeground.opacity(WarrenSidebarTextWeight.leaf)
+    }
+    var sidebarLeafSelectedText: Color { workspaceSelectedText }
+
+    /// The rail tying a workspace's Session leaves to it.
+    ///
+    /// Indentation alone answers containment only when the eye can measure it,
+    /// and one 10pt step is below that threshold. A stroked line in the gutter
+    /// answers it without spending contrast on either row.
+    ///
+    /// The rail is structure rather than decoration, so it has to survive a
+    /// squint the way a divider does. At 0.18 it sat within a few units of the
+    /// sidebar's own trailing divider and read as noise instead of as a figure;
+    /// 0.30 keeps it quieter than any row text while staying continuous to the
+    /// eye. `WarrenLayoutMetrics.sidebarRailWidth` owns the matching width, and
+    /// a Host section rule uses the same pair so the tree has one rail spec.
+    var sidebarTreeGuide: Color { mutedForeground.opacity(0.30) }
+
+    /// Section headings that name a region rather than participate in it.
+    ///
+    /// A dense tree reads as calm when its structural labels recede far enough
+    /// to stop competing with the resource names under them. Full-strength
+    /// muted text is still loud enough to scan as a row, which is why a rail of
+    /// four sections looks crowded before a single project is added.
+    var sidebarSectionText: Color {
+        mutedForeground.opacity(WarrenSidebarTextWeight.section)
+    }
+
+    /// Resting row metadata: branch names, provider names, counts, status text.
+    ///
+    /// This is deliberately much fainter than the row label it accompanies.
+    /// Metadata is there to answer a question the user already has, not to be
+    /// read on every pass down the rail.
+    var sidebarMetaText: Color {
+        mutedForeground.opacity(WarrenSidebarTextWeight.meta)
+    }
+
+    /// Row metadata on the selected or hovered row, where the user has already
+    /// signalled interest in this row's detail.
+    var sidebarMetaTextActive: Color { mutedForeground.opacity(0.92) }
 
     func wash(_ kind: WarrenWashKind) -> Color {
         switch kind {

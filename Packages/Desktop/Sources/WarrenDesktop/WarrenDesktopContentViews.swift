@@ -26,7 +26,6 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
     let onSelectPane: (String) -> Void
     let onClosePane: (String) -> Void
     let onMaximizePane: (String) -> Void
-    let onSplitDrop: (String, String, SplitDropTarget) -> Void
     let onResizeSplit: ([Bool], Double) -> Void
     let onAddProject: () -> Void
     let onImportSuperset: () -> Void
@@ -53,7 +52,6 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
         onSelectPane: @escaping (String) -> Void = { _ in },
         onClosePane: @escaping (String) -> Void = { _ in },
         onMaximizePane: @escaping (String) -> Void = { _ in },
-        onSplitDrop: @escaping (String, String, SplitDropTarget) -> Void = { _, _, _ in },
         onResizeSplit: @escaping ([Bool], Double) -> Void = { _, _ in },
         onAddProject: @escaping () -> Void,
         onImportSuperset: @escaping () -> Void,
@@ -79,7 +77,6 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
         self.onSelectPane = onSelectPane
         self.onClosePane = onClosePane
         self.onMaximizePane = onMaximizePane
-        self.onSplitDrop = onSplitDrop
         self.onResizeSplit = onResizeSplit
         self.onAddProject = onAddProject
         self.onImportSuperset = onImportSuperset
@@ -107,7 +104,6 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                     onSelectPane: onSelectPane,
                     onClosePane: onClosePane,
                     onMaximizePane: onMaximizePane,
-                    onSplitDrop: onSplitDrop,
                     onResizeSplit: onResizeSplit,
                     terminalSurface: terminalSurface
                 )
@@ -134,14 +130,14 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                     showsPaneHeader: showsPaneHeader,
                     isActive: true,
                     canSplit: true,
-                    canClose: false,
+                    // A lone pane shows no chip in the bar above, so its header
+                    // owns the close control. Closing it is a view operation, so
+                    // it is offered even when it is the only one.
+                    canClose: resolvedTab.sessionID != nil,
                     canMaximize: false,
                     onFocus: { onSelectPane(paneID) },
                     onClose: { onClosePane(paneID) },
                     onMaximize: { onMaximizePane(paneID) },
-                    onSplitDrop: { droppedTabID, target in
-                        onSplitDrop(paneID, droppedTabID, target)
-                    },
                     terminalSurface: terminalSurface(
                         WarrenDesktopTerminalContext(
                             workspace: workspace,
@@ -168,7 +164,6 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                     onSelectPane: onSelectPane,
                     onClosePane: onClosePane,
                     onMaximizePane: onMaximizePane,
-                    onSplitDrop: onSplitDrop,
                     onResizeSplit: onResizeSplit,
                     terminalSurface: terminalSurface
                 )
@@ -192,14 +187,11 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                     showsPaneHeader: showsPaneHeader,
                     isActive: true,
                     canSplit: true,
-                    canClose: false,
+                    canClose: resolvedTab.sessionID != nil,
                     canMaximize: false,
                     onFocus: { onSelectPane(paneID) },
                     onClose: { onClosePane(paneID) },
                     onMaximize: { onMaximizePane(paneID) },
-                    onSplitDrop: { droppedTabID, target in
-                        onSplitDrop(paneID, droppedTabID, target)
-                    },
                     terminalSurface: terminalSurface(
                         WarrenDesktopTerminalContext(
                             terminalGroup: terminalGroup,
@@ -348,10 +340,15 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
     var canSplit: Bool = true
     var canClose: Bool = false
     var canMaximize: Bool = false
+    /// True when this pane shares the view with others.
+    ///
+    /// The border, the inactive wash, and the focus dot all answer "which of
+    /// these panes am I typing into", so they only belong in a split. A lone
+    /// pane still offers close, which is why this is separate from `canClose`.
+    var isSplit: Bool = false
     var onFocus: () -> Void = {}
     var onClose: () -> Void = {}
     var onMaximize: () -> Void = {}
-    var onSplitDrop: (String, SplitDropTarget) -> Void = { _, _ in }
     let terminalSurface: TerminalSurface
 
     @Environment(\.colorScheme) private var colorScheme
@@ -361,13 +358,22 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
         VStack(spacing: 0) {
             if showsPaneHeader, !displayTitle.isEmpty {
                 HStack(spacing: WarrenSpacing.xs) {
-                    if canClose || canMaximize {
+                    // The focus dot answers "which of these panes takes my
+                    // keys", so it only appears once there is more than one.
+                    if isSplit {
                         Circle()
                             .fill(isActive ? tokens.info : Color.clear)
                             .frame(width: 6, height: 6)
                             .padding(.trailing, 2)
                     }
-                    // Auxiliary context bar: Tab owns the primary title.
+                    // With a single pane the bar above shows no chip, so this is
+                    // the primary title and has to name the provider itself.
+                    if let providerPreset {
+                        WarrenDesktopPresetIcon(preset: providerPreset)
+                            .frame(width: 12, height: 12)
+                            .opacity(isActive ? 0.9 : 0.55)
+                            .accessibilityHidden(true)
+                    }
                     Text(displayTitle)
                         .font(.system(size: 11, weight: isActive ? .medium : .regular))
                         .foregroundStyle(isActive ? tokens.foreground.opacity(0.85) : tokens.mutedForeground.opacity(0.65))
@@ -417,8 +423,10 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                                     .contentShape(.rect)
                             }
                             .buttonStyle(.plain)
-                            .help("Close Split Pane (C-x 0)")
-                            .accessibilityLabel("Close Split Pane")
+                            // Taking the pane off screen; the Session keeps
+                            // running and stays in the sidebar tree.
+                            .help("Close Pane (C-x 0)")
+                            .accessibilityLabel("Close Pane")
                         }
                     }
                 }
@@ -441,19 +449,19 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                     .padding(WarrenSpacing.compact)
                     .background(tokens.background)
 
-                WarrenDesktopSplitDropOverlay(canSplit: canSplit, onDrop: onSplitDrop)
+                WarrenDesktopSplitDropOverlay(paneID: paneID, canSplit: canSplit)
 
                 // Keep the focused-pane treatment familiar to Ghostty's
                 // split renderer: inactive surfaces remain live and readable,
                 // but a subtle wash makes the keyboard target unambiguous.
-                if !isActive, (canClose || canMaximize) {
+                if !isActive, isSplit {
                     Color.black
                         .opacity(0.08)
                         .allowsHitTesting(false)
                 }
             }
             .overlay {
-                if canClose || canMaximize {
+                if isSplit {
                     Rectangle()
                         .stroke(isActive ? tokens.info.opacity(0.4) : tokens.border.opacity(0.3), lineWidth: 1)
                 }
@@ -475,6 +483,13 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
         return titleTemplate.renderCompact(titleContext)
     }
 
+    /// The catalog entry for the agent bound to this pane's Session, read from
+    /// the binding rather than from what Warren launched.
+    private var providerPreset: WarrenDesktopSessionPreset? {
+        guard let kind = session?.presentedKind else { return nil }
+        return WarrenDesktopSessionPreset.builtIns.first { $0.request.kind == kind }
+    }
+
     private var fullDisplayTitle: String {
         return titleTemplate.render(titleContext)
     }
@@ -493,7 +508,11 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
             // A generated or manually renamed session is one placeholder
             // value. It must not replace the complete auxiliary template.
             session: normalizedCustomTitle ?? session?.title ?? tab.title,
-            command: session?.runtimeProcess ?? tab.kind.displayName,
+            command: WarrenDesktopTabTitle.resolvedCommand(
+                kind: session?.kind ?? tab.kind,
+                process: session?.runtimeProcess ?? "",
+                commandLine: session?.runtimeCommandLine ?? ""
+            ),
             directory: session?.workingDirectory.isEmpty == false
                 ? session!.workingDirectory
                 : (workspace?.path ?? terminalGroup?.home ?? ""),
@@ -536,13 +555,19 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
     let onSelectPane: (String) -> Void
     let onClosePane: (String) -> Void
     let onMaximizePane: (String) -> Void
-    let onSplitDrop: (String, String, SplitDropTarget) -> Void
     let onResizeSplit: ([Bool], Double) -> Void
     let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     var splitPath: [Bool] = []
+    /// How many panes the whole layout holds, carried down from the root.
+    ///
+    /// Recursion descends into subtrees, so a leaf's own `tree.count` is always
+    /// 1. Deriving pane chrome from it silently disabled close, maximize, the
+    /// focus dot, and the pane border for every pane in a split. Nil means "this
+    /// is the root", where the local count is the real one.
+    var totalPaneCount: Int? = nil
 
     var body: some View {
-        let paneCount = tree.count
+        let paneCount = totalPaneCount ?? tree.count
         switch tree {
         case .leaf(let item):
             let resolvedTab = allTabs.first { $0.id == item.tabID } ?? ClientTab(
@@ -566,12 +591,10 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
                 canSplit: paneCount < SplitLayoutTree.maxPanes,
                 canClose: paneCount > 1,
                 canMaximize: paneCount > 1,
+                isSplit: paneCount > 1,
                 onFocus: { onSelectPane(item.id) },
                 onClose: { onClosePane(item.id) },
                 onMaximize: { onMaximizePane(item.id) },
-                onSplitDrop: { droppedTabID, target in
-                    onSplitDrop(item.id, droppedTabID, target)
-                },
                 terminalSurface: terminalSurface(
                     WarrenDesktopTerminalContext(
                         workspace: workspace,
@@ -620,10 +643,10 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
                             onSelectPane: onSelectPane,
                             onClosePane: onClosePane,
                             onMaximizePane: onMaximizePane,
-                            onSplitDrop: onSplitDrop,
                             onResizeSplit: onResizeSplit,
                             terminalSurface: terminalSurface,
-                            splitPath: splitPath + [false]
+                            splitPath: splitPath + [false],
+                            totalPaneCount: paneCount
                         )
                         .frame(width: firstWidth)
 
@@ -663,10 +686,10 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
                             onSelectPane: onSelectPane,
                             onClosePane: onClosePane,
                             onMaximizePane: onMaximizePane,
-                            onSplitDrop: onSplitDrop,
                             onResizeSplit: onResizeSplit,
                             terminalSurface: terminalSurface,
-                            splitPath: splitPath + [true]
+                            splitPath: splitPath + [true],
+                            totalPaneCount: paneCount
                         )
                         .frame(width: secondWidth)
                     }
@@ -701,10 +724,10 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
                             onSelectPane: onSelectPane,
                             onClosePane: onClosePane,
                             onMaximizePane: onMaximizePane,
-                            onSplitDrop: onSplitDrop,
                             onResizeSplit: onResizeSplit,
                             terminalSurface: terminalSurface,
-                            splitPath: splitPath + [false]
+                            splitPath: splitPath + [false],
+                            totalPaneCount: paneCount
                         )
                         .frame(height: firstHeight)
 
@@ -744,10 +767,10 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
                             onSelectPane: onSelectPane,
                             onClosePane: onClosePane,
                             onMaximizePane: onMaximizePane,
-                            onSplitDrop: onSplitDrop,
                             onResizeSplit: onResizeSplit,
                             terminalSurface: terminalSurface,
-                            splitPath: splitPath + [true]
+                            splitPath: splitPath + [true],
+                            totalPaneCount: paneCount
                         )
                         .frame(height: secondHeight)
                     }
@@ -846,7 +869,11 @@ struct WarrenDesktopSplitDivider: View {
                 }
             }
             .gesture(
-                DragGesture()
+                // The divider is repositioned by the ratio it publishes, so a
+                // local coordinate space would move with it and feed its own
+                // displacement back into the next translation. Measuring the
+                // drag against the window keeps it tracking the pointer.
+                DragGesture(coordinateSpace: .global)
                     .onChanged { value in
                         if dragStartRatio == nil {
                             dragStartRatio = ratio

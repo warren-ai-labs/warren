@@ -174,7 +174,8 @@ public enum WarrenUsageCurveBuilder {
         intervals: [WarrenUsageInterval],
         day: String,
         granularity: WarrenUsageCurveGranularity,
-        baseBucketMinutes: Int = 5
+        baseBucketMinutes: Int = 5,
+        untilMinute: Int? = nil
     ) -> [WarrenUsageCurvePoint] {
         let base = max(baseBucketMinutes, 1)
         let step = max(granularity.rawValue, base)
@@ -193,7 +194,9 @@ public enum WarrenUsageCurveBuilder {
             )
         }
 
-        return stride(from: 0, to: 1_440, by: step).map { minute in
+        let maxMinute = min(1_440 - step, untilMinute ?? (1_440 - step))
+        let effectiveMax = max(0, maxMinute)
+        return stride(from: 0, through: effectiveMax, by: step).map { minute in
             aggregate[minute] ?? WarrenUsageCurvePoint(day: day, minute: minute)
         }
     }

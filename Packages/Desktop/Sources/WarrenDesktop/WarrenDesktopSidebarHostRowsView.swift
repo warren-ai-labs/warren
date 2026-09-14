@@ -10,9 +10,14 @@ import WarrenDomain
 struct WarrenDesktopSidebarHostRows: View {
     let hosts: [WarrenDesktopSidebarHostProjection]
     let showsActiveOnly: Bool
+    var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode = .compact
     let isCollapsed: Bool
     let selection: WarrenDesktopSidebarResourceSelection?
     let activeEndpointID: String
+    /// The open Tab, which only ever belongs to the active endpoint. A
+    /// background Host's leaves are navigable but nothing there is open, so they
+    /// have no selected row to draw.
+    var selectedTabID: String? = nil
     let deletingProjectIDs: Set<ProjectID>
     let deletingWorkspaceIDs: Set<WorkspaceID>
     let onAction: (WarrenDesktopAction) -> Void
@@ -20,6 +25,7 @@ struct WarrenDesktopSidebarHostRows: View {
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
     let onSelect: (WarrenDesktopSidebarResourceSelection) -> Void
     let onOpenWorkspace: (WarrenDesktopHostResourceRef<WorkspaceID>) -> Void
+    let onOpenSession: (WarrenDesktopHostResourceRef<TerminalSessionID>) -> Void
     let onFocusTask: (TaskID) -> Void
     let onToggleActiveOnly: () -> Void
     let onRetry: (String) -> Void
@@ -30,6 +36,46 @@ struct WarrenDesktopSidebarHostRows: View {
     @State private var collapsedHostIDs: Set<String> = []
     @State private var singleHostProjectsCollapsed = false
     @StateObject private var tintAllocator = WarrenDesktopHostTintAllocator()
+
+    init(
+        hosts: [WarrenDesktopSidebarHostProjection],
+        showsActiveOnly: Bool,
+        workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode = .compact,
+        isCollapsed: Bool,
+        selection: WarrenDesktopSidebarResourceSelection?,
+        activeEndpointID: String,
+        selectedTabID: String? = nil,
+        deletingProjectIDs: Set<ProjectID>,
+        deletingWorkspaceIDs: Set<WorkspaceID>,
+        onAction: @escaping (WarrenDesktopAction) -> Void,
+        onRequestRename: @escaping (WarrenDesktopRenameRequest) -> Void,
+        onRequestDeletion: @escaping (WarrenDesktopDeletionRequest) -> Void,
+        onSelect: @escaping (WarrenDesktopSidebarResourceSelection) -> Void,
+        onOpenWorkspace: @escaping (WarrenDesktopHostResourceRef<WorkspaceID>) -> Void,
+        onOpenSession: @escaping (WarrenDesktopHostResourceRef<TerminalSessionID>) -> Void = { _ in },
+        onFocusTask: @escaping (TaskID) -> Void,
+        onToggleActiveOnly: @escaping () -> Void,
+        onRetry: @escaping (String) -> Void
+    ) {
+        self.hosts = hosts
+        self.showsActiveOnly = showsActiveOnly
+        self.workspaceDisplayMode = workspaceDisplayMode
+        self.isCollapsed = isCollapsed
+        self.selection = selection
+        self.activeEndpointID = activeEndpointID
+        self.selectedTabID = selectedTabID
+        self.deletingProjectIDs = deletingProjectIDs
+        self.deletingWorkspaceIDs = deletingWorkspaceIDs
+        self.onAction = onAction
+        self.onRequestRename = onRequestRename
+        self.onRequestDeletion = onRequestDeletion
+        self.onSelect = onSelect
+        self.onOpenWorkspace = onOpenWorkspace
+        self.onOpenSession = onOpenSession
+        self.onFocusTask = onFocusTask
+        self.onToggleActiveOnly = onToggleActiveOnly
+        self.onRetry = onRetry
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
@@ -222,18 +268,70 @@ struct WarrenDesktopSidebarHostRows: View {
                 )
             }
         } else {
-            ForEach(groups) { scopedGroup in
+            ForEach(Array(groups.enumerated()), id: \.element.id) { index, scopedGroup in
                 let group = scopedGroup.group
-                hostProjectRow(group, host: host)
-                if isProjectExpanded(group.project.id, in: host) {
-                    ForEach(scopedWorkspaces(for: group, host: host)) { scopedWorkspace in
-                        hostWorkspaceRow(
-                            scopedWorkspace.workspace,
-                            project: group.project,
-                            host: host
-                        )
+                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                    hostProjectRow(group, host: host)
+                    if isProjectExpanded(group.project.id, in: host) {
+                        ForEach(scopedWorkspaces(for: group, host: host)) { scopedWorkspace in
+                            let sessions = workspaceDisplayMode.isRich
+                                ? host.activeSessions(in: scopedWorkspace.workspace.id)
+                                : []
+                            // The same guide the single-Host tree draws; see
+                            // WarrenDesktopSessionLeafGroup.
+                            WarrenDesktopSessionLeafGroup(
+                                leafCount: sessions.count,
+                                mode: workspaceDisplayMode,
+                                workspaceGlyph: WarrenDesktopWorkspaceGlyph(
+                                    scopedWorkspace.workspace
+                                )
+                            ) {
+                                hostWorkspaceRow(
+                                    scopedWorkspace.workspace,
+                                    project: group.project,
+                                    host: host
+                                )
+                            } leaves: {
+                                ForEach(sessions) { session in
+                                    WarrenDesktopWorkspaceSessionRow(
+                                        session: session,
+                                        project: group.project,
+                                        workspace: scopedWorkspace.workspace,
+                                        semanticScope: "host.\(host.endpointID)",
+                                        isSelected: isSelected(session: session, in: host),
+                                        isInteractionDisabled: !host.connectionState.isConnected
+                                            || deletingProjectIDs.contains(group.project.id)
+                                            || deletingWorkspaceIDs.contains(scopedWorkspace.workspace.id),
+                                        onOpen: {
+                                            onOpenSession(host.sessionReference(session.id))
+                                        },
+                                        // Session mutations target the current
+                                        // Host only; a background Host's leaf
+                                        // stays navigable but read-only, like
+                                        // its workspace row above it.
+                                        onRename: canMutate(host)
+                                            ? {
+                                                onRequestRename(.session(
+                                                    session.id,
+                                                    title: session.displayTitle
+                                                ))
+                                            }
+                                            : nil,
+                                        onTogglePin: canMutate(host)
+                                            ? { onAction(.setSessionPinned(session.id, !session.pinned)) }
+                                            : nil,
+                                        onEnd: canMutate(host)
+                                            ? { onAction(.deleteSession(session.id)) }
+                                            : nil
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
+                // Separate one project's subtree from the next; see
+                // WarrenDesktopWorkspaceDisplayMode.projectGroupSpacing.
+                .padding(.top, index == 0 ? 0 : workspaceDisplayMode.projectGroupSpacing)
             }
         }
     }
@@ -332,13 +430,17 @@ struct WarrenDesktopSidebarHostRows: View {
             activity: summary?.activity,
             activeTabCount: summary?.activeTabCount ?? 0,
             isCollapsed: false,
-            isSelected: isSelected(workspace: workspace.id, in: host)
+            isSelected: isWorkspaceRowSelected(workspace.id, in: host)
+                && !isSelectionDisabled,
+            containsSelection: workspaceRowContainsSelection(workspace.id, in: host)
                 && !isSelectionDisabled,
             isPinned: workspace.pinned,
             isDeleting: isDeleting,
             isInteractionDisabled: !enabled || isProjectDeleting || isDeleting,
             isMutationDisabled: !canWrite,
             isSelectionDisabled: isSelectionDisabled,
+            showsSessionChildren: workspaceDisplayMode.isRich,
+            rowHeight: workspaceDisplayMode.rowHeight,
             taskName: taskName,
             taskID: workspace.taskID,
             tasks: host.tasks,
@@ -643,6 +745,38 @@ struct WarrenDesktopSidebarHostRows: View {
     ) -> Bool {
         guard case .workspace(let reference) = selection else { return false }
         return reference.endpointID == host.endpointID && reference.id == workspaceID
+    }
+
+    private func isSelected(
+        session: WarrenDesktopSession,
+        in host: WarrenDesktopSidebarHostProjection
+    ) -> Bool {
+        guard host.endpointID == activeEndpointID, let selectedTabID else { return false }
+        return session.tabID == selectedTabID
+    }
+
+    /// Whether the workspace row itself carries the selection fill.
+    ///
+    /// Opening a Session keeps its workspace selected, so both rows match. The
+    /// leaf is the row the user clicked and the more specific answer, so it wins
+    /// and the workspace states containment instead.
+    private func isWorkspaceRowSelected(
+        _ workspaceID: WorkspaceID,
+        in host: WarrenDesktopSidebarHostProjection
+    ) -> Bool {
+        guard isSelected(workspace: workspaceID, in: host) else { return false }
+        guard workspaceDisplayMode.isRich else { return true }
+        return !host.activeSessions(in: workspaceID).contains {
+            isSelected(session: $0, in: host)
+        }
+    }
+
+    private func workspaceRowContainsSelection(
+        _ workspaceID: WorkspaceID,
+        in host: WarrenDesktopSidebarHostProjection
+    ) -> Bool {
+        isSelected(workspace: workspaceID, in: host)
+            && !isWorkspaceRowSelected(workspaceID, in: host)
     }
 
     private struct ScopedProjectGroup: Identifiable {

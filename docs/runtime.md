@@ -44,3 +44,19 @@ Warren has three separate environment boundaries:
 `RuntimeEnv` therefore affects new sessions only. Existing PTYs keep the
 environment with which they were created, and changing a shell's environment
 after startup is ordinary shell behavior rather than a Warren settings update.
+
+## Session metadata
+
+Warren projects two live, presentation-only fields onto each running Session:
+
+- **Working directory** comes from the OSC 7 report the shell integration
+  emits and is parsed from the same output stream that feeds the VT emulator,
+  so it updates without an OS probe. It is empty when the shell never reports
+  one.
+- **Foreground process and command line** come from the runtime's foreground
+  process group. The probe is best-effort, never persisted, and enabled by
+  default (`WARREN_GHOSTLINE_PROBE_FOREGROUND`).
+
+Clients use these fields for the pane title, tab label, and sidebar detail. A
+foreground shell is treated as a prompt rather than a command, so an idle
+Session shows its directory instead of `zsh`.

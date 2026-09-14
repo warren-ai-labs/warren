@@ -838,8 +838,13 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let title: String
         let customTitle: String?
         let kind: String
+        /// The provider family the Host bound to a shell or custom Session.
+        /// Dropping it made every Agent started inside a shell render as a
+        /// plain terminal.
+        var agentProvider: String? = nil
         let command: String?
         let process: String?
+        let commandLine: String?
         let directory: String?
         let lifecycle: String
         let pinned: Bool?
@@ -1517,6 +1522,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var rosterApplicationGeneration: UInt64 = 0
     private var resizeTask: Task<Void, Never>?
     private var resizeBuffer = WarrenResizeRequestBuffer()
+    /// Sessions this window currently renders. Split panes each own their
+    /// viewport, so every visible Session may size its own PTY; only the
+    /// selected one also holds the input lease.
+    private var visibleSessionIDs: Set<TerminalSessionID> = []
+    /// Per-Session viewport queues for the panes that are not the keyboard
+    /// target. One shared queue would let two panes overwrite each other's
+    /// latest size.
+    private var passiveResizeBuffers: [TerminalSessionID: WarrenResizeRequestBuffer] = [:]
+    private var passiveResizeTasks: [TerminalSessionID: Task<Void, Never>] = [:]
     private var focusTask: Task<Void, Never>?
     private var deletionReconciliationTask: Task<Void, Never>?
     private var deletionReconciliationWire: WarrenRemoteClient?
@@ -2112,6 +2126,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         pendingSyncedAnchors.removeAll()
         failedAtomicRecoverySessions.removeAll()
         cancelResizeRequests()
+        cancelPassiveResizeRequests()
+        visibleSessionIDs.removeAll()
         focusTask?.cancel()
         focusTask = nil
         if !preserveMountedSurfaces {
@@ -2151,6 +2167,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         pendingAtomicRecoveries.removeAll()
         pendingSyncedAnchors.removeAll()
         failedAtomicRecoverySessions.removeAll()
+        cancelPassiveResizeRequests()
+        visibleSessionIDs.removeAll()
     }
 
     private func removeMountedSurface(sessionID: TerminalSessionID) {
@@ -3644,31 +3662,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             selectSession(id)
         case .deleteSession(let id):
             closeSession(id)
-        case .closeTab(let tabID):
-            if let id = projection.tabs.first(where: { $0.id == tabID })?.sessionID {
-                closeSession(id)
-            }
-            // Close selects the replacement tab before the daemon confirms the
-            // delete. Attach it immediately so the pane does not fall back to
-            // the "Connecting…" placeholder while the roster catches up.
-            Task { await presentSelectedSession() }
-        case .closeOtherTabs(let tabID):
-            let tabs: [ClientTab]
-            if let workspaceID = projection.workspaceID(forTabID: tabID) {
-                tabs = projection.tabs(in: workspaceID)
-            } else if let groupID = projection.terminalGroupID(forTabID: tabID) {
-                tabs = projection.tabs(in: groupID)
-            } else {
-                return
-            }
-            for tab in tabs where tab.id != tabID {
-                if let id = tab.sessionID { closeSession(id) }
-            }
-            Task { await presentSelectedSession() }
-        case .closeAllTabs:
-            for tab in selectedContextTabs {
-                if let id = tab.sessionID { closeSession(id) }
-            }
+        case .clearSelectedTab:
+            // Nothing is attached, so nothing needs presenting. The Sessions
+            // stay running on the Host; only this client stopped showing one.
+            break
         case .launchSession(let workspaceID, let launch):
             createSession(workspaceID: workspaceID, request: launch)
         case .requestNewTerminalGroupSession(let groupID):
@@ -3704,6 +3701,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             deleteWorkspace(id, removeLocalWorktree: removeLocalWorktree)
         case .renameSession(let id, let title):
             request("session.rename", params: ["id": id.description, "title": title])
+        case .setTaskPinned(let id, let pinned):
+            request("task.pin", params: ["id": id.description, "pinned": String(pinned)])
         case .setProjectPinned(let id, let pinned):
             request("project.pin", params: ["id": id.description, "pinned": String(pinned)])
         case .setWorkspacePinned(let id, let pinned):
@@ -3773,8 +3772,86 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         columns: Int,
         rows: Int
     ) {
-        guard selectedSessionID == sessionID else { return }
-        resize(columns: columns, rows: rows)
+        // The focused pane's size travels with its control claim. Everything
+        // else — including the selected pane while its claim is still in
+        // flight, and every passive split sibling — uses the viewport-only
+        // path so its PTY still follows the pane.
+        if sessionID == selectedSessionID,
+           attachedSessionID == sessionID,
+           focusedSessionID == sessionID {
+            resize(columns: columns, rows: rows)
+        } else {
+            resizePassive(sessionID: sessionID, columns: columns, rows: rows)
+        }
+    }
+
+    /// Sizes a visible pane that does not own the keyboard lease.
+    ///
+    /// A split pane has to follow its own viewport even while another pane
+    /// holds the input lease. The daemon arbitrates the shared runtime size
+    /// independently of input control, so this is safe to send; it is ignored
+    /// when another client currently owns the size.
+    private func resizePassive(
+        sessionID: TerminalSessionID,
+        columns: Int,
+        rows: Int
+    ) {
+        guard visibleSessionIDs.contains(sessionID),
+              focusedSessionID != sessionID,
+              let size = TerminalSize(columns: columns, rows: rows) else { return }
+        var buffer = passiveResizeBuffers[sessionID] ?? WarrenResizeRequestBuffer()
+        let shouldStart = buffer.offer(size)
+        passiveResizeBuffers[sessionID] = buffer
+        guard shouldStart, passiveResizeTasks[sessionID] == nil else { return }
+        passiveResizeTasks[sessionID] = Task { @MainActor [weak self] in
+            await self?.drainPassiveResizeRequests(sessionID: sessionID)
+        }
+    }
+
+    private func drainPassiveResizeRequests(sessionID: TerminalSessionID) async {
+        defer { passiveResizeTasks[sessionID] = nil }
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: .milliseconds(24))
+            } catch {
+                return
+            }
+            guard var buffer = passiveResizeBuffers[sessionID],
+                  let size = buffer.take(),
+                  let wire,
+                  visibleSessionIDs.contains(sessionID),
+                  focusedSessionID != sessionID else {
+                return
+            }
+            buffer.markSent(size)
+            passiveResizeBuffers[sessionID] = buffer
+            TerminalDiagnostics.log("resize_request", [
+                "session": sessionID.description,
+                "cols": String(size.columns),
+                "rows": String(size.rows),
+            ])
+            do {
+                _ = try await wire.resize(
+                    sessionID: sessionID.description,
+                    size: size
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                // A passive pane's viewport is best-effort: another client may
+                // own the shared size, and a failed background resize must not
+                // surface as a terminal error over the selected pane.
+                return
+            }
+        }
+    }
+
+    private func cancelPassiveResizeRequests() {
+        for task in passiveResizeTasks.values {
+            task.cancel()
+        }
+        passiveResizeTasks.removeAll()
+        passiveResizeBuffers.removeAll()
     }
 
     func resize(columns: Int, rows: Int) {
@@ -5354,10 +5431,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 customTitle: value.customTitle,
                 pinned: value.pinned ?? false,
                 kind: TerminalSessionKind(rawValue: value.kind) ?? .custom,
+                agentProvider: value.agentProvider.flatMap(TerminalSessionKind.init(rawValue:)),
                 state: value.lifecycle == "running" ? .attached : .exited,
                 agentStatus: presentation.activity == nil ? nil : candidateStatus,
                 activityUpdatedAt: nextActivityUpdatedAtBySessionID[id],
                 runtimeProcess: value.process ?? value.command ?? "",
+                runtimeCommandLine: value.commandLine ?? "",
                 workingDirectory: value.directory
                     ?? workspaceID.flatMap { workspacePaths[$0] }
                     ?? terminalGroupID.flatMap { groupHomes[$0] }
@@ -5391,7 +5470,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 id: Self.tabID(id),
                 title: value.title,
                 sessionID: id,
-                kind: TerminalSessionKind(rawValue: value.kind) ?? .custom
+                // A Tab is a presentation entry, so it follows the bound
+                // provider rather than the durable launch kind.
+                kind: value.agentProvider.flatMap(TerminalSessionKind.init(rawValue:))
+                    ?? TerminalSessionKind(rawValue: value.kind)
+                    ?? .custom
             )
         }
         let sessionWorkspaces = Dictionary(uniqueKeysWithValues: remoteSessions.compactMap { value in
@@ -5551,6 +5634,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     func ensureVisibleSessions(_ sessionIDs: Set<TerminalSessionID>) {
         let live = Set(projection.sessions.filter { $0.state.isActive }.map(\.id))
         let visible = sessionIDs.intersection(live)
+        let departed = visibleSessionIDs.subtracting(visible)
+        visibleSessionIDs = visible
+        for sessionID in departed where sessionID != selectedSessionID {
+            releaseResizeOwnership(sessionID)
+        }
         let selectedID = navigation.selectedTabID.flatMap { tabID in
             projection.tabs.first(where: { $0.id == tabID })?.sessionID
         }
@@ -5566,6 +5654,24 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         guard let selectedID, visible.contains(selectedID) else { return }
         Task { @MainActor [weak self] in
             await self?.presentSelectedSession()
+        }
+    }
+
+    /// Releases the viewport ownership a passive pane adopted while it was on
+    /// screen. The daemon only clears it for the current owner, so this is a
+    /// no-op for a pane that never resized. Input focus is untouched: the peer
+    /// never claimed it for a passive pane.
+    private func releaseResizeOwnership(_ sessionID: TerminalSessionID) {
+        passiveResizeTasks[sessionID]?.cancel()
+        passiveResizeTasks[sessionID] = nil
+        passiveResizeBuffers[sessionID] = nil
+        guard let wire, outputSubscriptions.contains(sessionID) else { return }
+        Task {
+            _ = try? await wire.focus(
+                sessionID: sessionID.description,
+                focused: false,
+                size: nil
+            )
         }
     }
 

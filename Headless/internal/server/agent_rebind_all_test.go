@@ -647,3 +647,135 @@ func TestAgentProviderRebindResetsCustomTitle(t *testing.T) {
 		t.Fatalf("custom title after rebind = %q, want empty", got)
 	}
 }
+
+// TestAgentProviderPendingRebindKeepsRetiredTranscript covers a provider that
+// reports its new conversation before the JSONL is flushed (Pi's `/new`). The
+// pending binding must not reuse the retired transcript, because replaying it
+// regenerates the previous conversation's AI title.
+func TestAgentProviderPendingRebindKeepsRetiredTranscript(t *testing.T) {
+	piDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", piDir)
+	directory := t.TempDir()
+	t.Setenv("WARREN_DATA_DIR", directory)
+
+	path1 := filepath.Join(piDir, "2026-09-01T10-00-00-000Z_pi-session-1.jsonl")
+	if err := os.WriteFile(path1, []byte(
+		`{"type":"session","version":3,"id":"pi-session-1","timestamp":"2026-09-01T10:00:00.000Z","cwd":"`+directory+`"}`+"\n"+
+			`{"type":"message","id":"u1","timestamp":"2026-09-01T10:00:01.000Z","message":{"role":"user","content":"retired prompt"}}`+"\n"+
+			`{"type":"message","id":"a1","timestamp":"2026-09-01T10:00:02.000Z","message":{"role":"assistant","content":"retired answer"}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := store.NewID()
+	workspaceID := store.NewID()
+	session := api.Session{
+		ID: "session-pi-pending", WorkspaceID: workspaceID, Title: "Pi", CustomTitle: "Old Pi Topic",
+		Kind: "pi", Runtime: "runtime-pi", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Projects = []api.Project{{ID: projectID, Name: "Project", Path: directory, CreatedAt: time.Now().UTC()}}
+		value.Workspaces = []api.Workspace{{ID: workspaceID, ProjectID: projectID, Name: "main", Path: directory, Kind: "root", CreatedAt: time.Now().UTC()}}
+		value.Sessions = []api.Session{session}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &Service{Store: state, Runtime: newMemoryRuntime(t), AgentFinder: staticAgentFinder{path: path1}}
+	service.AgentProviders = NewTUIAgentProviderRegistry(service)
+	service.lazyInit()
+	if err := agent.WriteBinding(agent.BindPath(session.ID), agent.Binding{
+		Provider:       "pi",
+		SessionID:      "pi-session-1",
+		TranscriptPath: path1,
+		Cwd:            directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	entry, err := service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == nil || entry.handle == nil {
+		t.Fatal("expected a handle for the initial pi conversation")
+	}
+	waitForAgentHistory(t, service, session.ID, "retired answer")
+	epochBefore := service.currentAgentEpoch()
+
+	// `/new` reports conversation 2 before its JSONL exists. The pending binding
+	// must not rebind the watcher to the retired transcript.
+	path2 := filepath.Join(piDir, "2026-09-01T11-00-00-000Z_pi-session-2.jsonl")
+	if err := agent.WriteBinding(agent.BindPath(session.ID), agent.Binding{
+		Provider:       "pi",
+		SessionID:      "pi-session-2",
+		TranscriptPath: path2,
+		Cwd:            directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	entry, err = service.ensureAgent(context.Background(), state.Snapshot().Sessions[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == nil || entry.handle == nil {
+		t.Fatal("expected the retired handle to stay active while the new transcript is pending")
+	}
+	if meta, ok := entry.handle.(interface{ BindingMetadata() (string, string) }); ok {
+		if _, path := meta.BindingMetadata(); path != path1 {
+			t.Fatalf("watcher path while pending = %q, want %q", path, path1)
+		}
+	} else {
+		t.Fatal("handle does not implement BindingMetadata")
+	}
+	if got := service.currentAgentEpoch(); got != epochBefore {
+		t.Fatalf("agent epoch = %d, want unchanged %d before the new transcript lands", got, epochBefore)
+	}
+	if got := state.Snapshot().Sessions[0].CustomTitle; got != "Old Pi Topic" {
+		t.Fatalf("custom title while pending = %q, want the retired title retained", got)
+	}
+
+	// The new conversation lands. The rebind resets the title inputs instead of
+	// replaying the retired transcript.
+	if err := os.WriteFile(path2, []byte(
+		`{"type":"session","version":3,"id":"pi-session-2","timestamp":"2026-09-01T11:00:00.000Z","cwd":"`+directory+`"}`+"\n"+
+			`{"type":"message","id":"u2","timestamp":"2026-09-01T11:00:01.000Z","message":{"role":"user","content":"fresh prompt"}}`+"\n"+
+			`{"type":"message","id":"a2","timestamp":"2026-09-01T11:00:02.000Z","message":{"role":"assistant","content":"fresh answer"}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry, err = service.ensureAgent(context.Background(), state.Snapshot().Sessions[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == nil || entry.handle == nil {
+		t.Fatal("expected a handle after the new transcript landed")
+	}
+	if meta, ok := entry.handle.(interface{ BindingMetadata() (string, string) }); ok {
+		if _, path := meta.BindingMetadata(); path != path2 {
+			t.Fatalf("watcher path after rebind = %q, want %q", path, path2)
+		}
+	}
+	if got := state.Snapshot().Sessions[0].CustomTitle; got != "" {
+		t.Fatalf("custom title after rebind = %q, want empty", got)
+	}
+	waitForAgentHistory(t, service, session.ID, "fresh answer")
+	service.agentsMu.Lock()
+	bound := service.agents[session.ID]
+	var titleUser string
+	if bound != nil {
+		bound.mu.Lock()
+		titleUser = bound.titleUser
+		bound.mu.Unlock()
+	}
+	service.agentsMu.Unlock()
+	if titleUser != "fresh prompt" {
+		t.Fatalf("title user input after rebind = %q, want %q", titleUser, "fresh prompt")
+	}
+}

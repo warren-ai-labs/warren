@@ -17,7 +17,15 @@ import (
 )
 
 type Store struct {
-	mu       sync.RWMutex
+	// mu guards the published state, revision, and change channel. It is held
+	// only for the clone of the current state and for the pointer swap that
+	// publishes an update, never across disk I/O. Roster snapshots and session
+	// lookups read through mu, so holding it during the full state.json rewrite
+	// used to starve terminal attaches for seconds after a daemon restart.
+	mu sync.RWMutex
+	// writeMu serializes writers and their persistence so a slow disk write can
+	// neither block readers of mu nor let two writers interleave.
+	writeMu  sync.Mutex
 	path     string
 	state    api.State
 	revision uint64
@@ -57,7 +65,7 @@ func Open(path, hostName string) (*Store, error) {
 			migrated = true
 		}
 		if migrated {
-			if err := s.saveLocked(); err != nil {
+			if err := s.save(s.state); err != nil {
 				return nil, err
 			}
 		}
@@ -77,7 +85,7 @@ func Open(path, hostName string) (*Store, error) {
 	if err := ensureTerminalGroups(&s.state); err != nil {
 		return nil, err
 	}
-	if err := s.saveLocked(); err != nil {
+	if err := s.save(s.state); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -126,29 +134,42 @@ func (s *Store) ChangesSince(revision uint64) <-chan struct{} {
 }
 
 func (s *Store) Update(fn func(*api.State) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Writers are serialized by writeMu while mu is only taken for the clone
+	// and the publish below. Snapshot, SnapshotVersion, and ChangesSince
+	// therefore never wait for the state.json rewrite or for another writer.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	s.mu.RLock()
 	next := clone(s.state)
+	s.mu.RUnlock()
+
 	if err := fn(&next); err != nil {
 		return err
 	}
-	old := s.state
-	s.state = next
-	if err := s.saveLocked(); err != nil {
-		s.state = old
+	// Persist before publishing so a failed write leaves the in-memory state
+	// untouched, matching the previous rollback contract.
+	if err := s.save(next); err != nil {
 		return err
 	}
+
+	s.mu.Lock()
+	s.state = next
 	s.revision++
 	close(s.changed)
 	s.changed = make(chan struct{})
+	s.mu.Unlock()
 	return nil
 }
 
-func (s *Store) saveLocked() error {
+// save persists value to disk. Callers must hold writeMu, or be Open before
+// the Store is shared, so writes stay ordered and the published state only
+// advances after it is durable.
+func (s *Store) save(value api.State) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
-	data, err := json.MarshalIndent(s.state, "", "  ")
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
