@@ -4,6 +4,56 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [0.14.0] - 2026-09-14
+
+> Minor release: adds native split terminal workflows, historical Usage
+> analytics, richer sidebar and workspace organization, and runtime-aware
+> Session titles across Desktop, Web, and Headless. The JSON control protocol
+> remains at 4.0.
+
+### Added
+
+- Add native AppKit split terminal panes with drag-and-drop placement, pane
+  controls, independent PTY sizing, and screen reporting.
+- Rebuild Usage from historical transcripts with per-day Agent, model, and
+  project breakdowns, a selectable heatmap, an intraday curve, and cached
+  fetches.
+- Add a thread-oriented sidebar mode with Sessions as leaves, Task pinning,
+  Projects and Workspaces cards, and quick setup scripts.
+- Pin a Task from the Desktop sidebar context menu so important cross-repository
+  Tasks sort above the rest, matching Projects, Workspaces, and Sessions.
+- Add per-day Usage breakdowns by Agent, model, and project, and a Tokens/Cost
+  toggle on the intraday curve.
+- Show a Session's foreground command line (for example `npm run dev`) and the
+  working directory the shell reports through OSC 7 in the pane title, tab, and
+  sidebar, instead of falling back to the launch command.
+
+### Changed
+
+- Make pane close actions Session commands: closing a pane, other panes, or all
+  panes now ends the Sessions shown there, while surviving split panes retain
+  their layout and selection.
+- Keep startup work, Relay device listing, state-store reads, and loopback
+  handoff work off the terminal attach path to improve reconnect reliability.
+- Rework Desktop Settings and Usage into categorized two-column layouts with
+  grouped cards, refined typography, and a clearer sidebar tree rail.
+- Read a Session's working directory from the shell's OSC 7 report and the
+  foreground process name and command line from the runtime probe, and enable
+  that probe by default now that the macOS path uses native sysctl calls.
+- Remove the Tasks section from the Web client, so Tasks are no longer part of
+  the Web surface; a Task-linked Workspace renders as an ordinary Workspace
+  there, and Task management stays on Desktop and the CLI.
+- Send only the selected day's five-minute Usage buckets instead of the whole
+  range, cap the intraday payload at the most recent day when no day is picked,
+  and skip the Usage reprice scan when neither usage nor prices changed; a
+  year-long range no longer moves or reprices every bucket on each open.
+- Reuse a freshly fetched Usage payload when moving between the Overview and
+  Usage settings pages, and make Refresh bypass that reuse.
+- Let the Usage heatmap select a day in both pages: Overview opens that day's
+  detail, and Detail replaces the day menu with the same grid.
+
 ### Fixed
 
 - Keep a Session on its retired Agent conversation until the replacement
@@ -20,32 +70,15 @@ conversation can no longer name the current one.
 - Scope the "provider reports no token counts" caveat to the requested range, so
   a historical window is not blamed for an Agent that only exists today.
 
-### Changed
+### Release notes
 
-- Read a Session's working directory from the shell's OSC 7 report and the
-  foreground process name and command line from the runtime probe, and enable
-  that probe by default now that the macOS path uses native sysctl calls.
-- Remove the Tasks section from the Web client, so Tasks are no longer part of
-  the Web surface; a Task-linked Workspace renders as an ordinary Workspace
-  there, and Task management stays on Desktop and the CLI.
-- Send only the selected day's five-minute Usage buckets instead of the whole
-  range, cap the intraday payload at the most recent day when no day is picked,
-  and skip the Usage reprice scan when neither usage nor prices changed; a
-  year-long range no longer moves or reprices every bucket on each open.
-- Reuse a freshly fetched Usage payload when moving between the Overview and
-  Usage settings pages, and make Refresh bypass that reuse.
-- Let the Usage heatmap select a day in both pages: Overview opens that day's
-  detail, and Detail replaces the day menu with the same grid.
-
-### Added
-
-- Pin a Task from the Desktop sidebar context menu so important cross-repository
-  Tasks sort above the rest, matching Projects, Workspaces, and Sessions.
-- Add per-day Usage breakdowns by agent, model, and project, and a Tokens/Cost
-  toggle on the intraday curve.
-- Show a Session's foreground command line (for example `npm run dev`) and the
-  working directory the shell reports through OSC 7 in the pane title, tab, and
-  sidebar, instead of falling back to the launch command.
+- The release adds no control-protocol version change or state-schema
+  migration. Validate native split-pane focus and close behavior, Usage
+  history reconstruction, and OSC 7 title reporting on a clean host before
+  publishing.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing,
+  not general public distribution.
 
 ## [0.13.0] - 2026-09-11
 
