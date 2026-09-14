@@ -30,6 +30,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     public let onNoticeRead: (WarrenDesktopNotice.ID) -> Void
     public let onNoticeDismiss: (WarrenDesktopNotice.ID) -> Void
     public let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
+    /// Gives AppKit-backed terminal surfaces a chance to park before SwiftUI
+    /// commits a mode change that can alter their proposed geometry.
+    public let onActiveScreenSessionsWillChange: (Set<TerminalSessionID>) -> Void
     public let onActiveScreenSessionsChanged: (Set<TerminalSessionID>) -> Void
 
     private let endpointOptions: [WarrenDesktopEndpointOption]
@@ -48,6 +51,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let displayConfigurationError: String?
     private let onSelectSidebarResource: (WarrenDesktopSidebarResourceSelection) -> Void
     private let onOpenSidebarWorkspace: (WarrenDesktopHostResourceRef<WorkspaceID>) -> Void
+    private let onOpenSidebarSession: (WarrenDesktopHostResourceRef<TerminalSessionID>) -> Void
     private let onRetrySidebarHost: (String) -> Void
     private let onAddSSHHost: () -> Void
     private let onRetryConnection: () -> Void
@@ -94,7 +98,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var sidebarState: WarrenDesktopSidebarState
     @State private var sidebarTree: WarrenDesktopSidebarTreeState
     @State private var commandPalettePresented = false
-    @State private var activeSessionsPresented = false
     @State private var settingsPresented = false
     @State private var settingsDeepLinkSection: WarrenDesktopSettingsSection?
     @State private var settingsPublicAccessPrefill: WarrenDesktopPublicAccessPrefill?
@@ -121,7 +124,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var splitTrees: [String: SplitLayoutTree]
     @State private var activePaneIDs: [String: String]
     @State private var pendingSplits: [String: PendingSplit]
-    @State private var pendingPaneClosures: [String: PendingPaneClosure]
+    @StateObject private var tabDrag = WarrenDesktopTabDrag()
     @State private var emacsChordActive = false
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var terminalTitleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
@@ -136,6 +139,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var embeddedEditorDefaultIDE = false
     @AppStorage(WarrenPreferenceKey.sidebarShowTasks)
     private var showsTasks = true
+    /// Mirrors the sidebar's own preference so the pane bar can resolve which
+    /// surface lists Sessions. See `WarrenDesktopPaneBar.presentation(...)`.
+    @AppStorage(WarrenPreferenceKey.sidebarWorkspaceDisplayMode)
+    private var workspaceDisplayModeRawValue = WarrenDesktopWorkspaceDisplayMode.rich.rawValue
     @AppStorage(WarrenPreferenceKey.terminalSplitChordsEnabled)
     private var splitChordsEnabled = false
     @Environment(\.warrenSemanticRecorder) private var semanticRecorder
@@ -155,12 +162,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let targetPaneID: String
         let existingTabIDs: Set<String>
         let axis: SplitAxis
-    }
-
-    private struct PendingPaneClosure: Equatable {
-        let paneID: String
-        let tabID: String
-        let replacementPaneID: String?
     }
 
     public init(
@@ -184,6 +185,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onNoticeRead: @escaping (WarrenDesktopNotice.ID) -> Void = { _ in },
         onNoticeDismiss: @escaping (WarrenDesktopNotice.ID) -> Void = { _ in },
         externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl] = WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
+        onActiveScreenSessionsWillChange: @escaping (Set<TerminalSessionID>) -> Void = { _ in },
         onActiveScreenSessionsChanged: @escaping (Set<TerminalSessionID>) -> Void = { _ in },
         endpointOptions: [WarrenDesktopEndpointOption] = [
             .init(id: "local", label: "Local", isLocal: true),
@@ -199,6 +201,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         displayConfigurationError: String? = nil,
         onSelectSidebarResource: @escaping (WarrenDesktopSidebarResourceSelection) -> Void = { _ in },
         onOpenSidebarWorkspace: @escaping (WarrenDesktopHostResourceRef<WorkspaceID>) -> Void = { _ in },
+        onOpenSidebarSession: @escaping (WarrenDesktopHostResourceRef<TerminalSessionID>) -> Void = { _ in },
         onRetrySidebarHost: @escaping (String) -> Void = { _ in },
         onAddSSHHost: @escaping () -> Void = {},
         onRetryConnection: @escaping () -> Void = {},
@@ -261,6 +264,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             externallyVisibleControls,
             endpointCount: endpointOptions.count
         )
+        self.onActiveScreenSessionsWillChange = onActiveScreenSessionsWillChange
         self.onActiveScreenSessionsChanged = onActiveScreenSessionsChanged
         self.selectedEndpointID = selectedEndpointID
         let resolvedEndpointCapabilities = endpointCapabilities
@@ -280,6 +284,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.displayConfigurationError = displayConfigurationError
         self.onSelectSidebarResource = onSelectSidebarResource
         self.onOpenSidebarWorkspace = onOpenSidebarWorkspace
+        self.onOpenSidebarSession = onOpenSidebarSession
         self.onRetrySidebarHost = onRetrySidebarHost
         self.onAddSSHHost = onAddSSHHost
         self.onRetryConnection = onRetryConnection
@@ -346,7 +351,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         )
         _activePaneIDs = State(initialValue: [:])
         _pendingSplits = State(initialValue: [:])
-        _pendingPaneClosures = State(initialValue: [:])
     }
 
     public var body: some View {
@@ -437,6 +441,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             sidebarResourceSelection: sidebarResourceSelection,
             onSelectSidebarResource: onSelectSidebarResource,
             onOpenSidebarWorkspace: onOpenSidebarWorkspace,
+            onOpenSidebarSession: onOpenSidebarSession,
             onRetrySidebarHost: onRetrySidebarHost
         )
         .frame(width: sidebarState.renderedWidth)
@@ -452,6 +457,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
                 sidebarView
+                    // The handle sits inside the rail's trailing edge rather
+                    // than between the columns, so grabbing it never shifts
+                    // either one and the drag reads as moving the boundary.
+                    .overlay(alignment: .trailing) {
+                        if !sidebarState.isCollapsed {
+                            WarrenDesktopSidebarResizeHandle(
+                                width: sidebarState.renderedWidth,
+                                onResize: { sidebarState.setWidth($0) },
+                                onReset: { sidebarState.restoreExpanded() }
+                            )
+                        }
+                    }
                 workspaceColumn
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -473,6 +490,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         )
         .denSurface()
         .warrenUnixTextEditing()
+        .environment(\.warrenTabDrag, tabDrag)
+        .environmentObject(tabDrag)
         .onChange(of: sidebarState) { newState in
             if persistenceEnabled { Self.persist(newState) }
         }
@@ -512,9 +531,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.commandPalette)) { _ in
             presentCommandPalette()
         }
-        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.activeSessions)) { _ in
-            presentActiveSessions()
-        }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.newSession)) { _ in
             handleNewSession(in: presentation)
         }
@@ -526,9 +542,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.selectTab)) { note in
             handleSelectTab(note, in: presentation)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.closeTab)) { _ in
-            handleCloseTab(in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.toggleSidebar)) { _ in
             toggleSidebar()
@@ -590,6 +603,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
         .onAppear {
             reconcilePersistedSplitTree()
+            // Prime the manager before the first AppKit layout pass. A
+            // workspace restored directly into Editor mode still keeps the
+            // terminal branch mounted underneath the editor.
+            onActiveScreenSessionsWillChange(activeVisibleSessions)
             onActiveScreenSessionsChanged(activeVisibleSessions)
             // The monitor only forwards a command notification. Resolving the
             // current presentation in `.onReceive` avoids retaining the tab
@@ -672,9 +689,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 .transition(.opacity)
                 .zIndex(WarrenPresentationLayer.commandSurface)
             }
-        }
-        .overlay {
-            activeSessionsOverlay
         }
         .overlay {
             chromePopoverLayer(
@@ -886,43 +900,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
     }
 
-    @ViewBuilder
-    private var activeSessionsOverlay: some View {
-        if activeSessionsPresented && !settingsPresented && !commandPalettePresented {
-            GeometryReader { proxy in
-                let panelWidth = min(
-                    WarrenLayoutMetrics.activeSessionsPopoverWidth,
-                    max(0, proxy.size.width - WarrenSpacing.standard * 2)
-                )
-                let resultsMaxHeight = min(
-                    WarrenLayoutMetrics.activeSessionsPopoverResultsMaxHeight,
-                    max(0, proxy.size.height - WarrenSpacing.large * 2)
-                )
-                ZStack {
-                    Color.black.opacity(0.5)
-                        .ignoresSafeArea()
-                        .contentShape(Rectangle())
-                        .onTapGesture { setActiveSessionsPresented(false) }
-
-                    WarrenDesktopActiveSessionsPopover(
-                        projection: projection,
-                        onAction: { action in
-                            dispatch(action)
-                            setActiveSessionsPresented(false)
-                        },
-                        onDismiss: { setActiveSessionsPresented(false) },
-                        width: panelWidth,
-                        resultsMaxHeight: resultsMaxHeight
-                    )
-                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .transition(.opacity)
-            .zIndex(WarrenPresentationLayer.commandSurface)
-        }
-    }
-
     /// Resolve all selection-dependent UI values once per body evaluation.
     /// SwiftUI asks for these values in several branches and closures; keeping
     /// one immutable presentation value avoids repeated graph lookups while
@@ -940,13 +917,31 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         embeddedEditorChromeAvailable: Bool,
         currentTree: SplitLayoutTree
     ) -> AnyView {
-        AnyView(WarrenDesktopTabBar(
-            tabs: presentation.tabs,
+        let paneBar = WarrenDesktopPaneBar.presentation(
+            visibleIn: currentTree,
+            from: presentation.tabs,
+            selected: presentation.tab,
+            mode: workspaceDisplayMode,
+            includesEditorTab: hasEmbeddedEditorTab(for: presentation.workspace),
+            solo: { entries in
+                soloPaneIdentity(
+                    entries: entries,
+                    presentation: presentation,
+                    tabTitles: tabTitles,
+                    tabActivities: tabActivities
+                )
+            }
+        )
+        return AnyView(WarrenDesktopTabBar(
+            presentation: paneBar,
             tabTitles: tabTitles,
             tabActivities: tabActivities,
             pinnedSessionIDs: pinnedSessionIDs,
             selectedTabID: navigation.selectedTabID,
             splitTabIDs: Set(currentTree.allTabIDs),
+            onCopyPaneTitle: {
+                copySoloPaneTitle(presentation: presentation)
+            },
             chromeMode: chromeMode,
             isSidebarCollapsed: sidebarState.isCollapsed,
             connectionState: projection.connectionState,
@@ -980,6 +975,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             onMoveTab: { tabID, destinationTabID in
                 dispatch(.moveTab(tabID, before: destinationTabID))
             },
+            onSplitDrop: { targetPaneID, droppedTabID, target in
+                handleSplitDrop(
+                    targetPaneID: targetPaneID,
+                    droppedTabID: droppedTabID,
+                    target: target,
+                    in: presentation
+                )
+            },
             sessionMoveTargets: sessionMoveTargets,
             sessionMoveDestinations: sessionMoveDestinations,
             onMoveSession: { sessionID, destination in
@@ -990,9 +993,19 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             onAddTab: {
                 handleNewSession(in: presentation)
             },
-            onCloseTab: { dispatch(.closeTab($0)) },
-            onCloseOtherTabs: { dispatch(.closeOtherTabs($0)) },
-            onCloseAllTabs: { dispatch(.closeAllTabs) },
+            onCloseTab: { tabID in
+                handleClosePane(
+                    paneID: currentTree.item(forTabID: tabID)?.id,
+                    in: presentation
+                )
+            },
+            onCloseOtherTabs: { tabID in
+                handleCloseOtherPanes(
+                    paneID: currentTree.item(forTabID: tabID)?.id,
+                    in: presentation
+                )
+            },
+            onCloseAllTabs: { handleCloseAllPanes(in: presentation) },
             onRequestRename: presentRename,
             onToggleSessionPin: { sessionID, pinned in
                 dispatch(.setSessionPinned(sessionID, pinned))
@@ -1040,9 +1053,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         connectionState: projection.connectionState,
                         isMigratingRuntimeSessions: isMigratingRuntimeSessions,
                         endpointCapabilities: endpointCapabilities,
-                        // Superset keeps the 28pt pane toolbar in workspace
-                        // mode too. It is pane chrome, not a duplicate top bar.
-                        showsPaneHeader: true,
+                        // A per-pane header answers "which of these panes",
+                        // which only exists in a split. With one pane the top
+                        // chrome row carries the identity instead, so this band
+                        // would be a third bar restating it.
+                        showsPaneHeader: currentTree.count > 1,
                         session: presentation.session,
                         hostName: projection.host.name,
                         titleTemplate: TerminalDisplayTitleTemplate(rawValue: terminalTitleTemplate),
@@ -1052,7 +1067,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         ),
                         wantsTerminalFocus: contentMode == .terminal
                             && !commandPalettePresented
-                            && !activeSessionsPresented
                             && !settingsPresented,
                         splitTree: currentTree,
                         activePaneID: currentPaneID,
@@ -1068,9 +1082,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         },
                         onMaximizePane: { paneID in
                             handleMaximizePane(paneID: paneID, in: presentation)
-                        },
-                        onSplitDrop: { targetPaneID, droppedTabID, target in
-                            handleSplitDrop(targetPaneID: targetPaneID, droppedTabID: droppedTabID, target: target, in: presentation)
                         },
                         onResizeSplit: { splitPath, ratio in
                             handleResizeSplit(splitPath: splitPath, ratio: ratio, in: presentation)
@@ -1109,12 +1120,34 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         return workspaceContentModes[workspace.id] ?? .terminal
     }
 
+    /// Parks or primes terminal surfaces before the corresponding SwiftUI
+    /// mode mutation changes the content area's layout. The committed
+    /// `activeVisibleSessions` callback still performs the final screen report
+    /// after SwiftUI has settled.
+    private func prepareTerminalVisibility(
+        for mode: WarrenDesktopWorkspaceContentMode,
+        workspace: Workspace
+    ) {
+        if mode == .editor {
+            onActiveScreenSessionsWillChange([])
+            return
+        }
+
+        let presentation = makePresentation()
+        guard presentation.workspace?.id == workspace.id else { return }
+        let tree = currentSplitTree(presentation: presentation)
+        onActiveScreenSessionsWillChange(
+            visibleScreenSessionIDs(for: presentation, in: tree)
+        )
+    }
+
     private func setWorkspaceContentMode(
         _ mode: WarrenDesktopWorkspaceContentMode,
         for workspace: Workspace?
     ) {
         guard embeddedEditorAvailable, let workspace else { return }
         guard workspaceContentMode(for: workspace) != mode else { return }
+        prepareTerminalVisibility(for: mode, workspace: workspace)
         NSApp.keyWindow?.makeFirstResponder(nil)
         workspaceContentModes[workspace.id] = mode
     }
@@ -1128,6 +1161,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         guard embeddedEditorAvailable,
               let workspace,
               workspaceContentModes[workspace.id] != nil else { return }
+        prepareTerminalVisibility(for: .terminal, workspace: workspace)
         NSApp.keyWindow?.makeFirstResponder(nil)
         workspaceContentModes.removeValue(forKey: workspace.id)
     }
@@ -1162,6 +1196,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onSetOpenAISetting: onSetOpenAISetting,
                 onTestOpenAI: onTestOpenAI,
                 projects: projection.groups.map(\.project),
+                projectGroups: projection.groups,
                 onSetProjectSetupScript: onSetProjectSetupScript,
                 usageStats: usageStats,
                 usageState: usageState,
@@ -1325,7 +1360,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func openSettings(_ request: WarrenDesktopSettingsDeepLink?) {
         setCommandPalettePresented(false)
-        setActiveSessionsPresented(false)
         settingsDeepLinkSection = request?.section
         settingsPublicAccessPrefill = request?.publicAccess
         settingsRelayPrefill = request?.relay
@@ -1530,12 +1564,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
     }
 
-    private func setActiveSessionsPresented(_ presented: Bool) {
-        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
-            activeSessionsPresented = presented
-        }
-    }
-
     private func tabIndex(from rawValue: Any?) -> Int? {
         if let index = rawValue as? Int {
             return index
@@ -1622,7 +1650,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             )
         }
         let validTabIDs = Set(presentation.tabs.map(\.id))
-        let fallbackTabID = presentation.tab?.id ?? presentation.tabs.first?.id
+        // The only Session a scope may fall back to is the selected one. Falling
+        // back to the workspace's first Tab used to resurrect a Session the user
+        // had just cleared: closing the last pane emptied the content but the
+        // pane bar redrew that Session's identity, so the close read as a no-op.
+        let fallbackTabID = presentation.tab?.id
         if let existing = splitTrees[scope] {
             if let reconciled = existing.reconcile(validTabIDs: validTabIDs, fallbackTabID: fallbackTabID) {
                 return treeAlignedWithSelection(
@@ -1632,7 +1664,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 )
             }
         }
-        let tabID = presentation.tab?.id ?? fallbackTabID ?? "empty"
+        let tabID = presentation.tab?.id ?? Self.emptyPaneTabID
         return .leaf(
             SplitPaneItem(
                 id: SplitPaneItem.fallbackID(forTabID: tabID),
@@ -1640,6 +1672,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             )
         )
     }
+
+    /// Leaf identity for a scope with nothing on screen. It names no Session, so
+    /// the pane bar filters it out and the content renders the empty state while
+    /// the workspace's Sessions keep running in the tree.
+    ///
+    /// Computed rather than stored: a generic view type cannot hold static
+    /// storage.
+    private static var emptyPaneTabID: String { "empty" }
 
     private func currentActivePaneID(presentation: Presentation, tree: SplitLayoutTree) -> String {
         guard let scope = currentScopeKey(presentation: presentation) else {
@@ -1673,7 +1713,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         guard let scope = currentScopeKey(presentation: presentation),
               let existing = splitTrees[scope] else { return }
         let validTabIDs = Set(presentation.tabs.map(\.id))
-        let fallbackTabID = presentation.tab?.id ?? presentation.tabs.first?.id
+        let fallbackTabID = presentation.tab?.id
         guard let reconciled = existing.reconcile(
             validTabIDs: validTabIDs,
             fallbackTabID: fallbackTabID
@@ -1721,7 +1761,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         for scope in removed {
             activePaneIDs.removeValue(forKey: scope)
             pendingSplits.removeValue(forKey: scope)
-            pendingPaneClosures.removeValue(forKey: scope)
         }
     }
 
@@ -1819,8 +1858,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         guard let activeItem = tree.item(for: activePaneID),
               let activeTab = presentation.tabs.first(where: { $0.id == activeItem.tabID }),
               activeTab.sessionID != nil,
-              pendingSplits[scope] == nil,
-              pendingPaneClosures[scope] == nil else { return }
+              pendingSplits[scope] == nil else { return }
 
         pendingSplits[scope] = PendingSplit(
             targetPaneID: activePaneID,
@@ -1846,35 +1884,81 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
     }
 
+    /// Closes a pane and ends the Session it shows.
+    ///
+    /// Closing is a Session command: the Host owns process lifetime, so the
+    /// pane's Session is terminated rather than merely taken off screen. The
+    /// scope then follows the Session list — a split collapses to its surviving
+    /// pane, and the last pane leaves the Session list to choose what shows next
+    /// (the next Session, or nothing when the workspace is now empty).
+    ///
+    /// The layout change applies immediately; deleting the Session still waits
+    /// for the Host to confirm it, so a failed delete cannot hide a running
+    /// process.
     private func handleClosePane(paneID: String? = nil, in presentation: Presentation) {
+        if workspaceContentMode(for: presentation.workspace) == .editor {
+            closeEmbeddedEditor(for: presentation.workspace)
+            return
+        }
         guard let scope = currentScopeKey(presentation: presentation) else { return }
         let tree = currentSplitTree(presentation: presentation)
         let targetPaneID = paneID ?? currentActivePaneID(presentation: presentation, tree: tree)
-        if tree.count > 1 {
-            guard pendingPaneClosures[scope] == nil,
-                  let item = tree.item(for: targetPaneID) else { return }
-            pendingPaneClosures[scope] = PendingPaneClosure(
-                paneID: targetPaneID,
-                tabID: item.tabID,
-                replacementPaneID: tree.nextPaneID(after: targetPaneID)
-            )
-            if let tab = presentation.tabs.first(where: { $0.id == item.tabID }),
-               tab.sessionID != nil {
-                // The Host owns Session termination. Keep the leaf mounted
-                // until the roster confirms deletion so a failed delete does
-                // not leave a hidden running process or a misleading layout.
-                dispatch(.closeTab(item.tabID))
-                let captured = pendingPaneClosures[scope]
-                DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
-                    guard self.pendingPaneClosures[scope] == captured else { return }
-                    self.pendingPaneClosures.removeValue(forKey: scope)
-                }
-            } else {
-                reconcilePendingSplitMutations()
+        guard let item = tree.item(for: targetPaneID) else { return }
+        let sessionID = presentation.tabs.first(where: { $0.id == item.tabID })?.sessionID
+
+        if let newTree = tree.remove(paneID: targetPaneID) {
+            setSplitTree(newTree, for: scope)
+            let survivorID = newTree.allPaneIDs.first
+            activePaneIDs[scope] = survivorID
+            if let survivorID, let survivor = newTree.item(for: survivorID) {
+                selectTab(survivor.tabID, in: presentation)
             }
         } else {
-            handleCloseTab(in: presentation)
+            // The last pane is gone. Drop the stored layout and selection so the
+            // Session list decides what shows next; nothing is left to clear.
+            splitTrees.removeValue(forKey: scope)
+            activePaneIDs.removeValue(forKey: scope)
         }
+
+        if let sessionID {
+            dispatch(.deleteSession(sessionID))
+        }
+    }
+
+    /// Closes every other pane and ends its Session, leaving this one alone.
+    private func handleCloseOtherPanes(paneID: String? = nil, in presentation: Presentation) {
+        guard let scope = currentScopeKey(presentation: presentation) else { return }
+        let tree = currentSplitTree(presentation: presentation)
+        let targetPaneID = paneID ?? currentActivePaneID(presentation: presentation, tree: tree)
+        guard let item = tree.item(for: targetPaneID) else { return }
+        let otherSessionIDs = tree.leaves
+            .filter { $0.id != targetPaneID }
+            .compactMap { leaf in presentation.tabs.first(where: { $0.id == leaf.tabID })?.sessionID }
+        setSplitTree(.leaf(item), for: scope)
+        activePaneIDs[scope] = item.id
+        selectTab(item.tabID, in: presentation)
+        for sessionID in otherSessionIDs {
+            dispatch(.deleteSession(sessionID))
+        }
+    }
+
+    /// Closes every pane and ends the Sessions on screen.
+    private func handleCloseAllPanes(in presentation: Presentation) {
+        guard let scope = currentScopeKey(presentation: presentation) else { return }
+        let tree = currentSplitTree(presentation: presentation)
+        let sessionIDs = tree.leaves.compactMap { leaf in
+            presentation.tabs.first(where: { $0.id == leaf.tabID })?.sessionID
+        }
+        clearSelectedPane(for: scope)
+        for sessionID in sessionIDs {
+            dispatch(.deleteSession(sessionID))
+        }
+    }
+
+    private func clearSelectedPane(for scope: String) {
+        splitTrees.removeValue(forKey: scope)
+        activePaneIDs.removeValue(forKey: scope)
+        dispatch(.clearSelectedTab)
     }
 
     private func handleMaximizePane(paneID: String? = nil, in presentation: Presentation) {
@@ -1913,8 +1997,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
               (presentation.workspace.map { projection.workspaceID(forTabID: droppedTabID) == $0.id }
                   ?? presentation.terminalGroup.map { projection.terminalGroupID(forTabID: droppedTabID) == $0.id }
                   ?? false),
-              pendingSplits[scope] == nil,
-              pendingPaneClosures[scope] == nil else { return }
+              pendingSplits[scope] == nil else { return }
         if tree.contains(tabID: droppedTabID), tree.item(for: targetPaneID)?.tabID != droppedTabID {
             // Moving a tab between existing panes needs an explicit reorder
             // operation. Rejecting it here prevents duplicate Session IDs.
@@ -1981,25 +2064,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             }
             pendingSplits.removeValue(forKey: scope)
         }
-
-        for (scope, pending) in Array(pendingPaneClosures) {
-            guard currentScopeKey(presentation: presentation) == scope else { continue }
-            guard !presentation.tabs.contains(where: { $0.id == pending.tabID }) else { continue }
-            let tree = currentSplitTree(presentation: presentation)
-            guard let newTree = tree.remove(paneID: pending.paneID) else {
-                pendingPaneClosures.removeValue(forKey: scope)
-                continue
-            }
-            setSplitTree(newTree, for: scope)
-            let nextPaneID = pending.replacementPaneID.flatMap { replacement in
-                newTree.contains(paneID: replacement) ? replacement : nil
-            } ?? newTree.allPaneIDs.first
-            activePaneIDs[scope] = nextPaneID
-            if let nextPaneID, let item = newTree.item(for: nextPaneID) {
-                selectTab(item.tabID, in: presentation)
-            }
-            pendingPaneClosures.removeValue(forKey: scope)
-        }
     }
 
     private func handleResizeSplit(splitPath: [Bool], ratio: Double, in presentation: Presentation) {
@@ -2014,31 +2078,85 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         dispatch(.selectTab(tabID))
     }
 
-    private func handleCloseTab(in presentation: Presentation) {
-        if workspaceContentMode(for: presentation.workspace) == .editor {
-            closeEmbeddedEditor(for: presentation.workspace)
-            return
-        }
-        guard let tab = presentation.tab, tab.sessionID != nil else { return }
-        dispatch(.closeTab(tab.id))
+    /// The display mode, read from the same preference the sidebar reads so the
+    /// two surfaces cannot disagree about who owns the Session list.
+    private var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode {
+        WarrenDesktopWorkspaceDisplayMode(rawValue: workspaceDisplayModeRawValue) ?? .compact
+    }
+
+    /// The identity the top chrome row shows in place of a pane track.
+    ///
+    /// Asked only when the pane bar presentation has already decided no track
+    /// will be drawn, so `entries` is that same resolution and the two can never
+    /// both render.
+    private func soloPaneIdentity(
+        entries: [ClientTab],
+        presentation: Presentation,
+        tabTitles: [String: String],
+        tabActivities: [TerminalSessionID: AgentActivityState]
+    ) -> WarrenDesktopSoloPaneIdentity.Model? {
+        guard let tab = entries.first ?? presentation.tab, tab.sessionID != nil else { return nil }
+        let session = tab.sessionID.flatMap { projection.session(id: $0) }
+        return WarrenDesktopSoloPaneIdentity.Model(
+            tabID: tab.id,
+            title: tabTitles[tab.id] ?? tab.title,
+            fullTitle: soloPaneFullTitle(presentation: presentation, tab: tab, session: session),
+            providerPresetID: session.flatMap { session in
+                WarrenDesktopSessionPreset.builtIns
+                    .first { $0.request.kind == session.presentedKind }?.id
+            },
+            activity: tab.sessionID.flatMap { tabActivities[$0] },
+            canClose: true
+        )
+    }
+
+    private func copySoloPaneTitle(presentation: Presentation) {
+        guard let tab = presentation.tab else { return }
+        let session = tab.sessionID.flatMap { projection.session(id: $0) }
+        let title = soloPaneFullTitle(presentation: presentation, tab: tab, session: session)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(title, forType: .string)
+    }
+
+    /// The same fully rendered title the pane header would show, so copying it
+    /// yields the same string in either presentation.
+    private func soloPaneFullTitle(
+        presentation: Presentation,
+        tab: ClientTab,
+        session: WarrenDesktopSession?
+    ) -> String {
+        let workspace = tab.sessionID.flatMap { projection.workspace(for: $0) }
+            ?? presentation.workspace
+        let trimmedCustomTitle = session?.customTitle?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let customTitle = (trimmedCustomTitle?.isEmpty == false) ? trimmedCustomTitle : nil
+        return TerminalDisplayTitleTemplate(rawValue: terminalTitleTemplate)
+            .render(TerminalDisplayTitleContext(
+                session: customTitle ?? session?.title ?? tab.title,
+                command: WarrenDesktopTabTitle.resolvedCommand(
+                    kind: session?.kind ?? tab.kind,
+                    process: session?.runtimeProcess ?? "",
+                    commandLine: session?.runtimeCommandLine ?? ""
+                ),
+                directory: (session?.workingDirectory.isEmpty == false
+                    ? session?.workingDirectory
+                    : nil)
+                    ?? workspace?.path
+                    ?? presentation.terminalGroup?.home
+                    ?? "",
+                workspace: workspace?.name ?? presentation.terminalGroup?.name ?? "",
+                branch: workspace?.branch ?? "",
+                host: projection.host.name,
+                user: NSUserName(),
+                os: ProcessInfo.processInfo.operatingSystemVersionString
+            ))
     }
 
     private func presentCommandPalette() {
         // Release the terminal's AppKit first responder before the overlay
         // mounts so the palette TextField receives the next keystroke.
         NSApp.keyWindow?.makeFirstResponder(nil)
-        setActiveSessionsPresented(false)
         setCommandPalettePresented(true)
-    }
-
-    private func presentActiveSessions() {
-        guard !settingsPresented else { return }
-        // The search field owns the next keystroke; do not leave the terminal
-        // AppKit responder attached while the switcher is being mounted.
-        NSApp.keyWindow?.makeFirstResponder(nil)
-        setCommandPalettePresented(false)
-        setChromePopover(nil)
-        setActiveSessionsPresented(true)
     }
 
     private func setSettingsPresented(_ presented: Bool) {

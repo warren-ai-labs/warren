@@ -50,8 +50,11 @@ The implementation preserves these invariants:
    current Host roster.
 4. A Session appears at most once in a window's visible tree.
 5. Splitting and closing never silently moves a Session or changes its runtime.
-6. Only the active Pane receives local keyboard focus and the control lease;
-   sibling Panes receive passive output and recovery updates.
+6. Only the active Pane receives local keyboard focus and the input control
+   lease; sibling Panes receive passive output and recovery updates. Every
+   visible Pane still owns its own viewport: a shared runtime's size is
+   arbitrated independently of input control, so a passive Pane's PTY follows
+   its Pane without taking keyboard away from another client.
 7. Output and recovery state is keyed by Session ID, never by Pane ID.
 8. The visible tree contains at most four Panes.
 
@@ -138,14 +141,16 @@ a Host Session.
 
 ### Close and maximize
 
-Closing a Pane requests termination of that Pane's Session. The leaf remains
-visible until the Host roster confirms that the Tab has disappeared, so a
-failed delete cannot leave a hidden running process or falsely claim success.
-The parent split then collapses to its surviving child and the nearest
-surviving Pane is selected. A single remaining Pane follows the ordinary Close
-Tab action. Maximize keeps the chosen leaf as the root without changing the
-Session lifecycle. Pending close operations are bounded and are also
-reconciled when the user changes scope.
+Closing a Pane ends that Pane's Session: the Host owns process lifetime, so
+closing is a Session command rather than a view change. The layout applies
+immediately — the parent split collapses to its surviving child and that Pane
+is selected, and closing the last Pane leaves the scope to the Session list,
+which selects the next live Session or shows nothing when the workspace has
+none left. The deleted Session leaves the sidebar tree and the pane bar when
+the Host roster confirms it, so the client never claims a process is gone
+before the Host says so. Closing every pane ends the Sessions on screen and
+empties the view. Maximize keeps the chosen leaf as the root without changing
+the Session lifecycle.
 
 `Cycle Pane Focus` walks the tree's stable leaf order. The layout model also
 provides geometry-based nearest-Pane lookup with optional wrapping, so future
@@ -359,8 +364,12 @@ list wins over the stale filtered copy.
   manager does not synchronously read grid text to create a reattach anchor,
   because that read can contend with the background output drain on the main
   actor; protocol recovery remains the authoritative resync path.
-- A resize is derived from the owning Pane's measured host geometry. Only the
-  focused Session may claim the shared runtime control lease.
+- A resize is derived from the owning Pane's measured host geometry. The
+  shared runtime size is arbitrated separately from the input control lease:
+  the focused peer owns it, any output subscriber may adopt it while it is
+  unowned, and adopting it never grants input. This is what lets every pane in
+  a split follow its own viewport without one pane muting another client's
+  typing.
 - Desktop is the only client that renders this tree. Headless, Web, and CLI
   keep their existing Session-level behavior and do not persist Pane layout.
 - The first render remains one ordinary terminal until the user invokes a

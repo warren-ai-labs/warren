@@ -39,7 +39,8 @@ final class WarrenDesktopSplitDropOverlayHitTestTests: XCTestCase {
             ZStack {
                 TerminalStandIn(view: terminal)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                WarrenDesktopSplitDropOverlay(canSplit: true, onDrop: { _, _ in })
+                WarrenDesktopSplitDropOverlay(paneID: "pane-1", canSplit: true)
+                    .environmentObject(WarrenDesktopTabDrag())
             }
         }
         XCTAssertTrue(
@@ -51,7 +52,8 @@ final class WarrenDesktopSplitDropOverlayHitTestTests: XCTestCase {
             ZStack {
                 TerminalStandIn(view: terminal)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                WarrenDesktopSplitDropOverlay(canSplit: false, onDrop: { _, _ in })
+                WarrenDesktopSplitDropOverlay(paneID: "pane-1", canSplit: false)
+                    .environmentObject(WarrenDesktopTabDrag())
             }
         }
         XCTAssertTrue(
@@ -74,6 +76,148 @@ final class WarrenDesktopSplitDropOverlayHitTestTests: XCTestCase {
             }
         }
         XCTAssertFalse(swallowed)
+    }
+
+    // MARK: - Drop regions
+
+    /// Every point of a splittable pane belongs to exactly one target. The
+    /// earlier layout gave all five destinations the full pane, so the center
+    /// silently shadowed the four directional zones.
+    func testZoneGeometryTilesThePane() {
+        let size = CGSize(width: 800, height: 500)
+        let rects = WarrenDesktopSplitDropZones.rects(in: size)
+        let zones = [rects.top, rects.bottom, rects.left, rects.right, rects.center]
+
+        for (index, lhs) in zones.enumerated() {
+            for rhs in zones[(index + 1)...] {
+                XCTAssertFalse(
+                    lhs.intersects(rhs),
+                    "drop zones must not overlap: \(lhs) and \(rhs)"
+                )
+            }
+        }
+
+        let area = zones.reduce(CGFloat.zero) { $0 + $1.width * $1.height }
+        XCTAssertEqual(area, size.width * size.height, accuracy: 0.001)
+        XCTAssertEqual(rects.top, CGRect(x: 0, y: 0, width: 800, height: 125))
+        XCTAssertEqual(rects.bottom, CGRect(x: 0, y: 375, width: 800, height: 125))
+        XCTAssertEqual(rects.left, CGRect(x: 0, y: 125, width: 200, height: 250))
+        XCTAssertEqual(rects.right, CGRect(x: 600, y: 125, width: 200, height: 250))
+        XCTAssertEqual(rects.center, CGRect(x: 200, y: 125, width: 400, height: 250))
+    }
+
+    @MainActor
+    func testResolverMapsEachZone() {
+        let size = CGSize(width: 400, height: 300)
+        XCTAssertEqual(
+            WarrenDesktopPaneDropResolver.target(in: size, at: CGPoint(x: 200, y: 10), canSplit: true),
+            .top
+        )
+        XCTAssertEqual(
+            WarrenDesktopPaneDropResolver.target(in: size, at: CGPoint(x: 200, y: 290), canSplit: true),
+            .bottom
+        )
+        XCTAssertEqual(
+            WarrenDesktopPaneDropResolver.target(in: size, at: CGPoint(x: 10, y: 150), canSplit: true),
+            .left
+        )
+        XCTAssertEqual(
+            WarrenDesktopPaneDropResolver.target(in: size, at: CGPoint(x: 390, y: 150), canSplit: true),
+            .right
+        )
+        XCTAssertEqual(
+            WarrenDesktopPaneDropResolver.target(in: size, at: CGPoint(x: 200, y: 150), canSplit: true),
+            .center
+        )
+    }
+
+    /// A pane at the four-pane cap still accepts the centre target, which is
+    /// how replace-in-place stays reachable.
+    @MainActor
+    func testResolverHonoursThePaneLimit() {
+        let size = CGSize(width: 400, height: 300)
+        XCTAssertEqual(
+            WarrenDesktopPaneDropResolver.target(in: size, at: CGPoint(x: 10, y: 150), canSplit: false),
+            .center
+        )
+    }
+
+    /// The native drag session can only name the pane under the pointer if the
+    /// marker has a frame there. This exercises the full screen-to-zone path,
+    /// including the marker's flipped/unflipped Y origin.
+    @MainActor
+    func testDragHandleResolvesThePaneUnderThePointer() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let marker = WarrenDesktopPaneDropMarkerView()
+        marker.paneID = "pane-1"
+        marker.canSplit = true
+        marker.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
+        window.contentView?.addSubview(marker)
+
+        let handle = WarrenDesktopTabDragHandleView()
+        handle.frame = NSRect(x: 0, y: 0, width: 40, height: 20)
+        window.contentView?.addSubview(handle)
+
+        func resolve(_ point: NSPoint) -> WarrenDesktopSplitTarget? {
+            handle.resolve(window.convertPoint(toScreen: point))
+        }
+
+        XCTAssertEqual(resolve(NSPoint(x: 200, y: 275))?.target, .top)
+        XCTAssertEqual(resolve(NSPoint(x: 200, y: 25))?.target, .bottom)
+        XCTAssertEqual(resolve(NSPoint(x: 20, y: 150))?.target, .left)
+        XCTAssertEqual(resolve(NSPoint(x: 380, y: 150))?.target, .right)
+        XCTAssertEqual(resolve(NSPoint(x: 200, y: 150))?.target, .center)
+        XCTAssertEqual(resolve(NSPoint(x: 200, y: 150))?.paneID, "pane-1")
+        XCTAssertNil(resolve(NSPoint(x: 500, y: 150)))
+    }
+
+    /// The marker is how the drag source finds a pane; it must never become a
+    /// mouse target for the terminal below it.
+    @MainActor
+    func testPaneDropMarkerTakesNoHit() {
+        let marker = WarrenDesktopPaneDropMarkerView()
+        marker.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+        XCTAssertNil(marker.hitTest(NSPoint(x: 50, y: 50)))
+    }
+
+    /// A resolved drop reports the pane, the dragged tab, and the zone to the
+    /// split callback. A drop outside every pane reports nothing.
+    @MainActor
+    func testDragHandleReportsTheResolvedSplitOnDrop() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let marker = WarrenDesktopPaneDropMarkerView()
+        marker.paneID = "pane-7"
+        marker.canSplit = true
+        marker.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
+        window.contentView?.addSubview(marker)
+
+        var drops: [(String, String, SplitDropTarget)] = []
+        let handle = WarrenDesktopTabDragHandleView()
+        handle.tabID = "tab-b"
+        handle.frame = NSRect(x: 0, y: 0, width: 40, height: 20)
+        handle.onSplitDrop = { paneID, tabID, target in
+            drops.append((paneID, tabID, target))
+        }
+        window.contentView?.addSubview(handle)
+
+        handle.performDrop(at: window.convertPoint(toScreen: NSPoint(x: 20, y: 150)))
+        XCTAssertEqual(drops.count, 1)
+        XCTAssertEqual(drops.first?.0, "pane-7")
+        XCTAssertEqual(drops.first?.1, "tab-b")
+        XCTAssertEqual(drops.first?.2, .left)
+
+        handle.performDrop(at: window.convertPoint(toScreen: NSPoint(x: 500, y: 150)))
+        XCTAssertEqual(drops.count, 1)
     }
 
     /// The pane selects itself on a click in its chrome. That gesture must stay

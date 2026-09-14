@@ -3,6 +3,31 @@ import WarrenDesignSystem
 import WarrenDomain
 import WarrenObservation
 
+/// The leading glyph a workspace row draws.
+///
+/// Two things read this value: the row, which draws the glyph, and the tree
+/// rail, whose top tick has to reach it. The three glyphs are different widths
+/// inside the same 18pt slot, so the reach differs per kind; keeping one switch
+/// here is what stops the row and the guide from disagreeing.
+enum WarrenDesktopWorkspaceGlyph: Equatable, Sendable {
+    /// The main checkout: a laptop glyph.
+    case checkout
+    /// A worktree already merged to its default branch: the merge glyph.
+    case mergedWorktree
+    /// Any other worktree: a plain 5pt dot.
+    case worktree
+
+    init(_ workspace: Workspace) {
+        if workspace.branch == nil {
+            self = .checkout
+        } else if workspace.mergeState == .merged {
+            self = .mergedWorktree
+        } else {
+            self = .worktree
+        }
+    }
+}
+
 /// A workspace row uses a compact 26pt desktop rhythm. Its marker lives in a
 /// stable slot. Project-list copies attached to a Task are context-only; the
 /// Task-list copy remains the workspace navigation target.
@@ -13,6 +38,13 @@ struct WarrenDesktopWorkspaceRow: View {
     let activeTabCount: Int
     let isCollapsed: Bool
     let isSelected: Bool
+    /// True when this workspace is the navigation scope but one of its Session
+    /// leaves owns the selection.
+    ///
+    /// The row then answers "you are working in here" without taking the
+    /// selection fill off the leaf that answers "and in this Session". Painting
+    /// both rows put the louder answer on the row the user did not click.
+    var containsSelection: Bool = false
     let isPinned: Bool
     let isDeleting: Bool
     let isInteractionDisabled: Bool
@@ -22,6 +54,17 @@ struct WarrenDesktopWorkspaceRow: View {
     /// Project-list copies of Task workspaces remain visible for context but
     /// are not navigation targets; the Task-list copy owns selection.
     let isSelectionDisabled: Bool
+    /// True when the rich presentation lists this workspace's Sessions as child
+    /// rows.
+    ///
+    /// The row then drops its activity marker entirely: every state it could
+    /// summarise is already spelled out one row below, by name, with its own
+    /// reason text. Keeping the aggregate made the workspace restate its
+    /// children and left two markers competing in one 28pt band.
+    var showsSessionChildren: Bool = false
+    /// The tree's row rhythm, owned by the display mode so a workspace, its
+    /// project, and its Session leaves stay on one grid.
+    var rowHeight: CGFloat = WarrenLayoutMetrics.sidebarWorkspaceRowHeight
     /// The task label is supplied only when this workspace is rendered in the
     /// project list. Task-list rows already sit beneath their task heading.
     let taskName: String?
@@ -55,6 +98,9 @@ struct WarrenDesktopWorkspaceRow: View {
         }) {
             ZStack(alignment: .topTrailing) {
                 workspaceGlyph(tokens: tokens)
+                // The icon rail has no room for leaves, so the aggregate marker
+                // is the only signal a workspace has work in it. It is never
+                // redundant here, however the tree is configured.
                 if let activity {
                     WarrenDesktopWorkspaceActivityIndicator(
                         activity: activity,
@@ -125,10 +171,14 @@ struct WarrenDesktopWorkspaceRow: View {
 
                 Text(workspace.name.isEmpty ? "Workspace" : workspace.name)
                     .font(WarrenTypography.navigationItem)
+                    // A workspace holding the selected leaf reads at the same
+                    // weight as a selected one. Only the fill moves to the leaf,
+                    // so the rail still answers "which workspace am I in" at a
+                    // glance rather than by tracing indentation upward.
                     .foregroundStyle(
                         isSelectionDisabled
                             ? tokens.mutedForeground.opacity(0.62)
-                            : isSelected
+                            : isSelected || containsSelection
                             ? tokens.workspaceSelectedText
                             : tokens.workspaceText
                     )
@@ -139,7 +189,7 @@ struct WarrenDesktopWorkspaceRow: View {
                     deletionStatus(tokens: tokens)
                 }
 
-                if let activity {
+                if let activity, !showsSessionChildren {
                     WarrenDesktopWorkspaceActivityIndicator(
                         activity: activity,
                         activeTabCount: activeTabCount,
@@ -159,7 +209,7 @@ struct WarrenDesktopWorkspaceRow: View {
             // The indent lives inside the button, as it does on a project row,
             // so nesting a workspace deeper never shrinks the row's hit area.
             .padding(.leading, WarrenDesktopSidebarIndent.workspace)
-            .frame(minHeight: WarrenLayoutMetrics.sidebarWorkspaceRowHeight)
+            .frame(minHeight: rowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
         }
@@ -186,7 +236,7 @@ struct WarrenDesktopWorkspaceRow: View {
                 if !isInteractionDisabled && !isSelectionDisabled { onSelect() }
             }
         )
-        .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarWorkspaceRowHeight)
+        .frame(maxWidth: .infinity, minHeight: rowHeight)
         .padding(.trailing, WarrenSpacing.compact)
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
         .contentShape(.rect)
@@ -258,10 +308,6 @@ struct WarrenDesktopWorkspaceRow: View {
         }
     }
 
-    private var isMergedWorktree: Bool {
-        workspace.branch != nil && workspace.mergeState == .merged
-    }
-
     private var workspaceAccessibilityValue: String {
         var values: [String] = []
         if let taskName {
@@ -269,6 +315,9 @@ struct WarrenDesktopWorkspaceRow: View {
         }
         if isSelectionDisabled {
             values.append("Open from Task")
+        }
+        if containsSelection {
+            values.append("Contains the selected session")
         }
         if workspace.branch != nil, let mergeState = workspace.mergeState {
             values.append(mergeState.accessibilityLabel)
@@ -309,19 +358,20 @@ struct WarrenDesktopWorkspaceRow: View {
     @ViewBuilder
     private func workspaceGlyph(tokens: WarrenColorTokens) -> some View {
         let disabledColor = tokens.mutedForeground.opacity(0.62)
-        if workspace.branch == nil {
+        switch WarrenDesktopWorkspaceGlyph(workspace) {
+        case .checkout:
             Image(systemName: "laptopcomputer")
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(isSelectionDisabled ? disabledColor : tokens.mutedForeground)
                 .accessibilityHidden(true)
-        } else if isMergedWorktree {
+        case .mergedWorktree:
             Image(systemName: "arrow.triangle.merge")
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(
                     isSelectionDisabled ? disabledColor : tokens.success.opacity(0.8)
                 )
                 .accessibilityHidden(true)
-        } else {
+        case .worktree:
             Circle()
                 .strokeBorder(
                     isSelectionDisabled ? disabledColor : tokens.mutedForeground.opacity(0.9),

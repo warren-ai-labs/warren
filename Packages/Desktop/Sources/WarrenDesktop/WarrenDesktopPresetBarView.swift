@@ -180,6 +180,10 @@ struct WarrenDesktopPresetIcon: View {
                 .opacity(0.9)
                 .scaleEffect(preset.id == "codex" ? 1.35 : 1)
                 .accessibilityHidden(true)
+        } else {
+            Image(systemName: preset.symbolName)
+                .font(.system(size: 13, weight: .medium))
+                .accessibilityHidden(true)
         }
     }
 

@@ -29,8 +29,8 @@ never exists without one.
 
 **Warren Terminal Session**:
 A Host-owned terminal execution resource belonging to one Session Scope. It has
-a durable lifecycle independent of client connectivity; in Warren v1, closing
-its Tab is the user's command to end it.
+a durable lifecycle independent of client connectivity; ending it is an explicit
+command on its sidebar entry, never a side effect of closing a view.
 _Avoid_: Session
 
 **Runtime Binding**:
@@ -54,9 +54,14 @@ optional and does not represent terminal lifecycle or client connectivity.
 
 **Tab**:
 A device-local window entry that references one Warren Terminal Session within a
-Workspace View or Terminal Group View. It does not own Host state, although
-Close Tab is the Warren v1 command for ending the referenced Session and
-removing the entry.
+Workspace View or Terminal Group View. It does not own Host state. Its entry in
+the pane bar is a handle on a visible Pane, so closing it takes the Pane off
+screen and leaves the referenced Session running.
+
+**Pane**:
+A device-local region of a Workspace View or Terminal Group View that renders one
+Tab. Panes are arranged by a local split layout and are never Host state; closing
+the last one leaves the view with no live Pane rather than ending any Session.
 
 **Attachment**:
 A temporary client connection to a Warren Terminal Session. Disconnecting an

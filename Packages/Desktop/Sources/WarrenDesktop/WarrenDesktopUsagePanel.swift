@@ -68,6 +68,8 @@ public struct WarrenDesktopUsagePanel: View {
 
     @State private var curveGranularity: WarrenUsageCurveGranularity = .halfHour
     @State private var curveMetric: WarrenUsageCurveMetric = .tokens
+    @State private var selectedAgentFilter: String? = nil
+    @State private var selectedModelFilter: String? = nil
 
     public init(
         stats: WarrenUsageStats,
@@ -124,10 +126,7 @@ public struct WarrenDesktopUsagePanel: View {
                 }
             }
         }
-        // Single-argument onChange: the package's macOS 13 baseline predates the
-        // two-argument form.
         .onChange(of: range) { _ in
-            // A day selected in one range may not exist in the next.
             selectedDay = nil
             onLoad(range.days, nil, false)
         }
@@ -146,9 +145,9 @@ public struct WarrenDesktopUsagePanel: View {
     // MARK: - Overview
 
     private var overviewContent: some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.large) {
+        VStack(alignment: .leading, spacing: WarrenSpacing.xlarge) {
             summaryGrid
-            heatmapCard(subtitle: "Every day in range, shaded by tokens")
+            heatmapCard(subtitle: "Daily activity across selected range")
             breakdownHint
             breakdowns(providers: stats.providers, models: stats.models, projects: stats.projects)
             footnote
@@ -156,16 +155,21 @@ public struct WarrenDesktopUsagePanel: View {
     }
 
     private var breakdownHint: some View {
-        Text("Click a day above to open its intraday curve and breakdown.")
-            .font(WarrenTypography.settingsMeta)
-            .foregroundStyle(tokens.mutedForeground)
+        HStack(spacing: WarrenSpacing.xs) {
+            Image(systemName: "hand.tap")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(tokens.mutedForeground)
+            Text("Click any day in the heatmap to view its intraday curve and breakdown.")
+                .font(WarrenTypography.settingsMeta)
+                .foregroundStyle(tokens.mutedForeground)
+        }
+        .padding(.horizontal, WarrenSpacing.xxs)
     }
 
     // MARK: - Detail
 
     private var detailContent: some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.large) {
-            heatmapCard(subtitle: "Select a day to inspect")
+        VStack(alignment: .leading, spacing: WarrenSpacing.xlarge) {
             detailStrip
             WarrenDesktopUsageCurveView(
                 intervals: stats.intervals,
@@ -180,12 +184,7 @@ public struct WarrenDesktopUsagePanel: View {
         }
     }
 
-    /// Shows the selected day, and its cost and token composition, so the strip
-    /// answers "what am I looking at" before the curve is read.
     private var detailStrip: some View {
-        // When a day is named but has no rows, show zeros rather than the range
-        // total under a day heading: a title that disagrees with its figures is
-        // worse than an empty day.
         let buckets = detailDayStats?.buckets ?? WarrenUsageBuckets()
         let cost = detailDayStats?.cost ?? WarrenUsageCost()
         let title = detailDay.map { WarrenUsageFormatting.dayLabel($0) }
@@ -193,45 +192,110 @@ public struct WarrenDesktopUsagePanel: View {
         let share = WarrenUsageFormatting.percent(buckets.cacheHitRate ?? 0)
 
         return VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
-            HStack(spacing: WarrenSpacing.small) {
+            HStack(alignment: .center, spacing: WarrenSpacing.small) {
                 VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                    Text(title)
-                        .font(WarrenTypography.settingsBodyEmphasis)
-                    Text("Cache hit \(share) · \(WarrenUsageFormatting.tokens(cost.calls)) calls")
+                    HStack(spacing: WarrenSpacing.xs) {
+                        Circle()
+                            .fill(tokens.highlight)
+                            .frame(width: 7, height: 7)
+                        Text(title)
+                            .font(WarrenTypography.settingsBodyEmphasis)
+                            .foregroundStyle(tokens.foreground)
+
+                        if let curDay = detailDay, let idx = stats.days.firstIndex(where: { $0.day == curDay }), stats.days.count > 1 {
+                            HStack(spacing: 2) {
+                                Button {
+                                    if idx > 0 {
+                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                            selectedDay = stats.days[idx - 1].day
+                                        }
+                                        onLoad(range.days, selectedDay, false)
+                                    }
+                                } label: {
+                                    Image(systemName: "chevron.left")
+                                        .font(.system(size: 9, weight: .regular))
+                                        .frame(width: 20, height: 20)
+                                        .background(tokens.border.opacity(0.18))
+                                        .clipShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(idx == 0)
+                                .opacity(idx == 0 ? 0.35 : 1)
+                                .help("Previous day")
+
+                                Button {
+                                    if idx < stats.days.count - 1 {
+                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                            selectedDay = stats.days[idx + 1].day
+                                        }
+                                        onLoad(range.days, selectedDay, false)
+                                    }
+                                } label: {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 9, weight: .regular))
+                                        .frame(width: 20, height: 20)
+                                        .background(tokens.border.opacity(0.18))
+                                        .clipShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(idx >= stats.days.count - 1)
+                                .opacity(idx >= stats.days.count - 1 ? 0.35 : 1)
+                                .help("Next day")
+                            }
+                            .padding(.leading, WarrenSpacing.xxs)
+                        }
+                    }
+                    Text("Cache hit rate \(share) · \(WarrenUsageFormatting.tokens(cost.calls)) calls")
                         .font(WarrenTypography.settingsMeta)
                         .foregroundStyle(tokens.mutedForeground)
                 }
+
                 Spacer(minLength: 0)
+
                 if selectedDay != nil {
-                    Button("Show latest") {
-                        selectedDay = nil
+                    Button {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                            selectedDay = nil
+                        }
                         onLoad(range.days, nil, false)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("Latest")
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .medium))
+                        }
                     }
                     .buttonStyle(.plain)
                     .font(WarrenTypography.settingsGroupLabel)
                     .foregroundStyle(tokens.link)
+                    .padding(.horizontal, WarrenSpacing.compact)
+                    .padding(.vertical, WarrenSpacing.xxs)
+                    .background(tokens.link.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
+
                 Text(WarrenUsageFormatting.money(cost))
-                    .font(WarrenTypography.settingsSectionTitle)
+                    .font(WarrenTypography.pageTitle)
                     .foregroundStyle(tokens.highlight)
                     .monospacedDigit()
             }
+
             bucketBar(buckets)
             bucketLegend(buckets)
         }
-        .padding(WarrenSpacing.medium)
+        .padding(WarrenSpacing.standard)
         .background(
-            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+            RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
                 .fill(tokens.chromeSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
+                .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
         )
         .accessibilityIdentifier("usage.detail")
     }
 
     private var dayBreakdowns: some View {
-        // The Host narrows these to the selected day. Against an older Host that
-        // sends no day groups at all (`detailDay` absent), fall back to the range
-        // breakdowns rather than showing an empty section. A new Host that names
-        // a quiet day legitimately sends empty groups, and that must stay empty.
         let hasDayScope = stats.detailDay != nil
         let providers = hasDayScope ? stats.dayProviders : stats.providers
         let models = hasDayScope ? stats.dayModels : stats.models
@@ -246,8 +310,42 @@ public struct WarrenDesktopUsagePanel: View {
 
     // MARK: - Shared pieces
 
+    private var activeFilteredBuckets: WarrenUsageBuckets {
+        if let model = selectedModelFilter,
+           let match = (stats.detailDay != nil ? stats.dayModels : stats.models).first(where: { $0.key == model }) {
+            return match.buckets
+        }
+        if let agent = selectedAgentFilter,
+           let match = (stats.detailDay != nil ? stats.dayProviders : stats.providers).first(where: { $0.key == agent }) {
+            return match.buckets
+        }
+        return stats.total
+    }
+
+    private var activeFilteredCost: WarrenUsageCost {
+        if let model = selectedModelFilter,
+           let match = (stats.detailDay != nil ? stats.dayModels : stats.models).first(where: { $0.key == model }) {
+            return match.cost
+        }
+        if let agent = selectedAgentFilter,
+           let match = (stats.detailDay != nil ? stats.dayProviders : stats.providers).first(where: { $0.key == agent }) {
+            return match.cost
+        }
+        return stats.cost
+    }
+
+    private var activeFilterLabel: String? {
+        if let model = selectedModelFilter {
+            return (stats.detailDay != nil ? stats.dayModels : stats.models).first(where: { $0.key == model })?.displayName ?? model
+        }
+        if let agent = selectedAgentFilter {
+            return (stats.detailDay != nil ? stats.dayProviders : stats.providers).first(where: { $0.key == agent })?.displayName ?? agent
+        }
+        return nil
+    }
+
     private var rangePicker: some View {
-        HStack(spacing: WarrenSpacing.medium) {
+        HStack(spacing: WarrenSpacing.small) {
             Picker("Range", selection: $range) {
                 ForEach(WarrenUsageRange.allCases) { option in
                     Text(option.label).tag(option)
@@ -255,14 +353,126 @@ public struct WarrenDesktopUsagePanel: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(maxWidth: 320)
+            .frame(maxWidth: 260)
             .accessibilityIdentifier("usage.range")
+
+            // Agent filter
+            Menu {
+                Button("All Agents") {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        selectedAgentFilter = nil
+                    }
+                }
+                Divider()
+                ForEach(stats.providers) { group in
+                    Button {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                            selectedAgentFilter = (selectedAgentFilter == group.key) ? nil : group.key
+                        }
+                    } label: {
+                        HStack {
+                            Text(group.displayName)
+                            if selectedAgentFilter == group.key {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "person.2")
+                        .font(.system(size: 11, weight: .regular))
+                    Text(selectedAgentFilter.flatMap { key in stats.providers.first { $0.key == key }?.displayName } ?? "All Agents")
+                        .font(WarrenTypography.settingsGroupLabel)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .regular))
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(selectedAgentFilter != nil ? tokens.highlight.opacity(0.12) : tokens.chromeSurface)
+                .foregroundStyle(selectedAgentFilter != nil ? tokens.highlight : tokens.foreground)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(selectedAgentFilter != nil ? tokens.highlight.opacity(0.4) : tokens.border.opacity(0.4), lineWidth: WarrenSpacing.hairline)
+                )
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityIdentifier("usage.filter.agent")
+
+            // Model filter
+            Menu {
+                Button("All Models") {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        selectedModelFilter = nil
+                    }
+                }
+                Divider()
+                ForEach(stats.models) { group in
+                    Button {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                            selectedModelFilter = (selectedModelFilter == group.key) ? nil : group.key
+                        }
+                    } label: {
+                        HStack {
+                            Text(group.displayName)
+                            if selectedModelFilter == group.key {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 11, weight: .regular))
+                    Text(selectedModelFilter.flatMap { key in stats.models.first { $0.key == key }?.displayName } ?? "All Models")
+                        .font(WarrenTypography.settingsGroupLabel)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .regular))
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(selectedModelFilter != nil ? tokens.highlight.opacity(0.12) : tokens.chromeSurface)
+                .foregroundStyle(selectedModelFilter != nil ? tokens.highlight : tokens.foreground)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(selectedModelFilter != nil ? tokens.highlight.opacity(0.4) : tokens.border.opacity(0.4), lineWidth: WarrenSpacing.hairline)
+                )
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityIdentifier("usage.filter.model")
+
+            if selectedAgentFilter != nil || selectedModelFilter != nil {
+                Button {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        selectedAgentFilter = nil
+                        selectedModelFilter = nil
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "xmark.circle")
+                            .font(.system(size: 11, weight: .regular))
+                        Text("Reset")
+                            .font(WarrenTypography.settingsMeta)
+                    }
+                    .foregroundStyle(tokens.mutedForeground)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("usage.filter.reset")
+            }
 
             Spacer(minLength: 0)
 
             if state == .loading {
                 ProgressView().controlSize(.small)
             }
+
             Button {
                 onLoad(range.days, selectedDay, true)
             } label: {
@@ -275,13 +485,16 @@ public struct WarrenDesktopUsagePanel: View {
     }
 
     private func heatmapCard(subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
+        VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Activity")
-                    .font(WarrenTypography.settingsBodyEmphasis)
-                Text(subtitle)
-                    .font(WarrenTypography.settingsMeta)
-                    .foregroundStyle(tokens.mutedForeground)
+                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                    Text("Activity Calendar")
+                        .font(WarrenTypography.settingsBodyEmphasis)
+                        .foregroundStyle(tokens.foreground)
+                    Text(subtitle)
+                        .font(WarrenTypography.settingsMeta)
+                        .foregroundStyle(tokens.mutedForeground)
+                }
                 Spacer(minLength: 0)
                 if stats.fromDay.isEmpty == false {
                     Text("\(WarrenUsageFormatting.dayLabel(stats.fromDay)) – \(WarrenUsageFormatting.dayLabel(stats.toDay))")
@@ -296,16 +509,17 @@ public struct WarrenDesktopUsagePanel: View {
                 selectedDay: heatmapSelection
             )
         }
-        .padding(WarrenSpacing.medium)
+        .padding(WarrenSpacing.standard)
         .background(
-            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+            RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
                 .fill(tokens.chromeSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
+                .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
         )
     }
 
-    /// The heatmap writes through the same selection the detail surface reads.
-    /// Overview additionally opens the detail page so a click leads somewhere;
-    /// that page fetches on appear, so Overview does not request twice.
     private var heatmapSelection: Binding<String?> {
         Binding(
             get: { selectedDay },
@@ -325,76 +539,99 @@ public struct WarrenDesktopUsagePanel: View {
     }
 
     private var summaryGrid: some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 148, maximum: 320), spacing: WarrenSpacing.medium)],
+        let buckets = activeFilteredBuckets
+        let cost = activeFilteredCost
+        let filterLabel = activeFilterLabel
+
+        return LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 160, maximum: 340), spacing: WarrenSpacing.standard)],
             alignment: .leading,
-            spacing: WarrenSpacing.medium
+            spacing: WarrenSpacing.standard
         ) {
             metricCard(
-                "Cost",
-                WarrenUsageFormatting.money(stats.cost),
+                "Estimated Spend",
+                WarrenUsageFormatting.money(cost),
+                subtitle: filterLabel != nil
+                    ? "Filtered by \(filterLabel!)"
+                    : (cost.calls > 0 ? "\(WarrenUsageFormatting.money(cost.usd / Double(cost.calls))) / call avg" : "No priced calls"),
                 icon: "dollarsign.circle",
                 accent: tokens.highlight
             )
             metricCard(
-                "Tokens",
-                WarrenUsageFormatting.tokens(stats.total.total),
-                icon: "number",
+                "Total Tokens",
+                WarrenUsageFormatting.tokens(buckets.total),
+                subtitle: "\(WarrenUsageFormatting.tokens(buckets.freshInput)) fresh · \(WarrenUsageFormatting.tokens(buckets.output)) out",
+                icon: "sparkles",
                 accent: tokens.info
             )
             metricCard(
-                "Calls",
-                WarrenUsageFormatting.tokens(stats.cost.calls),
-                icon: "arrow.left.arrow.right",
-                accent: tokens.success
-            )
-            metricCard(
-                "Cache hit",
-                stats.total.cacheHitRate.map(WarrenUsageFormatting.percent) ?? "—",
-                icon: "bolt.horizontal.circle",
+                "Cache Hit Rate",
+                buckets.cacheHitRate.map(WarrenUsageFormatting.percent) ?? "—",
+                subtitle: "\(WarrenUsageFormatting.tokens(buckets.cacheRead)) read (\(WarrenUsageFormatting.tokens(buckets.cacheWrite)) write)",
+                icon: "bolt.shield",
                 accent: tokens.warning
             )
             metricCard(
-                "Per call",
-                stats.cost.calls > 0
-                    ? WarrenUsageFormatting.money(stats.cost.usd / Double(stats.cost.calls))
-                    : "—",
-                icon: "divide.circle",
-                accent: tokens.link
+                "API Activity",
+                "\(WarrenUsageFormatting.tokens(cost.calls)) calls",
+                subtitle: filterLabel != nil
+                    ? "Calls in selection"
+                    : "\(stats.days.filter { $0.buckets.total > 0 }.count) active days in range",
+                icon: "waveform.path.ecg",
+                accent: tokens.success
             )
         }
     }
 
-    private func metricCard(_ label: String, _ value: String, icon: String, accent: Color) -> some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.small) {
-            HStack(spacing: WarrenSpacing.xs) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(accent)
-                    .accessibilityHidden(true)
+    private func metricCard(
+        _ label: String,
+        _ value: String,
+        subtitle: String? = nil,
+        icon: String,
+        accent: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
+            HStack(spacing: WarrenSpacing.small) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(accent.opacity(0.10))
+                        .frame(width: 26, height: 26)
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(accent)
+                }
                 Text(label)
                     .font(WarrenTypography.settingsGroupLabel)
                     .foregroundStyle(tokens.mutedForeground)
+                    .lineLimit(1)
             }
+
             Text(value)
-                .font(WarrenTypography.settingsSectionTitle)
+                .font(WarrenTypography.pageTitle)
+                .foregroundStyle(tokens.foreground)
                 .monospacedDigit()
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.75)
+
+            if let subtitle {
+                Text(subtitle)
+                    .font(WarrenTypography.settingsMeta)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .lineLimit(1)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(WarrenSpacing.medium)
+        .padding(WarrenSpacing.standard)
         .background(
-            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
-                .fill(tokens.fillHover)
+            RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
+                .fill(tokens.chromeSurface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
-                .strokeBorder(accent.opacity(0.18), lineWidth: 1)
+            RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
+                .strokeBorder(tokens.border.opacity(0.35), lineWidth: WarrenSpacing.hairline)
         )
     }
 
-    /// Proportional bar over the four disjoint token classes.
     private func bucketBar(_ buckets: WarrenUsageBuckets) -> some View {
         let total = max(buckets.total, 1)
         let parts: [(Int64, Color)] = [
@@ -412,8 +649,8 @@ public struct WarrenDesktopUsagePanel: View {
                 }
             }
         }
-        .frame(height: 8)
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .frame(height: 7)
+        .clipShape(RoundedRectangle(cornerRadius: 3.5, style: .continuous))
         .accessibilityHidden(true)
     }
 
@@ -458,82 +695,205 @@ public struct WarrenDesktopUsagePanel: View {
             if let heading {
                 Text(heading)
                     .font(WarrenTypography.settingsBodyEmphasis)
+                    .foregroundStyle(tokens.foreground)
             }
-            // Three dimensions side by side rather than behind tabs: they answer
-            // different questions about the same range and are usually read together.
-            HStack(alignment: .top, spacing: WarrenSpacing.large) {
-                breakdown("By agent", groups: providers)
-                breakdown("By model", groups: models)
-                breakdown("By project", groups: projects)
+            HStack(alignment: .top, spacing: WarrenSpacing.standard) {
+                breakdownCard(
+                    "By Agent",
+                    icon: "person.2",
+                    groups: providers,
+                    selectedKey: selectedAgentFilter,
+                    onSelect: { group in
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                            selectedAgentFilter = (selectedAgentFilter == group.key) ? nil : group.key
+                        }
+                    }
+                )
+                breakdownCard(
+                    "By Model",
+                    icon: "cpu",
+                    groups: models,
+                    selectedKey: selectedModelFilter,
+                    onSelect: { group in
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                            selectedModelFilter = (selectedModelFilter == group.key) ? nil : group.key
+                        }
+                    }
+                )
+                breakdownCard(
+                    "By Project",
+                    icon: "folder",
+                    groups: projects,
+                    selectedKey: nil,
+                    onSelect: nil
+                )
             }
         }
     }
 
-    private func breakdown(_ title: String, groups: [WarrenUsageGroup]) -> some View {
+    private func brandColor(for key: String) -> Color {
+        let lower = key.lowercased()
+        if lower.contains("claude") || lower.contains("anthropic") {
+            return Color(red: 0.85, green: 0.45, blue: 0.3)
+        } else if lower.contains("codex") || lower.contains("openai") || lower.contains("gpt") {
+            return Color(red: 0.1, green: 0.7, blue: 0.5)
+        } else if lower.contains("opencode") {
+            return Color(red: 0.2, green: 0.6, blue: 0.9)
+        } else if lower.contains("pi") {
+            return Color(red: 0.65, green: 0.35, blue: 0.85)
+        } else if lower.contains("qoder") {
+            return Color(red: 0.9, green: 0.6, blue: 0.1)
+        } else if lower.contains("trae") {
+            return Color(red: 0.3, green: 0.5, blue: 0.95)
+        } else {
+            return tokens.highlight
+        }
+    }
+
+    private func breakdownCard(
+        _ title: String,
+        icon: String,
+        groups: [WarrenUsageGroup],
+        selectedKey: String? = nil,
+        onSelect: ((WarrenUsageGroup) -> Void)? = nil
+    ) -> some View {
         let peak = groups.map(\.buckets.total).max() ?? 0
         let total = groups.map(\.buckets.total).reduce(0, +)
         return VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-            Text(title)
-                .font(WarrenTypography.settingsGroupLabel)
-                .foregroundStyle(tokens.mutedForeground)
-            if groups.isEmpty {
-                Text("—").font(WarrenTypography.settingsSupporting)
+            HStack(spacing: WarrenSpacing.xs) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .regular))
                     .foregroundStyle(tokens.mutedForeground)
+                Text(title)
+                    .font(WarrenTypography.settingsGroupLabel)
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+                    .foregroundStyle(tokens.mutedForeground)
+                Spacer()
+                if !groups.isEmpty {
+                    Text("\(groups.count)")
+                        .font(WarrenTypography.settingsMeta)
+                        .foregroundStyle(tokens.mutedForeground)
+                }
+            }
+            .padding(.bottom, WarrenSpacing.xxs)
+
+            if groups.isEmpty {
+                Text("No activity recorded")
+                    .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, WarrenSpacing.large)
             } else {
-                // Bounded so one dimension cannot push the others off screen.
-                ForEach(groups.prefix(6)) { group in
-                    groupRow(group, peak: peak, total: total)
+                VStack(spacing: WarrenSpacing.compact) {
+                    ForEach(groups.prefix(6)) { group in
+                        groupRow(
+                            group,
+                            peak: peak,
+                            total: total,
+                            isSelected: selectedKey == group.key,
+                            onSelect: onSelect != nil ? { onSelect?(group) } : nil
+                        )
+                    }
                 }
                 if groups.count > 6 {
                     Text("+\(groups.count - 6) more")
                         .font(WarrenTypography.settingsGroupLabel)
                         .foregroundStyle(tokens.mutedForeground)
+                        .padding(.top, WarrenSpacing.xxs)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(WarrenSpacing.standard)
+        .background(
+            RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
+                .fill(tokens.chromeSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
+                .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
+        )
     }
 
-    private func groupRow(_ group: WarrenUsageGroup, peak: Int64, total: Int64) -> some View {
+    private func groupRow(
+        _ group: WarrenUsageGroup,
+        peak: Int64,
+        total: Int64,
+        isSelected: Bool = false,
+        onSelect: (() -> Void)? = nil
+    ) -> some View {
         let share = total > 0 ? Double(group.buckets.total) / Double(total) : 0
+        let dotColor = brandColor(for: group.key)
+
         return VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
             HStack(spacing: WarrenSpacing.small) {
+                Circle()
+                    .fill(dotColor)
+                    .frame(width: 6, height: 6)
+
                 Text(group.displayName)
                     .font(WarrenTypography.settingsSupporting)
+                    .foregroundStyle(isSelected ? tokens.highlight : tokens.foreground)
                     .lineLimit(1)
                     .truncationMode(.middle)
+
                 Spacer(minLength: WarrenSpacing.xs)
+
                 Text(WarrenUsageFormatting.percent(share))
                     .font(WarrenTypography.settingsMeta)
                     .foregroundStyle(tokens.mutedForeground)
                     .monospacedDigit()
+
                 Text(WarrenUsageFormatting.money(group.cost))
-                    .font(WarrenTypography.settingsGroupLabel)
-                    .foregroundStyle(tokens.mutedForeground)
+                    .font(WarrenTypography.settingsBody)
+                    .foregroundStyle(tokens.foreground)
                     .monospacedDigit()
             }
+
             GeometryReader { geometry in
                 let ratio = peak > 0 ? CGFloat(group.buckets.total) / CGFloat(peak) : 0
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(tokens.muted.opacity(0.5))
+                        .fill(tokens.muted.opacity(0.35))
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(tokens.highlight.opacity(0.8))
+                        .fill(
+                            LinearGradient(
+                                colors: [dotColor.opacity(0.9), dotColor.opacity(0.65)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
                         .frame(width: max(geometry.size.width * ratio, ratio > 0 ? 2 : 0))
                 }
             }
             .frame(height: 4)
         }
+        .padding(.horizontal, onSelect != nil ? 6 : 0)
+        .padding(.vertical, onSelect != nil ? 4 : 0)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isSelected ? tokens.highlight.opacity(0.10) : Color.clear)
+        )
+        .overlay(
+            Group {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(tokens.highlight.opacity(0.40), lineWidth: WarrenSpacing.hairline)
+                }
+            }
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onSelect?()
+        }
         .help(
             "\(group.displayName)\n\(WarrenUsageFormatting.exact(group.buckets.total)) tokens\n"
                 + WarrenUsageFormatting.money(group.cost)
+                + (onSelect != nil ? "\nClick to filter" : "")
         )
     }
 
-    /// States what the figures exclude, and how fresh the prices are.
-    ///
-    /// Present whenever anything is missing: a total that silently omits spend is
-    /// worse than one that says what it left out.
     @ViewBuilder
     private var footnote: some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
@@ -552,6 +912,7 @@ public struct WarrenDesktopUsagePanel: View {
                     .foregroundStyle(tokens.mutedForeground)
             }
         }
+        .padding(.horizontal, WarrenSpacing.xxs)
     }
 
     private func placeholder(_ text: String) -> some View {

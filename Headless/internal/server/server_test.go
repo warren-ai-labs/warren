@@ -1181,6 +1181,86 @@ func TestOnlyFocusedPeerCanResizeSharedRuntime(t *testing.T) {
 	}
 }
 
+// A passive subscriber owns the runtime size while the session is unowned, so
+// a split pane that is not the keyboard target can still follow its own
+// viewport. The first resizer becomes the size owner, and releasing that owner
+// hands the size back for another subscriber. None of this grants input
+// control: only session.focus writes focusedPeers/controlPeers.
+func TestUnownedSessionSizeIsAdoptedByTheFirstSubscriber(t *testing.T) {
+	state, session := testSession(t)
+	runtime := &recordingRuntime{
+		memoryRuntime: memoryRuntime{sessions: map[string][]byte{session.Runtime: []byte("prompt")}},
+		captureSeen:   make(chan struct{}),
+	}
+	httpServer := httptest.NewServer(NewHTTPServer(&Service{Store: state, Runtime: runtime}, "secret", slog.Default()).Handler())
+	defer httpServer.Close()
+
+	first := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer first.Close()
+	second := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer second.Close()
+
+	_ = requestResultBeforeBinary[terminalSubscriptionResult](t, first, "session.subscribe", map[string]any{
+		"id": session.ID, "claim": false,
+	})
+	readBrowserMessage(t, first, "attached")
+	readBinaryFrame(t, first)
+	readBrowserMessage(t, first, "synced")
+
+	_ = requestResultBeforeBinary[terminalSubscriptionResult](t, second, "session.subscribe", map[string]any{
+		"id": session.ID, "claim": false,
+	})
+	readBrowserMessage(t, second, "attached")
+	readBinaryFrame(t, second)
+	readBrowserMessage(t, second, "synced")
+
+	_, resizes := runtime.snapshotOrder()
+	if len(resizes) != 0 {
+		t.Fatalf("passive subscriptions resized the runtime: %#v", resizes)
+	}
+
+	adopted := requestResult[map[string]bool](t, first, "session.resize", map[string]any{
+		"id": session.ID, "cols": 91, "rows": 31,
+	})
+	if !adopted["resized"] {
+		t.Fatal("unowned session resize was ignored")
+	}
+
+	contested := requestResult[map[string]bool](t, second, "session.resize", map[string]any{
+		"id": session.ID, "cols": 77, "rows": 27,
+	})
+	if contested["resized"] {
+		t.Fatal("a second subscriber overrode the adopted size owner")
+	}
+
+	// Releasing the adopted owner hands the size to the next subscriber
+	// without changing the keyboard focus owner, which stays unset.
+	released := requestResult[map[string]bool](t, first, "session.focus", map[string]any{
+		"id": session.ID, "focused": false,
+	})
+	if released["focused"] {
+		t.Fatalf("releasing an unowned session reported focus: %#v", released)
+	}
+
+	readopted := requestResult[map[string]bool](t, second, "session.resize", map[string]any{
+		"id": session.ID, "cols": 77, "rows": 27,
+	})
+	if !readopted["resized"] {
+		t.Fatal("second subscriber could not adopt the released size")
+	}
+
+	_, resizes = runtime.snapshotOrder()
+	want := []recordedResize{{columns: 91, rows: 31}, {columns: 77, rows: 27}}
+	if len(resizes) != len(want) {
+		t.Fatalf("runtime resize calls = %#v, want %#v", resizes, want)
+	}
+	for index := range want {
+		if resizes[index] != want[index] {
+			t.Fatalf("runtime resize calls = %#v, want %#v", resizes, want)
+		}
+	}
+}
+
 func testSession(t *testing.T) (*store.Store, api.Session) {
 	t.Helper()
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")

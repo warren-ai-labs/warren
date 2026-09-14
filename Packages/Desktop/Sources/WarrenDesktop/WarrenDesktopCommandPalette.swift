@@ -226,7 +226,9 @@ struct WarrenDesktopCommandPaletteSearch {
                 let status = session.activity.map(Status.activity)
                     ?? (session.pinned ? .pinned : nil)
                 let sessionTitleValue = Self.sessionTitle(session, tab: tab)
-                let trimmedRuntime = session.runtimeProcess.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmedCommandLine = session.runtimeCommandLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmedProcess = session.runtimeProcess.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmedRuntime = trimmedCommandLine.isEmpty ? trimmedProcess : trimmedCommandLine
                 let sessionDetail: String
                 if trimmedRuntime.isEmpty
                     || trimmedRuntime.lowercased() == sessionTitleValue.lowercased()
@@ -261,6 +263,7 @@ struct WarrenDesktopCommandPaletteSearch {
                         session.title,
                         session.customTitle,
                         session.runtimeProcess,
+                        session.runtimeCommandLine,
                         tab?.title,
                         generatedTitle,
                         workspaceName,

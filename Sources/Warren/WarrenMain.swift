@@ -490,9 +490,6 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         if menuItem.action == #selector(selectTabNumber(_:)) {
             return true
         }
-        if menuItem.representedObject as? String == WarrenDesktopCommand.activeSessions.rawValue {
-            return true
-        }
         if let raw = menuItem.representedObject as? String {
             switch raw {
             case WarrenDesktopCommand.splitBelow.rawValue,
@@ -641,25 +638,6 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         }
         sessionMenu.addItem(.separator())
 
-        let closeTabItem = sessionMenu.addItem(
-            withTitle: "Close Tab",
-            action: #selector(WarrenAppDelegate.postCommand(_:)),
-            keyEquivalent: "w"
-        )
-        closeTabItem.target = target
-        closeTabItem.representedObject = WarrenDesktopCommand.closeTab.rawValue
-
-        sessionMenu.addItem(.separator())
-        let activeSessionsItem = sessionMenu.addItem(
-            withTitle: "Active Sessions…",
-            action: #selector(WarrenAppDelegate.postCommand(_:)),
-            keyEquivalent: "a"
-        )
-        activeSessionsItem.target = target
-        activeSessionsItem.keyEquivalentModifierMask = [.command, .shift]
-        activeSessionsItem.representedObject = WarrenDesktopCommand.activeSessions.rawValue
-
-        sessionMenu.addItem(.separator())
         let paletteItem = sessionMenu.addItem(
             withTitle: "Command Palette…",
             action: #selector(WarrenAppDelegate.postCommand(_:)),
@@ -722,12 +700,12 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         splitBelowItem.representedObject = WarrenDesktopCommand.splitBelow.rawValue
 
         let closePaneItem = viewMenu.addItem(
-            withTitle: "Close Split Pane",
+            withTitle: "Close Pane",
             action: #selector(WarrenAppDelegate.postCommand(_:)),
             keyEquivalent: "w"
         )
         closePaneItem.target = target
-        closePaneItem.keyEquivalentModifierMask = [.command, .shift]
+        closePaneItem.keyEquivalentModifierMask = [.command]
         closePaneItem.representedObject = WarrenDesktopCommand.closePane.rawValue
 
         let maximizePaneItem = viewMenu.addItem(

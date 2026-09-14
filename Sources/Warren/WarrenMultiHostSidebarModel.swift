@@ -464,6 +464,7 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                     projectGroups: activeHost.projection.groups,
                     tasks: activeHost.projection.taskGroups.map(\.task),
                     workspaceActivitySummaries: activeHost.projection.workspaceActivitySummaries,
+                    activeSessionsByWorkspaceID: activeHost.projection.activeSessionsByWorkspaceID,
                     activeWorkspaceIDs: activeHost.projection.activeWorkspaceIDs,
                     lastError: activeHost.lastError
                 )
@@ -619,9 +620,11 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 customTitle: value.customTitle,
                 pinned: value.pinned,
                 kind: TerminalSessionKind(rawValue: value.kind) ?? .custom,
+                agentProvider: value.agentProvider.flatMap(TerminalSessionKind.init(rawValue:)),
                 state: value.isRunning ? .attached : .exited,
                 agentStatus: agentStatus(from: value.agentStatus),
                 runtimeProcess: value.process ?? value.command ?? "",
+                runtimeCommandLine: value.commandLine ?? "",
                 workingDirectory: value.directory ?? ""
             )
         }
@@ -631,7 +634,7 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 id: "sidebar-\(endpointID)-\(session.id.description)",
                 title: session.title,
                 sessionID: session.id,
-                kind: session.kind
+                kind: session.presentedKind
             )
         }
         let sessionWorkspaceIDs = Dictionary(
@@ -657,6 +660,7 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
             projectGroups: valueProjection.groups,
             tasks: tasks,
             workspaceActivitySummaries: valueProjection.workspaceActivitySummaries,
+            activeSessionsByWorkspaceID: valueProjection.activeSessionsByWorkspaceID,
             activeWorkspaceIDs: valueProjection.activeWorkspaceIDs,
             lastError: boundedError(lastError)
         )

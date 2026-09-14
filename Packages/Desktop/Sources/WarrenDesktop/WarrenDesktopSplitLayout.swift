@@ -630,6 +630,49 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
     }
 }
 
+/// Which Tabs the pane bar lists for a split layout.
+///
+/// This is the mode-independent half of the pane bar: given a scope's Tabs and
+/// the layout on screen, it answers what the bar has to enumerate. Whether that
+/// answer is a pane control or the Session list itself comes from the display
+/// mode, and is resolved in `WarrenDesktopPaneBar.presentation(...)` next to the
+/// bar that renders it.
+public enum WarrenDesktopPaneBar {
+    /// Exactly one surface enumerates a scope's Sessions, and which one it is
+    /// depends on the tree.
+    ///
+    /// When the sidebar lists Sessions as leaves, the bar is a pure pane control:
+    /// it shows what is on screen, in pane order, so panes can be focused and
+    /// closed, and navigation lives in the one place that already has it. When
+    /// the sidebar stops listing them, the bar has to take that job back —
+    /// otherwise toggling the tree's density silently strips access to every
+    /// Session that is not currently in a pane.
+    ///
+    /// `selected` is the fallback for the frame between selecting a Session and
+    /// the split tree catching up; without it the bar would blink empty.
+    public static func tabs(
+        visibleIn tree: SplitLayoutTree,
+        from tabs: [ClientTab],
+        selected: ClientTab?,
+        mode: WarrenDesktopWorkspaceDisplayMode
+    ) -> [ClientTab] {
+        if mode.paneBarListsEverySession {
+            // The projection's order is the one the user reordered by dragging,
+            // so it survives however the panes are currently arranged.
+            return tabs.isEmpty ? [selected].compactMap { $0 } : tabs
+        }
+        let tabsByID = Dictionary(
+            tabs.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let visible = tree.leaves.compactMap { tabsByID[$0.tabID] }
+        if visible.isEmpty, let selected {
+            return [selected]
+        }
+        return visible
+    }
+}
+
 /// Device-local persistence for split layouts per workspace or terminal group.
 public enum WarrenDesktopSplitLayoutPersistence {
     private static let key = "warren.desktop.splitLayouts"

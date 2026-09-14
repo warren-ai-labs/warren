@@ -6,6 +6,10 @@ All notable changes to Warren are documented here.
 
 ### Fixed
 
+- Keep a Session on its retired Agent conversation until the replacement
+transcript is on disk, so `/clear` and `/new` no longer regenerate the AI title
+from the previous conversation; a late title response from a replaced
+conversation can no longer name the current one.
 - Fail loopback Host connections immediately instead of waiting for
   connectivity, and give them a short welcome deadline, so a Desktop that
   starts during a Ghostline handoff reconnects as soon as the daemon returns
@@ -18,6 +22,12 @@ All notable changes to Warren are documented here.
 
 ### Changed
 
+- Read a Session's working directory from the shell's OSC 7 report and the
+  foreground process name and command line from the runtime probe, and enable
+  that probe by default now that the macOS path uses native sysctl calls.
+- Remove the Tasks section from the Web client, so Tasks are no longer part of
+  the Web surface; a Task-linked Workspace renders as an ordinary Workspace
+  there, and Task management stays on Desktop and the CLI.
 - Send only the selected day's five-minute Usage buckets instead of the whole
   range, cap the intraday payload at the most recent day when no day is picked,
   and skip the Usage reprice scan when neither usage nor prices changed; a
@@ -29,8 +39,13 @@ All notable changes to Warren are documented here.
 
 ### Added
 
+- Pin a Task from the Desktop sidebar context menu so important cross-repository
+  Tasks sort above the rest, matching Projects, Workspaces, and Sessions.
 - Add per-day Usage breakdowns by agent, model, and project, and a Tokens/Cost
   toggle on the intraday curve.
+- Show a Session's foreground command line (for example `npm run dev`) and the
+  working directory the shell reports through OSC 7 in the pane title, tab, and
+  sidebar, instead of falling back to the launch command.
 
 ## [0.13.0] - 2026-09-11
 

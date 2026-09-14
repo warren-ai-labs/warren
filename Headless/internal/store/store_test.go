@@ -185,6 +185,48 @@ func TestSnapshotDoesNotShareMutableState(t *testing.T) {
 	}
 }
 
+func TestSnapshotDoesNotWaitForInFlightUpdate(t *testing.T) {
+	store := &Store{changed: make(chan struct{})}
+	store.path = filepath.Join(t.TempDir(), "state.json")
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	updateDone := make(chan error, 1)
+	go func() {
+		updateDone <- store.Update(func(state *api.State) error {
+			close(entered)
+			<-release
+			state.Schema = currentSchema
+			return nil
+		})
+	}()
+	<-entered
+
+	// A reader must not block behind an in-flight writer's work. Roster
+	// snapshots and session lookups run on the terminal attach path, and
+	// waiting here is what used to black out a pane for seconds after a
+	// daemon restart.
+	read := make(chan struct{})
+	go func() {
+		_ = store.Snapshot()
+		close(read)
+	}()
+	select {
+	case <-read:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Snapshot blocked on an in-flight Update")
+	}
+
+	close(release)
+	if err := <-updateDone; err != nil {
+		t.Fatal(err)
+	}
+	// The update becomes visible only after it completes and persists.
+	if store.Snapshot().Schema != currentSchema {
+		t.Fatal("update was not published after completion")
+	}
+}
+
 func TestUpdateAdvancesRevisionAndNotifiesWatchers(t *testing.T) {
 	store := &Store{changed: make(chan struct{})}
 	_, revision := store.SnapshotVersion()

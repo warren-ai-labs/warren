@@ -116,6 +116,22 @@ final class WarrenDesktopUsageTests: XCTestCase {
         XCTAssertEqual(points[47].tokens, 12)
     }
 
+    func testCurveLimitsPointsToUntilMinuteWhenProvided() {
+        let intervals = [
+            WarrenUsageInterval(
+                day: "2026-09-10", minute: 300,
+                buckets: WarrenUsageBuckets(freshInput: 50), cost: WarrenUsageCost()
+            ),
+        ]
+        let points = WarrenUsageCurveBuilder.build(
+            intervals: intervals, day: "2026-09-10", granularity: .halfHour, untilMinute: 600
+        )
+        // From 0 through 600 step 30 is (600 / 30) + 1 = 21 points
+        XCTAssertEqual(points.count, 21)
+        XCTAssertEqual(points.first?.minute, 0)
+        XCTAssertEqual(points.last?.minute, 600)
+    }
+
     // MARK: - Heatmap layout
 
     func testHeatmapLaysOutEveryDayInRangeIncludingEmptyOnes() {

@@ -391,17 +391,20 @@ func TestSubscribeDoesNotClaimFocus(t *testing.T) {
 		t.Fatal("subscribe must never claim focus ownership")
 	}
 
-	// A subscriber holds no control lease, so an explicit resize target cannot
-	// mutate the shared runtime; it is answered as a no-op instead of letting
-	// stale viewport callbacks fight the focused endpoint.
+	// A subscriber that does not claim focus still owns an unowned session's
+	// viewport: a split pane has to follow its own size even while it is not
+	// the keyboard target. That adoption must never grant input control.
 	resized := requestResult[map[string]bool](t, connection, "session.resize", map[string]any{
 		"id": sessionID, "cols": 120, "rows": 40,
 	})
-	if resized["resized"] {
-		t.Fatal("unfocused explicit resize unexpectedly succeeded")
+	if !resized["resized"] {
+		t.Fatal("unowned explicit resize was ignored")
 	}
-	if got := len(runtime.snapshotResizes()); got != 0 {
-		t.Fatalf("unfocused resize mutated runtime: %d calls", got)
+	if service.hasFocusedPeer(sessionID) {
+		t.Fatal("resize must not claim input focus ownership")
+	}
+	if got := len(runtime.snapshotResizes()); got != 1 {
+		t.Fatalf("unowned resize did not reach runtime: %d calls", got)
 	}
 	requestError(t, connection, "session.resize", map[string]any{
 		"id": otherSessionID, "cols": 120, "rows": 40,
@@ -444,11 +447,14 @@ func TestPassiveSubscriptionCanPromoteExplicitFocus(t *testing.T) {
 	resized := requestResult[map[string]bool](t, connection, "session.resize", map[string]any{
 		"id": sessionID, "cols": 122, "rows": 42,
 	})
-	if resized["resized"] {
-		t.Fatal("resize after explicit blur unexpectedly succeeded")
+	if !resized["resized"] {
+		t.Fatal("unowned resize after explicit blur was ignored")
 	}
-	if got := len(runtime.snapshotResizes()); got != 1 {
-		t.Fatalf("resize after explicit blur mutated runtime: %d calls", got)
+	if service.hasFocusedPeer(sessionID) {
+		t.Fatal("unowned resize must not regain input focus ownership")
+	}
+	if got := len(runtime.snapshotResizes()); got != 2 {
+		t.Fatalf("unowned resize after blur did not reach runtime: %d calls", got)
 	}
 }
 

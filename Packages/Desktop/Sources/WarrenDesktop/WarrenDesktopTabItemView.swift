@@ -16,6 +16,7 @@ struct WarrenDesktopTabItem: View {
     let onCloseOthers: () -> Void
     let onCloseAll: () -> Void
     let onMoveBefore: (String) -> Void
+    let onSplitDrop: (String, String, SplitDropTarget) -> Void
     let onRename: () -> Void
     let onTogglePin: () -> Void
     let onDismissActivity: () -> Void
@@ -23,6 +24,7 @@ struct WarrenDesktopTabItem: View {
     let onMoveSession: (TerminalSessionID, WarrenDesktopSessionMoveDestination) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isEnabled) private var isEnabled
     @Environment(\.warrenForceHover) private var forceHover
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isTabFocused: Bool
@@ -49,36 +51,64 @@ struct WarrenDesktopTabItem: View {
     }
 
     private var contextMenuActions: [WarrenDesktopContextMenuAction] {
-        guard tab.sessionID != nil else { return [] }
+        guard let sessionID = tab.sessionID else { return [] }
+        return Self.contextMenuActions(
+            sessionID: sessionID,
+            isPinned: isPinned,
+            hasActivity: activity != nil,
+            workspaceMoveTargets: workspaceMoveTargets,
+            terminalGroupMoveTargets: terminalGroupMoveTargets,
+            onMoveSession: onMoveSession,
+            onTogglePin: onTogglePin,
+            onDismissActivity: onDismissActivity,
+            onRename: onRename,
+            onClose: onClose,
+            onCloseOthers: onCloseOthers,
+            onCloseAll: onCloseAll
+        )
+    }
+
+    /// The bar is a pane control, so its close actions are view operations only.
+    /// Ending a Session lives on its sidebar leaf, which is also the only place
+    /// the workspace's other Sessions are reachable.
+    static func contextMenuActions(
+        sessionID: TerminalSessionID,
+        isPinned: Bool,
+        hasActivity: Bool,
+        workspaceMoveTargets: [WarrenDesktopSessionMoveTarget],
+        terminalGroupMoveTargets: [WarrenDesktopSessionMoveTarget],
+        onMoveSession: @escaping (TerminalSessionID, WarrenDesktopSessionMoveDestination) -> Void,
+        onTogglePin: @escaping () -> Void,
+        onDismissActivity: @escaping () -> Void,
+        onRename: @escaping () -> Void,
+        onClose: @escaping () -> Void,
+        onCloseOthers: @escaping () -> Void,
+        onCloseAll: @escaping () -> Void
+    ) -> [WarrenDesktopContextMenuAction] {
         var actions: [WarrenDesktopContextMenuAction] = []
-        if !sessionMoveTargets.isEmpty {
-            var moveActions: [WarrenDesktopContextMenuAction] = []
-            if !workspaceMoveTargets.isEmpty {
-                moveActions.append(.menu(title: "Workspace", actions: workspaceMoveTargets.map { target in
-                    .button(title: target.title, action: {
-                        guard let sessionID = tab.sessionID else { return }
-                        onMoveSession(sessionID, target.destination)
-                    })
-                }))
-            }
-            if !terminalGroupMoveTargets.isEmpty {
-                moveActions.append(.menu(title: "Terminal Group", actions: terminalGroupMoveTargets.map { target in
-                    .button(title: target.title, action: {
-                        guard let sessionID = tab.sessionID else { return }
-                        onMoveSession(sessionID, target.destination)
-                    })
-                }))
-            }
+        var moveActions: [WarrenDesktopContextMenuAction] = []
+        if !workspaceMoveTargets.isEmpty {
+            moveActions.append(.menu(title: "Workspace", actions: workspaceMoveTargets.map { target in
+                .button(title: target.title, action: { onMoveSession(sessionID, target.destination) })
+            }))
+        }
+        if !terminalGroupMoveTargets.isEmpty {
+            moveActions.append(.menu(title: "Terminal Group", actions: terminalGroupMoveTargets.map { target in
+                .button(title: target.title, action: { onMoveSession(sessionID, target.destination) })
+            }))
+        }
+        if !moveActions.isEmpty {
             actions.append(.menu(title: "Move Session To", actions: moveActions))
         }
         actions.append(.button(title: isPinned ? "Unpin Session" : "Pin Session", action: onTogglePin))
-        if activity != nil {
+        if hasActivity {
             actions.append(.button(title: "Dismiss Activity", action: onDismissActivity))
         }
         actions.append(.button(title: "Rename Session", action: onRename))
-        actions.append(.button(title: "Close Tab", action: onClose))
-        actions.append(.button(title: "Close Other Tabs", action: onCloseOthers))
-        actions.append(.button(title: "Close All Tabs", action: onCloseAll))
+        actions.append(.divider)
+        actions.append(.button(title: "Close Pane", action: onClose))
+        actions.append(.button(title: "Close Other Panes", action: onCloseOthers))
+        actions.append(.button(title: "Close All Panes", action: onCloseAll))
         return actions
     }
 
@@ -118,7 +148,25 @@ struct WarrenDesktopTabItem: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(.rect)
-                    .draggable(tab.id)
+                    // The drag source is native because SwiftUI's `.draggable`
+                    // does not reliably complete a drop over the AppKit
+                    // terminal. The handle forwards a plain click to selection
+                    // and resolves a split itself once the pointer crosses the
+                    // movement threshold. See `WarrenDesktopTabDrag`.
+                    .overlay {
+                        WarrenDesktopTabDragHandle(
+                            tabID: tab.id,
+                            isEnabled: isEnabled && tab.sessionID != nil,
+                            // The handle owns the title press now, so it has
+                            // to restore the keyboard focus the Button used to
+                            // take on click.
+                            onSelect: {
+                                isTabFocused = true
+                                onSelect()
+                            },
+                            onSplitDrop: onSplitDrop
+                        )
+                    }
                 }
                 .padding(.leading, WarrenSpacing.medium)
                 .padding(.trailing, WarrenLayoutMetrics.tabAccessoryColumnWidth)
@@ -176,11 +224,11 @@ struct WarrenDesktopTabItem: View {
             .focused($isCloseFocused)
             .onHover { isCloseHovered = $0 }
             .accessibilityHidden(!exposesClose)
-            .accessibilityLabel("Close tab \(displayTitle)")
+            .accessibilityLabel("Close pane \(displayTitle)")
             .warrenSemanticElement(
                 id: "tab.\(tab.id).close",
                 role: .button,
-                label: "Close tab \(displayTitle)",
+                label: "Close pane \(displayTitle)",
                 isEnabled: exposesClose,
                 action: onClose
             )

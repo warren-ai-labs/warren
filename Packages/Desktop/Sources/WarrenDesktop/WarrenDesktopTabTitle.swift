@@ -56,20 +56,49 @@ enum WarrenDesktopTabTitle {
         tab: ClientTab,
         session: WarrenDesktopSession?
     ) -> String {
-        let kind = session?.kind ?? tab.kind
-        let process = session?.runtimeProcess
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        resolvedCommand(
+            kind: session?.kind ?? tab.kind,
+            process: session?.runtimeProcess ?? "",
+            commandLine: session?.runtimeCommandLine ?? ""
+        )
+    }
 
+    /// Resolves the command label a title or tab should show.
+    ///
+    /// The full command line wins over the bare process name so a running
+    /// `npm run dev` reads better than `npm`. A foreground shell is not a
+    /// command, so it resolves empty and the caller falls back to the
+    /// directory.
+    static func resolvedCommand(
+        kind: TerminalSessionKind,
+        process: String,
+        commandLine: String
+    ) -> String {
         if let managedPurpose = managedPurpose(for: kind) {
             return managedPurpose
         }
-        if !process.isEmpty, !shellProcessNames.contains(process) {
-            return process
+        let trimmedProcess = process.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCommandLine = commandLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCommandLine.isEmpty,
+           !shellProcessNames.contains(executableName(trimmedCommandLine).lowercased()) {
+            return trimmedCommandLine
         }
-        if session == nil || process.isEmpty {
+        if !trimmedProcess.isEmpty,
+           !shellProcessNames.contains(executableName(trimmedProcess).lowercased()) {
+            return trimmedProcess
+        }
+        if trimmedProcess.isEmpty, trimmedCommandLine.isEmpty {
             return purposeLabel(for: kind)
         }
         return ""
+    }
+
+    /// The executable a command line or process name refers to, without a
+    /// leading login-shell dash.
+    static func executableName(_ value: String) -> String {
+        let token = value.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? value
+        let base = (token as NSString).lastPathComponent
+        return base.hasPrefix("-") ? String(base.dropFirst()) : base
     }
 
     private static func managedPurpose(for kind: TerminalSessionKind) -> String? {

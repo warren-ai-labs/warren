@@ -50,7 +50,7 @@ public struct TerminalDisplayTitleTemplate: RawRepresentable, Hashable, Sendable
 
     public static let placeholders: [(token: String, description: String)] = [
         ("{session}", "Session name"),
-        ("{command}", "Current process"),
+        ("{command}", "Current command"),
         ("{directory}", "Full directory"),
         ("{directoryName}", "Directory name"),
         ("{workspace}", "Workspace name"),
@@ -184,6 +184,10 @@ public enum WarrenPreferenceKey {
     public static let agentCompletionSoundEnabled = "notifications.agentCompletionSoundEnabled"
     public static let sidebarShowActiveSessions = "sidebar.showActiveSessions"
     public static let sidebarShowTasks = "sidebar.showTasks"
+    /// Presentation mode for workspace rows in the desktop sidebar.
+    /// Values are client-local and intentionally independent of the tree's
+    /// persisted expansion state.
+    public static let sidebarWorkspaceDisplayMode = "sidebar.workspaceDisplayMode"
     public static let publicAccessEnabled = "web.publicAccessEnabled"
     public static let usageRange = "usage.range"
     /// Emacs `C-x` prefix for split commands. Off by default: while it is on,

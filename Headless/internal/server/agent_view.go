@@ -274,8 +274,8 @@ func (s *Service) runCanonicalCommand(
 	if !leader {
 		return waitAgentAction(ctx, call)
 	}
-	if s.AgentStore != nil {
-		record, durableLeader, err := s.AgentStore.BeginCanonicalCommand(
+	if agentStore := s.agentStore(); agentStore != nil {
+		record, durableLeader, err := agentStore.BeginCanonicalCommand(
 			ctx, executionID, commandID, fingerprint,
 		)
 		if err != nil {
@@ -299,8 +299,8 @@ func (s *Service) runCanonicalCommand(
 		}
 	}
 	result, callErr := fn()
-	if s.AgentStore != nil {
-		if persistErr := s.AgentStore.CompleteCanonicalCommand(
+	if agentStore := s.agentStore(); agentStore != nil {
+		if persistErr := agentStore.CompleteCanonicalCommand(
 			context.Background(), executionID, commandID, fingerprint, result, callErr,
 		); persistErr != nil {
 			if callErr == nil {
@@ -346,10 +346,11 @@ func (s *Service) canonicalCommandAdmitted(
 	if remembered || active || fingerprinted {
 		return true, nil
 	}
-	if s.AgentStore == nil {
+	agentStore := s.agentStore()
+	if agentStore == nil {
 		return false, nil
 	}
-	_, found, err := s.AgentStore.GetCanonicalCommand(ctx, executionID, commandID)
+	_, found, err := agentStore.GetCanonicalCommand(ctx, executionID, commandID)
 	if err != nil {
 		return false, err
 	}

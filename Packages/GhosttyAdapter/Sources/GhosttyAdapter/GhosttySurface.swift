@@ -323,8 +323,12 @@ public final class GhosttySurface: Identifiable {
             builder.withFontThicken(false)
             builder.withCustom("adjust-cell-height", Self.defaultCellHeightAdjustment)
             builder.withCustom("copy-on-select", "true")
-            builder.withCustom("search-foreground", "#eae8e6")
-            builder.withCustom("search-background", "#3a3837")
+            // Match standalone Ghostty's find highlighting: black text on a
+            // golden yellow background for candidate matches, and on Warren's
+            // orange accent for the focused match. The previous near-black
+            // candidate background was almost invisible on the terminal grid.
+            builder.withCustom("search-foreground", "#151110")
+            builder.withCustom("search-background", "#ffe082")
             builder.withCustom("search-selected-foreground", "#151110")
             builder.withCustom("search-selected-background", "#e07850")
             builder.withWindowPaddingX(0)

@@ -1127,6 +1127,77 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         XCTAssertTrue(second.mountedTerminalView?.superview === hostB)
     }
 
+    func testVisibilityPreparationParksBeforeHiddenHostLayout() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 1)
+        let surface = makeSurface()
+        manager.insert(surface)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        var blurred: [TerminalSessionID] = []
+        submit(
+            surface.id,
+            to: manager,
+            host: host,
+            onBlurred: { blurred.append($0) }
+        )
+        try await waitUntil {
+            manager.isActive(surface.id)
+                && surface.terminalSurfaceIsReady
+                && surface.mountedTerminalView?.superview === host
+        }
+        // Queue a geometry reconciliation for the old presentation. The
+        // visibility preparation below must cancel that stale task before the
+        // hidden host receives its new editor-sized bounds.
+        let generationBeforeDebounce = manager.snapshot().transitionGeneration
+        host.setFrameSize(NSSize(width: 640, height: 420))
+        manager.hostDidLayout(host, size: host.bounds.size)
+        let viewportAfterActiveLayout = surface.terminalSize
+
+        // Mode actions prepare the next visibility set before SwiftUI changes
+        // the host's proposed size. Parking must therefore be observable
+        // synchronously, before the queued reconciliation turn runs.
+        manager.prepareForVisibilityChange(sessionIDs: [])
+        XCTAssertFalse(manager.isActive(surface.id))
+        XCTAssertNil(surface.mountedTerminalView?.superview)
+        XCTAssertEqual(blurred, [surface.id])
+
+        host.setFrameSize(NSSize(width: 320, height: 240))
+        manager.hostDidLayout(host, size: host.bounds.size)
+        XCTAssertEqual(
+            surface.terminalSize,
+            viewportAfterActiveLayout,
+            "a parked terminal must not resize when its hidden host lays out"
+        )
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(
+            manager.snapshot().transitionGeneration,
+            generationBeforeDebounce,
+            "cancelling a stale geometry debounce must not reconcile the parked host"
+        )
+
+        manager.activateMultiple(sessionIDs: [])
+        try await waitUntil {
+            manager.snapshot().activeSessionIDs.isEmpty
+                && manager.snapshot().warmSessionIDs == [surface.id]
+        }
+        XCTAssertEqual(blurred, [surface.id])
+    }
+
     func testClickingAPassiveSplitPaneRequestsFocusForThatSession() async throws {
         _ = NSApplication.shared
         let manager = TerminalSurfaceManager(warmLimit: 2)

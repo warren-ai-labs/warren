@@ -61,6 +61,13 @@ struct WarrenDesktopSidebar: View {
     
     @AppStorage("notificationsMuted")
     private var notificationsMuted = false
+    /// Rich is the default because the tree is the only session switcher: the
+    /// tab strip controls the panes on screen and no longer lists a workspace's
+    /// other Sessions. Compact remains available for navigating projects
+    /// without their Sessions, at the cost of having to open a workspace to
+    /// reach one.
+    @AppStorage(WarrenPreferenceKey.sidebarWorkspaceDisplayMode)
+    private var workspaceDisplayModeRawValue = WarrenDesktopWorkspaceDisplayMode.rich.rawValue
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
     let onRequestTerminalGroupCreate: () -> Void
@@ -81,6 +88,7 @@ struct WarrenDesktopSidebar: View {
     let sidebarResourceSelection: WarrenDesktopSidebarResourceSelection?
     let onSelectSidebarResource: (WarrenDesktopSidebarResourceSelection) -> Void
     let onOpenSidebarWorkspace: (WarrenDesktopHostResourceRef<WorkspaceID>) -> Void
+    let onOpenSidebarSession: (WarrenDesktopHostResourceRef<TerminalSessionID>) -> Void
     let onRetrySidebarHost: (String) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -97,7 +105,9 @@ struct WarrenDesktopSidebar: View {
                 onToggle: toggleSidebar,
                 onCommandPalette: onCommandPalette,
                 showsActiveOnly: sidebarTree.showsActiveOnly,
-                onToggleActiveOnly: toggleActiveOnly
+                onToggleActiveOnly: toggleActiveOnly,
+                workspaceDisplayMode: workspaceDisplayMode,
+                onToggleWorkspaceDisplayMode: toggleWorkspaceDisplayMode
             )
             if let displayConfigurationError {
                 displayConfigurationNotice(displayConfigurationError, tokens: tokens)
@@ -126,9 +136,8 @@ struct WarrenDesktopSidebar: View {
                                     },
                                     workspaceActivitySummaries: projection.workspaceActivitySummaries,
                                     activeWorkspaceIDs: projection.activeWorkspaceIDs,
-                                    // Active Sessions lives in the dedicated shortcut
-                                    // switcher; the sidebar stays focused on navigation.
-                                    showsActiveSessions: false,
+                                    activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
+                                    workspaceDisplayMode: workspaceDisplayMode,
                                     showsTasks: showsTasks,
                                     showsProjects: false,
                                     tree: $sidebarTree,
@@ -161,9 +170,11 @@ struct WarrenDesktopSidebar: View {
                                 WarrenDesktopSidebarHostRows(
                                     hosts: sidebarHostProjections,
                                     showsActiveOnly: sidebarTree.showsActiveOnly,
+                                    workspaceDisplayMode: workspaceDisplayMode,
                                     isCollapsed: sidebarState.isCollapsed,
                                     selection: sidebarResourceSelection,
                                     activeEndpointID: activeEndpointID,
+                                    selectedTabID: selectedTabID,
                                     deletingProjectIDs: deletingProjectIDs,
                                     deletingWorkspaceIDs: deletingWorkspaceIDs,
                                     onAction: onAction,
@@ -171,6 +182,7 @@ struct WarrenDesktopSidebar: View {
                                     onRequestDeletion: onRequestDeletion,
                                     onSelect: onSelectSidebarResource,
                                     onOpenWorkspace: onOpenSidebarWorkspace,
+                                    onOpenSession: onOpenSidebarSession,
                                     onFocusTask: { taskID in
                                         Self.revealTask(taskID, in: &sidebarTree)
                                         DispatchQueue.main.async {
@@ -198,9 +210,8 @@ struct WarrenDesktopSidebar: View {
                             },
                             workspaceActivitySummaries: projection.workspaceActivitySummaries,
                             activeWorkspaceIDs: projection.activeWorkspaceIDs,
-                            // Active Sessions lives in the dedicated shortcut
-                            // switcher; the sidebar stays focused on navigation.
-                            showsActiveSessions: false,
+                            activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
+                            workspaceDisplayMode: workspaceDisplayMode,
                             showsTasks: showsTasks,
                             tree: $sidebarTree,
                             isCollapsed: sidebarState.isCollapsed,
@@ -404,6 +415,18 @@ struct WarrenDesktopSidebar: View {
             if sidebarTree.showsActiveOnly {
                 sidebarTree.expandedProjectIDs.formUnion(projection.groups.map(\.project.id))
             }
+        }
+    }
+
+    private var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode {
+        WarrenDesktopWorkspaceDisplayMode(rawValue: workspaceDisplayModeRawValue) ?? .compact
+    }
+
+    private func toggleWorkspaceDisplayMode() {
+        let nextMode: WarrenDesktopWorkspaceDisplayMode =
+            workspaceDisplayMode == .compact ? .rich : .compact
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            workspaceDisplayModeRawValue = nextMode.rawValue
         }
     }
 

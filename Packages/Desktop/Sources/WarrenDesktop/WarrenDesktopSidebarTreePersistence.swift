@@ -11,7 +11,6 @@ public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
     public var terminalGroupsCollapsed: Bool
     public var tasksCollapsed: Bool
     public var projectsCollapsed: Bool
-    public var activeSessionsCollapsed: Bool
     public var showsActiveOnly: Bool
 
     public init(
@@ -20,7 +19,6 @@ public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
         terminalGroupsCollapsed: Bool = false,
         tasksCollapsed: Bool = false,
         projectsCollapsed: Bool = false,
-        activeSessionsCollapsed: Bool = false,
         showsActiveOnly: Bool = false
     ) {
         self.expandedTaskIDs = expandedTaskIDs
@@ -28,7 +26,6 @@ public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
         self.terminalGroupsCollapsed = terminalGroupsCollapsed
         self.tasksCollapsed = tasksCollapsed
         self.projectsCollapsed = projectsCollapsed
-        self.activeSessionsCollapsed = activeSessionsCollapsed
         self.showsActiveOnly = showsActiveOnly
     }
 }
@@ -51,7 +48,6 @@ public enum WarrenDesktopSidebarTreePersistence {
             terminalGroupsCollapsed: defaults.bool(forKey: base + ".terminal-groups.collapsed"),
             tasksCollapsed: defaults.bool(forKey: base + ".tasks.collapsed"),
             projectsCollapsed: defaults.bool(forKey: base + ".collapsed"),
-            activeSessionsCollapsed: defaults.bool(forKey: base + ".active-sessions.collapsed"),
             showsActiveOnly: defaults.bool(forKey: base + ".active-only")
         )
     }
@@ -77,10 +73,6 @@ public enum WarrenDesktopSidebarTreePersistence {
             forKey: base + ".terminal-groups.collapsed"
         )
         defaults.set(state.tasksCollapsed, forKey: base + ".tasks.collapsed")
-        defaults.set(
-            state.activeSessionsCollapsed,
-            forKey: base + ".active-sessions.collapsed"
-        )
         defaults.set(state.showsActiveOnly, forKey: base + ".active-only")
         defaults.set(state.projectsCollapsed, forKey: base + ".collapsed")
     }

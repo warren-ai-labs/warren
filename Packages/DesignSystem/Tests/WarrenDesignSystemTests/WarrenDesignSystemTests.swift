@@ -9,6 +9,21 @@ final class WarrenDesignSystemTests: XCTestCase {
         XCTAssertEqual(WarrenLayoutMetrics.sidebarWidth(for: 401), 400)
     }
 
+    /// A row must never read louder than the row that contains it. A leaf that
+    /// outranked its own workspace inverted the tree: the deepest rows were the
+    /// loudest and the eye could not find where one workspace ended.
+    func testSidebarTextWeightsDescendWithTreeDepth() {
+        let tiers = WarrenSidebarTextWeight.descendingTiers
+        XCTAssertEqual(tiers.count, 3)
+        XCTAssertEqual(tiers, tiers.sorted(by: >))
+        XCTAssertEqual(Set(tiers).count, tiers.count, "Two tiers at one weight is no tier")
+
+        // Metadata rides along with the row it annotates rather than forming its
+        // own depth, so it sits at the quietest tier instead of below it.
+        XCTAssertEqual(WarrenSidebarTextWeight.meta, tiers.last)
+        XCTAssertTrue(tiers.allSatisfy { $0 > 0 && $0 <= 1 })
+    }
+
     func testInteractionStatePriority() {
         XCTAssertEqual(
             WarrenInteractionState.resolve(disabled: true, pressed: true, selected: true, focused: true, hovered: true),

@@ -16,6 +16,7 @@ struct WarrenDesktopTaskRow: View {
     let onAttachWorkspace: (WorkspaceID) -> Void
     let onCreateWorkspace: (ProjectID) -> Void
     let onRename: () -> Void
+    let onTogglePin: () -> Void
     let onDelete: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -74,7 +75,7 @@ struct WarrenDesktopTaskRow: View {
                         .opacity(isHovered || isToggleFocused ? 0 : 1)
 
                     Text(task.name)
-                        .font(WarrenTypography.navigationItem)
+                        .font(WarrenTypography.sidebarContainerRow)
                         .lineLimit(1)
                         .truncationMode(.tail)
 
@@ -84,6 +85,13 @@ struct WarrenDesktopTaskRow: View {
                         .lineLimit(1)
                         .opacity(isHovered || isToggleFocused || forceHover ? 1 : 0)
                         .accessibilityHidden(true)
+
+                    if task.pinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(tokens.mutedForeground)
+                            .accessibilityHidden(true)
+                    }
 
                     Spacer(minLength: 0)
                 }
@@ -235,6 +243,7 @@ struct WarrenDesktopTaskRow: View {
     private var taskContextMenu: some View {
         if !isInteractionDisabled {
             WarrenDesktopContextMenu([
+                .button(title: task.pinned ? "Unpin Task" : "Pin Task", action: onTogglePin),
                 .button(title: "Rename Task", action: onRename),
                 .button(
                     title: "Delete Task…",

@@ -2,7 +2,7 @@ export const defaultTitleTemplate = "{session} · {directory} · {command}";
 
 export const titlePlaceholders = {
   session: "Session name",
-  command: "Current process",
+  command: "Current command",
   directory: "Full directory",
   directoryName: "Directory name",
   workspace: "Workspace name",
@@ -32,6 +32,9 @@ const kindLabels = {
   trae: "trae",
   custom: "Custom",
 };
+const managedPurposes = new Set([
+  "claude", "codex", "opencode", "pi", "qoder", "antigravity", "trae",
+]);
 
 export function renderTerminalTitle(template, session = {}, workspace = {}, host = {}) {
   const directory = session.directory || workspace.path || "";
@@ -49,7 +52,7 @@ export function renderCompactTerminalTitle(template, session = {}, workspace = {
 function titleValues(session, workspace, host, directory) {
   return {
     session: sessionDisplayTitle(session) || "Session",
-    command: session.process || session.kind || "shell",
+    command: resolvedCommand(session),
     directory,
     directoryName: directoryName(directory),
     workspace: workspace.name || "",
@@ -138,17 +141,37 @@ export function terminalTabTitle(session = {}, workspace = {}) {
 }
 
 function tabPurpose(session = {}) {
-  const kind = String(session.kind || "").trim().toLowerCase();
-  const process = String(session.process || "").trim();
+  return resolvedCommand(session);
+}
 
-  // Integrated Codex/Claude/OpenCode/Pi/Qoder/Antigravity sessions keep their stable launch
-  // kind even when the foreground process is a shell or another
-  // implementation detail.
-  if (kind === "claude" || kind === "codex" || kind === "opencode" || kind === "pi" || kind === "qoder" || kind === "antigravity") {
-    return kindLabels[kind];
+/**
+ * Resolves the command label shared by the pane title, tab, and sidebar.
+ *
+ * The full command line wins over the bare process name so a running
+ * `npm run dev` reads better than `npm`. A foreground shell is not a command,
+ * so it resolves empty and the caller falls back to the directory.
+ */
+export function resolvedCommand(session = {}) {
+  const kind = String(session.kind || "").trim().toLowerCase();
+  if (managedPurposes.has(kind)) return kindLabels[kind] || kind;
+  const commandLine = String(session.commandLine || "").trim();
+  if (commandLine && !shellProcessNames.has(executableName(commandLine))) {
+    return commandLine;
   }
-  if (process && !shellProcessNames.has(process)) return process;
-  return kind && kind !== "shell" ? kindLabels[kind] || kind : "";
+  const process = String(session.process || "").trim();
+  if (process && !shellProcessNames.has(executableName(process))) {
+    return process;
+  }
+  if (!commandLine && !process) {
+    return kind && kind !== "shell" ? (kindLabels[kind] || kind) : "";
+  }
+  return "";
+}
+
+function executableName(value) {
+  const token = String(value || "").trim().split(/\s+/)[0] || "";
+  const base = token.split("/").pop() || token;
+  return (base.startsWith("-") ? base.slice(1) : base).toLowerCase();
 }
 
 function directoryName(path) {

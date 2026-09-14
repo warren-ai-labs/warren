@@ -285,22 +285,15 @@ function SessionPresetIcon({ kind }) {
 export function Sidebar({
   catalog,
   activeWorkspace,
-  expandedTasks,
   expandedProjects,
-  tasksCollapsed = false,
   tabsForWorkspace,
   connection,
-  onToggleTasksCollapsed,
-  onToggleTask,
-  onFocusTask,
-  onNewTask,
   onToggleProject,
   onChooseWorkspace,
   onOpenWorkspace,
   onNewSessionInWorkspace,
   onNewSession,
   onOpenSettings,
-  onTaskContextMenu,
   onProjectContextMenu,
   onWorkspaceContextMenu,
   onMoveProject,
@@ -377,7 +370,7 @@ export function Sidebar({
   };
 
   return (
-    <aside className="sidebar" aria-label="Tasks, projects, and workspaces">
+    <aside className="sidebar" aria-label="Projects and workspaces">
       <div className="brand">
         <img className="brand-mark" src={webAssetURL("icon.svg")} alt="Warren" />
         {isBuild && <span className="build-badge">Build</span>}
@@ -387,70 +380,6 @@ export function Sidebar({
         </span>
       </div>
       <div className="sidebar-scroll">
-        <div className="section-label-row">
-          <button
-            type="button"
-            className="section-label-toggle"
-            aria-expanded={!tasksCollapsed}
-            aria-label={tasksCollapsed ? "Expand Tasks" : "Collapse Tasks"}
-            onClick={onToggleTasksCollapsed}
-          >
-            <span className="section-label">Tasks</span>
-            <span className={`chevron${!tasksCollapsed ? " open" : ""}`}>{ChevronRightIcon}</span>
-          </button>
-          <button type="button" className="section-add" aria-label="New task" title="New task" onClick={onNewTask}>
-            <PlusIcon />
-          </button>
-        </div>
-        {!tasksCollapsed && (catalog.tasks.length ? catalog.tasks.map(task => {
-          const workspaces = catalog.workspacesByTask.get(task.id) || [];
-          const open = expandedTasks.has(task.id);
-          return (
-            <section className={`project task${open ? " open" : ""}`} key={task.id} id={`task-${task.id}`}>
-              <div className="project-toggle" onContextMenu={event => onTaskContextMenu(event, task)}>
-                <button
-                  type="button"
-                  className="project-toggle-main"
-                  aria-expanded={open}
-                  onClick={() => onToggleTask(task.id)}
-                >
-                  <span className="branch">{task.name}</span>
-                  {task.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
-                  <span className="project-count">({workspaces.length})</span>
-                </button>
-                <button
-                  type="button"
-                  className="project-chevron"
-                  aria-label={open ? `Collapse ${task.name}` : `Expand ${task.name}`}
-                  onClick={() => onToggleTask(task.id)}
-                >
-                  <span className="chevron">{ChevronRightIcon}</span>
-                </button>
-              </div>
-              <div className="workspace-list">
-                {workspaces.length ? workspaces.map(workspace => {
-                  const project = catalog.projectsByID.get(workspace.project);
-                  return (
-                    <button
-                      type="button"
-                      className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}${creatingWorkspaceIDs.has(workspace.id) ? " pending" : ""}`}
-                      disabled={creatingWorkspaceIDs.has(workspace.id)}
-                      aria-busy={creatingWorkspaceIDs.has(workspace.id) || undefined}
-                      key={workspace.id}
-                      onClick={() => onChooseWorkspace(workspace.id)}
-                      onDoubleClick={() => onOpenWorkspace(workspace.id)}
-                      onContextMenu={event => onWorkspaceContextMenu(event, workspace)}
-                    >
-                      <ActivityDot status={highestStatus(tabsForWorkspace(workspace.id))} />
-                      <span className="branch">{project?.name || "Project"} · {workspace.branch || workspace.name || "Workspace"}</span>
-                      {creatingWorkspaceIDs.has(workspace.id) && <span className="workspace-pending" role="status">Creating…</span>}
-                    </button>
-                  );
-                }) : <div className="workspace-row task-empty">No linked workspaces</div>}
-              </div>
-            </section>
-          );
-        }) : <div className="workspace-row task-empty">No tasks</div>)}
         <div className="section-label">Projects</div>
         {catalog.projects.length ? catalog.projects.map(project => {
           const workspaces = catalog.workspacesByProject.get(project.id) || [];
@@ -503,14 +432,10 @@ export function Sidebar({
               </div>
               <div className="workspace-list">
                 {workspaces.map(workspace => {
-                  const task = workspace.task
-                    ? catalog.tasks.find(value => value.id === workspace.task)
-                    : null;
-                  const taskWorkspace = Boolean(task);
                   const creating = creatingWorkspaceIDs.has(workspace.id);
                   return (
                     <div
-                      className={`workspace-row${workspace.id === activeWorkspace && !taskWorkspace ? " active" : ""}${taskWorkspace ? " task-linked" : ""}${creating ? " pending" : ""}${dragOverID === workspace.id ? " drag-over" : ""}`}
+                      className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}${creating ? " pending" : ""}${dragOverID === workspace.id ? " drag-over" : ""}`}
                       key={workspace.id}
                       aria-busy={creating || undefined}
                       onContextMenu={event => onWorkspaceContextMenu(event, workspace)}
@@ -523,9 +448,8 @@ export function Sidebar({
                       <button
                         type="button"
                         className="workspace-row-main"
-                        disabled={creating || taskWorkspace}
+                        disabled={creating}
                         aria-busy={creating || undefined}
-                        aria-label={taskWorkspace ? `${workspace.branch || workspace.name || "Workspace"} (open from Task)` : undefined}
                         onClick={() => onChooseWorkspace(workspace.id)}
                         onDoubleClick={() => onOpenWorkspace(workspace.id)}
                       >
@@ -536,21 +460,6 @@ export function Sidebar({
                         <span className="branch">{workspace.branch || workspace.name || "Workspace"}</span>
                       </button>
                       {creating && <span className="workspace-pending" role="status">Creating…</span>}
-                      {task && (
-                        <button
-                          type="button"
-                          className="workspace-task-link"
-                          aria-label={`Open task ${task.name}`}
-                          title={`Task: ${task.name}`}
-                          disabled={creating}
-                          onClick={event => {
-                            event.stopPropagation();
-                            onFocusTask(task.id);
-                          }}
-                        >
-                          Task
-                        </button>
-                      )}
                     </div>
                   );
                 })}

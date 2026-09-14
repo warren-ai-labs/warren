@@ -1467,6 +1467,13 @@ func (provider *TUIAgentProvider) Ensure(ctx context.Context, value AgentSession
 		if binding.SessionID != "" {
 			agentSessionID = strings.TrimSpace(binding.SessionID)
 		}
+		// A binding that names a different provider conversation retires the
+		// persisted transcript. `/clear`, `/new`, and `/resume` report the new
+		// conversation before its JSONL is flushed, so reusing the persisted
+		// path would replay the previous conversation and regenerate its title.
+		if agentSessionID != "" && agentSessionID != strings.TrimSpace(value.AgentSessionID) {
+			transcriptPath = ""
+		}
 		if binding.TranscriptPath != "" && regularFileExists(binding.TranscriptPath) {
 			transcriptPath = binding.TranscriptPath
 		}

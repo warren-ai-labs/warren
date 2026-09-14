@@ -106,6 +106,49 @@ final class WarrenMultiHostSidebarModelTests: XCTestCase {
         XCTAssertEqual(projection.workspaceActivitySummaries[domainWorkspaceID]?.activeTabCount, 1)
     }
 
+    /// The roster reports the provider bound to a shell Session. Dropping it
+    /// made every Agent started inside a shell render as a plain terminal.
+    func testRosterProjectionCarriesTheBoundAgentProviderIntoPresentation() throws {
+        let hostID = "00000000-0000-4000-8000-000000000011"
+        let projectID = "00000000-0000-4000-8000-000000000012"
+        let workspaceID = "00000000-0000-4000-8000-000000000013"
+        let sessionID = "00000000-0000-4000-8000-000000000014"
+        let roster = WarrenRemoteRoster(
+            revision: 1,
+            host: .init(id: hostID, name: "Build VPS"),
+            projects: [.init(id: projectID, name: "repository-a", path: "/srv/repository-a")],
+            workspaces: [.init(
+                id: workspaceID,
+                projectID: projectID,
+                name: "main",
+                path: "/srv/repository-a"
+            )],
+            sessions: [.init(
+                id: sessionID,
+                workspaceID: workspaceID,
+                title: "Implement API",
+                kind: "shell",
+                agentProvider: "claude",
+                lifecycle: "running",
+                agentStatus: .init(activity: .working)
+            )]
+        )
+
+        let projection = WarrenMultiHostSidebarModel.makeProjection(
+            endpointID: "build",
+            endpointLabel: "Build",
+            roster: roster,
+            connectionState: .attached,
+            lastError: nil
+        )
+        let domainWorkspaceID = try XCTUnwrap(WorkspaceID(uuidString: workspaceID))
+        let session = try XCTUnwrap(projection.activeSessions(in: domainWorkspaceID).first)
+
+        XCTAssertEqual(session.kind, .shell, "The durable launch kind must survive the roster")
+        XCTAssertEqual(session.presentedKind, .claude)
+        XCTAssertTrue(session.isAgentSession)
+    }
+
     @MainActor
     func testUnknownAndOverflowHostsDoNotReplaceTheActiveHostProjection() {
         let model = WarrenMultiHostSidebarModel()

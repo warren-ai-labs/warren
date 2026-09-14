@@ -7,13 +7,13 @@ require github.com/gorilla/websocket v1.5.3
 require github.com/openai/openai-go v1.12.0
 
 require (
-	github.com/abcdlsj/ghostline v1.1.3
+	github.com/abcdlsj/ghostline v1.2.1
 	github.com/hashicorp/mdns v1.0.7
+	github.com/miekg/dns v1.1.72
 	github.com/ncruces/go-sqlite3 v0.35.3
 )
 
 require (
-	github.com/miekg/dns v1.1.72 // indirect
 	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect

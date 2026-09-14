@@ -223,9 +223,11 @@ current design:
 
 - `session.subscribe` registers an output subscription and may optionally claim
   the control lease with `claim: true`;
-- `session.focus` promotes or releases the control lease without creating a
-  second output subscription;
-- only the focused peer may resize the shared PTY;
+- `session.focus` promotes or releases the input control lease without
+  creating a second output subscription;
+- viewport ownership is arbitrated separately from input: the focused peer owns
+  the shared PTY size, an output subscriber may adopt it while it is unowned,
+  and adopting it never grants input control;
 - `session.unsubscribe` removes one output subscription;
 - `session.attach` is the legacy single-subscription path and also carries a
   control lease;
@@ -654,7 +656,9 @@ Define the invariants that cleanup must preserve:
 
 - a 3.0 client is rejected before roster/session data on version mismatch;
 - a selected terminal state and its recovery cursor are one atomic pair;
-- only the focused peer can resize or send controlled input;
+- only the control lease can send input; the shared PTY size is arbitrated
+  separately, so a passive pane may follow its own viewport without muting
+  another client;
 - roster deltas apply only at the matching revision;
 - canonical Agent event identity and sequence are idempotent across reconnect;
 - Relay never parses or owns inner Warren session semantics.

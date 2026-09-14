@@ -6,8 +6,9 @@ import "context"
 // session, rendered into roster snapshots when the runtime adapter supports
 // it.
 type RuntimeMetadata struct {
-	Process   string
-	Directory string
+	Process     string
+	CommandLine string
+	Directory   string
 }
 
 // RuntimeMetadataProvider is implemented by runtime adapters that can report

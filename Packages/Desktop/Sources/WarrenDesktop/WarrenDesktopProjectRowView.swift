@@ -176,7 +176,9 @@ struct WarrenDesktopProjectRow: View {
                         .opacity(isHovered || isToggleFocused ? 0 : 1)
 
                     Text(project.name)
-                        .font(WarrenTypography.navigationItem)
+                        // Weight is what separates a project from the
+                        // workspaces inside it, now that they share depth 0.
+                        .font(WarrenTypography.sidebarContainerRow)
                         .lineLimit(1)
                         .truncationMode(.tail)
 

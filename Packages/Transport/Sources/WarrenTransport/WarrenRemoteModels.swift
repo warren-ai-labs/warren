@@ -752,6 +752,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let agentProvider: String?
         public let agentHandler: String?
         public let command: String?
+        public let commandLine: String?
         public let process: String?
         public let directory: String?
         public let runtime: String?
@@ -783,6 +784,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             agentProvider: String? = nil,
             agentHandler: String? = nil,
             command: String? = nil,
+            commandLine: String? = nil,
             process: String? = nil,
             directory: String? = nil,
             runtime: String? = nil,
@@ -814,6 +816,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.agentProvider = agentProvider
             self.agentHandler = agentHandler
             self.command = command
+            self.commandLine = commandLine
             self.process = process
             self.directory = directory
             self.runtime = runtime
@@ -896,7 +899,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             case id
             case workspaceID = "workspace"
             case terminalGroupID = "terminalGroup"
-            case scope, title, customTitle, kind, agentProvider, agentHandler, command, process, directory, runtime, runtimeKind
+            case scope, title, customTitle, kind, agentProvider, agentHandler, command, commandLine, process, directory, runtime, runtimeKind
             case lifecycle, epoch, sequence, pinned
             case agentSessionID = "agentSessionId"
             case agentExecutionID = "agentExecutionId"
@@ -924,6 +927,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             agentProvider = try values.decodeIfPresent(String.self, forKey: .agentProvider)
             agentHandler = try values.decodeIfPresent(String.self, forKey: .agentHandler)
             command = try values.decodeIfPresent(String.self, forKey: .command)
+            commandLine = try values.decodeIfPresent(String.self, forKey: .commandLine)
             process = try values.decodeIfPresent(String.self, forKey: .process)
             directory = try values.decodeIfPresent(String.self, forKey: .directory)
             runtime = try values.decodeIfPresent(String.self, forKey: .runtime)

@@ -23,7 +23,8 @@ const usageStatsDefaultDays = 365
 // so historical duplicate observations are corrected without rewriting the
 // canonical Agent journal or any other database.
 func (s *Service) RebuildUsage(ctx context.Context) (api.UsageRebuildResult, error) {
-	if s.AgentStore == nil {
+	agentStore := s.agentStore()
+	if agentStore == nil {
 		return api.UsageRebuildResult{}, nil
 	}
 	// Embedders and focused tests may intentionally disable transcript
@@ -34,7 +35,7 @@ func (s *Service) RebuildUsage(ctx context.Context) (api.UsageRebuildResult, err
 	// scanning this process's default home directories.
 	finder, hasHistoricalFinder := historicalUsageFinder(s.AgentFinder)
 	if !hasHistoricalFinder {
-		result, err := s.AgentStore.RebuildUsageRollups(ctx)
+		result, err := agentStore.RebuildUsageRollups(ctx)
 		if err != nil {
 			return api.UsageRebuildResult{}, err
 		}
@@ -70,7 +71,7 @@ func (s *Service) RebuildUsage(ctx context.Context) (api.UsageRebuildResult, err
 		}
 	}
 
-	result, err := s.AgentStore.RebuildUsageRollupsFromObservations(ctx, observations)
+	result, err := agentStore.RebuildUsageRollupsFromObservations(ctx, observations)
 	if err != nil {
 		return api.UsageRebuildResult{}, err
 	}
@@ -149,14 +150,15 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 		ToDay:                 toDay,
 		IntervalBucketMinutes: api.UsageIntervalBucketMinutes,
 	}
-	if s.AgentStore == nil {
+	agentStore := s.agentStore()
+	if agentStore == nil {
 		return result, nil
 	}
 
 	// Repricing before reading keeps a stored cost from lagging a price change.
 	// It is best effort: stale or absent prices must not withhold token counts.
 	if table, err := s.usagePrices.Table(ctx); err == nil && table != nil {
-		if _, err := s.AgentStore.RepriceUsageDaily(ctx, table); err != nil {
+		if _, err := agentStore.RepriceUsageDaily(ctx, table); err != nil {
 			s.logWarn("reprice usage rollup", "error", err)
 		}
 		result.PricesFetchedAt = table.FetchedAt.UTC().Format(time.RFC3339)
@@ -164,7 +166,7 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 		s.logWarn("fetch model pricing", "error", err)
 	}
 
-	rows, err := s.AgentStore.QueryUsageDaily(ctx, fromDay, toDay)
+	rows, err := agentStore.QueryUsageDaily(ctx, fromDay, toDay)
 	if err != nil {
 		return api.UsageStatsResult{}, err
 	}
@@ -179,7 +181,7 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 		detailDay = ""
 	}
 	if detailDay == "" {
-		detailDay, err = s.AgentStore.LatestUsageIntervalDay(ctx, fromDay, toDay)
+		detailDay, err = agentStore.LatestUsageIntervalDay(ctx, fromDay, toDay)
 		if err != nil {
 			return api.UsageStatsResult{}, err
 		}
@@ -188,7 +190,7 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 
 	var intervalRows []store.UsageIntervalRow
 	if detailDay != "" {
-		intervalRows, err = s.AgentStore.QueryUsageIntervals(ctx, detailDay, detailDay)
+		intervalRows, err = agentStore.QueryUsageIntervals(ctx, detailDay, detailDay)
 		if err != nil {
 			return api.UsageStatsResult{}, err
 		}

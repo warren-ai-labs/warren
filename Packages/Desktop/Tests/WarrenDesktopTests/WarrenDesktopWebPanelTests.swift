@@ -4,6 +4,7 @@ import SwiftUI
 import XCTest
 @testable import WarrenDesktop
 import WarrenDesignSystem
+import WarrenDomain
 import WarrenObservation
 
 final class WarrenDesktopWebPanelTests: XCTestCase {
@@ -482,5 +483,65 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
 
         let link = try XCTUnwrap(WarrenDesktopSettingsDeepLink(url: url))
         XCTAssertEqual(link.publicAccess?.publicHostname, "first.example")
+    }
+
+    @MainActor
+    func testWorkspacesSettingsRendersWorkspaceSetupScriptsList() throws {
+        let recorder = WarrenSemanticRecorder()
+        let projectID = ProjectID()
+        let workspaceID = WorkspaceID()
+        let project = Project(
+            id: projectID,
+            hostID: HostID(),
+            name: "warren",
+            rootPath: "/path/to/warren",
+            setupScript: "scripts/setup.sh"
+        )
+        let workspace = Workspace(
+            id: workspaceID,
+            projectID: projectID,
+            name: "main",
+            path: "/path/to/warren",
+            branch: "main"
+        )
+        let group = WarrenDesktopProjectGroup(project: project, workspaces: [workspace])
+
+        let settings = WarrenDesktopSettingsView(
+            onBack: {},
+            hostName: "Test Host",
+            webStatus: WarrenDesktopWebStatus(),
+            onWebTest: nil,
+            onWebStop: nil,
+            onWebReset: nil,
+            onRelayEnroll: nil,
+            defaultRuntime: nil,
+            onSetRuntime: { _ in },
+            autoOpenShell: false,
+            onSetAutoOpenShell: { _ in },
+            autoStartAI: false,
+            onSetAutoStartAI: { _ in },
+            openAIBaseURL: "",
+            openAIModel: "",
+            openAITitleEnabled: false,
+            onSetOpenAISetting: { _, _ in },
+            onTestOpenAI: { _, _, _ in },
+            projectGroups: [group],
+            initialSettingsSection: .workspaces
+        )
+        .environment(\.colorScheme, .dark)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .frame(width: 1_000, height: 800)
+
+        let hostingView = NSHostingView(rootView: settings)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let snapshot = recorder.snapshot()
+        let workspaceSection = snapshot.node(id: "settings.section.Workspaces")
+        XCTAssertNotNil(workspaceSection)
+        XCTAssertEqual(workspaceSection?.label, "Workspaces")
+        XCTAssertTrue(workspaceSection?.isSelected == true)
     }
 }

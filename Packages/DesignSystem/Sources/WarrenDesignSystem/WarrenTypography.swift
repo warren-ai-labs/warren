@@ -32,9 +32,14 @@ public enum WarrenTypography {
     /// monospaced design for keyboard hints.
     public static let shortcut = Font.system(size: 12, weight: .medium, design: .monospaced)
     public static let chromeLabel = Font.system(size: 12, weight: .regular)
-    /// Compatibility aliases for clients that have not migrated yet. Ordinary
-    /// project, workspace, and session rows use regular weight; group labels
-    /// continue to use `navigationGroup` when they need hierarchy.
+    /// The sidebar's two row weights.
+    ///
+    /// Projects, Tasks, and Terminal Groups are containers: rows you open to
+    /// find something rather than rows you land on. They read at `medium` so
+    /// they can share depth 0 with the Workspaces inside them — weight carries
+    /// the tier that indentation used to, and costs no width. Everything you
+    /// actually navigate to stays `regular`.
+    public static let sidebarContainerRow = navigationGroup
     public static let sidebarRow = navigationItem
     public static let workspaceRow = navigationItem
     /// Section labels are intentionally compact and uppercase in their source.
@@ -52,13 +57,13 @@ public enum WarrenTypography {
     public static let paneHeader = Font.system(size: 12, weight: .medium)
     public static let badge = Font.system(size: 10, weight: .medium)
     public static let activityChip = Font.system(size: 9, weight: .medium)
-    public static let emptyState = Font.system(size: 18, weight: .semibold)
+    public static let emptyState = Font.system(size: 18, weight: .light)
     /// Empty-state titles use the light text tier and a larger size so an
     /// empty page reads as calm guidance instead of shouting chrome.
     public static let emptyStateTitle = Font.system(size: 20, weight: .light)
-    public static let screenTitle = Font.system(size: 18, weight: .semibold)
-    /// Superset settings page headings are `text-xl`.
-    public static let pageTitle = Font.system(size: 20, weight: .semibold)
+    public static let screenTitle = Font.system(size: 18, weight: .medium)
+    /// Superset settings page headings are `text-xl` in medium weight.
+    public static let pageTitle = Font.system(size: 20, weight: .medium)
     /// Business dialogs use a clearer hierarchy than dense navigation chrome.
     public static let dialogTitle = Font.system(size: 18, weight: .light)
     public static let dialogBody = Font.system(size: 14, weight: .regular)
@@ -77,5 +82,8 @@ public enum WarrenTypography {
     /// Superset `text-xs` descriptions and hints.
     public static let supporting = Font.system(size: 12, weight: .regular)
     public static let code = Font.system(size: 12, weight: .regular, design: .monospaced)
-    public static let compactCode = Font.system(size: 11, weight: .semibold, design: .monospaced)
+    /// The terminal find field uses Menlo rather than the system monospaced
+    /// face so a typed query reads like the terminal grid it searches.
+    public static let terminalSearchField = Font.custom("Menlo", size: 12)
+    public static let compactCode = Font.system(size: 11, weight: .regular, design: .monospaced)
 }
