@@ -213,6 +213,7 @@ func (s *AgentEventStore) replaceUsageRollupsLocked(
 	if err := tx.Commit(); err != nil {
 		return UsageRebuildResult{}, fmt.Errorf("commit usage rebuild: %w", err)
 	}
+	s.usageRepriceDirty = true
 	return result, nil
 }
 
@@ -323,6 +324,8 @@ func (s *AgentEventStore) accumulateUsageWithAttribution(
 		attribution.ProjectID, offsetSeconds/60, buckets); err != nil {
 		return fmt.Errorf("accumulate usage interval: %w", err)
 	}
+	// The row landed with a zero cost; the next reprice pass fills it in.
+	s.usageRepriceDirty = true
 	return nil
 }
 
@@ -432,7 +435,11 @@ func (s *AgentEventStore) backfillUsageIntervalsLocked() error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.usageRepriceDirty = true
+	return nil
 }
 
 // usageFromPayload reads the usage object out of a canonical payload. The value
@@ -489,6 +496,15 @@ func (s *AgentEventStore) RepriceUsageDaily(ctx context.Context, table *usage.Pr
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.db == nil || table == nil {
+		return 0, nil
+	}
+	// Skip the full-table scan when nothing can have changed. `usageRepricedPriceAt`
+	// is only trusted when the table carries a real version: a zero FetchedAt is
+	// treated as always-changed so callers that build a table by hand still
+	// restate. A dirty flag covers usage written since the last pass, which is
+	// what keeps fresh spend from waiting for the next price refresh.
+	if !s.usageRepriceDirty && !table.FetchedAt.IsZero() &&
+		table.FetchedAt.Equal(s.usageRepricedPriceAt) {
 		return 0, nil
 	}
 
@@ -599,6 +615,7 @@ func (s *AgentEventStore) RepriceUsageDaily(ctx context.Context, table *usage.Pr
 	}
 	intervalRows.Close()
 	if len(pending) == 0 && len(intervalPending) == 0 {
+		s.markUsageRepricedLocked(table)
 		return 0, nil
 	}
 
@@ -632,7 +649,17 @@ func (s *AgentEventStore) RepriceUsageDaily(ctx context.Context, table *usage.Pr
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit usage repricing: %w", err)
 	}
+	s.markUsageRepricedLocked(table)
 	return len(pending), nil
+}
+
+// markUsageRepricedLocked records the price version the stored costs now reflect
+// and clears the pending-write flag. Callers must hold s.mu.
+func (s *AgentEventStore) markUsageRepricedLocked(table *usage.PriceTable) {
+	s.usageRepriceDirty = false
+	if table != nil {
+		s.usageRepricedPriceAt = table.FetchedAt
+	}
 }
 
 // UsageDailyRow is one aggregated spend row.
@@ -720,6 +747,36 @@ func (s *AgentEventStore) QueryUsageDaily(ctx context.Context, fromDay, toDay st
 		return nil, fmt.Errorf("iterate usage rollup: %w", err)
 	}
 	return result, nil
+}
+
+// LatestUsageIntervalDay returns the most recent local day with five-minute
+// rows in the inclusive range, or "" when none. It lets the Service choose the
+// default detail day without loading every bucket in the range.
+func (s *AgentEventStore) LatestUsageIntervalDay(ctx context.Context, fromDay, toDay string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return "", nil
+	}
+	query := `SELECT COALESCE(MAX(local_day), '') FROM agent_usage_interval`
+	var clauses []string
+	var args []any
+	if day := strings.TrimSpace(fromDay); day != "" {
+		clauses = append(clauses, "local_day >= ?")
+		args = append(args, day)
+	}
+	if day := strings.TrimSpace(toDay); day != "" {
+		clauses = append(clauses, "local_day <= ?")
+		args = append(args, day)
+	}
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	var latest string
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&latest); err != nil {
+		return "", fmt.Errorf("query latest usage interval day: %w", err)
+	}
+	return latest, nil
 }
 
 // QueryUsageIntervals returns the canonical 5-minute rows for an inclusive

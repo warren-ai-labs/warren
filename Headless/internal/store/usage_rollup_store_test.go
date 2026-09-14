@@ -559,6 +559,49 @@ func TestRepriceUsageDailyRestatesHistoryWhenPricesChange(t *testing.T) {
 	}
 }
 
+func TestRepriceUsageDailySkipsCleanTableButPricesNewUsage(t *testing.T) {
+	// Repricing is a full scan of both Usage tables, so an unchanged price table
+	// with no new writes must be a no-op. New usage, however, lands unpriced and
+	// has to be filled in even while the price table is unchanged.
+	s := newUsageStore(t, "proj-1")
+	ctx := context.Background()
+	if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{
+		usageEvent("evt-1", "claude", "claude-opus-5", time.Now(), &api.AgentUsage{
+			InputTokens: 1_000_000,
+		}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	table := &usage.PriceTable{FetchedAt: time.Now(), Models: map[string]usage.ModelPrice{
+		"claude-opus-5": {Input: priceRate(5)},
+	}}
+	changed, err := s.RepriceUsageDaily(ctx, table)
+	if err != nil || changed != 1 {
+		t.Fatalf("first reprice changed = %d, err = %v", changed, err)
+	}
+	if changed, err = s.RepriceUsageDaily(ctx, table); err != nil || changed != 0 {
+		t.Fatalf("clean reprice changed = %d, err = %v, want no scan result", changed, err)
+	}
+
+	if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{
+		usageEvent("evt-2", "claude", "claude-opus-5", time.Now(), &api.AgentUsage{
+			InputTokens: 2_000_000,
+		}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RepriceUsageDaily(ctx, table); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.QueryUsageDaily(ctx, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].CostNanoUSD != 15_000_000_000 || rows[0].PricedCalls != 2 {
+		t.Fatalf("row = %+v, want the new call priced without a price refresh", rows[0])
+	}
+}
+
 func TestUsageRollupReadsRealCanonicalConversion(t *testing.T) {
 	// The seam that matters in production: the Service builds canonical events
 	// with CanonicalAgentEventFromObservation, and accumulation has to find the

@@ -1212,11 +1212,12 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 			// Git inspection can invoke network-backed fetches and filesystem
 			// scans. Keep those reads off the WebSocket reader so terminal
 			// attach, resize, and input remain responsive on the same client.
-			go func(command api.Envelope) {
-				if err := peer.handle(request.Context(), command); err != nil {
+			backgroundContext := backgroundRequestContext(request.Context(), command.Method)
+			go func(command api.Envelope, ctx context.Context) {
+				if err := peer.handle(ctx, command); err != nil {
 					_ = peer.writeError(command.ID, err)
 				}
-			}(command)
+			}(command, backgroundContext)
 			continue
 		}
 		if err := peer.handle(request.Context(), command); err != nil {
@@ -1363,11 +1364,12 @@ func (s *HTTPServer) HandleRelayControl(
 		return nil
 	}
 	if isBackgroundRequest(command.Method) {
-		go func() {
-			if err := peer.handle(ctx, command); err != nil {
+		backgroundContext := backgroundRequestContext(ctx, command.Method)
+		go func(backgroundContext context.Context) {
+			if err := peer.handle(backgroundContext, command); err != nil {
 				_ = peer.writeError(command.ID, err)
 			}
-		}()
+		}(backgroundContext)
 		return nil
 	}
 	return peer.handle(ctx, command)
@@ -1404,14 +1406,24 @@ func isSlowMutation(method string) bool {
 func isBackgroundRequest(method string) bool {
 	switch method {
 	case "git.panel", "git.diff", "session.subscribe", "settings.testOpenAI",
-		// usage.stats can refresh unit prices over the network and rescan the
-		// whole rollup, so it belongs off the reader for the same reason git
-		// inspection does: terminal input must stay responsive meanwhile.
+		// Usage stats can refresh unit prices over the network and rescan the
+		// whole rollup; rebuild can scan every retained transcript. Both belong
+		// off the reader so terminal input stays responsive meanwhile.
 		"usage.stats", "usage.rebuild":
 		return true
 	default:
 		return false
 	}
+}
+
+// backgroundRequestContext keeps a Host-owned maintenance rebuild alive when
+// the initiating WebSocket goes away. Other background reads should retain the
+// connection lifetime so their result is not produced after the caller leaves.
+func backgroundRequestContext(parent context.Context, method string) context.Context {
+	if method == "usage.rebuild" {
+		return context.WithoutCancel(parent)
+	}
+	return parent
 }
 
 // registerPeer tracks an authenticated WebSocket client so server-initiated

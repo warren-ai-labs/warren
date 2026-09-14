@@ -365,6 +365,27 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
+    func testHostMaintenanceRequestCanWaitPastTheNormalRPCDeadline() async throws {
+        let (client, task, consuming, _) = try await connectedClient()
+        let request = Task {
+            try await client.request("usage.rebuild")
+        }
+        let sent = await waitForSentMessages(task, count: 2)
+        let id = try requestID(from: try XCTUnwrap(sent.last))
+
+        // The maintenance request has no 15-second client deadline. Answer it
+        // after a short delay to exercise the same tracked response path.
+        try await Task.sleep(for: .milliseconds(100))
+        await task.enqueue(.text(
+            "{\"t\":\"response\",\"id\":\"\(id)\",\"ok\":true,\"result\":{\"rebuilt\":true}}"
+        ))
+        let response = try await request.value
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: response) as? [String: Any])
+        XCTAssertEqual(object["rebuilt"] as? Bool, true)
+        await client.stop()
+        consuming.cancel()
+    }
+
     func testRosterDecodesCurrentTaskAndOwnershipFields() throws {
         let json = """
         {

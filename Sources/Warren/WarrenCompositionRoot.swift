@@ -271,8 +271,8 @@ struct WarrenCompositionRoot: View {
             },
             usageStats: remoteModel.usageStats,
             usageState: remoteModel.usageState,
-            onLoadUsage: { days in
-                remoteModel.loadUsageStats(days: days)
+            onLoadUsage: { days, day, force in
+                remoteModel.loadUsageStats(days: days, selectedDay: day, force: force)
             },
             onRebuildUsage: { completion in
                 remoteModel.rebuildUsageData(completion: completion)

@@ -93,6 +93,84 @@ final class WarrenUsageStatsDecodingTests: XCTestCase {
         XCTAssertTrue(WarrenUsageFormatting.money(stats.cost).hasPrefix("≥"))
     }
 
+    func testDecodesDetailDayAndDayGroups() throws {
+        let stats = try decode(
+            """
+            {
+              "fromDay": "2026-09-01", "toDay": "2026-09-10",
+              "detailDay": "2026-09-05",
+              "days": [
+                {"day": "2026-09-05", "buckets": {"freshInput": 100}},
+                {"day": "2026-09-08", "buckets": {"freshInput": 900}}
+              ],
+              "intervals": [
+                {"day": "2026-09-05", "minute": 600, "buckets": {"freshInput": 100}}
+              ],
+              "dayProviders": [
+                {"key": "claude", "buckets": {"freshInput": 100}}
+              ],
+              "dayModels": [
+                {"key": "claude-opus-5", "buckets": {"freshInput": 100}}
+              ],
+              "dayProjects": [
+                {"key": "p1", "label": "warren", "buckets": {"freshInput": 100}}
+              ]
+            }
+            """
+        )
+        XCTAssertEqual(stats.detailDay, "2026-09-05")
+        XCTAssertEqual(stats.dayProviders.first?.key, "claude")
+        XCTAssertEqual(stats.dayProjects.first?.displayName, "warren")
+        XCTAssertEqual(stats.intervals.map(\.day), ["2026-09-05"])
+        XCTAssertEqual(stats.resolvedDetailDay(selected: nil), "2026-09-05")
+        // A selected day that is not in the payload falls back to the Host's
+        // default rather than pointing the curve at a day with no rows.
+        XCTAssertEqual(stats.resolvedDetailDay(selected: "2026-01-01"), "2026-09-05")
+    }
+
+    func testResolvedDetailDayFallsBackToTheLatestDay() throws {
+        let stats = try decode(
+            """
+            {
+              "fromDay": "2026-09-01", "toDay": "2026-09-10",
+              "days": [
+                {"day": "2026-09-05", "buckets": {"freshInput": 100}},
+                {"day": "2026-09-08", "buckets": {"freshInput": 900}}
+              ]
+            }
+            """
+        )
+        XCTAssertNil(stats.detailDay)
+        XCTAssertEqual(stats.resolvedDetailDay(selected: nil), "2026-09-08")
+        XCTAssertEqual(stats.resolvedDetailDay(selected: "2026-09-05"), "2026-09-05")
+    }
+
+    func testUsageRequestWindowNamesTheTrailingRange() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 10, hour: 12))!
+
+        let week = WarrenUsageStatsRequest.window(days: 7, selectedDay: nil, now: now, calendar: calendar)
+        XCTAssertEqual(week.fromDay, "2026-09-04")
+        XCTAssertEqual(week.toDay, "2026-09-10")
+        XCTAssertNil(week.intervalDay)
+        XCTAssertEqual(week.cacheKey, "2026-09-04..2026-09-10..-")
+        XCTAssertNil(week.parameters["intervalDay"])
+
+        let scoped = WarrenUsageStatsRequest.window(
+            days: 30, selectedDay: "2026-08-20", now: now, calendar: calendar
+        )
+        XCTAssertEqual(scoped.fromDay, "2026-08-12")
+        XCTAssertEqual(scoped.intervalDay, "2026-08-20")
+        XCTAssertEqual(scoped.parameters["intervalDay"], "2026-08-20")
+
+        // An empty pick means "follow the Host's default", not a day named "".
+        let empty = WarrenUsageStatsRequest.window(
+            days: 7, selectedDay: "", now: now, calendar: calendar
+        )
+        XCTAssertNil(empty.intervalDay)
+    }
+
     func testParsesTimestampWithAndWithoutFractionalSeconds() {
         XCTAssertNotNil(WarrenUsageStatsResponse.parseTimestamp("2026-09-10T12:00:00Z"))
         XCTAssertNotNil(WarrenUsageStatsResponse.parseTimestamp("2026-09-10T12:00:00.123Z"))

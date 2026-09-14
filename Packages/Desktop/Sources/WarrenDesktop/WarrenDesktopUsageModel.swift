@@ -127,6 +127,23 @@ public enum WarrenUsageCurveGranularity: Int, CaseIterable, Identifiable, Sendab
     }
 }
 
+/// Which quantity the intraday curve plots. Tokens are the durable fact; cost
+/// is the projection the pricing pass derives from them, so both are worth a
+/// view without another Host request.
+public enum WarrenUsageCurveMetric: String, CaseIterable, Identifiable, Sendable {
+    case tokens
+    case cost
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .tokens: "Tokens"
+        case .cost: "Cost"
+        }
+    }
+}
+
 /// One point in the rendered intraday curve.
 public struct WarrenUsageCurvePoint: Equatable, Sendable, Identifiable {
     public let day: String
@@ -248,6 +265,15 @@ public struct WarrenUsageStats: Equatable, Sendable {
     public let providers: [WarrenUsageGroup]
     public let models: [WarrenUsageGroup]
     public let projects: [WarrenUsageGroup]
+    /// The day `intervals` describes. The Host chooses the most recent day with
+    /// data when the client names none, so the curve has something to draw on
+    /// first open.
+    public let detailDay: String?
+    /// The same breakdowns as `providers`/`models`/`projects`, narrowed to
+    /// `detailDay`. Empty against an older Host that does not send them.
+    public let dayProviders: [WarrenUsageGroup]
+    public let dayModels: [WarrenUsageGroup]
+    public let dayProjects: [WarrenUsageGroup]
     /// When the unit prices behind `cost` were retrieved. Nil means no price
     /// table was available, so every amount is zero.
     public let pricesFetchedAt: Date?
@@ -263,6 +289,10 @@ public struct WarrenUsageStats: Equatable, Sendable {
         providers: [WarrenUsageGroup] = [],
         models: [WarrenUsageGroup] = [],
         projects: [WarrenUsageGroup] = [],
+        detailDay: String? = nil,
+        dayProviders: [WarrenUsageGroup] = [],
+        dayModels: [WarrenUsageGroup] = [],
+        dayProjects: [WarrenUsageGroup] = [],
         pricesFetchedAt: Date? = nil
     ) {
         self.fromDay = fromDay
@@ -275,8 +305,22 @@ public struct WarrenUsageStats: Equatable, Sendable {
         self.providers = providers
         self.models = models
         self.projects = projects
+        self.detailDay = detailDay
+        self.dayProviders = dayProviders
+        self.dayModels = dayModels
+        self.dayProjects = dayProjects
         self.pricesFetchedAt = pricesFetchedAt
     }
 
     public var isEmpty: Bool { days.isEmpty && total.total == 0 }
+
+    /// The day the detail surfaces should render: the caller's explicit pick,
+    /// otherwise the Host's default. Nil only when the range has no data.
+    public func resolvedDetailDay(selected: String?) -> String? {
+        if let selected, days.contains(where: { $0.day == selected }) {
+            return selected
+        }
+        if let detailDay, !detailDay.isEmpty { return detailDay }
+        return days.map(\.day).max()
+    }
 }
