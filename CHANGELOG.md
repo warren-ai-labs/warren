@@ -20,6 +20,13 @@ _No changes yet._
   panes the user cannot see. Compact mode keeps the group on the strip, where it
   is the only way back into the split.
 
+### Release notes
+
+- The JSON control protocol remains at 4.0 and this release migrates no state.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.16.0] - 2026-09-16
 
 > Fix release: restores the Desktop's pane-group writes, which 0.15.0 dropped
