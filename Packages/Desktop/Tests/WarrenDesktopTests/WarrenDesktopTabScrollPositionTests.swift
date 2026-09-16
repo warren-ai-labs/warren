@@ -1,4 +1,5 @@
 import XCTest
+import WarrenDesignSystem
 @testable import WarrenDesktop
 
 /// The tab track's reveal contract: a selection inside the visible band must not
@@ -15,12 +16,13 @@ final class WarrenDesktopTabScrollPositionTests: XCTestCase {
         currentOriginX: CGFloat,
         trackWidth: CGFloat? = nil,
         viewportWidth: CGFloat? = nil,
-        revealInset: CGFloat? = nil
+        revealInset: CGFloat? = nil,
+        groupMarkSlotWidth: CGFloat = 0
     ) -> CGFloat {
         WarrenDesktopTabScrollPosition.revealOriginX(
-            selectedIndex: selectedIndex,
+            selectedMinX: CGFloat(selectedIndex) * tabWidth + groupMarkSlotWidth,
             tabWidth: tabWidth,
-            trackWidth: trackWidth ?? self.trackWidth,
+            trackWidth: (trackWidth ?? self.trackWidth) + groupMarkSlotWidth,
             viewportWidth: viewportWidth ?? self.viewportWidth,
             currentOriginX: currentOriginX,
             revealInset: revealInset
@@ -75,6 +77,20 @@ final class WarrenDesktopTabScrollPositionTests: XCTestCase {
         XCTAssertEqual(origin(selectedIndex: 1, currentOriginX: -500), 0)
         // A raw origin past the end normalizes to the maximum origin.
         XCTAssertEqual(origin(selectedIndex: 8, currentOriginX: 9_999), 900)
+    }
+
+    /// A drawn group's chip is a slot rather than a Tab, so every Tab behind it
+    /// starts one chip-width later and the reveal has to follow.
+    func testGroupChipSlotShiftsTheRevealedOrigin() {
+        XCTAssertEqual(origin(selectedIndex: 4, currentOriginX: 0), 186)
+        XCTAssertEqual(
+            origin(
+                selectedIndex: 4,
+                currentOriginX: 0,
+                groupMarkSlotWidth: WarrenLayoutMetrics.tabGroupMarkSlotWidth
+            ),
+            186 + WarrenLayoutMetrics.tabGroupMarkSlotWidth
+        )
     }
 
     func testNarrowViewportYieldsTheInsetBeforeTheBand() {

@@ -196,10 +196,14 @@ Warm session path:
 
 - Warm promotion is endpoint-specific. Local promotions re-seed the retained
   surface from a fresh atomic snapshot, discarding renderer backlog before the
-  presentation gate opens. Remote promotions log `tab_promote_local`, swap the
-  control lease, and reparent the retained surface without an extra snapshot
-  round trip. Remote output continues draining while hidden, so normal
-  switches do not visibly replay backlog.
+  presentation gate opens. Remote promotions log `tab_promote` (named
+  `tab_promote_local` at the time), swap the control lease, and reparent the
+  retained surface without an extra snapshot round trip. Remote output
+  continues draining while hidden, so normal switches do not visibly replay
+  backlog. Superseded: promotion is no longer endpoint-specific — a retained
+  surface is promoted on any endpoint, on screen or parked. See
+  `docs/rfc/0008-native-tab-splits.md` and
+  `docs/decisions/2026-08-26-terminal-rendering-comparison-and-direction.md`.
 - Output subscriptions remain per retained session, so background surfaces
   stay current. Resize is debounced (50ms) and promotion defers 250ms after
   resize; only the focused session may claim resize. This prevents color-block

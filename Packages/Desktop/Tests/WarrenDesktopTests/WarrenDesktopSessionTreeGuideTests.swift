@@ -310,4 +310,110 @@ final class WarrenDesktopSessionTreeGuideTests: XCTestCase {
             )
         }
     }
+
+    /// The group's pointer source is AppKit, not SwiftUI: its rows are Buttons,
+    /// so a container `.onHover` never hears about them. Both halves are pinned
+    /// here — the sensor reports the pointer without taking the click, and the
+    /// reported state paints the rail.
+    @MainActor
+    func testHoverSensorReportsThePointerAndLeavesClicksToTheRows() {
+        var reports: [Bool] = []
+        let sensor = WarrenDesktopHoverSensor.SensorView()
+        sensor.onHover = { reports.append($0) }
+        sensor.updateTrackingAreas()
+
+        XCTAssertFalse(
+            sensor.trackingAreas.isEmpty,
+            "The sensor has to watch a tracking area to see the pointer"
+        )
+        XCTAssertNil(
+            sensor.hitTest(NSPoint(x: 10, y: 10)),
+            "The sensor watches the pointer; the row below still takes the click"
+        )
+
+        sensor.mouseEntered(with: Self.pointerEvent(.mouseEntered))
+        sensor.mouseExited(with: Self.pointerEvent(.mouseExited))
+        XCTAssertEqual(reports, [true, false])
+    }
+
+    /// The emphasis is what the pointer produces, so it is measured through the
+    /// rendering path rather than from the color value alone.
+    ///
+    /// The offscreen harness has no pointer, so the hover state is forced
+    /// through the environment the same way every other hover-revealed control
+    /// is probed.
+    @MainActor
+    func testEmphasizedRailIsPaintedBrighterThanTheRestingRail() throws {
+        let mode = WarrenDesktopWorkspaceDisplayMode.rich
+        let leafCount = 2
+        let railX = WarrenDesktopSidebarIndent.sessionGuide
+
+        /// The darkest pixel the rail puts on white, scanned across the line and
+        /// its anti-aliased edges so one half-covered pixel cannot decide the
+        /// answer.
+        func railInk(forcedHover: Bool) throws -> CGFloat {
+            let group = WarrenDesktopSessionLeafGroup(
+                leafCount: leafCount,
+                mode: mode,
+                workspaceGlyph: .checkout
+            ) {
+                Color.clear.frame(height: mode.rowHeight)
+            } leaves: {
+                ForEach(0..<leafCount, id: \.self) { _ in
+                    Color.clear.frame(height: mode.rowHeight)
+                }
+            }
+            .frame(width: 200, alignment: .leading)
+
+            let host = NSHostingView(rootView: ZStack(alignment: .topLeading) {
+                Color.white
+                group
+            }
+            .environment(\.warrenForceHover, forcedHover)
+            .frame(width: 200, height: 200, alignment: .topLeading))
+            host.frame = NSRect(x: 0, y: 0, width: 200, height: 200)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            host.layoutSubtreeIfNeeded()
+
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let scale = CGFloat(rep.pixelsWide) / host.bounds.width
+            let column = Int((railX * scale).rounded())
+
+            var darkest: CGFloat = 1
+            for x in (column - 2)...(column + 2) {
+                for y in 0..<rep.pixelsHigh {
+                    guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                    else { continue }
+                    darkest = min(darkest, color.redComponent)
+                }
+            }
+            return darkest
+        }
+
+        let resting = try railInk(forcedHover: false)
+        let emphasized = try railInk(forcedHover: true)
+
+        XCTAssertLessThan(resting, 1, "The resting rail must be painted at all")
+        XCTAssertLessThan(
+            emphasized,
+            resting,
+            "Hover must reach the rail, not only the state that selects its color"
+        )
+    }
+
+    private static func pointerEvent(_ type: NSEvent.EventType) -> NSEvent {
+        NSEvent.enterExitEvent(
+            with: type,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 1,
+            trackingNumber: 1,
+            userData: nil
+        )!
+    }
 }

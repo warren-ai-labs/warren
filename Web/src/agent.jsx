@@ -1218,8 +1218,13 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
     if (state !== "pending") setSubmitting(false);
   }, [state]);
 
-  if (["config", "config_updated", "compaction", "compaction_updated"].includes(type)) {
-    const markerLabel = type.startsWith("config") ? "Config" : "Compaction";
+  // Canonical control-plane events arrive as dotted types (for example
+  // `compaction.updated`), while the marker check has always been written with
+  // underscore spellings. Fold separators before matching so the canonical
+  // row renders as the quiet timeline marker instead of a generic card.
+  const markerType = type.replaceAll(".", "_");
+  if (["config", "config_updated", "compaction", "compaction_updated"].includes(markerType)) {
+    const markerLabel = markerType.startsWith("config") ? "Config" : "Compaction";
     return <div className="agent-metadata-marker" role="note">--- {markerLabel} ---</div>;
   }
 
@@ -1479,6 +1484,21 @@ function ActivityGroup({ block }) {
   const status = groupStatus(tools);
   let step = 0;
   const toolItems = order.filter(item => item.kind === "tool");
+  // A lone tool has nothing to disclose: the collapsed header already carries
+  // the command, so keep that row and drop the chevron and expand body instead
+  // of repeating the same line.
+  const singleTool = reasoning.length === 0 && toolItems.length === 1;
+  if (singleTool) {
+    return (
+      <div className={`agent-activity-group ${status}`}>
+        <div className="agent-activity-head is-static">
+          <span className="agent-activity-title">{activityTitle(reasoning.length, tools.length, tools)}</span>
+          {toolGroupSummary(tools) && <code className="agent-tool-summary">{toolGroupSummary(tools)}</code>}
+          <span className="agent-tool-status">{statusText(status)}</span>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={`agent-activity-group ${status}`}>
       <button type="button" className="agent-activity-head" onClick={() => setOpen(!open)} aria-expanded={open}>
@@ -1641,8 +1661,8 @@ function activityTitle(reasoningCount, toolsCount, tools = []) {
   const parts = [];
   if (reasoningCount > 0) parts.push(reasoningCount === 1 ? "Thinking" : `Thinking × ${reasoningCount}`);
   if (toolsCount > 0) {
-    if (toolsCount === 1 && tools[0]?.call?.toolName) {
-      parts.push(displayToolName(tools[0].call.toolName));
+    if (toolsCount === 1) {
+      parts.push(displayToolName(tools[0]?.call?.toolName));
     } else {
       const toolNames = new Set(tools.map(t => (t.call?.toolName || "").toLowerCase()));
       if (toolNames.size === 1) {

@@ -202,3 +202,49 @@ func sameStrings(got, want []string) bool {
 	}
 	return true
 }
+
+func TestMakeRosterDeltaSplitsHighFrequencyMetadata(t *testing.T) {
+	createdAt := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	before := api.State{Sessions: []api.Session{{
+		ID: "session-a", Title: "Shell", Process: "zsh", CommandLine: "-zsh",
+		Directory: "/work/old", CreatedAt: createdAt,
+	}}}
+	after := api.State{Sessions: []api.Session{{
+		ID: "session-a", Title: "Shell", Process: "npm", CommandLine: "npm run dev",
+		Directory: "/work/new", CreatedAt: createdAt,
+	}}}
+
+	delta := makeRosterDelta(before, after, 1, 2)
+	if delta.Sessions != nil {
+		t.Fatalf("metadata-only change produced a session entity delta: %#v", delta.Sessions)
+	}
+	if delta.SessionMetadata == nil || len(delta.SessionMetadata.Upsert) != 1 {
+		t.Fatalf("session metadata delta = %#v", delta.SessionMetadata)
+	}
+	got := delta.SessionMetadata.Upsert[0]
+	if got.ID != "session-a" || got.Process != "npm" || got.CommandLine != "npm run dev" || got.Directory != "/work/new" {
+		t.Fatalf("metadata upsert = %#v", got)
+	}
+}
+
+func TestMakeRosterDeltaEntityUpsertCarriesMetadataOnce(t *testing.T) {
+	createdAt := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	before := api.State{Sessions: []api.Session{{
+		ID: "session-a", Title: "Old", Process: "zsh", Directory: "/work/old", CreatedAt: createdAt,
+	}}}
+	after := api.State{Sessions: []api.Session{{
+		ID: "session-a", Title: "New", Process: "npm", CommandLine: "npm run dev",
+		Directory: "/work/new", CreatedAt: createdAt,
+	}}}
+
+	delta := makeRosterDelta(before, after, 1, 2)
+	if delta.Sessions == nil || len(delta.Sessions.Upsert) != 1 {
+		t.Fatalf("session entity delta = %#v", delta.Sessions)
+	}
+	if got := delta.Sessions.Upsert[0]; got.Title != "New" || got.CommandLine != "npm run dev" || got.Directory != "/work/new" {
+		t.Fatalf("entity upsert lost metadata: %#v", got)
+	}
+	if delta.SessionMetadata != nil {
+		t.Fatalf("metadata duplicated beside the entity upsert: %#v", delta.SessionMetadata)
+	}
+}

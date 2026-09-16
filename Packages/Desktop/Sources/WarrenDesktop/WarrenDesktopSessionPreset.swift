@@ -32,6 +32,13 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         self.isPinned = isPinned
     }
 
+    /// The catalog entry for a Session kind, which is what carries the provider's
+    /// own icon. Callers pass `presentedKind` so a shell the Host has promoted to
+    /// an Agent resolves to that Agent's mark.
+    public static func builtIn(for kind: TerminalSessionKind) -> Self? {
+        builtIns.first { $0.request.kind == kind }
+    }
+
     public static let builtIns: [Self] = [
         Self(
             id: "shell",

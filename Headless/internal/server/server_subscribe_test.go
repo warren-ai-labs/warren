@@ -403,6 +403,7 @@ func TestSubscribeDoesNotClaimFocus(t *testing.T) {
 	if service.hasFocusedPeer(sessionID) {
 		t.Fatal("resize must not claim input focus ownership")
 	}
+	service.flushResizes()
 	if got := len(runtime.snapshotResizes()); got != 1 {
 		t.Fatalf("unowned resize did not reach runtime: %d calls", got)
 	}
@@ -431,6 +432,7 @@ func TestPassiveSubscriptionCanPromoteExplicitFocus(t *testing.T) {
 	if !focused["focused"] || !focused["resized"] {
 		t.Fatalf("explicit focus result = %#v, want focused and resized", focused)
 	}
+	service.flushResizes()
 	resizes := runtime.snapshotResizes()
 	if len(resizes) != 1 || resizes[0] != (recordedResize{columns: 121, rows: 41}) {
 		t.Fatalf("explicit focus resizes = %#v", resizes)
@@ -453,6 +455,7 @@ func TestPassiveSubscriptionCanPromoteExplicitFocus(t *testing.T) {
 	if service.hasFocusedPeer(sessionID) {
 		t.Fatal("unowned resize must not regain input focus ownership")
 	}
+	service.flushResizes()
 	if got := len(runtime.snapshotResizes()); got != 2 {
 		t.Fatalf("unowned resize after blur did not reach runtime: %d calls", got)
 	}

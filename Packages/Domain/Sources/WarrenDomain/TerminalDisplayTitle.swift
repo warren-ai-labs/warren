@@ -46,7 +46,7 @@ public struct TerminalDisplayTitleTemplate: RawRepresentable, Hashable, Sendable
     public static let compactPlaceholderMaxLength = 32
     public static let compactDirectoryMaxLength = 32
 
-    public static let defaultValue = Self(rawValue: "{session} · {directory} · {command}")
+    public static let defaultValue = Self(rawValue: "{session} · {directoryName} · {command}")
 
     public static let placeholders: [(token: String, description: String)] = [
         ("{session}", "Session name"),

@@ -703,6 +703,54 @@ final class WarrenRemoteModelTests: XCTestCase {
         XCTAssertNil(updated.applying(try XCTUnwrap(staleMessage.delta)))
     }
 
+    func testRemoteRosterAppliesSessionMetadataDelta() throws {
+        let roster = try JSONDecoder().decode(
+            RemoteRoster.self,
+            from: Data(
+                """
+                {
+                  "revision": 7,
+                  "host": {"id": "host", "name": "Host"},
+                  "sessions": [{
+                    "id": "session-a",
+                    "title": "Shell",
+                    "kind": "shell",
+                    "lifecycle": "running",
+                    "process": "zsh",
+                    "directory": "/work/old"
+                  }]
+                }
+                """.utf8
+            )
+        )
+        let message = try JSONDecoder().decode(
+            RemoteRoster.StreamMessage.self,
+            from: Data(
+                """
+                {
+                  "t": "roster.delta",
+                  "baseRevision": 7,
+                  "revision": 8,
+                  "sessionMetadata": {
+                    "upsert": [{
+                      "id": "session-a",
+                      "process": "npm",
+                      "commandLine": "npm run dev",
+                      "directory": "/work/new"
+                    }]
+                  }
+                }
+                """.utf8
+            )
+        )
+        let updated = try XCTUnwrap(roster.applying(try XCTUnwrap(message.delta)))
+
+        let session = try XCTUnwrap(updated.sessions.first)
+        XCTAssertEqual(session.process, "npm")
+        XCTAssertEqual(session.commandLine, "npm run dev")
+        XCTAssertEqual(session.directory, "/work/new")
+    }
+
     func testReorderingTabsPreservesTasksInProjection() {
         let host = WarrenDomain.Host(name: "Task Host")
         let task = WarrenTask(hostID: host.id, name: "Delivery")
@@ -999,32 +1047,59 @@ final class WarrenRemoteModelTests: XCTestCase {
         let sessionID = TerminalSessionID()
         var tracker = WarrenAgentCompletionTracker()
 
-        XCTAssertEqual(tracker.observe([
+        XCTAssertEqual(tracker.observe(sessions: [sessionID], turns: [
             sessionID: .init(id: 4, status: "completed"),
         ]), [])
-        XCTAssertEqual(tracker.observe([
+        XCTAssertEqual(tracker.observe(sessions: [sessionID], turns: [
             sessionID: .init(id: 5, status: "started"),
         ]), [])
-        XCTAssertEqual(tracker.observe([
+        XCTAssertEqual(tracker.observe(sessions: [sessionID], turns: [
             sessionID: .init(id: 5, status: "completed"),
         ]), [sessionID])
-        XCTAssertEqual(tracker.observe([
+        XCTAssertEqual(tracker.observe(sessions: [sessionID], turns: [
             sessionID: .init(id: 5, status: "completed"),
         ]), [])
+    }
+
+    func testAgentCompletionTrackerTreatsRestoredTurnAsBaseline() {
+        let restored = TerminalSessionID()
+        let fresh = TerminalSessionID()
+        var tracker = WarrenAgentCompletionTracker()
+
+        // The Host reports a Session before replaying its transcript.
+        XCTAssertEqual(tracker.observe(sessions: [restored], turns: [:]), [])
+        // The restored Session regains an already terminal turn: no ring.
+        XCTAssertEqual(tracker.observe(sessions: [restored], turns: [
+            restored: .init(id: 7, status: "completed"),
+        ]), [])
+        // A Session first seen with a terminal turn is a live completion.
+        XCTAssertEqual(tracker.observe(sessions: [restored, fresh], turns: [
+            restored: .init(id: 7, status: "completed"),
+            fresh: .init(id: 2, status: "completed"),
+        ]), [fresh])
+        // A live turn on a restored Session still rings when it completes.
+        XCTAssertEqual(tracker.observe(sessions: [restored], turns: [
+            restored: .init(id: 8, status: "started"),
+        ]), [])
+        XCTAssertEqual(tracker.observe(sessions: [restored], turns: [
+            restored: .init(id: 8, status: "completed"),
+        ]), [restored])
     }
 
     func testAgentCompletionTrackerIgnoresFailedAndReboundTurns() {
         let sessionID = TerminalSessionID()
         var tracker = WarrenAgentCompletionTracker()
-        _ = tracker.observe([sessionID: .init(id: 5, status: "completed")])
+        _ = tracker.observe(sessions: [sessionID], turns: [
+            sessionID: .init(id: 5, status: "completed"),
+        ])
 
-        XCTAssertEqual(tracker.observe([
+        XCTAssertEqual(tracker.observe(sessions: [sessionID], turns: [
             sessionID: .init(id: 6, status: "failed"),
         ]), [])
-        XCTAssertEqual(tracker.observe([
+        XCTAssertEqual(tracker.observe(sessions: [sessionID], turns: [
             sessionID: .init(id: 1, status: "completed"),
         ]), [])
-        XCTAssertEqual(tracker.observe([
+        XCTAssertEqual(tracker.observe(sessions: [sessionID], turns: [
             sessionID: .init(id: 2, status: "completed"),
         ]), [sessionID])
     }

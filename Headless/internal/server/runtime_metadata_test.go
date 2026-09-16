@@ -82,3 +82,52 @@ func TestRosterOverlaysRuntimeMetadata(t *testing.T) {
 		t.Fatalf("roster metadata = %q/%q/%q, want npm/npm run dev//work/live", session.Process, session.CommandLine, session.Directory)
 	}
 }
+
+func TestRosterFallsBackToLaunchDirectory(t *testing.T) {
+	directory := t.TempDir()
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test-host")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	adapter := &metadataRuntime{
+		memoryRuntime: memoryRuntime{sessions: map[string][]byte{"runtime-live": {}}},
+		process:       "zsh",
+	}
+	service := &Service{
+		Store:           state,
+		Runtime:         adapter,
+		Runtimes:        map[string]Runtime{"test": adapter},
+		DefaultRuntime:  "test",
+		ProbeForeground: true,
+		WorktreeRoot:    filepath.Join(directory, "worktrees"),
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Workspaces = append(value.Workspaces, api.Workspace{
+			ID:        "workspace-1",
+			ProjectID: "project-1",
+			Name:      "warren",
+			Path:      "/work/launch",
+			CreatedAt: time.Now().UTC(),
+		})
+		value.Sessions = append(value.Sessions, api.Session{
+			ID:          "session-1",
+			WorkspaceID: "workspace-1",
+			Runtime:     "runtime-live",
+			RuntimeKind: "test",
+			Lifecycle:   "running",
+			CreatedAt:   time.Now().UTC(),
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	service.lazyInit()
+	service.refreshMetadata(context.Background())
+	roster, _ := service.RosterVersion(context.Background())
+	if len(roster.Sessions) != 1 {
+		t.Fatalf("roster sessions = %d, want 1", len(roster.Sessions))
+	}
+	if got := roster.Sessions[0].Directory; got != "/work/launch" {
+		t.Fatalf("directory = %q, want the workspace path", got)
+	}
+}

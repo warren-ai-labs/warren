@@ -65,13 +65,23 @@ struct WarrenDesktopSessionTreeGuide: Equatable, Sendable {
             - WarrenDesktopSidebarIndent.sessionGuide
     }
 
-    /// The vertical center of the row at `index`, from the group's top.
+    /// The row center of the leaf at `index`, from the group's top.
     ///
     /// Index 0 is the workspace row that owns the leaves; the leaves start at 1.
     func rowCenter(at index: Int) -> CGFloat {
         guard index > 0 else { return rowHeight / 2 }
         let step = rowHeight + rowSpacing
         return rowHeight + rowSpacing + CGFloat(index - 1) * step + rowHeight / 2
+    }
+
+    /// The rail's stroke, resting or under the pointer.
+    ///
+    /// In rich mode the workspace row does not navigate, so the group's hover
+    /// feedback is spent on the figure rather than on the row's background. The
+    /// emphasis is resolved next to the geometry so the rendered rail stays the
+    /// single thing that has to be read to know what hover looks like.
+    func railColor(isHovered: Bool, tokens: WarrenColorTokens) -> Color {
+        isHovered ? tokens.sidebarTreeGuideHighlight : tokens.sidebarTreeGuide
     }
 }
 
@@ -113,6 +123,12 @@ struct WarrenDesktopSessionTreeGuideShape: Shape {
 /// without moving the elbow that points at it. Both the current Host's tree and
 /// a scoped Host's render their leaves through here, so the two cannot drift
 /// apart.
+///
+/// The same figure carries the hover state: the pointer anywhere in the group
+/// lights the whole rail, because the group is what is being pointed at. The
+/// workspace row above it does not navigate on a click, so this is the only
+/// place the pointer can be answered, and answering it needs a sensor rather
+/// than `.onHover`; see `WarrenDesktopHoverSensor`.
 struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
     let leafCount: Int
     let guide: WarrenDesktopSessionTreeGuide
@@ -137,6 +153,9 @@ struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.warrenForceHover) private var forceHover
+    @State private var isHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: guide.rowSpacing) {
@@ -151,19 +170,53 @@ struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
         // glyphs it leaves, and behind the leaf fills it spans. It takes no
         // pointer or accessibility surface of its own.
         .background(alignment: .topLeading) {
-            if leafCount > 0 {
-                WarrenDesktopSessionTreeGuideShape(guide: guide, leafCount: leafCount)
-                    .stroke(
-                        WarrenColorTokens.resolved(for: colorScheme).sidebarTreeGuide,
-                        style: StrokeStyle(
-                            lineWidth: WarrenLayoutMetrics.sidebarRailWidth,
-                            lineCap: .round,
-                            lineJoin: .round
-                        )
-                    )
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
+            rail
+        }
+        .overlay {
+            // The rows cannot report hover themselves, and a click still has to
+            // reach them; the sensor answers both. See
+            // WarrenDesktopHoverSensor.
+            WarrenDesktopHoverSensor { isHovered = $0 }
+                .accessibilityHidden(true)
         }
     }
+
+    /// The figure at rest, with the emphasis faded in over it.
+    ///
+    /// Two strokes rather than one color swap: hover then reads as the line
+    /// lifting instead of snapping to a different grey, and the fade is an
+    /// opacity the compositor can animate.
+    @ViewBuilder
+    private var rail: some View {
+        if leafCount > 0 {
+            let tokens = WarrenColorTokens.resolved(for: colorScheme)
+            let stroke = StrokeStyle(
+                lineWidth: WarrenLayoutMetrics.sidebarRailWidth,
+                lineCap: .round,
+                lineJoin: .round
+            )
+            ZStack {
+                shape.stroke(guide.railColor(isHovered: false, tokens: tokens), style: stroke)
+                shape
+                    .stroke(guide.railColor(isHovered: true, tokens: tokens), style: stroke)
+                    .opacity(isEmphasized ? 1 : 0)
+                    .animation(
+                        WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion),
+                        value: isEmphasized
+                    )
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+
+    private var shape: WarrenDesktopSessionTreeGuideShape {
+        WarrenDesktopSessionTreeGuideShape(guide: guide, leafCount: leafCount)
+    }
+
+    /// Whether the rail is painted with the emphasis.
+    ///
+    /// The offscreen probe has no pointer, so it forces the hover state every
+    /// other hover-revealed control reads; see `WarrenForceHoverKey`.
+    private var isEmphasized: Bool { isHovered || forceHover }
 }

@@ -20,7 +20,8 @@ struct WarrenDesktopTabBar: View {
     let tabActivities: [TerminalSessionID: AgentActivityState]
     let pinnedSessionIDs: Set<TerminalSessionID>
     let selectedTabID: String?
-    let splitTabIDs: Set<String>
+    /// The pane group the track draws, when the scope's layout has one.
+    let splitGroup: WarrenDesktopSplitGroup?
     var onCopyPaneTitle: () -> Void = {}
     let chromeMode: WarrenDesktopChromeMode
     let isSidebarCollapsed: Bool
@@ -55,7 +56,8 @@ struct WarrenDesktopTabBar: View {
     let onAddTab: () -> Void
     let onCloseTab: (String) -> Void
     let onCloseOtherTabs: (String) -> Void
-    let onCloseAllTabs: () -> Void
+    /// Closes every pane of the layout the named Tab belongs to.
+    let onCloseAllTabs: (String) -> Void
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onToggleSessionPin: (TerminalSessionID, Bool) -> Void
     let onDismissActivity: (TerminalSessionID, AgentActivityState) -> Void
@@ -71,7 +73,7 @@ struct WarrenDesktopTabBar: View {
         tabActivities: [TerminalSessionID: AgentActivityState],
         pinnedSessionIDs: Set<TerminalSessionID>,
         selectedTabID: String?,
-        splitTabIDs: Set<String> = [],
+        splitGroup: WarrenDesktopSplitGroup? = nil,
         onCopyPaneTitle: @escaping () -> Void = {},
         chromeMode: WarrenDesktopChromeMode,
         isSidebarCollapsed: Bool,
@@ -106,7 +108,7 @@ struct WarrenDesktopTabBar: View {
         onAddTab: @escaping () -> Void,
         onCloseTab: @escaping (String) -> Void,
         onCloseOtherTabs: @escaping (String) -> Void,
-        onCloseAllTabs: @escaping () -> Void,
+        onCloseAllTabs: @escaping (String) -> Void,
         onRequestRename: @escaping (WarrenDesktopRenameRequest) -> Void,
         onToggleSessionPin: @escaping (TerminalSessionID, Bool) -> Void,
         onDismissActivity: @escaping (TerminalSessionID, AgentActivityState) -> Void
@@ -116,7 +118,7 @@ struct WarrenDesktopTabBar: View {
         self.tabActivities = tabActivities
         self.pinnedSessionIDs = pinnedSessionIDs
         self.selectedTabID = selectedTabID
-        self.splitTabIDs = splitTabIDs
+        self.splitGroup = splitGroup
         self.onCopyPaneTitle = onCopyPaneTitle
         self.chromeMode = chromeMode
         self.isSidebarCollapsed = isSidebarCollapsed
@@ -160,11 +162,18 @@ struct WarrenDesktopTabBar: View {
         self.onDismissActivity = onDismissActivity
     }
 
-    static func tabTrackWidth(tabCount: Int) -> CGFloat {
-        CGFloat(tabCount) * WarrenLayoutMetrics.tabWidth
+    /// The track's width for a listing, including the slot a drawn group's
+    /// mark costs. The mark is not a Tab, so it has to be added here and to
+    /// every Tab origin behind it in the scroll follower.
+    static func tabTrackWidth(tabCount: Int, groupMarkSlotWidth: CGFloat = 0) -> CGFloat {
+        CGFloat(tabCount) * WarrenLayoutMetrics.tabWidth + groupMarkSlotWidth
     }
 
     private var tabs: [ClientTab] { presentation.listings }
+
+    private var rowElements: [WarrenDesktopTabRowElement] {
+        WarrenDesktopPaneBar.rowElements(listings: tabs, group: splitGroup)
+    }
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
@@ -196,64 +205,21 @@ struct WarrenDesktopTabBar: View {
                     showsEdgeChevrons: true
                 ) {
                     HStack(spacing: 0) {
-                        ForEach(tabs) { tab in
-                            let activity = tab.sessionID.flatMap { tabActivities[$0] }
-                            let isSelected = !embeddedEditorSelected && selectedTabID == tab.id
-                            let isSplitVisible = splitTabIDs.contains(tab.id) && !isSelected
-                            WarrenDesktopTabItem(
-                                tab: tab,
-                                displayTitle: tabTitles[tab.id] ?? tab.title,
-                                activity: activity,
-                                isSelected: isSelected,
-                                isSplitVisible: isSplitVisible,
-                                isPinned: tab.sessionID.map(pinnedSessionIDs.contains) ?? false,
-                                onSelect: { selectTab(tab.id) },
-                                onClose: { onCloseTab(tab.id) },
-                                onCloseOthers: { onCloseOtherTabs(tab.id) },
-                                onCloseAll: onCloseAllTabs,
-                                onMoveBefore: { sourceID in onMoveTab(sourceID, tab.id) },
-                                onSplitDrop: { paneID, droppedTabID, target in
-                                    onSplitDrop(paneID, droppedTabID, target)
-                                },
-                                onRename: {
-                                    guard let sessionID = tab.sessionID else { return }
-                                    onRequestRename(.session(
-                                        sessionID,
-                                        title: tabTitles[tab.id] ?? tab.title
-                                    ))
-                                },
-                                onTogglePin: {
-                                    guard let sessionID = tab.sessionID else { return }
-                                    onToggleSessionPin(
-                                        sessionID,
-                                        !pinnedSessionIDs.contains(sessionID)
-                                    )
-                                },
-                                onDismissActivity: {
-                                    guard let sessionID = tab.sessionID,
-                                          let activity else { return }
-                                    onDismissActivity(sessionID, activity)
-                                },
-                                sessionMoveTargets: tab.sessionID.map { sessionID in
-                                    sessionMoveTargets.filter {
-                                        $0.destination != sessionMoveDestinations[sessionID]
-                                    }
-                                } ?? [],
-                                onMoveSession: { sessionID, destination in
-                                    onMoveSession(sessionID, destination)
-                                }
-                            )
-                            .disabled(pendingTabID != nil)
-                            .opacity(pendingTabID == tab.id ? 0.72 : 1)
-                            .overlay(alignment: .bottom) {
-                                // Keep the pending state visible while the
-                                // selection itself remains free of a colored
-                                // underline. The tab surface already carries
-                                // the selected background and border.
-                                Rectangle()
-                                    .fill(pendingTabID == tab.id ? tokens.info : .clear)
-                                    .frame(height: pendingTabID == tab.id ? 2 : 0)
-                                    .allowsHitTesting(false)
+                        ForEach(rowElements) { element in
+                            switch element {
+                            case .tab(let tab):
+                                tabItem(
+                                    tab,
+                                    showsTrailingSeparator: true,
+                                    dropBeforeTabID: tab.id,
+                                    canStartDrag: true
+                                )
+                            case .groupRun(let group, let runTabs, let dropBeforeTabID):
+                                groupRun(
+                                    group: group,
+                                    tabs: runTabs,
+                                    dropBeforeTabID: dropBeforeTabID
+                                )
                             }
                         }
 
@@ -270,8 +236,10 @@ struct WarrenDesktopTabBar: View {
                             selectedTabID: embeddedEditorSelected
                                 ? Self.editorTabID
                                 : selectedTabID,
-                            tabIDs: tabs.map(\.id)
+                            tabIDs: rowElements.drawnTabIDs
                                 + (embeddedEditorTabVisible ? [Self.editorTabID] : []),
+                            groupMarkSlotWidth: rowElements.groupMarkSlotWidth,
+                            groupMarkAnchorIndex: rowElements.groupMarkAnchorIndex,
                             reduceMotion: reduceMotion
                         )
                     }
@@ -279,7 +247,8 @@ struct WarrenDesktopTabBar: View {
                 }
                 .frame(
                     maxWidth: Self.tabTrackWidth(
-                        tabCount: tabs.count + (embeddedEditorTabVisible ? 1 : 0)
+                        tabCount: tabs.count + (embeddedEditorTabVisible ? 1 : 0),
+                        groupMarkSlotWidth: rowElements.groupMarkSlotWidth
                     ),
                     alignment: .leading
                 )
@@ -352,6 +321,135 @@ struct WarrenDesktopTabBar: View {
 
     private static let editorTabID = "warren.workspace.editor"
 
+    /// One Tab of the track, with the pending feedback the bar owns.
+    ///
+    /// `dropBeforeTabID` is the Tab a drop on this one moves its source in
+    /// front of. It differs from the Tab itself for a pane group's members,
+    /// where every drop resolves to the group's leading edge.
+    @ViewBuilder
+    private func tabItem(
+        _ tab: ClientTab,
+        showsTrailingSeparator: Bool,
+        dropBeforeTabID: String?,
+        canStartDrag: Bool
+    ) -> some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let activity = tab.sessionID.flatMap { tabActivities[$0] }
+        WarrenDesktopTabItem(
+            tab: tab,
+            displayTitle: tabTitles[tab.id] ?? tab.title,
+            activity: activity,
+            isSelected: !embeddedEditorSelected && selectedTabID == tab.id,
+            showsTrailingSeparator: showsTrailingSeparator,
+            canStartDrag: canStartDrag,
+            isPinned: tab.sessionID.map(pinnedSessionIDs.contains) ?? false,
+            onSelect: { selectTab(tab.id) },
+            onClose: { onCloseTab(tab.id) },
+            onCloseOthers: { onCloseOtherTabs(tab.id) },
+            onCloseAll: { onCloseAllTabs(tab.id) },
+            onMoveBefore: { sourceID in
+                guard let dropBeforeTabID else { return }
+                onMoveTab(sourceID, dropBeforeTabID)
+            },
+            onSplitDrop: { paneID, droppedTabID, target in
+                onSplitDrop(paneID, droppedTabID, target)
+            },
+            onRename: {
+                guard let sessionID = tab.sessionID else { return }
+                onRequestRename(.session(
+                    sessionID,
+                    title: tabTitles[tab.id] ?? tab.title
+                ))
+            },
+            onTogglePin: {
+                guard let sessionID = tab.sessionID else { return }
+                onToggleSessionPin(
+                    sessionID,
+                    !pinnedSessionIDs.contains(sessionID)
+                )
+            },
+            onDismissActivity: {
+                guard let sessionID = tab.sessionID,
+                      let activity else { return }
+                onDismissActivity(sessionID, activity)
+            },
+            sessionMoveTargets: tab.sessionID.map { sessionID in
+                sessionMoveTargets.filter {
+                    $0.destination != sessionMoveDestinations[sessionID]
+                }
+            } ?? [],
+            onMoveSession: { sessionID, destination in
+                onMoveSession(sessionID, destination)
+            }
+        )
+        .disabled(pendingTabID != nil)
+        .opacity(pendingTabID == tab.id ? 0.72 : 1)
+        .overlay(alignment: .bottom) {
+            // Keep the pending state visible while the selection itself
+            // remains free of a colored underline. The tab surface already
+            // carries the selected background and border.
+            Rectangle()
+                .fill(pendingTabID == tab.id ? tokens.info : .clear)
+                .frame(height: pendingTabID == tab.id ? 2 : 0)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// One pane group: the mark in front of its first member, and the rule that
+    /// binds the members to it.
+    ///
+    /// A drop anywhere in the run lands after the group, which is the only
+    /// position a Session from outside can take: the group leads the strip, and
+    /// the Tab the drop goes in front of is the first one that follows it. The
+    /// group is one placement, so nothing can be inserted between its members —
+    /// that is also the only reason the rule under them can keep meaning "these
+    /// belong together".
+    @ViewBuilder
+    private func groupRun(
+        group: WarrenDesktopSplitGroup,
+        tabs runTabs: [ClientTab],
+        dropBeforeTabID: String?
+    ) -> some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let color = WarrenDesktopSplitGroupPalette.color(for: group.scopeKey, tokens: tokens)
+        HStack(spacing: 0) {
+            WarrenDesktopSplitGroupMark(tree: group.tree, color: color)
+                .padding(.leading, WarrenLayoutMetrics.tabGroupMarkLeadingInset)
+                .padding(.trailing, WarrenLayoutMetrics.tabGroupMarkTrailingInset)
+                // The mark is part of the group for drops as well, so landing on
+                // it lands beside the group instead of on nothing.
+                .dropDestination(for: String.self) { tabIDs, _ in
+                    guard let sourceID = tabIDs.first else { return false }
+                    onMoveTab(sourceID, dropBeforeTabID)
+                    return true
+                }
+            ForEach(Array(runTabs.enumerated()), id: \.element.id) { index, tab in
+                tabItem(
+                    tab,
+                    showsTrailingSeparator: WarrenDesktopTabRowElement
+                        .memberShowsTrailingSeparator(index: index, count: runTabs.count),
+                    dropBeforeTabID: dropBeforeTabID,
+                    // A member cannot be pulled out of its group: the layout,
+                    // not the Tab strip, decides which Session sits where.
+                    canStartDrag: false
+                )            }
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(color.opacity(WarrenLayoutMetrics.tabGroupRuleOpacity))
+                .frame(height: WarrenLayoutMetrics.tabGroupRuleHeight)
+                .allowsHitTesting(false)
+        }
+        .warrenSemanticElement(
+            id: "tabgroup.\(group.scopeKey)",
+            role: .group,
+            label: "Split group",
+            value: "\(runTabs.count) panes"
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Split group of \(runTabs.count) panes")
+    }
+
     private func selectTab(_ tabID: String) {
         guard pendingTabID == nil else { return }
         guard selectedTabID != tabID else {
@@ -387,10 +485,15 @@ enum WarrenDesktopTabScrollPosition {
     /// fade length clears the whole band with one existing token.
     static let defaultRevealInset = WarrenLayoutMetrics.tabScrollFadeLength
 
-    /// The origin that reveals `selectedIndex` with the smallest movement, or
-    /// the current origin when the tab is already fully visible.
+    /// The origin that reveals a Tab starting at `selectedMinX` with the
+    /// smallest movement, or the current origin when the Tab is already fully
+    /// visible.
+    ///
+    /// The Tab's own origin is passed in rather than derived from its index:
+    /// a drawn group's mark is a slot that is not a Tab, so the track's origins
+    /// stop being `index * tabWidth` the moment a group exists.
     static func revealOriginX(
-        selectedIndex: Int,
+        selectedMinX: CGFloat,
         tabWidth: CGFloat,
         trackWidth: CGFloat,
         viewportWidth: CGFloat,
@@ -404,7 +507,6 @@ enum WarrenDesktopTabScrollPosition {
         // A viewport narrower than both insets would invert the visible band,
         // so the margin yields before the band does.
         let inset = min(max(revealInset, 0), viewportWidth / 2)
-        let selectedMinX = CGFloat(selectedIndex) * tabWidth
         let selectedMaxX = selectedMinX + tabWidth
         let visibleMinX = origin + inset
         let visibleMaxX = origin + viewportWidth - inset
@@ -425,6 +527,11 @@ enum WarrenDesktopTabScrollPosition {
 private struct WarrenDesktopTabScrollFollower: NSViewRepresentable {
     let selectedTabID: String?
     let tabIDs: [String]
+    /// The slot a drawn pane group's mark costs, and the Tab index it sits in
+    /// front of. Together they are the follower's only reason to stop treating
+    /// a Tab's origin as `index * tabWidth`.
+    let groupMarkSlotWidth: CGFloat
+    let groupMarkAnchorIndex: Int?
     let reduceMotion: Bool
 
     func makeNSView(context: Context) -> WarrenDesktopTabScrollFollowerView {
@@ -432,6 +539,8 @@ private struct WarrenDesktopTabScrollFollower: NSViewRepresentable {
         view.update(
             selectedTabID: selectedTabID,
             tabIDs: tabIDs,
+            groupMarkSlotWidth: groupMarkSlotWidth,
+            groupMarkAnchorIndex: groupMarkAnchorIndex,
             reduceMotion: reduceMotion
         )
         return view
@@ -441,6 +550,8 @@ private struct WarrenDesktopTabScrollFollower: NSViewRepresentable {
         nsView.update(
             selectedTabID: selectedTabID,
             tabIDs: tabIDs,
+            groupMarkSlotWidth: groupMarkSlotWidth,
+            groupMarkAnchorIndex: groupMarkAnchorIndex,
             reduceMotion: reduceMotion
         )
     }
@@ -449,6 +560,8 @@ private struct WarrenDesktopTabScrollFollower: NSViewRepresentable {
 private final class WarrenDesktopTabScrollFollowerView: NSView {
     private var selectedTabID: String?
     private var tabIDs: [String] = []
+    private var groupMarkSlotWidth: CGFloat = 0
+    private var groupMarkAnchorIndex: Int?
     private var reduceMotion = false
     private var lastViewportWidth: CGFloat?
     private var scrollScheduled = false
@@ -467,12 +580,34 @@ private final class WarrenDesktopTabScrollFollowerView: NSView {
         scheduleScroll()
     }
 
-    func update(selectedTabID: String?, tabIDs: [String], reduceMotion: Bool) {
+    func update(
+        selectedTabID: String?,
+        tabIDs: [String],
+        groupMarkSlotWidth: CGFloat,
+        groupMarkAnchorIndex: Int?,
+        reduceMotion: Bool
+    ) {
         self.reduceMotion = reduceMotion
-        guard self.selectedTabID != selectedTabID || self.tabIDs != tabIDs else { return }
+        guard self.selectedTabID != selectedTabID
+            || self.tabIDs != tabIDs
+            || self.groupMarkSlotWidth != groupMarkSlotWidth
+            || self.groupMarkAnchorIndex != groupMarkAnchorIndex else { return }
         self.selectedTabID = selectedTabID
         self.tabIDs = tabIDs
+        self.groupMarkSlotWidth = groupMarkSlotWidth
+        self.groupMarkAnchorIndex = groupMarkAnchorIndex
         scheduleScroll()
+    }
+
+    /// Where a Tab starts on the track.
+    ///
+    /// The mark is drawn before the group's first member, so that member and
+    /// everything after it are shifted by the mark's slot; Tabs in front of the
+    /// group keep their plain `index * tabWidth` origin.
+    private func originX(forTabIndex index: Int) -> CGFloat {
+        let base = CGFloat(index) * WarrenLayoutMetrics.tabWidth
+        guard let groupMarkAnchorIndex, index >= groupMarkAnchorIndex else { return base }
+        return base + groupMarkSlotWidth
     }
 
     private func scheduleScroll() {
@@ -494,9 +629,9 @@ private final class WarrenDesktopTabScrollFollowerView: NSView {
         guard viewport.width > 0 else { return }
 
         let tabWidth = WarrenLayoutMetrics.tabWidth
-        let trackWidth = max(CGFloat(tabIDs.count) * tabWidth, bounds.width)
+        let trackWidth = max(originX(forTabIndex: tabIDs.count), bounds.width)
         let originX = WarrenDesktopTabScrollPosition.revealOriginX(
-            selectedIndex: selectedIndex,
+            selectedMinX: self.originX(forTabIndex: selectedIndex),
             tabWidth: tabWidth,
             trackWidth: trackWidth,
             viewportWidth: viewport.width,
@@ -541,11 +676,42 @@ struct WarrenDesktopPaneBarPresentation {
 }
 
 extension WarrenDesktopPaneBar {
+    /// The track's elements for one listing.
+    ///
+    /// A pane group is one placement, so the track leads with it: the members
+    /// are drawn as one run at the head of the strip, in the pane order the
+    /// mark's glyph draws, and the rest of the listing follows in its own order.
+    /// Nothing can sit between the members, which is what lets the mark and the
+    /// rule say "these belong together".
+    ///
+    /// The stored Tab order is moved to match (`WarrenDesktopTabOrdering`), so
+    /// the run's position is only the bar's business for the frames between a
+    /// layout change and that reorder landing. A Tab's drop target is the first
+    /// one that follows the group, since nothing can land inside it.
+    static func rowElements(
+        listings: [ClientTab],
+        group: WarrenDesktopSplitGroup?
+    ) -> [WarrenDesktopTabRowElement] {
+        guard let group, group.isDrawn else {
+            return listings.map { .tab(tab: $0) }
+        }
+        let paneOrder = Dictionary(
+            uniqueKeysWithValues: group.tabIDs.enumerated().map { ($0.element, $0.offset) }
+        )
+        let members = listings
+            .filter { paneOrder[$0.id] != nil }
+            .sorted { (paneOrder[$0.id] ?? 0) < (paneOrder[$1.id] ?? 0) }
+        let rest = listings.filter { paneOrder[$0.id] == nil }
+        guard !members.isEmpty else { return listings.map { .tab(tab: $0) } }
+        return [.groupRun(group: group, tabs: members, dropBeforeTabID: rest.first?.id)]
+            + rest.map { WarrenDesktopTabRowElement.tab(tab: $0) }
+    }
+
     /// Whether a scope's Sessions earn the bar a track.
     ///
-    /// As a pane control the bar has nothing to do with one pane: the chip
+    /// As a pane control the bar has nothing to do with one pane: the mark
     /// cannot switch anywhere and repeats a title the pane header carries and
-    /// the sidebar leaf highlights. Panes earn their chips once there are two to
+    /// the sidebar leaf highlights. Panes earn their marks once there are two to
     /// choose between.
     ///
     /// As the Session switcher — which it becomes when the tree stops listing
@@ -588,6 +754,92 @@ extension WarrenDesktopPaneBar {
             showsTrack: drawsTrack,
             solo: drawsTrack ? nil : solo(listings)
         )
+    }
+}
+
+/// One drawn unit of the pane bar's track.
+///
+/// A track stops being a flat list of Tabs once a pane group exists: the
+/// group's mark takes a slot of its own in front of its first member, and the
+/// group's members are drawn as one run so that nothing can sit between them.
+/// Resolving both here — and nowhere else — is what keeps the body, the track's
+/// width, and the scroll follower agreeing about where each Tab starts.
+enum WarrenDesktopTabRowElement: Identifiable, Equatable {
+    case tab(tab: ClientTab)
+    case groupRun(
+        group: WarrenDesktopSplitGroup,
+        tabs: [ClientTab],
+        /// The Tab a drop on this run goes in front of, or nil for the end.
+        dropBeforeTabID: String?
+    )
+
+    var id: String {
+        switch self {
+        case .tab(let tab):
+            return tab.id
+        case .groupRun(let group, _, _):
+            return "tabgroup.\(group.scopeKey)"
+        }
+    }
+
+    var drawsGroupMark: Bool {
+        if case .groupRun = self { return true }
+        return false
+    }
+
+    /// Whether the member at `index` of a run still draws the hairline that
+    /// divides it from the member after it.
+    ///
+    /// Only the last member does. The group's rule is what joins the members,
+    /// so a hairline between two of them would divide what the rule just
+    /// joined — while the last one still has to separate the group from
+    /// whatever Tab follows it.
+    static func memberShowsTrailingSeparator(index: Int, count: Int) -> Bool {
+        index == count - 1
+    }
+}
+
+extension Array where Element == WarrenDesktopTabRowElement {
+    /// The Tab index the group's mark sits in front of.
+    ///
+    /// The follower needs it because the mark is a slot rather than a Tab:
+    /// every Tab from this index on is shifted right by the mark's width, so a
+    /// Tab's origin is no longer `index * tabWidth`.
+    var groupMarkAnchorIndex: Int? {
+        var tabCount = 0
+        for element in self {
+            switch element {
+            case .tab:
+                tabCount += 1
+            case .groupRun:
+                return tabCount
+            }
+        }
+        return nil
+    }
+
+    /// The extra track width one drawn group costs.
+    var groupMarkSlotWidth: CGFloat {
+        contains(where: \.drawsGroupMark)
+            ? WarrenLayoutMetrics.tabGroupMarkSlotWidth
+            : 0
+    }
+
+    /// The Tabs in the order the track draws them.
+    ///
+    /// Equal to the listing's order once the layout has moved the stored order
+    /// (`WarrenDesktopTabOrdering`); it differs only in the frames between a
+    /// layout change and that reorder landing, which is exactly why the scroll
+    /// follower reads this rather than either order on its own.
+    var drawnTabIDs: [String] {
+        flatMap { element -> [String] in
+            switch element {
+            case .tab(let tab):
+                return [tab.id]
+            case .groupRun(_, let tabs, _):
+                return tabs.map(\.id)
+            }
+        }
     }
 }
 

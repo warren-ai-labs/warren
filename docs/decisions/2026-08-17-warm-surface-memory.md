@@ -23,8 +23,10 @@ for future tuning.
 
 Implemented in `Packages/GhosttyAdapter/Sources/GhosttyAdapter/TerminalSurfaceManager.swift`:
 
-- `TerminalSurfaceRetentionPolicy.defaultWarmLimit = 8`
-- `TerminalSurfaceRetentionPolicy.defaultWarmByteLimit = 1024 * 1024 * 1024` (1 GiB)
+- `TerminalSurfaceRetentionPolicy.defaultWarmLimit = 8` (raised to 32 on
+  2026-09-15 — see the update at the end)
+- `TerminalSurfaceRetentionPolicy.defaultWarmByteLimit = 1024 * 1024 * 1024` (1 GiB,
+  raised to 3 GiB on 2026-09-15 — see the update at the end)
 - The active surface is never evicted.
 - Warm surfaces are evicted LRU (oldest first) when the warm count exceeds
   `warmLimit` or the estimated warm bytes exceed `warmByteLimit`.
@@ -161,3 +163,32 @@ becomes a problem.
 3. Reduce the default warm count (e.g. to 1-2) or adapt it to system memory
    pressure.
 4. Rely more aggressively on ghostline's cold rebuild path.
+
+## Update 2026-09-15: warm count raised to 32, byte ceiling raised to 3 GiB
+
+Observed cost of the old limits: a user cycling through roughly ten open
+Sessions saw a full snapshot install (and a TUI-wide repaint) on the revisit,
+because the ninth surface evicted the oldest warm one. `defaultWarmLimit` is now
+32, and `defaultWarmByteLimit` is 3 GiB.
+
+Both were needed. The count alone cannot bind, because every warm surface keeps
+its IOSurface (~86 MB measured at 1512x982) and the estimate scales with
+viewport size, so the old 1 GiB ceiling capped the pool near 15-20 surfaces:
+
+| Pane viewport (points, 2x) | Estimate/surface | Warm surfaces under 3 GiB |
+|---|---:|---:|
+| 1148x869 | ~48 MB | ~64 |
+| 800x600 | ~23 MB | ~130 |
+| 1512x982 | ~71 MB | ~43 |
+
+At 3 GiB the count of 32 is the binding constraint on ordinary displays. The
+trade-off is explicit: on the order of 2-3 GB of warm memory in the worst case,
+against re-installing a full snapshot on every revisit. A surface whose
+projection leaves the running set is still pruned immediately, so the pool only
+grows with Sessions the user actually keeps open.
+
+The durable fix for this whole class remains what the comparison section
+describes: a renderer-realization API that frees the IOSurface of an idle warm
+surface while keeping its terminal state. Until libghostty exposes one, the
+budget is the only lever, and eviction always costs a cold attach plus a full
+snapshot install.

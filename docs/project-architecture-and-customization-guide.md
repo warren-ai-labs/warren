@@ -413,8 +413,7 @@ the manager reconciles it outside `body` and layout call stacks.
 Its default retention policy keeps:
 
 - one active Surface;
-- up to eight warm Surfaces;
-- up to 1 GiB of estimated warm Surface memory;
+- up to 32 warm Surfaces under a 3 GiB estimated warm-memory ceiling;
 - all other Surfaces cold and disposable.
 
 This policy exists because recreating terminal renderers on every Tab switch

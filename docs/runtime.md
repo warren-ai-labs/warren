@@ -47,15 +47,25 @@ after startup is ordinary shell behavior rather than a Warren settings update.
 
 ## Session metadata
 
-Warren projects two live, presentation-only fields onto each running Session:
+Warren projects three live, presentation-only fields onto each running
+Session:
 
 - **Working directory** comes from the OSC 7 report the shell integration
   emits and is parsed from the same output stream that feeds the VT emulator,
-  so it updates without an OS probe. It is empty when the shell never reports
-  one.
+  so it updates without an OS probe. Warren injects a minimal OSC 7 hook for
+  zsh (via `ZDOTDIR`) and fish (via `XDG_DATA_DIRS`); both restore the user's
+  own configuration. `sh`/`dash` have no prompt hook. When the shell has not
+  reported a directory, the Host falls back to the directory the Session was
+  launched in. A rolling Ghostline upgrade carries the last report forward
+  until the next prompt.
 - **Foreground process and command line** come from the runtime's foreground
   process group. The probe is best-effort, never persisted, and enabled by
   default (`WARREN_GHOSTLINE_PROBE_FOREGROUND`).
+
+These fields change on every prompt or `cd`, so they travel in a dedicated
+`sessionMetadata` roster delta instead of the Session entity. An omitted field
+in that delta means empty, not unchanged; a Session entity upsert still carries
+any metadata it happens to include.
 
 Clients use these fields for the pane title, tab label, and sidebar detail. A
 foreground shell is treated as a prompt rather than a command, so an idle

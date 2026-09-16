@@ -124,7 +124,13 @@ lifecycle.
 - On tab switch, only reparent/present the already-current surface.
 - Do not call `session.subscribe`, replay a ring, or clear the screen for an
   ordinary switch.
-- Only the active session may receive input, focus, or resize ownership.
+- Only the active session may receive input and keyboard focus. Resize
+  ownership is separate: every visible pane may size its own PTY, and the
+  daemon arbitrates the shared size (see the resize path below).
+- The normal path is endpoint-independent. A retained surface is promoted
+  locally whether it is on screen or parked, because a parked surface keeps
+  applying background output to its grid; only a cold or transport-recovered
+  session takes the recovery path.
 
 ### Recovery path
 

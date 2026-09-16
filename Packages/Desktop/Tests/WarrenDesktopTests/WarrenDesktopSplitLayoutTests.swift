@@ -1,5 +1,6 @@
 import XCTest
 import WarrenClientCore
+import WarrenDomain
 @testable import WarrenDesktop
 
 final class WarrenDesktopSplitLayoutTests: XCTestCase {
@@ -382,20 +383,6 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
         XCTAssertEqual(ratio, 0.5, accuracy: 0.001)
     }
 
-    func testStructuralIdentityIgnoresRatiosButTracksShapeAndLeaves() {
-        let first = SplitLayoutTree.leaf(SplitPaneItem(id: "p1", tabID: "t1"))
-        let second = first.split(targetPaneID: "p1", newTabID: "t2", axis: .horizontal)
-        let resized = second.updateRatio(path: [], ratio: 0.72)
-
-        XCTAssertEqual(second.structuralIdentity, resized.structuralIdentity)
-
-        let changedAxis = first.split(targetPaneID: "p1", newTabID: "t2", axis: .vertical)
-        XCTAssertNotEqual(second.structuralIdentity, changedAxis.structuralIdentity)
-
-        let changedLeaf = SplitLayoutTree.leaf(SplitPaneItem(id: "p1", tabID: "other"))
-        XCTAssertNotEqual(first.structuralIdentity, changedLeaf.structuralIdentity)
-    }
-
     func testReconcileFallbackUsesStablePaneIdentity() {
         let tree = SplitLayoutTree.leaf(SplitPaneItem(id: "stale", tabID: "closed"))
 
@@ -404,85 +391,6 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
 
         XCTAssertEqual(first?.allPaneIDs, [SplitPaneItem.fallbackID(forTabID: "open")])
         XCTAssertEqual(first, second)
-    }
-
-    func testPersistenceDropsUnscopedLegacyLayouts() {
-        let suiteName = "WarrenDesktopSplitLayoutTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
-        let tree = SplitLayoutTree.leaf(SplitPaneItem(id: "pane", tabID: "tab"))
-        WarrenDesktopSplitLayoutPersistence.save(
-            [
-                "legacy-workspace": tree,
-                "endpoint-local-workspace-current": tree,
-            ],
-            to: defaults
-        )
-
-        let restored = WarrenDesktopSplitLayoutPersistence.restore(from: defaults)
-        XCTAssertNil(restored["legacy-workspace"])
-        XCTAssertEqual(restored["endpoint-local-workspace-current"], tree)
-    }
-
-    func testPruningDropsDeletedScopesOfCurrentEndpointOnly() {
-        let tree = SplitLayoutTree.leaf(SplitPaneItem(id: "pane", tabID: "tab"))
-        let layouts = [
-            "endpoint-local-workspace-live": tree,
-            "endpoint-local-workspace-deleted": tree,
-            "endpoint-remote-workspace-absent": tree,
-        ]
-
-        let pruned = WarrenDesktopSplitLayoutPersistence.pruned(
-            layouts,
-            endpointID: "local",
-            liveScopeKeys: ["endpoint-local-workspace-live"]
-        )
-
-        XCTAssertNotNil(pruned["endpoint-local-workspace-live"])
-        XCTAssertNil(pruned["endpoint-local-workspace-deleted"])
-        XCTAssertNotNil(
-            pruned["endpoint-remote-workspace-absent"],
-            "another endpoint's scopes are not represented in this projection"
-        )
-    }
-
-    @MainActor
-    func testScheduledSaveCoalescesAndFlushesTheLatestLayout() {
-        let suiteName = "WarrenDesktopSplitLayoutTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
-        let first = SplitLayoutTree.leaf(SplitPaneItem(id: "pane-1", tabID: "tab-1"))
-        let second = SplitLayoutTree.leaf(SplitPaneItem(id: "pane-2", tabID: "tab-2"))
-        WarrenDesktopSplitLayoutPersistence.scheduleSave(
-            ["endpoint-local-workspace-a": first],
-            to: defaults,
-            after: 60
-        )
-        XCTAssertTrue(
-            WarrenDesktopSplitLayoutPersistence.restore(from: defaults).isEmpty,
-            "a scheduled save must not write before its quiet period"
-        )
-
-        WarrenDesktopSplitLayoutPersistence.scheduleSave(
-            ["endpoint-local-workspace-a": second],
-            to: defaults,
-            after: 60
-        )
-        WarrenDesktopSplitLayoutPersistence.flushPendingSave()
-
-        XCTAssertEqual(
-            WarrenDesktopSplitLayoutPersistence.restore(from: defaults),
-            ["endpoint-local-workspace-a": second]
-        )
-
-        // A flush with nothing pending is a no-op rather than a rewrite.
-        WarrenDesktopSplitLayoutPersistence.flushPendingSave()
-        XCTAssertEqual(
-            WarrenDesktopSplitLayoutPersistence.restore(from: defaults),
-            ["endpoint-local-workspace-a": second]
-        )
     }
 
     func testWindowMinimumStopsGrowingBeyondTwoPanes() {
@@ -554,5 +462,323 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
         XCTAssertEqual(tree.nearestPaneID(from: "p1", direction: .right, wrapping: false), right)
         XCTAssertEqual(tree.nearestPaneID(from: right, direction: .right), "p1")
         XCTAssertNil(tree.nearestPaneID(from: "missing", direction: .right))
+    }
+
+    // MARK: - Flattened placement
+
+    /// The placement is what the content renders: one frame per pane and one
+    /// band per divider, in preorder. A pane's view is keyed by its own id, so
+    /// these frames are the whole story of where a terminal ends up.
+    func testHorizontalPlacementSplitsTheContainerAroundItsDivider() {
+        let tree = SplitLayoutTree.split(
+            axis: .horizontal,
+            ratio: 0.5,
+            first: .leaf(SplitPaneItem(id: "pane-a", tabID: "a")),
+            second: .leaf(SplitPaneItem(id: "pane-b", tabID: "b"))
+        )
+        let placement = tree.placement(in: CGSize(width: 1_000, height: 100))
+
+        XCTAssertEqual(placement.panes.map(\.id), ["pane-a", "pane-b"])
+        // 995 points of travel cannot split evenly, so the leading pane takes
+        // the extra point and the divider sits on 498 rather than between
+        // pixels.
+        XCTAssertEqual(
+            placement.panes[0].frame,
+            CGRect(x: 0, y: 0, width: 498, height: 100)
+        )
+        XCTAssertEqual(
+            placement.panes[1].frame,
+            CGRect(x: 503, y: 0, width: 497, height: 100)
+        )
+        let divider = try? XCTUnwrap(placement.dividers.first)
+        XCTAssertEqual(divider?.path, [])
+        XCTAssertEqual(divider?.axis, .horizontal)
+        XCTAssertEqual(divider?.frame, CGRect(x: 498, y: 0, width: 5, height: 100))
+        XCTAssertEqual(divider?.totalLength, 995)
+    }
+
+    func testVerticalPlacementSplitsAlongTheOtherAxis() {
+        let tree = SplitLayoutTree.split(
+            axis: .vertical,
+            ratio: 0.5,
+            first: .leaf(SplitPaneItem(id: "pane-a", tabID: "a")),
+            second: .leaf(SplitPaneItem(id: "pane-b", tabID: "b"))
+        )
+        let placement = tree.placement(in: CGSize(width: 1_000, height: 400))
+
+        XCTAssertEqual(
+            placement.panes[0].frame,
+            CGRect(x: 0, y: 0, width: 1_000, height: 198)
+        )
+        XCTAssertEqual(
+            placement.dividers.first?.frame,
+            CGRect(x: 0, y: 198, width: 1_000, height: 5)
+        )
+        XCTAssertEqual(
+            placement.panes[1].frame,
+            CGRect(x: 0, y: 203, width: 1_000, height: 197)
+        )
+    }
+
+    /// A nested split keeps its own divider, and that divider's path is the one
+    /// `updateRatio(path:)` addresses — not its depth-first index.
+    func testNestedPlacementKeepsEachDividersPath() {
+        let tree = SplitLayoutTree.split(
+            axis: .horizontal,
+            ratio: 0.5,
+            first: .leaf(SplitPaneItem(id: "pane-a", tabID: "a")),
+            second: .split(
+                axis: .vertical,
+                ratio: 0.5,
+                first: .leaf(SplitPaneItem(id: "pane-b", tabID: "b")),
+                second: .leaf(SplitPaneItem(id: "pane-c", tabID: "c"))
+            )
+        )
+        let placement = tree.placement(in: CGSize(width: 1_000, height: 400))
+
+        XCTAssertEqual(placement.panes.map(\.id), ["pane-a", "pane-b", "pane-c"])
+        XCTAssertEqual(placement.dividers.map(\.path), [[], [true]])
+        XCTAssertEqual(placement.dividers.last?.axis, .vertical)
+        XCTAssertEqual(
+            placement.dividers.last?.frame,
+            CGRect(x: 503, y: 198, width: 497, height: 5)
+        )
+    }
+
+    /// Panes and dividers tile the container exactly: nothing overlaps and
+    /// nothing is left over, which is what makes the flattened layout draw the
+    /// same thing the recursive one did.
+    func testPlacementTilesTheContainer() {
+        let tree = SplitLayoutTree.split(
+            axis: .horizontal,
+            ratio: 0.35,
+            first: .split(
+                axis: .vertical,
+                ratio: 0.6,
+                first: .leaf(SplitPaneItem(id: "pane-a", tabID: "a")),
+                second: .leaf(SplitPaneItem(id: "pane-b", tabID: "b"))
+            ),
+            second: .leaf(SplitPaneItem(id: "pane-c", tabID: "c"))
+        )
+        let size = CGSize(width: 900, height: 500)
+        let placement = tree.placement(in: size)
+
+        XCTAssertEqual(placement.panes.count, 3)
+        let area = placement.panes.reduce(CGFloat.zero) { $0 + $1.frame.width * $1.frame.height }
+            + placement.dividers.reduce(CGFloat.zero) { $0 + $1.frame.width * $1.frame.height }
+        XCTAssertEqual(area, size.width * size.height, accuracy: 0.01)
+        for pane in placement.panes {
+            XCTAssertTrue(
+                CGRect(origin: .zero, size: size).contains(pane.frame),
+                "\(pane.id) escapes the container"
+            )
+        }
+    }
+
+    /// The divider cannot travel past the minimum size of the subtree on either
+    /// side of it, and a container too small for both minimums pins it in the
+    /// middle rather than letting it cross.
+    func testDividerBoundsFollowTheSubtreeMinimums() {
+        let tree = SplitLayoutTree.split(
+            axis: .horizontal,
+            ratio: 0.5,
+            first: .leaf(SplitPaneItem(id: "pane-a", tabID: "a")),
+            second: .leaf(SplitPaneItem(id: "pane-b", tabID: "b"))
+        )
+        let roomy = tree.placement(in: CGSize(width: 1_000, height: 100)).dividers[0]
+        XCTAssertEqual(roomy.minimumRatio, 260 / 995, accuracy: 0.001)
+        XCTAssertEqual(roomy.maximumRatio, 1 - 260 / 995, accuracy: 0.001)
+
+        let cramped = tree.placement(in: CGSize(width: 400, height: 100)).dividers[0]
+        XCTAssertEqual(cramped.minimumRatio, 0.5)
+        XCTAssertEqual(cramped.maximumRatio, 0.5)
+    }
+
+    func testSinglePaneFillsTheContainerWithNoDivider() {
+        let placement = SplitLayoutTree
+            .leaf(SplitPaneItem(id: "pane-a", tabID: "a"))
+            .placement(in: CGSize(width: 320, height: 200))
+        XCTAssertTrue(placement.dividers.isEmpty)
+        XCTAssertEqual(
+            placement.panes.first?.frame,
+            CGRect(x: 0, y: 0, width: 320, height: 200)
+        )
+    }
+
+    /// A Session the panel was already drawing on its own keeps the pane
+    /// identity it had, so adopting it into the layout does not re-create the
+    /// terminal the user is looking at. The Session this request creates then
+    /// splits the pane it adopted, which is what puts the new pane beside the
+    /// Session that asked for it.
+    func testSplitReusesTheIdentityOfThePaneItAdopts() {
+        let layout = SplitLayoutTree.leaf(SplitPaneItem(id: "pane-a", tabID: "a"))
+        let adoptedPaneID = SplitPaneItem.fallbackID(forTabID: "b")
+
+        let adopted = layout.split(
+            targetPaneID: "pane-a",
+            newTabID: "b",
+            axis: .vertical,
+            newPaneID: adoptedPaneID
+        )
+        XCTAssertEqual(adopted.allTabIDs, ["a", "b"])
+        XCTAssertEqual(adopted.item(forTabID: "b")?.id, adoptedPaneID)
+
+        let split = adopted.split(
+            targetPaneID: adoptedPaneID,
+            newTabID: "c",
+            axis: .vertical
+        )
+        XCTAssertEqual(split.allTabIDs, ["a", "b", "c"])
+        XCTAssertEqual(split.allPaneIDs.count, 3)
+        XCTAssertEqual(
+            split.allPaneIDs.filter { $0 == adoptedPaneID }.count,
+            1,
+            "The adopted pane keeps its one identity"
+        )
+        XCTAssertNotEqual(split.item(forTabID: "c")?.id, adoptedPaneID)
+    }
+
+    /// Every frame lands on a whole point, and the panes plus their dividers
+    /// still cover the container exactly, whatever the container size and ratio
+    /// are. A divider placed between pixels is what made the panes flip by a
+    /// point between layout passes: each flip reads as a new viewport, so the
+    /// PTY is resized for a divider that never moved.
+    func testPlacementSnapsToPointsAndCoversFractionalContainers() {
+        let tree = SplitLayoutTree.split(
+            axis: .horizontal,
+            ratio: 0.5927,
+            first: .split(
+                axis: .vertical,
+                ratio: 0.413,
+                first: .leaf(SplitPaneItem(id: "pane-a", tabID: "a")),
+                second: .leaf(SplitPaneItem(id: "pane-b", tabID: "b"))
+            ),
+            second: .leaf(SplitPaneItem(id: "pane-c", tabID: "c"))
+        )
+        for size in [
+            CGSize(width: 1_217.5, height: 815.25),
+            CGSize(width: 809.5, height: 443.75),
+            CGSize(width: 320, height: 200),
+        ] {
+            let placement = tree.placement(in: size)
+            let container = CGRect(
+                origin: .zero,
+                size: CGSize(width: size.width.rounded(), height: size.height.rounded())
+            )
+            let frames = placement.panes.map(\.frame) + placement.dividers.map(\.frame)
+            let area = frames.reduce(CGFloat.zero) { $0 + $1.width * $1.height }
+            XCTAssertEqual(
+                area,
+                container.width * container.height,
+                accuracy: 0.01,
+                "Panes and dividers must cover \(size) exactly"
+            )
+            for frame in frames {
+                for value in [frame.minX, frame.minY, frame.width, frame.height] {
+                    XCTAssertEqual(value, value.rounded(), "\(frame) is not on a point")
+                }
+            }
+        }
+    }
+}
+
+/// Pane groups are Host state, so the projection carries them and answers the
+/// questions a renderer asks: which arrangements belong to this scope, which one
+/// shows a Session, and in what order.
+final class WarrenDesktopPaneGroupProjectionTests: XCTestCase {
+    func testProjectionCarriesHostPaneGroupsInHostOrder() {
+        let hostID = HostID()
+        let workspaceID = WorkspaceID()
+        let sessionA = TerminalSessionID()
+        let sessionB = TerminalSessionID()
+        let sessionC = TerminalSessionID()
+        let later = PaneGroup(
+            id: PaneGroupID(),
+            hostID: hostID,
+            workspaceID: workspaceID,
+            name: "second",
+            order: 1,
+            tree: .leaf(sessionID: sessionB),
+            revision: 3
+        )
+        let earlier = PaneGroup(
+            id: PaneGroupID(),
+            hostID: hostID,
+            workspaceID: workspaceID,
+            name: "first",
+            order: 0,
+            tree: .split(
+                axis: .horizontal,
+                ratio: 0.5,
+                first: .leaf(paneID: PaneID(), sessionID: sessionA),
+                second: .leaf(sessionID: sessionC)
+            ),
+            revision: 7
+        )
+        let otherWorkspace = PaneGroup(
+            id: PaneGroupID(),
+            hostID: hostID,
+            workspaceID: WorkspaceID(),
+            tree: .leaf(sessionID: sessionB)
+        )
+        let projection = WarrenDesktopProjection(
+            host: WarrenDomain.Host(id: hostID, name: "test"),
+            projects: [],
+            workspaces: [
+                Workspace(
+                    id: workspaceID,
+                    projectID: ProjectID(),
+                    name: "main",
+                    path: "/tmp"
+                )
+            ],
+            paneGroups: [later, otherWorkspace, earlier]
+        )
+
+        XCTAssertEqual(projection.paneGroups(in: workspaceID).map { $0.id }, [earlier.id, later.id])
+        XCTAssertEqual(projection.paneGroups(in: workspaceID).first?.paneCount, 2)
+        XCTAssertEqual(projection.paneGroup(containingSession: sessionC)?.id, earlier.id)
+        XCTAssertEqual(projection.paneGroup(containingSession: sessionC)?.paneIndex(forSession: sessionC), 2)
+        XCTAssertNil(projection.paneGroup(containingSession: TerminalSessionID()))
+        XCTAssertEqual(projection.paneGroups(in: workspaceID).first?.tree.sessionIDs, [sessionA, sessionC])
+    }
+}
+
+final class WarrenDesktopPaneGroupMappingTests: XCTestCase {
+    func testHostTreeBecomesTheRenderersTreeAndBack() {
+        let sessionA = TerminalSessionID()
+        let sessionB = TerminalSessionID()
+        let paneID = PaneID()
+        let host = PaneNode.split(
+            axis: .horizontal,
+            ratio: 0.25,
+            first: .leaf(paneID: paneID, sessionID: sessionA),
+            second: .leaf(sessionID: sessionB)
+        )
+        let local = WarrenDesktopPaneGroupMapping.tree(from: host)
+        XCTAssertEqual(local.count, 2)
+        guard case .split(let axis, let ratio, _, _) = local else {
+            return XCTFail("expected a split")
+        }
+        XCTAssertEqual(axis, .horizontal)
+        XCTAssertEqual(ratio, 0.25, accuracy: 0.001)
+        XCTAssertEqual(local.leaves.map(\.id), [paneID.description, SplitPaneItem.fallbackID(forTabID: "remote-\(sessionB.description)")])
+        XCTAssertEqual(local.allTabIDs, ["remote-\(sessionA.description)", "remote-\(sessionB.description)"])
+
+        // A round trip preserves the Host's pane identity and hands the pane it
+        // never assigned back as an empty identity for the Host to fill in.
+        let rebuilt = WarrenDesktopPaneGroupMapping.paneNode(from: local) { tabID in
+            WarrenDesktopPaneGroupMapping.sessionID(forTabID: tabID)
+        }
+        XCTAssertEqual(rebuilt, .split(
+            axis: .horizontal,
+            ratio: 0.25,
+            first: .leaf(paneID: paneID, sessionID: sessionA),
+            second: .leaf(paneID: nil, sessionID: sessionB)
+        ))
+
+        // A Tab that no longer maps to a Session is dropped with the split that
+        // only held it: the renderer never sends a pane it cannot show.
+        XCTAssertNil(WarrenDesktopPaneGroupMapping.paneNode(from: local) { _ in nil })
     }
 }

@@ -32,6 +32,12 @@ private struct WarrenInteractiveBody: View {
     let focused: Bool
     let cornerRadius: CGFloat
     let pressedOpacity: Double
+    /// Whether the pointer alone paints the row's background.
+    ///
+    /// The hover wash is what says a row navigates. A row that turns a click
+    /// into nothing must not borrow it; the row is responsible for giving the
+    /// pointer its feedback somewhere else.
+    let showsHoverBackground: Bool
 
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -67,7 +73,8 @@ private struct WarrenInteractiveBody: View {
     }
 
     private func background(for state: WarrenInteractionState) -> Color {
-        tokens.interactionBackground(for: state)
+        if state == .hovered, !showsHoverBackground { return .clear }
+        return tokens.interactionBackground(for: state)
     }
 }
 
@@ -76,11 +83,20 @@ public struct WarrenInteractiveRowStyle: ButtonStyle {
     public var isSelected: Bool
     public var isFocused: Bool
     public var cornerRadius: CGFloat
+    /// Set false for a row the pointer cannot activate; see
+    /// `WarrenInteractiveBody.showsHoverBackground`.
+    public var showsHoverBackground: Bool
 
-    public init(isSelected: Bool = false, isFocused: Bool = false, cornerRadius: CGFloat = WarrenRadius.row) {
+    public init(
+        isSelected: Bool = false,
+        isFocused: Bool = false,
+        cornerRadius: CGFloat = WarrenRadius.row,
+        showsHoverBackground: Bool = true
+    ) {
         self.isSelected = isSelected
         self.isFocused = isFocused
         self.cornerRadius = cornerRadius
+        self.showsHoverBackground = showsHoverBackground
     }
 
     public func makeBody(configuration: Configuration) -> some View {
@@ -90,7 +106,8 @@ public struct WarrenInteractiveRowStyle: ButtonStyle {
             selected: isSelected,
             focused: isFocused,
             cornerRadius: cornerRadius,
-            pressedOpacity: 0.82
+            pressedOpacity: 0.82,
+            showsHoverBackground: showsHoverBackground
         )
     }
 }
@@ -110,7 +127,8 @@ public struct WarrenChromeButtonStyle: ButtonStyle {
             selected: false,
             focused: isFocused,
             cornerRadius: WarrenRadius.small,
-            pressedOpacity: 0.82
+            pressedOpacity: 0.82,
+            showsHoverBackground: true
         )
     }
 }
@@ -130,7 +148,8 @@ public struct WarrenPresetButtonStyle: ButtonStyle {
             selected: false,
             focused: isFocused,
             cornerRadius: WarrenRadius.small,
-            pressedOpacity: 0.82
+            pressedOpacity: 0.82,
+            showsHoverBackground: true
         )
     }
 }

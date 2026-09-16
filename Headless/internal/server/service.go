@@ -184,7 +184,16 @@ type Service struct {
 	controlPeers   map[string]*wsPeer
 	runtimeSizes   map[string]ghostline.Size
 	broadcastLocks map[string]*sessionLock
-	agentsMu       sync.Mutex
+	// resizeMu guards the per-session viewport queue below. Runtime.Resize can
+	// block for seconds on a remote host, so it must never run on the
+	// WebSocket reader. The queue serializes per session with latest-wins
+	// semantics: a slow resize cannot delay attach/recovery on the same
+	// connection, and two resizes for one session cannot apply out of order.
+	resizeMu      sync.Mutex
+	resizePending map[string]ghostline.Size
+	resizeActive  map[string]bool
+	resizeWorkers sync.WaitGroup
+	agentsMu      sync.Mutex
 	// OpenCode session discovery and metadata persistence must be one critical
 	// section. A concurrent reconcile can otherwise observe the same provider
 	// row before either Warren session has persisted its binding.
@@ -473,6 +482,12 @@ func (s *Service) lazyInitLocked() {
 	}
 	if s.resizePeers == nil {
 		s.resizePeers = map[string]*wsPeer{}
+	}
+	if s.resizePending == nil {
+		s.resizePending = map[string]ghostline.Size{}
+	}
+	if s.resizeActive == nil {
+		s.resizeActive = map[string]bool{}
 	}
 	if s.controlPeers == nil {
 		s.controlPeers = map[string]*wsPeer{}
@@ -782,6 +797,17 @@ func (s *Service) reconcile(ctx context.Context) {
 		_, _ = s.ensureAgentWithState(probeContext, session, &state)
 	}
 	s.stopMissingAgents(seenSessions)
+	// Pane Groups follow Session liveness. A Session that ended while the daemon
+	// was down, or one whose owner was removed, is pruned here; the write only
+	// happens when an arrangement actually changed, so a steady Host does not
+	// rewrite state.json once per tick.
+	outdated := s.Store.Snapshot()
+	if reconcilePaneGroups(&outdated) {
+		_ = s.Store.Update(func(value *api.State) error {
+			reconcilePaneGroups(value)
+			return nil
+		})
+	}
 }
 
 // stopMissingAgents closes provider handles whose Session was deleted from
@@ -1046,6 +1072,18 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		}
 		return state.Sessions[i].CreatedAt.Before(state.Sessions[j].CreatedAt)
 	})
+	// A Session's projected directory is the shell-reported pwd when OSC 7 has
+	// reported one, otherwise the directory Warren launched it in. Resolving the
+	// fallback here keeps every client from re-deriving it, and avoids the
+	// filesystem check the create path performs.
+	workspacePaths := make(map[string]string, len(state.Workspaces))
+	for _, workspace := range state.Workspaces {
+		workspacePaths[workspace.ID] = workspace.Path
+	}
+	groupHomes := make(map[string]string, len(state.TerminalGroups))
+	for _, group := range state.TerminalGroups {
+		groupHomes[group.ID] = group.Home
+	}
 	agentsStartedAt := time.Now()
 	for i := range state.Sessions {
 		session := &state.Sessions[i]
@@ -1077,6 +1115,9 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 				session.CommandLine = metadata.CommandLine
 				session.Directory = metadata.Directory
 			}
+		}
+		if session.Directory == "" {
+			session.Directory = sessionLaunchDirectory(*session, workspacePaths, groupHomes)
 		}
 		if status := s.agentStatus(session.ID); status.Activity != "" {
 			session.AgentStatus = &status
@@ -1766,6 +1807,8 @@ func (s *Service) RemoveTerminalGroup(ctx context.Context, id string, force bool
 		for index := range value.TerminalGroups {
 			value.TerminalGroups[index].Order = index
 		}
+		// The owner is gone from this snapshot, so its arrangements go with it.
+		reconcilePaneGroups(value)
 		return nil
 	})
 }
@@ -2356,6 +2399,8 @@ func (s *Service) RemoveWorkspace(ctx context.Context, id string, options Remove
 				order++
 			}
 		}
+		// The owner is gone from this snapshot, so its arrangements go with it.
+		reconcilePaneGroups(value)
 		return nil
 	})
 	projectLock.Unlock()
@@ -3203,6 +3248,9 @@ func (s *Service) DeleteSession(ctx context.Context, id string) error {
 	agent.RemoveBinding(id)
 	err := s.Store.Update(func(value *api.State) error {
 		value.Sessions = filter(value.Sessions, func(item api.Session) bool { return item.ID != id })
+		// The deleted Session's pane goes with it; an arrangement that loses its
+		// last pane is deleted, and every other group keeps its revision.
+		reconcilePaneGroups(value)
 		return nil
 	})
 	if err == nil {
@@ -3301,6 +3349,9 @@ func (s *Service) MoveSessionWithExpectations(_ context.Context, id, workspaceID
 		if len(value.Operations) > operationAuditLimit {
 			value.Operations = append([]api.OperationAudit(nil), value.Operations[len(value.Operations)-operationAuditLimit:]...)
 		}
+		// A Session that leaves its owner cannot stay in that owner's
+		// arrangement. It reappears as an ordinary unplaced Tab in the new one.
+		reconcilePaneGroups(value)
 		moved = session
 		return nil
 	})
@@ -3493,6 +3544,28 @@ func (s *Service) removeTerminalGroupRuntimes(ctx context.Context, state api.Sta
 			s.openCodeBindingMu.Unlock()
 		}
 	}
+}
+
+// sessionLaunchDirectory is the directory Warren started a Session in: the
+// Terminal Group home (falling back to the Host home) or the Workspace path.
+// It matches sessionWorkingDirectory without the filesystem check that only
+// the create path needs.
+func sessionLaunchDirectory(session api.Session, workspacePaths, groupHomes map[string]string) string {
+	if session.TerminalGroupID != "" {
+		home, ok := groupHomes[session.TerminalGroupID]
+		if !ok {
+			return ""
+		}
+		if home != "" {
+			return home
+		}
+		resolved, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		return resolved
+	}
+	return workspacePaths[session.WorkspaceID]
 }
 
 func sessionWorkingDirectory(state api.State, workspaceID, groupID string) (string, error) {
@@ -6955,6 +7028,7 @@ func (s *Service) reanchorAtomicOutput(
 		cursor  ghostline.Cursor
 		err     error
 	)
+	captureStarted := time.Now()
 	// Capture the Ghostline state while the shared reader is paused. The reader
 	// normally keeps the Warren ring at the same cursor, but output can arrive
 	// between the reader's final batch and this checkpoint. Catch that small
@@ -6984,6 +7058,7 @@ func (s *Service) reanchorAtomicOutput(
 		return fmt.Errorf("unsupported terminal state format %q", peer.terminalStateFormat)
 	}
 	cancelState()
+	captureMS := time.Since(captureStarted).Milliseconds()
 	if err != nil {
 		return fmt.Errorf("capture ghostline terminal state: %w", err)
 	}
@@ -6991,7 +7066,9 @@ func (s *Service) reanchorAtomicOutput(
 		return errors.New("ghostline returned an incomplete terminal state")
 	}
 	catchUpContext, cancelCatchUp := context.WithTimeout(ctx, s.commandTimeout())
+	catchUpStarted := time.Now()
 	err = s.catchUpOutputCursor(catchUpContext, session, outputSession, cursor)
+	catchUpMS := time.Since(catchUpStarted).Milliseconds()
 	cancelCatchUp()
 	if err != nil {
 		return fmt.Errorf("align ghostline recovery cursor: %w", err)
@@ -7014,6 +7091,7 @@ func (s *Service) reanchorAtomicOutput(
 	if err := peer.enqueueAttached(session.ID, epoch, upper, true); err != nil {
 		return err
 	}
+	enqueueStarted := time.Now()
 	if err := peer.enqueueAtomicState(
 		session.ID,
 		epoch,
@@ -7023,15 +7101,32 @@ func (s *Service) reanchorAtomicOutput(
 	); err != nil {
 		return err
 	}
+	enqueueMS := time.Since(enqueueStarted).Milliseconds()
+	readerStarted := time.Now()
 	if err := s.startPeerCursorOutput(peer, session, cursor, epoch, upper); err != nil {
 		return err
 	}
+	readerMS := time.Since(readerStarted).Milliseconds()
 	// Start the direct reader before releasing the presentation boundary.  Any
 	// bytes produced after the checkpoint are therefore either queued before or
 	// after this marker, but never lost because the reader had not been armed.
 	if err := peer.enqueueSynced(session.ID, epoch, upper); err != nil {
 		return err
 	}
+	// One line that names which phase owns the attach's latency: the ghostline
+	// state capture, the one-byte-at-a-time gap catch-up, the encode+enqueue, or
+	// arming the direct reader. `attachOutputLocked` used to report only a
+	// single total, which cannot separate a slow snapshot from a slow reader.
+	s.logInfo("reanchor: phases",
+		"session", session.ID,
+		"method", method,
+		"captureMs", captureMS,
+		"catchUpMs", catchUpMS,
+		"enqueueMs", enqueueMS,
+		"readerMs", readerMS,
+		"bytes", len(payload),
+		"format", format,
+	)
 
 	return nil
 }
@@ -7039,16 +7134,34 @@ func (s *Service) reanchorAtomicOutput(
 // catchUpOutputCursor records bytes that arrived after the shared reader was
 // stopped but before Ghostline captured its atomic state. The target cursor is
 // intentionally compared only for equality: Ghostline cursors are opaque to
-// Warren, and reading one byte at a time is the safe fallback that cannot
-// consume output produced after the checkpoint boundary. This path is limited
-// to the short attach/reanchor window; the normal shared reader remains
-// buffered at 64 KiB.
+// Warren. Each read is bounded by the distance Ghostline reports to that
+// cursor, so it can never consume output produced after the checkpoint
+// boundary; at a generation boundary, where that distance is unknown, the read
+// falls back to a single byte. This path is limited to the short
+// attach/reanchor window; the normal shared reader remains buffered at 64 KiB.
 func (s *Service) catchUpOutputCursor(
 	ctx context.Context,
 	session api.Session,
 	outputSession *outputSession,
 	target ghostline.Cursor,
 ) error {
+	catchUpStarted := time.Now()
+	caughtUpBytes := 0
+	caughtUpRounds := 0
+	// Reading one byte per round trip made the gap's size the attach's
+	// latency, and the gap grows with output volume. Report what it actually
+	// had to cover so a regression is visible in the log.
+	defer func() {
+		if caughtUpBytes == 0 {
+			return
+		}
+		s.logInfo("reanchor: catchUp",
+			"session", session.ID,
+			"bytes", caughtUpBytes,
+			"rounds", caughtUpRounds,
+			"ms", time.Since(catchUpStarted).Milliseconds(),
+		)
+	}()
 	outputSession.mu.Lock()
 	from := outputSession.outputCursor
 	outputSession.mu.Unlock()
@@ -7064,7 +7177,7 @@ func (s *Service) catchUpOutputCursor(
 		return fmt.Errorf("open ghostline recovery gap: %w", err)
 	}
 	defer reader.Close()
-	buffer := make([]byte, 1)
+	buffer := make([]byte, catchUpBatchBytes)
 	for {
 		if reader.Cursor() == target {
 			return nil
@@ -7072,10 +7185,16 @@ func (s *Service) catchUpOutputCursor(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		count, readErr := reader.Read(buffer)
+		readBuffer, closed := catchUpReadBuffer(buffer, reader.Cursor(), target)
+		if closed {
+			return nil
+		}
+		count, readErr := reader.Read(readBuffer)
 		if count > 0 {
+			caughtUpBytes += count
+			caughtUpRounds++
 			cursor := reader.Cursor()
-			s.recordOutputWithCursorMode(session.ID, buffer[:count], &cursor, false)
+			s.recordOutputWithCursorMode(session.ID, readBuffer[:count], &cursor, false)
 			if cursor == target {
 				return nil
 			}
@@ -7093,6 +7212,35 @@ func (s *Service) catchUpOutputCursor(
 			return io.ErrNoProgress
 		}
 	}
+}
+
+// catchUpBatchBytes bounds one catch-up read. The gap is normally a few
+// kilobytes of output that arrived between pausing the shared reader and taking
+// the checkpoint, so one batch covers it in ordinary cases.
+const catchUpBatchBytes = 64 * 1024
+
+// catchUpReadBuffer sizes the next catch-up read so it cannot pass target.
+//
+// It returns closed when the gap is already covered. An unknown span (a zero
+// cursor, a generation boundary, or a reversed pair) can only be walked one
+// byte at a time: reading past the checkpoint would record bytes that the live
+// stream still delivers, duplicating them in the pane.
+func catchUpReadBuffer(
+	buffer []byte,
+	from ghostline.Cursor,
+	target ghostline.Cursor,
+) ([]byte, bool) {
+	gap, known := from.Distance(target)
+	if !known {
+		return buffer[:1], false
+	}
+	if gap == 0 {
+		return nil, true
+	}
+	if gap < uint64(len(buffer)) {
+		return buffer[:gap], false
+	}
+	return buffer, false
 }
 
 func (s *Service) PingOutput(sessionID string) {
@@ -7188,6 +7336,7 @@ func (s *Service) focusPeerLocked(
 	focused bool,
 	columns, rows int,
 	resizeSpecified bool,
+	deferResize bool,
 ) (resized bool, err error) {
 	s.lazyInit()
 	s.outputMu.Lock()
@@ -7215,7 +7364,7 @@ func (s *Service) focusPeerLocked(
 		s.outputMu.Unlock()
 		return false, nil
 	}
-	if resizeSpecified {
+	if resizeSpecified && !deferResize {
 		resized, err = s.resizeRuntime(ctx, session, columns, rows)
 		if err != nil {
 			return false, err
@@ -7234,6 +7383,15 @@ func (s *Service) focusPeerLocked(
 	// size the shared runtime follows while it stays focused.
 	s.resizePeers[session.ID] = peer
 	s.outputMu.Unlock()
+	if resizeSpecified && deferResize {
+		// The lease is already granted, so the focus reply never waits on a
+		// slow PTY resize; the queued worker applies the size afterwards.
+		size := ghostline.Size{Columns: columns, Rows: rows}
+		if current, known := s.runtimeSizeFor(session.ID); !known || current != size {
+			s.enqueueResize(session, size)
+			resized = true
+		}
+	}
 	return resized, nil
 }
 
@@ -7255,24 +7413,18 @@ func (s *Service) resizeFocusedLocked(
 	columns, rows int,
 ) (bool, error) {
 	s.lazyInit()
+	size := ghostline.Size{Columns: columns, Rows: rows}
 	s.outputMu.Lock()
 	owner := s.resizePeers[session.ID]
 	_, registered := s.peers[session.ID][peer]
-	s.outputMu.Unlock()
+	current, known := s.runtimeSizes[session.ID]
 	if !registered || (owner != nil && owner != peer) {
+		s.outputMu.Unlock()
 		return false, nil
 	}
-	resized, err := s.resizeRuntime(ctx, session, columns, rows)
-	if err != nil {
-		return false, err
-	}
-	if !resized {
-		return false, nil
-	}
-	s.outputMu.Lock()
-	// A peer can disconnect while Runtime.Resize is in flight. Do not hand the
-	// viewport to a socket that is no longer subscribed.
-	if _, stillRegistered := s.peers[session.ID][peer]; !stillRegistered {
+	if known && current == size {
+		// Do not adopt an unowned size for a same-size request; a no-op must
+		// not hand viewport ownership to a random subscriber.
 		s.outputMu.Unlock()
 		return false, nil
 	}
@@ -7280,6 +7432,10 @@ func (s *Service) resizeFocusedLocked(
 		s.resizePeers[session.ID] = peer
 	}
 	s.outputMu.Unlock()
+	// Runtime.Resize can block for seconds on a remote host. Queue it instead
+	// of running it on the WebSocket reader, where it would delay the next
+	// session.subscribe and leave that terminal black.
+	s.enqueueResize(session, size)
 	return true, nil
 }
 
@@ -7304,6 +7460,67 @@ func (s *Service) resizeRuntime(ctx context.Context, session api.Session, column
 	s.rememberRuntimeSize(session.ID, size)
 	s.updateResponderSize(session.ID, columns, rows)
 	return true, nil
+}
+
+// enqueueResize records the latest requested viewport for a session and makes
+// sure one worker is applying it. The caller has already validated ownership
+// and that the size differs from the last applied size; this only schedules.
+func (s *Service) enqueueResize(session api.Session, size ghostline.Size) {
+	s.lazyInit()
+	s.resizeMu.Lock()
+	s.resizePending[session.ID] = size
+	if !s.resizeActive[session.ID] {
+		s.resizeActive[session.ID] = true
+		s.resizeWorkers.Add(1)
+		go s.runResizeWorker(session)
+	}
+	s.resizeMu.Unlock()
+}
+
+// runResizeWorker applies the latest queued viewport for one session until the
+// queue drains. Each application takes the session's broadcast lock so it can
+// never interleave with a snapshot/capture, and latest-wins collapses a burst
+// of layout callbacks into one or two PTY resizes.
+func (s *Service) runResizeWorker(session api.Session) {
+	defer s.resizeWorkers.Done()
+	for {
+		s.resizeMu.Lock()
+		size, ok := s.resizePending[session.ID]
+		if ok {
+			delete(s.resizePending, session.ID)
+			s.resizeMu.Unlock()
+		} else {
+			s.resizeActive[session.ID] = false
+			s.resizeMu.Unlock()
+			return
+		}
+
+		lock := s.broadcastLock(session.ID)
+		ctx, cancel := context.WithTimeout(context.Background(), s.commandTimeout())
+		if err := lock.LockContext(ctx); err != nil {
+			cancel()
+			// The session was busy past the command timeout. Keep the request
+			// only if nothing newer arrived while we waited.
+			s.resizeMu.Lock()
+			if _, newer := s.resizePending[session.ID]; !newer {
+				s.resizePending[session.ID] = size
+			}
+			s.resizeMu.Unlock()
+			continue
+		}
+		if _, err := s.resizeRuntime(ctx, session, size.Columns, size.Rows); err != nil {
+			s.logWarn("resize worker", "session", session.ID, "error", err.Error())
+		}
+		lock.Unlock()
+		cancel()
+	}
+}
+
+// flushResizes blocks until every queued viewport application has completed.
+// Tests use it to assert the runtime calls a resize produced without waiting on
+// wall-clock time.
+func (s *Service) flushResizes() {
+	s.resizeWorkers.Wait()
 }
 
 // runtimeSizeFor reports the last observed PTY grid size for a session.
@@ -7352,6 +7569,11 @@ func (s *Service) updateResponderSize(sessionID string, columns, rows int) {
 	}
 }
 
+// focusPeer grants or releases the control lease. It never waits on the
+// session's broadcast lock: the resize it carries is queued to the per-session
+// worker, which takes that lock when it applies it. Keeping this off the lock is
+// what stops a slow PTY resize from delaying the focus reply or the next
+// command on the WebSocket reader.
 func (s *Service) focusPeer(
 	ctx context.Context,
 	peer *wsPeer,
@@ -7359,26 +7581,23 @@ func (s *Service) focusPeer(
 	focused bool,
 	columns, rows int,
 	resizeSpecified bool,
+	deferResize bool,
 ) (bool, bool, error) {
-	lock := s.broadcastLock(session.ID)
-	lock.Lock()
-	defer lock.Unlock()
-	resized, err := s.focusPeerLocked(ctx, peer, session, focused, columns, rows, resizeSpecified)
+	resized, err := s.focusPeerLocked(ctx, peer, session, focused, columns, rows, resizeSpecified, deferResize)
 	if err != nil {
 		return false, false, err
 	}
 	return s.isFocused(peer, session.ID), resized, nil
 }
 
+// resizeFocused queues a viewport-only resize. It does not take the broadcast
+// lock: the worker applies the size, and the reader stays free.
 func (s *Service) resizeFocused(
 	ctx context.Context,
 	peer *wsPeer,
 	session api.Session,
 	columns, rows int,
 ) (bool, error) {
-	lock := s.broadcastLock(session.ID)
-	lock.Lock()
-	defer lock.Unlock()
 	return s.resizeFocusedLocked(ctx, peer, session, columns, rows)
 }
 
@@ -7472,6 +7691,10 @@ func (s *Service) markEnded(sessionID string) {
 				value.Sessions[index].EndedAt = &now
 				changed = true
 			}
+		}
+		// The arrangement loses the pane of the Session that just ended.
+		if reconcilePaneGroups(value) {
+			changed = true
 		}
 		return nil
 	})

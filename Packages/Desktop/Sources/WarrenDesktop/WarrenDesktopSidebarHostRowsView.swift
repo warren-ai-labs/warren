@@ -275,6 +275,7 @@ struct WarrenDesktopSidebarHostRows: View {
                     if isProjectExpanded(group.project.id, in: host) {
                         ForEach(scopedWorkspaces(for: group, host: host)) { scopedWorkspace in
                             let sessions = workspaceDisplayMode.isRich
+                                && !routesSelectionToTaskRow(scopedWorkspace.workspace, in: host)
                                 ? host.activeSessions(in: scopedWorkspace.workspace.id)
                                 : []
                             // The same guide the single-Host tree draws; see
@@ -419,8 +420,7 @@ struct WarrenDesktopSidebarHostRows: View {
         // background Host must leave this row selectable to provide an
         // activation path. Once it becomes current, the existing Task row
         // again owns navigation.
-        let isSelectionDisabled = workspace.taskID != nil
-            && host.endpointID == activeEndpointID
+        let isSelectionDisabled = routesSelectionToTaskRow(workspace, in: host)
         let taskName = workspace.taskID.flatMap { taskID in
             host.tasks.first(where: { $0.id == taskID })?.name
         }
@@ -439,7 +439,14 @@ struct WarrenDesktopSidebarHostRows: View {
             isInteractionDisabled: !enabled || isProjectDeleting || isDeleting,
             isMutationDisabled: !canWrite,
             isSelectionDisabled: isSelectionDisabled,
-            showsSessionChildren: workspaceDisplayMode.isRich,
+            // Same rule as the current-Host tree: a row that cannot be acted on
+            // owns no leaves. The active endpoint's task-linked row routes to
+            // its Task copy, which the Tasks section renders with the leaves.
+            // The flag also gates click navigation, so it claims a leaf that is
+            // actually drawn.
+            showsSessionChildren: workspaceDisplayMode.isRich
+                && !isSelectionDisabled
+                && !host.activeSessions(in: workspace.id).isEmpty,
             rowHeight: workspaceDisplayMode.rowHeight,
             taskName: taskName,
             taskID: workspace.taskID,
@@ -452,7 +459,13 @@ struct WarrenDesktopSidebarHostRows: View {
                 onSelect(.workspace(host.workspaceReference(workspace.id)))
             },
             onDoubleClick: {
-                onOpenWorkspace(host.workspaceReference(workspace.id))
+                // A background Host stays read-only, so its double-click keeps
+                // opening instead of creating; see the current-Host tree.
+                if workspaceDisplayMode.isRich, canWrite {
+                    onAction(.requestNewSession(workspace.id))
+                } else {
+                    onOpenWorkspace(host.workspaceReference(workspace.id))
+                }
             },
             onRename: {
                 guard canWrite else { return }
@@ -476,6 +489,20 @@ struct WarrenDesktopSidebarHostRows: View {
             }
         )
         .id(key)
+    }
+
+    /// Whether a Host's copy of this Workspace is context-only because its Task
+    /// row owns navigation.
+    ///
+    /// A Task-linked Workspace on the active Host routes selection to the Task
+    /// row, which the Tasks section renders with the Session leaves. A
+    /// background Host keeps its own row as the activation path, so it keeps its
+    /// leaves as well.
+    private func routesSelectionToTaskRow(
+        _ workspace: Workspace,
+        in host: WarrenDesktopSidebarHostProjection
+    ) -> Bool {
+        workspace.taskID != nil && host.endpointID == activeEndpointID
     }
 
     private func canMutate(_ host: WarrenDesktopSidebarHostProjection) -> Bool {

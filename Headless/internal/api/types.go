@@ -144,8 +144,9 @@ type Session struct {
 	Command       string `json:"command,omitempty"`
 	// Process, CommandLine, and Directory are live runtime metadata overlaid
 	// on roster snapshots only; they are never persisted with the session
-	// record. Directory comes from the shell's OSC 7 report; Process and
-	// CommandLine come from the runtime's foreground probe.
+	// record. Directory is the shell's OSC 7 pwd when reported, otherwise the
+	// directory the Session was launched in. Process and CommandLine come from
+	// the runtime's foreground probe.
 	Process     string `json:"process,omitempty"`
 	CommandLine string `json:"commandLine,omitempty"`
 	Directory   string `json:"directory,omitempty"`
@@ -197,6 +198,71 @@ type Session struct {
 	// `screen.panes`.
 	ScreenPosition  int `json:"screenPosition,omitempty"`
 	ScreenPaneCount int `json:"screenPaneCount,omitempty"`
+}
+
+// PaneGroup is one whole-screen arrangement of running Sessions. It is durable
+// Host state: the Host owns the pane tree, so any client can read how a scope is
+// arranged without a reporting peer, and several arrangements can coexist in one
+// Workspace or Terminal Group.
+//
+// The tree is the single source of pane membership, pane order, and geometry.
+// Pane order is preorder leaf order; a pane's 1-based index is derived on read
+// and never stored. A client stores only which group it is looking at and which
+// pane has focus.
+type PaneGroup struct {
+	ID string `json:"id"`
+	// WorkspaceID and TerminalGroupID are mutually exclusive owners, exactly as
+	// they are for a Session.
+	WorkspaceID     string `json:"workspace,omitempty"`
+	TerminalGroupID string `json:"terminalGroup,omitempty"`
+	// Scope mirrors Session.Scope so a group's owner kind is explicit for legacy
+	// and for clients that read one field.
+	Scope string `json:"scope,omitempty"`
+	// Name is an optional user label. An empty name renders as the group's
+	// ordinal within its owner.
+	Name string `json:"name,omitempty"`
+	// Order positions the group among its owner's groups.
+	Order int `json:"order,omitempty"`
+	// Tree holds at least one leaf and at most `pane.MaxPanes` leaves.
+	Tree PaneNode `json:"tree"`
+	// Revision increments on every accepted mutation. It is the compare-and-swap
+	// token for `pane-group.update`: a structural edit that cannot name the
+	// revision it observed is rejected instead of overwriting another client.
+	Revision  uint64    `json:"revision"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// OwnerID returns the Workspace or Terminal Group that owns the group.
+func (group PaneGroup) OwnerID() string {
+	if group.WorkspaceID != "" {
+		return group.WorkspaceID
+	}
+	return group.TerminalGroupID
+}
+
+// OwnerScope normalizes the owner kind, deriving it from the ownership fields
+// for records written before Scope existed.
+func (group PaneGroup) OwnerScope() string {
+	if group.Scope != "" {
+		return group.Scope
+	}
+	if group.TerminalGroupID != "" {
+		return SessionScopeTerminalGroup
+	}
+	return SessionScopeWorkspace
+}
+
+// PaneNode is one node of a Pane Group's tree. A leaf sets PaneID and
+// SessionID; a split sets Axis, Ratio, First, and Second. Exactly one shape is
+// valid, and a leaf's PaneID is assigned by the Host.
+type PaneNode struct {
+	PaneID    string    `json:"paneId,omitempty"`
+	SessionID string    `json:"sessionId,omitempty"`
+	Axis      string    `json:"axis,omitempty"`
+	Ratio     float64   `json:"ratio,omitempty"`
+	First     *PaneNode `json:"first,omitempty"`
+	Second    *PaneNode `json:"second,omitempty"`
 }
 
 // ScreenPane is one Session displayed on a client screen, in the order that
@@ -437,6 +503,10 @@ type State struct {
 	Workspaces     []Workspace     `json:"workspaces"`
 	TerminalGroups []TerminalGroup `json:"terminalGroups"`
 	Sessions       []Session       `json:"sessions"`
+	// PaneGroups carries the durable split arrangements of every Workspace and
+	// Terminal Group. It is additive state: a Host that has never served a split
+	// simply has none.
+	PaneGroups []PaneGroup `json:"paneGroups"`
 	// GhostlineMigration records the durable handoff journal used while a new
 	// Ghostline server adopts sessions from the previous server.
 	GhostlineMigration *GhostlineMigration `json:"ghostlineMigration,omitempty"`

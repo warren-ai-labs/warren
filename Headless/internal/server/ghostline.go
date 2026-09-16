@@ -65,18 +65,22 @@ func (r *GhostlineRuntime) Create(ctx context.Context, name, directory, command 
 			sessionEnv = append(sessionEnv, "TERMINFO="+terminfoDir)
 		}
 	}
+	shell := runtime.LoginShellPath()
+	// Load the OSC 7 prompt hook before the shell starts so the working
+	// directory is reported without relying on the user's own shell setup.
+	integration := runtime.ApplyShellIntegration(shell, sessionEnv)
+	sessionEnv = integration.Env
 	process := ghostline.ProcessSpec{
 		Directory:   directory,
 		Environment: sessionEnv,
 	}
-	shell := runtime.LoginShellPath()
-	if bootstrap, err := runtime.ShellCommandWithUnsets(shell, unsetKeys); err != nil {
+	if bootstrap, err := runtime.ShellCommandWithUnsets(shell, integration.Args, unsetKeys); err != nil {
 		return err
 	} else if bootstrap != "" {
 		process.ShellCommand = bootstrap
 	} else {
 		process.Path = shell
-		process.Args = runtime.LoginShellArgs()
+		process.Args = integration.Args
 	}
 	session, err := r.client.Start(ctx, ghostline.SessionOptions{
 		Name:    name,

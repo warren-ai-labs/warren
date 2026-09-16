@@ -9,8 +9,12 @@ final class GhosttyAdapterTests: XCTestCase {
     func testDefaultRetentionBudgetSupportsNormalMultiAgentWorkflows() {
         let policy = TerminalSurfaceRetentionPolicy()
 
-        XCTAssertEqual(policy.warmLimit, 8)
-        XCTAssertEqual(policy.warmByteLimit, 1024 * 1024 * 1024)
+        // Sized for a real multi-agent session: the budget has to cover the
+        // Sessions a user cycles through without evicting a surface, because
+        // every eviction turns the next visit into a cold attach and a full
+        // snapshot install (a visible reflow for a TUI).
+        XCTAssertEqual(policy.warmLimit, 32)
+        XCTAssertEqual(policy.warmByteLimit, 3 * 1024 * 1024 * 1024)
     }
 
     func testRetentionPolicyKeepsOneActiveAndTwoMostRecentWarmSurfaces() {
@@ -734,6 +738,39 @@ final class GhosttyAdapterTests: XCTestCase {
         XCTAssertFalse(session.restoreSnapshot(Data("not-a-snapshot".utf8)))
     }
 
+    /// A promotion that lands while a TUI holds a synchronized-output block
+    /// open defers its draw. Without the stall escape the deferral lasts until
+    /// the block closes, which is a black pane for as long as the block lives.
+    @MainActor
+    func testSynchronizedOutputStallEscapeArmsWhenABlockStaysOpen() async throws {
+        let surface = GhosttySurface(
+            id: TerminalSessionID(),
+            attachmentID: TerminalAttachmentID(),
+            workingDirectory: "/tmp",
+            onInput: { _ in },
+            onResize: { _, _ in }
+        )
+        defer { surface.outputWriter.shutdown() }
+
+        XCTAssertFalse(surface.outputWriter.isInSynchronizedOutput)
+        XCTAssertFalse(surface.outputWriter.isSyncStalled)
+
+        // `receive` is the synchronous feed: the drain path waits for a ready
+        // native surface, which a surface without a mounted view does not have.
+        surface.outputWriter.receive(Data("\u{1b}[?2026h".utf8))
+        XCTAssertTrue(surface.outputWriter.isInSynchronizedOutput)
+        XCTAssertFalse(
+            surface.outputWriter.isSyncStalled,
+            "the escape must not fire before its own window"
+        )
+
+        try await waitUntil { surface.outputWriter.isSyncStalled }
+
+        surface.outputWriter.receive(Data("\u{1b}[?2026l".utf8))
+        XCTAssertFalse(surface.outputWriter.isInSynchronizedOutput)
+        XCTAssertFalse(surface.outputWriter.isSyncStalled)
+    }
+
     @MainActor
     func testNativeSnapshotRestoreReplacesViewportAndContinuesAtCursor() async throws {
         let recorder = LockedInputRecorder()
@@ -749,16 +786,36 @@ final class GhosttyAdapterTests: XCTestCase {
         let colorQueryExpected = Data(
             "\u{1b}]10;rgb:eaea/e8e8/e6e6\u{1b}\\\u{1b}]11;rgb:1515/1111/1010\u{1b}\\".utf8
         )
+        // `ghostty_surface_update_config` is delivered to Ghostty's I/O thread
+        // through its mailbox, while `ghostty_surface_write_buffer` processes
+        // output synchronously on the calling thread. Sampling the colors once
+        // therefore races that mailbox: the restore can be complete while the
+        // configured colors have not been applied yet. Re-query until they
+        // land instead of accepting whichever reply happens to arrive first; a
+        // reapply that never happens still fails on the deadline.
+        let colorQueryTerminator = "\u{1b}" + "\\"
+        let colorQuery = Data(
+            ("\u{1b}]10;?" + colorQueryTerminator
+                + "\u{1b}]11;?" + colorQueryTerminator).utf8
+        )
         let colorQueryDeadline = ContinuousClock.now.advanced(by: .seconds(2))
-        while recorder.allBytes().count < colorQueryExpected.count,
-              ContinuousClock.now < colorQueryDeadline
-        {
-            try await Task.sleep(for: .milliseconds(10))
+        var reportedColors = recorder.allBytes()
+        while ContinuousClock.now < colorQueryDeadline {
+            let responseDeadline = ContinuousClock.now.advanced(by: .milliseconds(250))
+            while recorder.allBytes().count < colorQueryExpected.count,
+                  ContinuousClock.now < responseDeadline
+            {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            reportedColors = recorder.allBytes()
+            if reportedColors.suffix(colorQueryExpected.count) == colorQueryExpected { break }
+            recorder.clear()
+            surface.receive(colorQuery)
         }
         XCTAssertEqual(
-            Array(recorder.allBytes()),
+            Array(reportedColors.suffix(colorQueryExpected.count)),
             Array(colorQueryExpected),
-            "native snapshot restore must preserve Warren's configured default colors"
+            "native snapshot restore must reapply Warren's configured default colors"
         )
 
         let restored = try XCTUnwrap(surface.inMemory.readViewportText())
@@ -897,6 +954,23 @@ private func makeMountedTerminal(
 
     _ = try await waitUntilSurfaceAvailable(on: surface.state)
     return (surface, view, window)
+}
+
+/// Polls a condition with a deadline. Used by the synchronized-output test: the
+/// writer drains on its own task, so state changes are not observable inline.
+@MainActor
+private func waitUntil(
+    timeout: Duration = .seconds(3),
+    _ condition: @escaping @MainActor () -> Bool
+) async throws {
+    let deadline = ContinuousClock.now.advanced(by: timeout)
+    while !condition(), ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    guard condition() else {
+        struct ConditionTimeout: Error {}
+        throw ConditionTimeout()
+    }
 }
 
 @MainActor

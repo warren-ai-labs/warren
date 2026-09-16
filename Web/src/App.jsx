@@ -3862,6 +3862,23 @@ export default function App() {
     if (workspaceID) chooseSearchWorkspace(workspaceID);
   }, [catalog, chooseSearchWorkspace]);
 
+  /// A search result names a resource, not a screen. A session opens inside the
+  /// workspace that owns it, so the terminal the user picked is the one attached.
+  const chooseSearchTarget = useCallback(target => {
+    if (!target) return;
+    if (target.kind === "session") {
+      if (!target.workspace) return;
+      closeSearch();
+      chooseWorkspace(target.workspace, target.id);
+      return;
+    }
+    if (target.kind === "workspace") {
+      chooseSearchWorkspace(target.id);
+      return;
+    }
+    if (target.kind === "project") chooseSearchProject(target.id);
+  }, [chooseSearchProject, chooseSearchWorkspace, chooseWorkspace, closeSearch]);
+
   const updateFontFamily = useCallback(value => {
     setFontFamily(value.trim() || defaultFontFamily);
   }, []);
@@ -4368,8 +4385,7 @@ export default function App() {
         catalog={catalog}
         onQueryChange={setSearchQuery}
         onClose={closeSearch}
-        onChooseWorkspace={chooseSearchWorkspace}
-        onChooseProject={chooseSearchProject}
+        onChooseTarget={chooseSearchTarget}
       />
       {sessionSheetOpen && (
         <SessionSheet

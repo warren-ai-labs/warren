@@ -830,6 +830,47 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let order: Int?
         let createdAt: String?
     }
+    /// The Host's pane tree. The wire shape is flat: a leaf carries pane and
+    /// session identity, a split carries geometry. Recursion needs an indirect
+    /// enum, and a leaf without a resolvable Session is dropped by the mapping
+    /// into the projection rather than by the decoder.
+    indirect enum PaneNode: Decodable, Sendable, Equatable {
+        case leaf(paneID: String?, sessionID: String?)
+        case split(axis: String, ratio: Double, first: PaneNode, second: PaneNode)
+
+        private enum CodingKeys: String, CodingKey {
+            case paneId, sessionId, axis, ratio, first, second
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            if let axis = try values.decodeIfPresent(String.self, forKey: .axis), !axis.isEmpty {
+                self = .split(
+                    axis: axis,
+                    ratio: try values.decodeIfPresent(Double.self, forKey: .ratio) ?? 0.5,
+                    first: try values.decode(PaneNode.self, forKey: .first),
+                    second: try values.decode(PaneNode.self, forKey: .second)
+                )
+                return
+            }
+            self = .leaf(
+                paneID: try values.decodeIfPresent(String.self, forKey: .paneId),
+                sessionID: try values.decodeIfPresent(String.self, forKey: .sessionId)
+            )
+        }
+    }
+
+    struct PaneGroup: Decodable, Sendable, Equatable {
+        let id: String
+        let workspace: String?
+        let terminalGroup: String?
+        let scope: String?
+        let name: String?
+        let order: Int?
+        let tree: PaneNode
+        let revision: UInt64?
+    }
+
     struct Session: Decodable, Sendable, Equatable {
         let id: String
         let workspace: String?
@@ -843,9 +884,9 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         /// plain terminal.
         var agentProvider: String? = nil
         let command: String?
-        let process: String?
-        let commandLine: String?
-        let directory: String?
+        var process: String?
+        var commandLine: String?
+        var directory: String?
         let lifecycle: String
         let pinned: Bool?
         let agentStatus: AgentStatus?
@@ -876,6 +917,26 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     }
 
     struct Delta: Decodable, Sendable {
+        struct SessionMetadata: Decodable, Sendable, Equatable {
+            let id: String
+            let process: String?
+            let commandLine: String?
+            let directory: String?
+        }
+
+        struct SessionMetadataChanges: Decodable, Sendable {
+            let upsert: [SessionMetadata]
+
+            private enum CodingKeys: String, CodingKey {
+                case upsert
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                upsert = try container.decodeIfPresent([SessionMetadata].self, forKey: .upsert) ?? []
+            }
+        }
+
         struct EntityChanges<Value: Decodable & Sendable>: Decodable, Sendable {
             let upsert: [Value]
             let remove: [String]
@@ -902,7 +963,9 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let projects: EntityChanges<Project>?
         let workspaces: EntityChanges<Workspace>?
         let terminalGroups: EntityChanges<TerminalGroup>?
+        let paneGroups: EntityChanges<PaneGroup>?
         let sessions: EntityChanges<Session>?
+        let sessionMetadata: SessionMetadataChanges?
     }
 
     struct StreamMessage: Decodable, Sendable {
@@ -929,6 +992,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     let projects: [Project]
     let workspaces: [Workspace]
     let terminalGroups: [TerminalGroup]
+    let paneGroups: [PaneGroup]
     let sessions: [Session]
 
     init(from decoder: Decoder) throws {
@@ -939,6 +1003,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         projects = try container.decodeIfPresent([Project].self, forKey: .projects) ?? []
         workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
         terminalGroups = try container.decodeIfPresent([TerminalGroup].self, forKey: .terminalGroups) ?? []
+        paneGroups = try container.decodeIfPresent([PaneGroup].self, forKey: .paneGroups) ?? []
         sessions = try container.decodeIfPresent([Session].self, forKey: .sessions) ?? []
     }
 
@@ -949,6 +1014,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         case projects
         case workspaces
         case terminalGroups
+        case paneGroups
         case sessions
     }
 
@@ -959,6 +1025,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         projects: [Project],
         workspaces: [Workspace],
         terminalGroups: [TerminalGroup],
+        paneGroups: [PaneGroup],
         sessions: [Session]
     ) {
         self.revision = revision
@@ -967,6 +1034,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         self.projects = projects
         self.workspaces = workspaces
         self.terminalGroups = terminalGroups
+        self.paneGroups = paneGroups
         self.sessions = sessions
     }
 
@@ -983,8 +1051,34 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
             projects: Self.applying(projects, changes: delta.projects, id: \.id),
             workspaces: Self.applying(workspaces, changes: delta.workspaces, id: \.id),
             terminalGroups: Self.applying(terminalGroups, changes: delta.terminalGroups, id: \.id),
-            sessions: Self.applying(sessions, changes: delta.sessions, id: \.id)
+            paneGroups: Self.applying(paneGroups, changes: delta.paneGroups, id: \.id),
+            // Metadata travels separately from the Session entity, so apply it
+            // first and let an entity upsert override it with the full record.
+            sessions: Self.applying(
+                Self.applyingMetadata(sessions, changes: delta.sessionMetadata),
+                changes: delta.sessions,
+                id: \.id
+            )
         )
+    }
+
+    private static func applyingMetadata(
+        _ current: [Session],
+        changes: Delta.SessionMetadataChanges?
+    ) -> [Session] {
+        guard let changes, !changes.upsert.isEmpty else { return current }
+        var byID: [String: Delta.SessionMetadata] = [:]
+        for change in changes.upsert {
+            byID[change.id] = change
+        }
+        return current.map { session in
+            guard let change = byID[session.id] else { return session }
+            var updated = session
+            updated.process = change.process
+            updated.commandLine = change.commandLine
+            updated.directory = change.directory
+            return updated
+        }
     }
 
     private static func applying<Value: Decodable & Sendable>(
@@ -1063,13 +1157,25 @@ struct WarrenAgentCompletionEvent: Equatable, Sendable {
 /// Converts the latest Agent turn from each roster snapshot into exactly one
 /// notification per successful completion. A first snapshot and a transcript
 /// reset are baselines, never historical notifications.
+///
+/// A Host that restarts reports its Sessions before it has replayed their
+/// transcripts, so a Session can first appear without a turn and only gain a
+/// terminal turn in a later snapshot. That first observation is restored
+/// Host state, not a completion: it rings only when the Session was unknown
+/// at the time of the snapshot, or when an already observed turn transitions
+/// to a terminal status.
 struct WarrenAgentCompletionTracker {
     private var initialized = false
     private var turns: [TerminalSessionID: RemoteRoster.AgentTurn] = [:]
+    private var knownSessionIDs: Set<TerminalSessionID> = []
 
     mutating func observe(
-        _ nextTurns: [TerminalSessionID: RemoteRoster.AgentTurn]
+        sessions: Set<TerminalSessionID>,
+        turns nextTurns: [TerminalSessionID: RemoteRoster.AgentTurn]
     ) -> [TerminalSessionID] {
+        let previouslyKnownSessionIDs = knownSessionIDs
+        knownSessionIDs.formUnion(sessions)
+
         guard initialized else {
             initialized = true
             turns = nextTurns
@@ -1080,7 +1186,12 @@ struct WarrenAgentCompletionTracker {
         for (sessionID, turn) in nextTurns {
             guard turn.status == "completed" else { continue }
             guard let previous = turns[sessionID] else {
-                completed.append(sessionID)
+                // A Session the client has never seen is a live completion
+                // whose start the snapshot missed. A Session first observed
+                // without a turn is still restoring Host Agent state.
+                if !previouslyKnownSessionIDs.contains(sessionID) {
+                    completed.append(sessionID)
+                }
                 continue
             }
             // Turn ids restart when a transcript projection is rebound. Do
@@ -1722,6 +1833,22 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         surfaceManager.onFocusRequested = { [weak self] sessionID in
             self?.selectTab(forSessionID: sessionID)
         }
+        // A promotion that never drew leaves the pane black with no work in
+        // flight. Recover it the only way that can rebuild a surface whose
+        // native renderer is gone: re-subscribe and install a fresh snapshot.
+        // A passive pane is left alone; it takes this path when it is selected.
+        surfaceManager.onPresentStalled = { [weak self] sessionID in
+            guard let self else { return }
+            guard sessionID == self.selectedSessionID else {
+                TerminalDiagnostics.logVerbose("present_stalled_passive", [
+                    "session": sessionID.description,
+                ])
+                return
+            }
+            Task { @MainActor in
+                await self.recoverStalledPrimarySession(sessionID)
+            }
+        }
         surfaceManager.onSurfaceDisposed = { [weak self] sessionID in
             guard let self else { return }
             self.outputAnchors.removeValue(forKey: sessionID)
@@ -2118,7 +2245,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         attachGeneration &+= 1
         outputAnchors = outputAnchors.filter { retainedSurfaceIDs.contains($0.key) }
         suppressFramedAnchorUpdates.removeAll()
-        outputSubscriptions.removeAll()
+        noteOutputSubscriptionsCleared(reason: "resetAttachmentState")
         backgroundAttachTokens.removeAll()
         installedAtomicStateAnchors.removeAll()
         cancelAllAtomicRecoveryRetries()
@@ -2160,7 +2287,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         appliedLiveTabSessionIDs.removeAll()
         outputAnchors.removeAll()
         suppressFramedAnchorUpdates.removeAll()
-        outputSubscriptions.removeAll()
+        noteOutputSubscriptionsCleared(reason: "shutdownAllMountedSurfaces")
         backgroundAttachTokens.removeAll()
         installedAtomicStateAnchors.removeAll()
         cancelAllAtomicRecoveryRetries()
@@ -2180,7 +2307,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         failedAtomicRecoverySessions.remove(sessionID)
         pendingRetainedSurfaceRebinds.remove(sessionID)
         reconnectPreservedSessions.remove(sessionID)
-        outputSubscriptions.remove(sessionID)
+        noteOutputSubscriptionDropped(sessionID, reason: "removeMountedSurface")
     }
 
     private func clearAtomicRecoveryState(for sessionID: TerminalSessionID) {
@@ -2201,11 +2328,48 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     /// Best-effort daemon-side unsubscribe for a disposed surface. The
+    /// Records the add and drop of a Session's output subscription.
+    ///
+    /// Ordinary navigation reparents a retained surface and reuses its
+    /// subscription, so a subscription that disappears silently turns the next
+    /// selection into a full re-seed (a re-subscribe answers with a complete
+    /// atomic state, and installing that repaints the pane). These events name
+    /// the call site on both sides so that chain is traceable without guessing.
+    private func noteOutputSubscriptionAdded(_ sessionID: TerminalSessionID, reason: String) {
+        guard !outputSubscriptions.contains(sessionID) else { return }
+        outputSubscriptions.insert(sessionID)
+        TerminalDiagnostics.log("output_subscription_added", [
+            "session": sessionID.description,
+            "reason": reason,
+            "count": String(outputSubscriptions.count),
+        ])
+    }
+
+    private func noteOutputSubscriptionDropped(_ sessionID: TerminalSessionID, reason: String) {
+        guard outputSubscriptions.remove(sessionID) != nil else { return }
+        TerminalDiagnostics.log("output_subscription_dropped", [
+            "session": sessionID.description,
+            "reason": reason,
+            "count": String(outputSubscriptions.count),
+        ])
+    }
+
+    private func noteOutputSubscriptionsCleared(reason: String) {
+        guard !outputSubscriptions.isEmpty else { return }
+        TerminalDiagnostics.log("output_subscriptions_cleared", [
+            "reason": reason,
+            "count": String(outputSubscriptions.count),
+            "sessions": outputSubscriptions.map(\.description).sorted().joined(separator: ","),
+        ])
+        outputSubscriptions.removeAll()
+    }
+
     /// daemon also cleans up when the session exits or the socket drops, so
     /// failures are deliberately ignored.
     private func unsubscribeFromOutput(_ sessionID: TerminalSessionID) {
         guard wire != nil else { return }
-        guard outputSubscriptions.remove(sessionID) != nil else { return }
+        guard outputSubscriptions.contains(sessionID) else { return }
+        noteOutputSubscriptionDropped(sessionID, reason: "unsubscribeFromOutput")
         Task { [weak self] in
             _ = try? await self?.wire?.request(
                 "session.unsubscribe",
@@ -3772,13 +3936,27 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         columns: Int,
         rows: Int
     ) {
-        // The focused pane's size travels with its control claim. Everything
-        // else — including the selected pane while its claim is still in
-        // flight, and every passive split sibling — uses the viewport-only
-        // path so its PTY still follows the pane.
+        // A surface reports a grid whenever Ghostty recomputes metrics,
+        // including the default surface it is created with before the view has
+        // driven a real size. That report arrives asynchronously, so by now the
+        // view already matches its pane and only a grid comparison can tell it
+        // apart from a real resize. Forwarding it would reflow the running
+        // program at the wrong width, which reads as a history replay.
+        guard surfaceManager.acceptsReportedGrid(
+            sessionID,
+            columns: columns,
+            rows: rows
+        ) else { return }
+        // The selected pane's size belongs to its focus claim while that claim
+        // is being established. Routing it through the viewport-only path
+        // would race the attach and can queue a bare `session.resize` ahead of
+        // `session.subscribe` on the daemon's reader. Only a real sibling pane
+        // — never the pane that is about to own focus — uses that path.
+        let focusPending = focusClaimInFlight
+            || pendingFocusSessionID == sessionID
+            || attachedSessionID != sessionID
         if sessionID == selectedSessionID,
-           attachedSessionID == sessionID,
-           focusedSessionID == sessionID {
+           focusedSessionID == sessionID || focusPending {
             resize(columns: columns, rows: rows)
         } else {
             resizePassive(sessionID: sessionID, columns: columns, rows: rows)
@@ -3790,13 +3968,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// A split pane has to follow its own viewport even while another pane
     /// holds the input lease. The daemon arbitrates the shared runtime size
     /// independently of input control, so this is safe to send; it is ignored
-    /// when another client currently owns the size.
+    /// when another client currently owns the size. A pane must already be
+    /// subscribed: a resize before `session.subscribe` is either rejected or
+    /// queued ahead of the attach, which is how a slow PTY resize used to leave
+    /// the terminal black.
     private func resizePassive(
         sessionID: TerminalSessionID,
         columns: Int,
         rows: Int
     ) {
         guard visibleSessionIDs.contains(sessionID),
+              outputSubscriptions.contains(sessionID),
               focusedSessionID != sessionID,
               let size = TerminalSize(columns: columns, rows: rows) else { return }
         var buffer = passiveResizeBuffers[sessionID] ?? WarrenResizeRequestBuffer()
@@ -3820,6 +4002,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                   let size = buffer.take(),
                   let wire,
                   visibleSessionIDs.contains(sessionID),
+                  outputSubscriptions.contains(sessionID),
                   focusedSessionID != sessionID else {
                 return
             }
@@ -3855,14 +4038,18 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     func resize(columns: Int, rows: Int) {
-        guard let sessionID = selectedSessionID,
-              attachedSessionID == sessionID else { return }
+        guard let sessionID = selectedSessionID else { return }
         guard let size = TerminalSize(columns: columns, rows: rows) else { return }
-        guard focusedSessionID == sessionID else {
-            // The very first Ghostty metric can arrive while the focus claim
-            // is still in flight. Remember the latest size and apply it as
-            // soon as the daemon confirms ownership instead of dropping it.
-            if focusClaimInFlight || pendingFocusSessionID == sessionID {
+        guard attachedSessionID == sessionID, focusedSessionID == sessionID else {
+            // The selected pane's size belongs to its focus claim. The very
+            // first Ghostty metric can arrive before the attach and while the
+            // claim is still in flight, so remember the latest size and let
+            // `sendFocus` carry it once ownership is confirmed; sending a bare
+            // `session.resize` here would race the attach and can block the
+            // daemon's reader behind a slow PTY resize.
+            if attachedSessionID != sessionID
+                || focusClaimInFlight
+                || pendingFocusSessionID == sessionID {
                 pendingFocusResizeSize = size
             }
             return
@@ -3927,7 +4114,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             pendingFocusSize = measuredSize
             return
         }
-        sendFocus(sessionID: sessionID, focused: true, size: measuredSize)
+        sendFocus(
+            sessionID: sessionID,
+            focused: true,
+            size: measuredSize,
+            reason: "surfaceFocus"
+        )
     }
 
     func blur(sessionID: TerminalSessionID) {
@@ -3952,13 +4144,34 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         focusTask?.cancel()
         focusedSessionID = nil
         guard attachedSessionID == sessionID else { return }
-        sendFocus(sessionID: sessionID, focused: false, size: nil)
+        sendFocus(sessionID: sessionID, focused: false, size: nil, reason: "surfaceBlur")
     }
 
-    private func sendFocus(sessionID: TerminalSessionID, focused: Bool, size: TerminalSize?) {
+    /// Sends the keyboard focus this pane holds to the daemon.
+    ///
+    /// A terminal application sees these as focus-in/focus-out, and a
+    /// full-screen TUI is entitled to repaint its whole interface for one — pi
+    /// does, which is why a repaint nobody asked for has to be attributable to a
+    /// focus change before it is blamed on rendering. `reason` names the path
+    /// that decided the pane holds focus.
+    private func sendFocus(
+        sessionID: TerminalSessionID,
+        focused: Bool,
+        size: TerminalSize?,
+        reason: String
+    ) {
         guard let wire,
               selectedSessionID == sessionID,
               attachedSessionID == sessionID else { return }
+        let sizeLabel = focused
+            ? size.map { "\($0.columns)x\($0.rows)" } ?? "nil"
+            : "nil"
+        TerminalDiagnostics.log("terminal_focus_send", [
+            "session": sessionID.description,
+            "focused": focused ? "true" : "false",
+            "size": sizeLabel,
+            "reason": reason,
+        ])
         focusTask?.cancel()
         focusClaimGeneration += 1
         let generation = focusClaimGeneration
@@ -3977,6 +4190,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 guard self.focusClaimGeneration == generation,
                       self.selectedSessionID == sessionID,
                       self.attachedSessionID == sessionID else { return }
+                TerminalDiagnostics.log("terminal_focus_sent", [
+                    "session": sessionID.description,
+                    "focused": focused ? "true" : "false",
+                    "reason": reason,
+                    "accepted": result.focused ? "true" : "false",
+                ])
                 self.focusClaimInFlight = false
                 if focused {
                     self.focusedSessionID = result.focused ? sessionID : nil
@@ -4000,6 +4219,71 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     func report(_ error: Error) { present(error) }
+
+    /// Writes one local arrangement back to the Host.
+    ///
+    /// The Host owns the shape, so this is a request rather than a store: a
+    /// scope the Host has no group for is created around the tree's first
+    /// Session, and every later edit is one tree replacement under the revision
+    /// the roster reported. A rejected edit is not fatal: the roster's answer
+    /// replaces the optimistic local value on the next update.
+    func commitPaneTree(owner: WarrenDesktopPaneOwner, tree: PaneNode) {
+        guard let wire else { return }
+        let workspaceID = owner.workspaceID?.description
+        let terminalGroupID = owner.terminalGroupID?.description
+        Task { @MainActor [weak self, wire] in
+            guard let self, self.wire === wire else { return }
+            // A Host that does not advertise the capability owns no
+            // arrangements, so a write would be an unknown method rather than a
+            // rejected tree. The read side needs no gate: an old Host has no
+            // groups to project, and the scope renders its selected Tab alone.
+            guard await wire.supportsCapability("pane-groups-v1") else { return }
+            do {
+                let existing = self.projection.paneGroups.first { group in
+                    group.workspaceID?.description == workspaceID
+                        && group.terminalGroupID?.description == terminalGroupID
+                }
+                var groupID: String
+                var revision: UInt64
+                if let existing {
+                    groupID = existing.id.description
+                    revision = existing.revision
+                } else {
+                    guard let sessionID = tree.sessionIDs.first else { return }
+                    var params: [String: Any] = ["session": sessionID.description]
+                    if let workspaceID {
+                        params["workspace"] = workspaceID
+                    } else if let terminalGroupID {
+                        params["group"] = terminalGroupID
+                    }
+                    let created: RemoteRoster.PaneGroup = try await wire.request(
+                        "pane-group.create",
+                        jsonParams: params,
+                        decoding: RemoteRoster.PaneGroup.self
+                    )
+                    groupID = created.id
+                    revision = created.revision ?? 0
+                }
+                let encoded = try JSONEncoder().encode(tree)
+                let treeObject = try JSONSerialization.jsonObject(with: encoded)
+                _ = try await wire.request(
+                    "pane-group.update",
+                    jsonParams: [
+                        "id": groupID,
+                        "tree": treeObject,
+                        "expectedRevision": revision,
+                    ]
+                )
+                // The mutation is accepted, so the next roster delta carries the
+                // Host's version of the tree. Nothing is cached locally.
+            } catch {
+                // A revision conflict means another client shaped the same
+                // arrangement first. Re-reading the roster is the whole
+                // recovery: the Host's version is already authoritative.
+                await self.refreshRosterAfterDeltaMismatch(using: wire)
+            }
+        }
+    }
 
     func reportActiveScreenSessions(_ sessions: Set<TerminalSessionID>) {
         // The Desktop callback intentionally exposes a Set, so sort before
@@ -4551,6 +4835,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     return
                 }
 
+                // The readiness waits above let a newer install for this
+                // Session run; the payload captured at the top of the loop is
+                // then stale and must not replace the grid a second time.
+                guard self.pendingAtomicRecoveries[sessionID]?.epoch == pending.epoch,
+                      self.pendingAtomicRecoveries[sessionID]?.sequence == pending.sequence else {
+                    return
+                }
+
                 let anchor = TerminalOutputAnchor(
                     epoch: pending.epoch,
                     sequence: pending.sequence
@@ -4585,6 +4877,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             )
             return false
         }
+        supersedePendingAtomicRecovery(sessionID: sessionID, epoch: epoch, sequence: sequence)
         guard surfaceManager.restoreSnapshot(
             payload,
             for: sessionID,
@@ -4624,6 +4917,36 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         ])
         finishAtomicRecoveryIfSynced(sessionID: sessionID, anchor: anchor)
         return true
+    }
+
+    /// Drops a deferred install for this Session that a newer state replaces.
+    ///
+    /// A background seed installs no snapshot while its pane is unmounted, so
+    /// the payload waits in `pendingAtomicRecoveries` for a retry. When the user
+    /// then selects that Session, the attach delivers the same state again and
+    /// the retry would install the earlier copy too, replacing the grid twice
+    /// and repainting the whole pane twice for one state. Anything the retry
+    /// still holds is redundant once the same or a newer state installs, so
+    /// cancel it.
+    private func supersedePendingAtomicRecovery(
+        sessionID: TerminalSessionID,
+        epoch: UInt64,
+        sequence: UInt64
+    ) {
+        guard let pending = pendingAtomicRecoveries[sessionID] else { return }
+        let superseded = pending.epoch < epoch
+            || (pending.epoch == epoch && pending.sequence <= sequence)
+        guard superseded else { return }
+        pendingAtomicRecoveries.removeValue(forKey: sessionID)
+        recoveryRetryGenerations[sessionID, default: 0] &+= 1
+        recoveryRetryTasks.removeValue(forKey: sessionID)?.cancel()
+        TerminalDiagnostics.log("atomic_recovery_superseded", [
+            "session": sessionID.description,
+            "pendingEpoch": String(pending.epoch),
+            "pendingSequence": String(pending.sequence),
+            "epoch": String(epoch),
+            "sequence": String(sequence),
+        ])
     }
 
     @discardableResult
@@ -5374,6 +5697,26 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 createdAt: Self.terminalGroupDate(value.createdAt)
             )
         }
+        // Pane groups are Host state, so the projection carries them verbatim:
+        // the client renders the arrangement the Host owns instead of keeping a
+        // device-local copy that no other client can see.
+        let paneGroups = roster.paneGroups.enumerated().compactMap { index, value -> PaneGroup? in
+            guard let id = PaneGroupID(uuidString: value.id),
+                  let tree = Self.paneTree(value.tree) else { return nil }
+            let workspaceID = value.workspace.flatMap(WorkspaceID.init(uuidString:))
+            let terminalGroupID = value.terminalGroup.flatMap(TerminalGroupID.init(uuidString:))
+            guard (workspaceID == nil) != (terminalGroupID == nil) else { return nil }
+            return PaneGroup(
+                id: id,
+                hostID: hostID,
+                workspaceID: workspaceID,
+                terminalGroupID: terminalGroupID,
+                name: value.name,
+                order: value.order ?? index,
+                tree: tree,
+                revision: value.revision ?? 0
+            )
+        }
         let workspacePaths = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0.path) })
         let groupHomes = Dictionary(uniqueKeysWithValues: terminalGroups.map { ($0.id, $0.home ?? "") })
         let remoteSessions = roster.sessions.compactMap {
@@ -5388,7 +5731,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             value, sessionID, _, _ in
             value.agentTurn.map { (sessionID, $0) }
         })
-        let completedAgentSessions = agentCompletionTracker.observe(agentTurns)
+        let completedAgentSessions = agentCompletionTracker.observe(
+            sessions: Set(remoteSessions.map { $0.1 }),
+            turns: agentTurns
+        )
         let previousProjectionSessions = Dictionary(
             uniqueKeysWithValues: projection.sessions.map { ($0.id, $0) }
         )
@@ -5498,7 +5844,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             sessionWorkspaceIDs: sessionWorkspaces,
             connectionState: .attached,
             terminalGroups: terminalGroups,
-            sessionTerminalGroupIDs: sessionTerminalGroups
+            sessionTerminalGroupIDs: sessionTerminalGroups,
+            paneGroups: paneGroups
         )
         publishProjectionIfChanged(nextProjection)
         TerminalDiagnostics.log("roster_apply", [
@@ -5515,6 +5862,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         // repeatedly scanning every mounted terminal makes roster bursts
         // compete with input and rendering on the main actor.
         if appliedLiveTabSessionIDs != liveTabSessionIDs {
+            let pruned = appliedLiveTabSessionIDs.subtracting(liveTabSessionIDs)
+            if !pruned.isEmpty {
+                // Disposing a surface also drops its output subscription, so a
+                // transiently narrow live tab set is what turns the next
+                // visibility update into a burst of full snapshot installs.
+                TerminalDiagnostics.log("mounted_surfaces_pruned", [
+                    "pruned": String(pruned.count),
+                    "sessions": pruned.map(\.description).sorted().joined(separator: ","),
+                ])
+            }
             surfaceManager.removeAll(except: liveTabSessionIDs)
             appliedLiveTabSessionIDs = liveTabSessionIDs
         }
@@ -5635,6 +5992,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let live = Set(projection.sessions.filter { $0.state.isActive }.map(\.id))
         let visible = sessionIDs.intersection(live)
         let departed = visibleSessionIDs.subtracting(visible)
+        let changed = visibleSessionIDs != visible
         visibleSessionIDs = visible
         for sessionID in departed where sessionID != selectedSessionID {
             releaseResizeOwnership(sessionID)
@@ -5642,14 +6000,36 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let selectedID = navigation.selectedTabID.flatMap { tabID in
             projection.tabs.first(where: { $0.id == tabID })?.sessionID
         }
+        var seeding: [TerminalSessionID] = []
+        var alreadySubscribed = 0
         for sessionID in visible where sessionID != selectedID {
+            // Only a Session without a subscription will actually subscribe;
+            // recording every leaf made the event look like a burst of seeds
+            // when nothing was re-subscribed.
+            guard !outputSubscriptions.contains(sessionID) else {
+                alreadySubscribed += 1
+                continue
+            }
             guard backgroundAttachTokens[sessionID] == nil else { continue }
             nextBackgroundAttachToken &+= 1
             let token = nextBackgroundAttachToken
             backgroundAttachTokens[sessionID] = token
+            seeding.append(sessionID)
             Task { @MainActor [weak self] in
                 await self?.attachBackgroundSession(sessionID, token: token)
             }
+        }
+        // Every seed below is a `session.subscribe`, and a subscribe answers
+        // with a complete atomic state. A burst here is therefore a burst of
+        // full snapshot installs, which is what a visible reflow looks like.
+        if !seeding.isEmpty {
+            TerminalDiagnostics.log("visible_sessions_seed", [
+                "visible": String(visible.count),
+                "seeding": String(seeding.count),
+                "subscribed": String(alreadySubscribed),
+                "changed": changed ? "true" : "false",
+                "sessions": seeding.map(\.description).sorted().joined(separator: ","),
+            ])
         }
         guard let selectedID, visible.contains(selectedID) else { return }
         Task { @MainActor [weak self] in
@@ -5688,7 +6068,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
               let wire,
               let session = projection.session(id: sessionID),
               session.state.isActive,
-              !outputSubscriptions.contains(sessionID) else { return }
+              !outputSubscriptions.contains(sessionID) else {
+            TerminalDiagnostics.logVerbose("background_attach_skipped", [
+                "session": sessionID.description,
+                "subscribed": outputSubscriptions.contains(sessionID) ? "true" : "false",
+                "tokenCurrent": backgroundAttachTokens[sessionID] == token ? "true" : "false",
+                "active": projection.session(id: sessionID)?.state.isActive == true ? "true" : "false",
+            ])
+            return
+        }
 
         let surface: GhosttySurface
         if let existing = surfaceManager.surface(for: sessionID) {
@@ -5711,7 +6099,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             )
             guard self.wire === wire,
                   backgroundAttachTokens[sessionID] == token else { return }
-            outputSubscriptions.insert(sessionID)
+            noteOutputSubscriptionAdded(sessionID, reason: "attachBackgroundSession")
         } catch {
             // A sibling's recovery failure must not tear down the selected
             // pane or the shared WebSocket. The next visibility update can
@@ -5727,8 +6115,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private func presentSelectedSession() async {
         guard let tabID = navigation.selectedTabID,
               let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID else { return }
-        if !isLocalEndpoint,
-           surfaceManager.surface(for: sessionID) != nil,
+        // A retained surface is the source of truth across ordinary navigation:
+        // reparent it and swap the control lease. Re-subscribe only after a
+        // transport gap (the preserved session set) or when no live surface or
+        // subscription exists at all.
+        if surfaceManager.surface(for: sessionID) != nil,
            reconnectPreservedSessions.contains(sessionID) {
             await attachSelectedSession(preservingExistingSurface: true)
             return
@@ -5747,9 +6138,18 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
             guard navigation.selectedTabID == tabID else { return }
         }
-        if !isLocalEndpoint,
-           surfaceManager.surface(for: sessionID) != nil,
-           outputSubscriptions.contains(sessionID) {
+        // Promote only a surface that is actually usable to present. A retained
+        // surface can outlive its native renderer — a cleared `state.surface`,
+        // an idle eviction that kept the Swift object, or a view that never
+        // reattached — and `schedulePresent` waits on `terminalSurfaceIsReady`,
+        // so promoting it would leave the pane black forever: nothing else would
+        // re-create the native surface. Falling back to the cold path runs
+        // `beginRecovery`/`waitForSurfaceReady` and re-subscribes, which revives
+        // it. The predicate deliberately ignores AppKit visibility so it stays
+        // stable before the reconciliation that re-attaches the view.
+        if surfaceManager.surface(for: sessionID) != nil,
+           outputSubscriptions.contains(sessionID),
+           surfaceManager.isReadyToInstallRecovery(sessionID) {
             await promoteRetainedSession(sessionID)
             return
         }
@@ -5777,7 +6177,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         inputRouter.prepare(for: sessionID)
         selectedSessionID = sessionID
-        TerminalDiagnostics.log("tab_promote_local", [
+        TerminalDiagnostics.log("tab_promote", [
             "session": sessionID.description,
         ])
         guard selectedSessionID == sessionID, self.wire === wire else { return }
@@ -5805,7 +6205,26 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let pendingSize = pendingFocusSize ?? measuredSize
         pendingFocusSessionID = nil
         pendingFocusSize = nil
-        sendFocus(sessionID: sessionID, focused: true, size: pendingSize)
+        sendFocus(
+            sessionID: sessionID,
+            focused: true,
+            size: pendingSize,
+            reason: "promote"
+        )
+    }
+
+    /// Recovers the selected Session after its promotion stalled.
+    ///
+    /// `attachSelectedSession` refuses a Session that is already selected and
+    /// attached, and a stalled promotion leaves exactly that state, so clear
+    /// the attach marker first: the pane is attached but has never drawn.
+    private func recoverStalledPrimarySession(_ sessionID: TerminalSessionID) async {
+        guard sessionID == selectedSessionID, wire != nil else { return }
+        TerminalDiagnostics.log("present_stall_recovery", [
+            "session": sessionID.description,
+        ])
+        attachedSessionID = nil
+        await attachSelectedSession()
     }
 
     private func attachSelectedSession(
@@ -5922,7 +6341,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             guard generation == attachGeneration,
                   selectedSessionID == sessionID,
                   self.wire === wire else { return }
-            outputSubscriptions.insert(sessionID)
+            noteOutputSubscriptionAdded(sessionID, reason: "attachSelectedSession")
             attachedSessionID = sessionID
             TerminalDiagnostics.log("attach_complete", [
                 "session": sessionID.description,
@@ -5934,7 +6353,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 let pendingSize = pendingFocusSize ?? size
                 pendingFocusSessionID = nil
                 pendingFocusSize = nil
-                sendFocus(sessionID: sessionID, focused: true, size: pendingSize)
+                sendFocus(
+                    sessionID: sessionID,
+                    focused: true,
+                    size: pendingSize,
+                    reason: "attach"
+                )
             }
         } catch {
             if generation == attachGeneration, selectedSessionID == sessionID {
@@ -5943,7 +6367,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     attachedSessionID = nil
                     focusedSessionID = nil
                     inputRouter.discard(for: sessionID)
-                    outputSubscriptions.remove(sessionID)
+                    noteOutputSubscriptionDropped(
+                        sessionID,
+                        reason: "attachTransportFailure"
+                    )
                     surfaceManager.cancelRecovery(
                         for: sessionID,
                         preservingDisplay: true
@@ -6201,7 +6628,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     pendingRetainedSurfaceRebinds.insert(sessionID)
                     return
                 }
-                outputSubscriptions.insert(sessionID)
+                noteOutputSubscriptionAdded(sessionID, reason: "rebindRetainedSurfaces")
                 TerminalDiagnostics.log("reconnect_surface_rebound", [
                     "session": sessionID.description,
                     "selected": "false",
@@ -6385,6 +6812,32 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     private static func tabID(_ id: TerminalSessionID) -> String { "remote-\(id.description)" }
+
+    /// Maps the Host's pane tree into the domain tree. A leaf whose Session ID
+    /// does not parse is dropped together with the split that only held it, so a
+    /// roster that raced a Session transition can never produce an empty pane.
+    private static func paneTree(_ node: RemoteRoster.PaneNode) -> WarrenDomain.PaneNode? {
+        switch node {
+        case .leaf(let paneID, let rawSession):
+            guard let rawSession, let session = TerminalSessionID(uuidString: rawSession) else { return nil }
+            return WarrenDomain.PaneNode.leaf(
+                paneID: paneID.flatMap(PaneID.init(uuidString:)),
+                sessionID: session
+            )
+        case .split(let rawAxis, let ratio, let first, let second):
+            guard let axis = WarrenDomain.SplitAxis(rawValue: rawAxis) else { return nil }
+            switch (paneTree(first), paneTree(second)) {
+            case (nil, nil):
+                return nil
+            case (let only?, nil), (nil, let only?):
+                // Collapsing here mirrors the Host's own reconcile, so the
+                // renderer never sees a split with one child.
+                return only
+            case (let firstChild?, let secondChild?):
+                return .split(axis: axis, ratio: ratio, first: firstChild, second: secondChild)
+            }
+        }
+    }
 }
 
 extension WarrenDesktopProjection {

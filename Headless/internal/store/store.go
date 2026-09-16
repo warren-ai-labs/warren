@@ -32,7 +32,7 @@ type Store struct {
 	changed  chan struct{}
 }
 
-const currentSchema = 3
+const currentSchema = 4
 
 var alreadyChanged = func() <-chan struct{} {
 	value := make(chan struct{})
@@ -49,9 +49,11 @@ func Open(path, hostName string) (*Store, error) {
 		}
 		migrated := false
 		switch s.state.Schema {
-		case 1, 2:
+		case 1, 2, 3:
 			// The state shape remains compatible across these releases. Bump the
 			// marker and preserve every known field instead of forcing a reset.
+			// Schema 4 adds Host-owned Pane Groups; a Host that has never served a
+			// split simply carries none.
 			s.state.Schema = currentSchema
 			migrated = true
 		case currentSchema:

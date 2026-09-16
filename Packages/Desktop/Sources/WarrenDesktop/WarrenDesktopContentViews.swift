@@ -89,119 +89,75 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         if let workspace {
-            if let splitTree, splitTree.count > 1 {
-                WarrenDesktopSplitTreeView(
-                    tree: splitTree,
-                    activePaneID: activePaneID,
-                    workspace: workspace,
-                    terminalGroup: nil,
-                    allTabs: allTabs.isEmpty ? (tab.map { [$0] } ?? []) : allTabs,
-                    sessionLookup: sessionLookup,
-                    hostName: hostName,
-                    titleTemplate: titleTemplate,
-                    terminalFont: terminalFont,
-                    wantsTerminalFocus: wantsTerminalFocus,
-                    onSelectPane: onSelectPane,
-                    onClosePane: onClosePane,
-                    onMaximizePane: onMaximizePane,
-                    onResizeSplit: onResizeSplit,
-                    terminalSurface: terminalSurface
-                )
-                // Match Ghostty's split renderer: only a structural change
-                // replaces the recursive view. Ratio updates keep each
-                // mounted terminal host alive during divider drags.
-                .id(splitTree.structuralIdentity)
-            } else {
-                let resolvedTab = tab ?? ClientTab(
-                    id: "workspace-empty-\(workspace.id.rawValue.uuidString)",
-                    title: "No open sessions",
-                    sessionID: nil,
-                    kind: .shell
-                )
-                let paneID = activePaneID ?? (splitTree?.allPaneIDs.first ?? resolvedTab.id)
-                WarrenDesktopPaneView(
-                    paneID: paneID,
-                    workspace: workspace,
-                    terminalGroup: nil,
-                    tab: resolvedTab,
-                    session: session ?? resolvedTab.sessionID.flatMap(sessionLookup),
-                    hostName: hostName,
-                    titleTemplate: titleTemplate,
-                    showsPaneHeader: showsPaneHeader,
-                    isActive: true,
-                    canSplit: true,
-                    // A lone pane shows no chip in the bar above, so its header
-                    // owns the close control. Closing it is a view operation, so
-                    // it is offered even when it is the only one.
-                    canClose: resolvedTab.sessionID != nil,
-                    canMaximize: false,
-                    onFocus: { onSelectPane(paneID) },
-                    onClose: { onClosePane(paneID) },
-                    onMaximize: { onMaximizePane(paneID) },
-                    terminalSurface: terminalSurface(
-                        WarrenDesktopTerminalContext(
-                            workspace: workspace,
-                            tab: resolvedTab,
-                            font: terminalFont,
-                            wantsTerminalFocus: wantsTerminalFocus
-                        )
+            let resolvedTab = tab ?? ClientTab(
+                id: "workspace-empty-\(workspace.id.rawValue.uuidString)",
+                title: "No open sessions",
+                sessionID: nil,
+                kind: .shell
+            )
+            WarrenDesktopSplitTreeView(
+                tree: splitTree ?? .leaf(
+                    SplitPaneItem(
+                        id: activePaneID ?? resolvedTab.id,
+                        tabID: resolvedTab.id
                     )
+                ),
+                activePaneID: activePaneID,
+                workspace: workspace,
+                terminalGroup: nil,
+                allTabs: allTabs,
+                sessionLookup: sessionLookup,
+                hostName: hostName,
+                titleTemplate: titleTemplate,
+                terminalFont: terminalFont,
+                wantsTerminalFocus: wantsTerminalFocus,
+                onSelectPane: onSelectPane,
+                onClosePane: onClosePane,
+                onMaximizePane: onMaximizePane,
+                onResizeSplit: onResizeSplit,
+                terminalSurface: terminalSurface,
+                lonePaneChrome: WarrenDesktopSplitTreeView<TerminalSurface>.LonePaneChrome(
+                    showsHeader: showsPaneHeader,
+                    canClose: resolvedTab.sessionID != nil,
+                    emptyTab: resolvedTab,
+                    session: session
                 )
-            }
+            )
         } else if let terminalGroup {
-            if let splitTree, splitTree.count > 1 {
-                WarrenDesktopSplitTreeView(
-                    tree: splitTree,
-                    activePaneID: activePaneID,
-                    workspace: nil,
-                    terminalGroup: terminalGroup,
-                    allTabs: allTabs.isEmpty ? (tab.map { [$0] } ?? []) : allTabs,
-                    sessionLookup: sessionLookup,
-                    hostName: hostName,
-                    titleTemplate: titleTemplate,
-                    terminalFont: terminalFont,
-                    wantsTerminalFocus: wantsTerminalFocus,
-                    onSelectPane: onSelectPane,
-                    onClosePane: onClosePane,
-                    onMaximizePane: onMaximizePane,
-                    onResizeSplit: onResizeSplit,
-                    terminalSurface: terminalSurface
-                )
-                .id(splitTree.structuralIdentity)
-            } else {
-                let resolvedTab = tab ?? ClientTab(
-                    id: "terminal-group-empty-\(terminalGroup.id.rawValue.uuidString)",
-                    title: "No open sessions",
-                    sessionID: nil,
-                    kind: .shell
-                )
-                let paneID = activePaneID ?? (splitTree?.allPaneIDs.first ?? resolvedTab.id)
-                WarrenDesktopPaneView(
-                    paneID: paneID,
-                    workspace: nil,
-                    terminalGroup: terminalGroup,
-                    tab: resolvedTab,
-                    session: session ?? resolvedTab.sessionID.flatMap(sessionLookup),
-                    hostName: hostName,
-                    titleTemplate: titleTemplate,
-                    showsPaneHeader: showsPaneHeader,
-                    isActive: true,
-                    canSplit: true,
-                    canClose: resolvedTab.sessionID != nil,
-                    canMaximize: false,
-                    onFocus: { onSelectPane(paneID) },
-                    onClose: { onClosePane(paneID) },
-                    onMaximize: { onMaximizePane(paneID) },
-                    terminalSurface: terminalSurface(
-                        WarrenDesktopTerminalContext(
-                            terminalGroup: terminalGroup,
-                            tab: resolvedTab,
-                            font: terminalFont,
-                            wantsTerminalFocus: wantsTerminalFocus
-                        )
+            let resolvedTab = tab ?? ClientTab(
+                id: "terminal-group-empty-\(terminalGroup.id.rawValue.uuidString)",
+                title: "No open sessions",
+                sessionID: nil,
+                kind: .shell
+            )
+            WarrenDesktopSplitTreeView(
+                tree: splitTree ?? .leaf(
+                    SplitPaneItem(
+                        id: activePaneID ?? resolvedTab.id,
+                        tabID: resolvedTab.id
                     )
+                ),
+                activePaneID: activePaneID,
+                workspace: nil,
+                terminalGroup: terminalGroup,
+                allTabs: allTabs.isEmpty ? (tab.map { [$0] } ?? []) : allTabs,
+                sessionLookup: sessionLookup,
+                hostName: hostName,
+                titleTemplate: titleTemplate,
+                terminalFont: terminalFont,
+                wantsTerminalFocus: wantsTerminalFocus,
+                onSelectPane: onSelectPane,
+                onClosePane: onClosePane,
+                onMaximizePane: onMaximizePane,
+                onResizeSplit: onResizeSplit,
+                terminalSurface: terminalSurface,
+                lonePaneChrome: WarrenDesktopSplitTreeView<TerminalSurface>.LonePaneChrome(
+                    showsHeader: showsPaneHeader,
+                    canClose: resolvedTab.sessionID != nil,
+                    emptyTab: resolvedTab,
+                    session: session
                 )
-            }
+            )
         } else if workspace == nil, tab == nil,
                   connectionState == .connecting || connectionState == .reconnecting {
             connectionLoadingState(tokens: tokens)
@@ -356,7 +312,13 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         VStack(spacing: 0) {
-            if showsPaneHeader, !displayTitle.isEmpty {
+            // The header is chrome, so its presence must not depend on live
+            // metadata. Gating it on a rendered title that can transiently be
+            // empty changed the pane's height by 28 pt, which resized the PTY
+            // and made a full-screen TUI repaint end to end — the "replay"
+            // seen while a Session streamed output. The fallback label below
+            // keeps the height and the bar itself stable.
+            if showsPaneHeader {
                 HStack(spacing: WarrenSpacing.xs) {
                     // The focus dot answers "which of these panes takes my
                     // keys", so it only appears once there is more than one.
@@ -374,7 +336,7 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                             .opacity(isActive ? 0.9 : 0.55)
                             .accessibilityHidden(true)
                     }
-                    Text(displayTitle)
+                    Text(paneHeaderTitle)
                         .font(.system(size: 11, weight: isActive ? .medium : .regular))
                         .foregroundStyle(isActive ? tokens.foreground.opacity(0.85) : tokens.mutedForeground.opacity(0.65))
                         .lineLimit(1)
@@ -483,6 +445,36 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
         return titleTemplate.renderCompact(titleContext)
     }
 
+    /// The title the pane header draws.
+    ///
+    /// A rendered title can be empty for a moment while metadata for the
+    /// Session is being rewritten. The header occupies a fixed height, so it
+    /// falls back to a stable label instead of disappearing: chrome that comes
+    /// and goes with live data moves every pane in the split.
+    private var paneHeaderTitle: String {
+        Self.stablePaneHeaderTitle(
+            rendered: displayTitle,
+            sessionTitle: session?.displayTitle ?? tab.title,
+            kindName: (session?.kind ?? tab.kind).displayName
+        )
+    }
+
+    /// Resolves a pane header label that is never empty.
+    ///
+    /// Exposed so the invariant is testable: the header's height must not
+    /// depend on whether live metadata currently renders to something.
+    static func stablePaneHeaderTitle(
+        rendered: String,
+        sessionTitle: String,
+        kindName: String
+    ) -> String {
+        for candidate in [rendered, sessionTitle, kindName] {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return kindName
+    }
+
     /// The catalog entry for the agent bound to this pane's Session, read from
     /// the binding rather than from what Warren launched.
     private var providerPreset: WarrenDesktopSessionPreset? {
@@ -504,18 +496,22 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
     }
 
     private var titleContext: TerminalDisplayTitleContext {
-        TerminalDisplayTitleContext(
-            // A generated or manually renamed session is one placeholder
-            // value. It must not replace the complete auxiliary template.
-            session: normalizedCustomTitle ?? session?.title ?? tab.title,
-            command: WarrenDesktopTabTitle.resolvedCommand(
-                kind: session?.kind ?? tab.kind,
-                process: session?.runtimeProcess ?? "",
-                commandLine: session?.runtimeCommandLine ?? ""
-            ),
-            directory: session?.workingDirectory.isEmpty == false
-                ? session!.workingDirectory
-                : (workspace?.path ?? terminalGroup?.home ?? ""),
+        let command = WarrenDesktopTabTitle.resolvedCommand(
+            kind: session?.kind ?? tab.kind,
+            process: session?.runtimeProcess ?? "",
+            commandLine: session?.runtimeCommandLine ?? ""
+        )
+        let directory = session?.workingDirectory.isEmpty == false
+            ? session!.workingDirectory
+            : (workspace?.path ?? terminalGroup?.home ?? "")
+        // A generated or manually renamed session is one placeholder value.
+        // The generated default repeats the kind the icon already shows, so it
+        // is suppressed whenever the directory or command carries the label.
+        let generatedTitle = session?.title ?? tab.title
+        return TerminalDisplayTitleContext(
+            session: normalizedCustomTitle ?? ((directory.isEmpty && command.isEmpty) ? generatedTitle : ""),
+            command: command,
+            directory: directory,
             workspace: workspace?.name ?? terminalGroup?.name ?? "",
             branch: workspace?.branch ?? "",
             host: hostName,
@@ -542,6 +538,22 @@ struct WarrenDesktopEmbeddedEditorPane<Surface: View>: View {
 }
 
 struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
+    /// Chrome for a layout that holds a single pane.
+    ///
+    /// A lone pane is not a split: the content may hide its header because the
+    /// top chrome row already carries the title, and its header owns the close
+    /// control even when it is the only pane. It is drawn through this same view
+    /// so that nothing about the terminal changes when a second pane arrives —
+    /// the two used to be different views, and a split therefore re-created the
+    /// pane that was already on screen, which reads as the terminal replaying
+    /// itself.
+    struct LonePaneChrome {
+        let showsHeader: Bool
+        let canClose: Bool
+        let emptyTab: ClientTab
+        let session: WarrenDesktopSession?
+    }
+
     let tree: SplitLayoutTree
     let activePaneID: String?
     let workspace: Workspace?
@@ -557,257 +569,102 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
     let onMaximizePane: (String) -> Void
     let onResizeSplit: ([Bool], Double) -> Void
     let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
-    var splitPath: [Bool] = []
-    /// How many panes the whole layout holds, carried down from the root.
-    ///
-    /// Recursion descends into subtrees, so a leaf's own `tree.count` is always
-    /// 1. Deriving pane chrome from it silently disabled close, maximize, the
-    /// focus dot, and the pane border for every pane in a split. Nil means "this
-    /// is the root", where the local count is the real one.
-    var totalPaneCount: Int? = nil
+    var lonePaneChrome: LonePaneChrome? = nil
 
     var body: some View {
-        let paneCount = totalPaneCount ?? tree.count
-        switch tree {
-        case .leaf(let item):
-            let resolvedTab = allTabs.first { $0.id == item.tabID } ?? ClientTab(
-                id: item.tabID,
+        GeometryReader { proxy in
+            let placement = tree.placement(in: proxy.size)
+            // Every pane is a sibling here rather than a node in a recursive
+            // tree. The shape of the layout therefore changes which frames the
+            // panes have, and never which views they are: adding a pane leaves
+            // the terminals that were already on screen mounted, so nothing
+            // flashes and no pane that did not move is re-attached.
+            ZStack(alignment: .topLeading) {
+                ForEach(placement.panes) { pane in
+                    paneView(pane)
+                        .frame(width: pane.frame.width, height: pane.frame.height)
+                        .offset(x: pane.frame.minX, y: pane.frame.minY)
+                }
+
+                ForEach(placement.dividers) { divider in
+                    WarrenDesktopSplitDivider(
+                        axis: divider.axis,
+                        ratio: divider.ratio,
+                        minimumRatio: divider.minimumRatio,
+                        maximumRatio: divider.maximumRatio,
+                        totalLength: divider.totalLength,
+                        onDrag: { ratio in
+                            onResizeSplit(
+                                divider.path,
+                                clampedRatio(
+                                    ratio,
+                                    minimum: divider.minimumRatio,
+                                    maximum: divider.maximumRatio
+                                )
+                            )
+                        },
+                        onAdjust: { delta in
+                            onResizeSplit(
+                                divider.path,
+                                clampedRatio(
+                                    divider.ratio + delta,
+                                    minimum: divider.minimumRatio,
+                                    maximum: divider.maximumRatio
+                                )
+                            )
+                        }
+                    )
+                    .frame(width: divider.frame.width, height: divider.frame.height)
+                    .offset(x: divider.frame.minX, y: divider.frame.minY)
+                }
+            }
+            .frame(
+                width: proxy.size.width,
+                height: proxy.size.height,
+                alignment: .topLeading
+            )
+        }
+    }
+
+    private func paneView(_ pane: SplitLayoutPlacement.Pane) -> some View {
+        let paneCount = tree.count
+        let chrome = paneCount == 1 ? lonePaneChrome : nil
+        let resolvedTab = allTabs.first { $0.id == pane.item.tabID }
+            ?? chrome?.emptyTab
+            ?? ClientTab(
+                id: pane.item.tabID,
                 title: "Terminal",
                 sessionID: nil,
                 kind: .shell
             )
-            let resolvedSession = resolvedTab.sessionID.flatMap(sessionLookup)
-            let isActive = activePaneID == nil || activePaneID == item.id
-            WarrenDesktopPaneView(
-                paneID: item.id,
-                workspace: workspace,
-                terminalGroup: terminalGroup,
-                tab: resolvedTab,
-                session: resolvedSession,
-                hostName: hostName,
-                titleTemplate: titleTemplate,
-                showsPaneHeader: true,
-                isActive: isActive,
-                canSplit: paneCount < SplitLayoutTree.maxPanes,
-                canClose: paneCount > 1,
-                canMaximize: paneCount > 1,
-                isSplit: paneCount > 1,
-                onFocus: { onSelectPane(item.id) },
-                onClose: { onClosePane(item.id) },
-                onMaximize: { onMaximizePane(item.id) },
-                terminalSurface: terminalSurface(
-                    WarrenDesktopTerminalContext(
-                        workspace: workspace,
-                        terminalGroup: terminalGroup,
-                        tab: resolvedTab,
-                        font: terminalFont,
-                        wantsTerminalFocus: wantsTerminalFocus && isActive
-                    )
+        let resolvedSession = chrome?.session ?? resolvedTab.sessionID.flatMap(sessionLookup)
+        let isActive = chrome != nil || activePaneID == nil || activePaneID == pane.id
+        return WarrenDesktopPaneView(
+            paneID: pane.id,
+            workspace: workspace,
+            terminalGroup: terminalGroup,
+            tab: resolvedTab,
+            session: resolvedSession,
+            hostName: hostName,
+            titleTemplate: titleTemplate,
+            showsPaneHeader: chrome?.showsHeader ?? true,
+            isActive: isActive,
+            canSplit: chrome != nil || paneCount < SplitLayoutTree.maxPanes,
+            canClose: chrome?.canClose ?? (paneCount > 1),
+            canMaximize: chrome == nil && paneCount > 1,
+            isSplit: chrome == nil && paneCount > 1,
+            onFocus: { onSelectPane(pane.id) },
+            onClose: { onClosePane(pane.id) },
+            onMaximize: { onMaximizePane(pane.id) },
+            terminalSurface: terminalSurface(
+                WarrenDesktopTerminalContext(
+                    workspace: workspace,
+                    terminalGroup: terminalGroup,
+                    tab: resolvedTab,
+                    font: terminalFont,
+                    wantsTerminalFocus: wantsTerminalFocus && isActive
                 )
             )
-
-        case .split(let axis, let rawRatio, let first, let second):
-            let ratio = rawRatio.isFinite ? min(max(rawRatio, 0.05), 0.95) : 0.5
-            GeometryReader { proxy in
-                // The divider draws a one-point rule but reserves two points
-                // of hit-target padding on either side.
-                let dividerThickness: CGFloat = 5
-                if axis == .horizontal {
-                    let totalWidth = max(0, proxy.size.width - dividerThickness)
-                    let firstWidth = totalWidth * CGFloat(ratio)
-                    let secondWidth = totalWidth - firstWidth
-                    let minimumRatioValue = minimumRatio(
-                        first: first,
-                        second: second,
-                        total: totalWidth,
-                        axis: .horizontal
-                    )
-                    let maximumRatioValue = maximumRatio(
-                        first: first,
-                        second: second,
-                        total: totalWidth,
-                        axis: .horizontal
-                    )
-                    HStack(spacing: 0) {
-                        WarrenDesktopSplitTreeView(
-                            tree: first,
-                            activePaneID: activePaneID,
-                            workspace: workspace,
-                            terminalGroup: terminalGroup,
-                            allTabs: allTabs,
-                            sessionLookup: sessionLookup,
-                            hostName: hostName,
-                            titleTemplate: titleTemplate,
-                            terminalFont: terminalFont,
-                            wantsTerminalFocus: wantsTerminalFocus,
-                            onSelectPane: onSelectPane,
-                            onClosePane: onClosePane,
-                            onMaximizePane: onMaximizePane,
-                            onResizeSplit: onResizeSplit,
-                            terminalSurface: terminalSurface,
-                            splitPath: splitPath + [false],
-                            totalPaneCount: paneCount
-                        )
-                        .frame(width: firstWidth)
-
-                        WarrenDesktopSplitDivider(
-                            axis: .horizontal,
-                            ratio: ratio,
-                            minimumRatio: minimumRatioValue,
-                            maximumRatio: maximumRatioValue,
-                            totalLength: totalWidth,
-                            onDrag: { newRatio in
-                                onResizeSplit(splitPath, clampedRatio(
-                                    newRatio,
-                                    minimum: minimumRatioValue,
-                                    maximum: maximumRatioValue
-                                ))
-                            },
-                            onAdjust: { delta in
-                                onResizeSplit(splitPath, clampedRatio(
-                                    ratio + delta,
-                                    minimum: minimumRatioValue,
-                                    maximum: maximumRatioValue
-                                ))
-                            }
-                        )
-
-                        WarrenDesktopSplitTreeView(
-                            tree: second,
-                            activePaneID: activePaneID,
-                            workspace: workspace,
-                            terminalGroup: terminalGroup,
-                            allTabs: allTabs,
-                            sessionLookup: sessionLookup,
-                            hostName: hostName,
-                            titleTemplate: titleTemplate,
-                            terminalFont: terminalFont,
-                            wantsTerminalFocus: wantsTerminalFocus,
-                            onSelectPane: onSelectPane,
-                            onClosePane: onClosePane,
-                            onMaximizePane: onMaximizePane,
-                            onResizeSplit: onResizeSplit,
-                            terminalSurface: terminalSurface,
-                            splitPath: splitPath + [true],
-                            totalPaneCount: paneCount
-                        )
-                        .frame(width: secondWidth)
-                    }
-                } else {
-                    let totalHeight = max(0, proxy.size.height - dividerThickness)
-                    let firstHeight = totalHeight * CGFloat(ratio)
-                    let secondHeight = totalHeight - firstHeight
-                    let minimumRatioValue = minimumRatio(
-                        first: first,
-                        second: second,
-                        total: totalHeight,
-                        axis: .vertical
-                    )
-                    let maximumRatioValue = maximumRatio(
-                        first: first,
-                        second: second,
-                        total: totalHeight,
-                        axis: .vertical
-                    )
-                    VStack(spacing: 0) {
-                        WarrenDesktopSplitTreeView(
-                            tree: first,
-                            activePaneID: activePaneID,
-                            workspace: workspace,
-                            terminalGroup: terminalGroup,
-                            allTabs: allTabs,
-                            sessionLookup: sessionLookup,
-                            hostName: hostName,
-                            titleTemplate: titleTemplate,
-                            terminalFont: terminalFont,
-                            wantsTerminalFocus: wantsTerminalFocus,
-                            onSelectPane: onSelectPane,
-                            onClosePane: onClosePane,
-                            onMaximizePane: onMaximizePane,
-                            onResizeSplit: onResizeSplit,
-                            terminalSurface: terminalSurface,
-                            splitPath: splitPath + [false],
-                            totalPaneCount: paneCount
-                        )
-                        .frame(height: firstHeight)
-
-                        WarrenDesktopSplitDivider(
-                            axis: .vertical,
-                            ratio: ratio,
-                            minimumRatio: minimumRatioValue,
-                            maximumRatio: maximumRatioValue,
-                            totalLength: totalHeight,
-                            onDrag: { newRatio in
-                                onResizeSplit(splitPath, clampedRatio(
-                                    newRatio,
-                                    minimum: minimumRatioValue,
-                                    maximum: maximumRatioValue
-                                ))
-                            },
-                            onAdjust: { delta in
-                                onResizeSplit(splitPath, clampedRatio(
-                                    ratio + delta,
-                                    minimum: minimumRatioValue,
-                                    maximum: maximumRatioValue
-                                ))
-                            }
-                        )
-
-                        WarrenDesktopSplitTreeView(
-                            tree: second,
-                            activePaneID: activePaneID,
-                            workspace: workspace,
-                            terminalGroup: terminalGroup,
-                            allTabs: allTabs,
-                            sessionLookup: sessionLookup,
-                            hostName: hostName,
-                            titleTemplate: titleTemplate,
-                            terminalFont: terminalFont,
-                            wantsTerminalFocus: wantsTerminalFocus,
-                            onSelectPane: onSelectPane,
-                            onClosePane: onClosePane,
-                            onMaximizePane: onMaximizePane,
-                            onResizeSplit: onResizeSplit,
-                            terminalSurface: terminalSurface,
-                            splitPath: splitPath + [true],
-                            totalPaneCount: paneCount
-                        )
-                        .frame(height: secondHeight)
-                    }
-                }
-            }
-        }
-    }
-
-    private func minimumRatio(
-        first: SplitLayoutTree,
-        second: SplitLayoutTree,
-        total: CGFloat,
-        axis: SplitAxis
-    ) -> Double {
-        guard total > 0 else { return SplitLayoutTree.minimumInteractiveRatio }
-        let minimum = axis == .horizontal
-            ? first.minimumPaneWidth
-            : first.minimumPaneHeight
-        return min(
-            max(Double(minimum / total), SplitLayoutTree.minimumInteractiveRatio),
-            0.5
-        )
-    }
-
-    private func maximumRatio(
-        first: SplitLayoutTree,
-        second: SplitLayoutTree,
-        total: CGFloat,
-        axis: SplitAxis
-    ) -> Double {
-        guard total > 0 else { return SplitLayoutTree.maximumInteractiveRatio }
-        let minimum = axis == .horizontal
-            ? second.minimumPaneWidth
-            : second.minimumPaneHeight
-        return max(
-            min(Double(1 - minimum / total), SplitLayoutTree.maximumInteractiveRatio),
-            0.5
         )
     }
 

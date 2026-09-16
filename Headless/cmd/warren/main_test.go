@@ -18,6 +18,8 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/config"
+	"github.com/abcdlsj/warren/Headless/internal/pane"
+	"github.com/abcdlsj/warren/Headless/internal/store"
 	"github.com/gorilla/websocket"
 )
 
@@ -899,7 +901,7 @@ func TestSessionCurrentReportsPositionWithoutNamingNeighbours(t *testing.T) {
 }
 
 func TestScreenPaneRowsNumberEveryWindow(t *testing.T) {
-	rows := screenPaneRows(api.ScreenPanesResult{
+	rows := screenPaneRows(api.State{}, "session-3", api.ScreenPanesResult{
 		SessionID: "session-3",
 		Screens: []api.ScreenLayout{
 			{Position: 1, PaneCount: 2, Panes: []api.ScreenPane{
@@ -919,11 +921,66 @@ func TestScreenPaneRowsNumberEveryWindow(t *testing.T) {
 		t.Fatalf("screen numbers = %d,%d want 1,2", rows[0].Screen, rows[3].Screen)
 	}
 	cells := screenPaneRowCells(rows[0])
-	if cells[0] != "1" || cells[1] != "1" || cells[2] != "session-3" || cells[3] != "Shell" || cells[4] != "yes" {
+	// GROUP, NAME, PANE, PANE ID, SESSION, TITLE, REVISION, SCREEN, CURRENT
+	if cells[0] != "-" || cells[2] != "1" || cells[3] != "-" || cells[4] != "session-3" ||
+		cells[5] != "Shell" || cells[6] != "-" || cells[7] != "1" || cells[8] != "yes" {
 		t.Fatalf("first row cells = %q", cells)
 	}
-	if got := screenPaneRowCells(rows[1])[3]; got != "-" {
+	if got := screenPaneRowCells(rows[1])[5]; got != "-" {
 		t.Fatalf("untitled pane cell = %q, want -", got)
+	}
+}
+
+// The pane list answers from the Host's arrangement, so it stays complete when
+// no client is connected; peer telemetry only fills the SCREEN column.
+func TestScreenPaneRowsReadTheDurableArrangement(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.PaneGroups = []api.PaneGroup{{
+			ID: "group-1", WorkspaceID: "workspace-1", Scope: api.SessionScopeWorkspace,
+			Name: "left", Revision: 7,
+			Tree: api.PaneNode{
+				Axis: pane.AxisHorizontal, Ratio: 0.5,
+				First:  &api.PaneNode{PaneID: "pane-1", SessionID: "session-1"},
+				Second: &api.PaneNode{PaneID: "pane-2", SessionID: "session-2"},
+			},
+		}}
+		value.Sessions = []api.Session{
+			{ID: "session-1", Title: "shell", Lifecycle: "running"},
+			{ID: "session-2", Title: "agent", CustomTitle: "Agent", Lifecycle: "running"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	displayed := screenPaneRows(state.Snapshot(), "session-2", api.ScreenPanesResult{
+		SessionID: "session-2",
+		Screens: []api.ScreenLayout{{Position: 1, PaneCount: 2, Panes: []api.ScreenPane{
+			{Index: 1, SessionID: "session-1"},
+			{Index: 2, SessionID: "session-2", Current: true},
+		}}},
+	})
+	if len(displayed) != 1 {
+		t.Fatalf("rows = %d, want 1", len(displayed))
+	}
+	cells := screenPaneRowCells(displayed[0])
+	if cells[0] != "group-1" || cells[1] != "left" || cells[2] != "2" || cells[3] != "pane-2" ||
+		cells[4] != "session-2" || cells[5] != "Agent" || cells[6] != "7" || cells[7] != "1" || cells[8] != "yes" {
+		t.Fatalf("arranged row cells = %q", cells)
+	}
+
+	// With no client connected the arrangement is still reported, and SCREEN
+	// says so instead of inventing a viewer.
+	offscreen := screenPaneRows(state.Snapshot(), "session-1", api.ScreenPanesResult{SessionID: "session-1"})
+	if len(offscreen) != 1 {
+		t.Fatalf("rows = %d, want 1", len(offscreen))
+	}
+	if cells := screenPaneRowCells(offscreen[0]); cells[2] != "1" || cells[3] != "pane-1" || cells[7] != "-" {
+		t.Fatalf("offscreen row cells = %q", cells)
 	}
 }
 
@@ -2500,5 +2557,170 @@ func TestDefaultUsageTextDescribesFilteringAndBestPractices(t *testing.T) {
 		if !strings.Contains(text, req) {
 			t.Errorf("usageText() missing %q", req)
 		}
+	}
+}
+
+func TestSessionForegroundCommandPrefersRuntimeCommandLine(t *testing.T) {
+	if got := sessionForegroundCommand(api.Session{Process: "sleep", CommandLine: "sleep 30"}); got != "sleep 30" {
+		t.Fatalf("sessionForegroundCommand = %q, want the command line", got)
+	}
+	if got := sessionForegroundCommand(api.Session{Process: "sleep"}); got != "sleep" {
+		t.Fatalf("sessionForegroundCommand = %q, want the process name", got)
+	}
+	if got := sessionForegroundCommand(api.Session{}); got != "" {
+		t.Fatalf("sessionForegroundCommand = %q, want empty", got)
+	}
+}
+
+func TestFilterPaneGroupRowsScopesByOwner(t *testing.T) {
+	groups := []api.PaneGroup{
+		{ID: "group-a", WorkspaceID: "workspace-1", Scope: api.SessionScopeWorkspace, Name: "left"},
+		{ID: "group-b", WorkspaceID: "workspace-2", Scope: api.SessionScopeWorkspace, Name: "right"},
+		{ID: "group-c", TerminalGroupID: "group-1", Scope: api.SessionScopeTerminalGroup, Name: "inbox"},
+	}
+	byWorkspace, err := filterPaneGroupRows(groups, map[string]any{"workspace": "workspace-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byWorkspace) != 1 || byWorkspace[0].ID != "group-b" {
+		t.Fatalf("workspace filter = %#v", byWorkspace)
+	}
+	byGroup, err := filterPaneGroupRows(groups, map[string]any{"group": "group-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byGroup) != 1 || byGroup[0].ID != "group-c" {
+		t.Fatalf("group filter = %#v", byGroup)
+	}
+	bySearch, err := filterPaneGroupRows(groups, map[string]any{"search": "RIGH"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bySearch) != 1 || bySearch[0].ID != "group-b" {
+		t.Fatalf("search filter = %#v", bySearch)
+	}
+	if _, err := filterPaneGroupRows(groups, map[string]any{"workspace": "w", "group": "g"}); err == nil {
+		t.Fatal("expected mutually exclusive owners to be rejected")
+	}
+}
+
+func TestPaneGroupContainingFindsByPaneAndSession(t *testing.T) {
+	state := api.State{PaneGroups: []api.PaneGroup{{
+		ID: "group-a", WorkspaceID: "workspace-1",
+		Tree: api.PaneNode{
+			Axis: pane.AxisHorizontal, Ratio: 0.5,
+			First:  &api.PaneNode{PaneID: "pane-1", SessionID: "session-1"},
+			Second: &api.PaneNode{PaneID: "pane-2", SessionID: "session-2"},
+		},
+	}}}
+	if group, ok := paneGroupContaining(state, "pane-2", ""); !ok || group.ID != "group-a" {
+		t.Fatalf("pane lookup = %#v, %t", group, ok)
+	}
+	if group, ok := paneGroupContaining(state, "", "session-1"); !ok || group.ID != "group-a" {
+		t.Fatalf("session lookup = %#v, %t", group, ok)
+	}
+	if _, ok := paneGroupContaining(state, "pane-9", ""); ok {
+		t.Fatal("an unknown pane must not resolve")
+	}
+}
+
+// paneSplit reads the arrangement from the roster and writes one replacement
+// tree under the revision it observed: the read-compute-write is the
+// compare-and-swap, so a concurrent edit fails instead of being overwritten.
+func TestPaneSplitSendsOneGuardedTreeUpdate(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	requests := make(chan map[string]any, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		var auth map[string]any
+		if connection.ReadJSON(&auth) != nil {
+			return
+		}
+		if err := connection.WriteJSON(map[string]any{
+			"t": "welcome", "version": api.Version,
+			"host": map[string]any{"id": "test-host"}, "accessScopeId": "test-scope",
+		}); err != nil {
+			return
+		}
+		for {
+			var envelope map[string]any
+			if connection.ReadJSON(&envelope) != nil {
+				return
+			}
+			method, _ := envelope["method"].(string)
+			id, _ := envelope["id"].(string)
+			requests <- envelope
+			switch method {
+			case "roster":
+				_ = connection.WriteJSON(map[string]any{
+					"t": "response", "id": id, "ok": true,
+					"result": api.State{
+						PaneGroups: []api.PaneGroup{{
+							ID: "group-a", WorkspaceID: "workspace-1", Scope: api.SessionScopeWorkspace,
+							Name: "left", Revision: 4,
+							Tree: api.PaneNode{PaneID: "pane-1", SessionID: "session-1"},
+						}},
+					},
+				})
+			case "pane-group.update":
+				_ = connection.WriteJSON(map[string]any{
+					"t": "response", "id": id, "ok": true,
+					"result": api.PaneGroup{ID: "group-a", WorkspaceID: "workspace-1", Revision: 5},
+				})
+			default:
+				_ = connection.WriteJSON(map[string]any{"t": "response", "id": id, "ok": false, "error": "unsupported"})
+			}
+		}
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(path, config.Config{
+		Current:   "test",
+		Endpoints: map[string]config.Endpoint{"test": {Name: "test", URL: server.URL, Token: "token", Type: "daemon"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The endpoint travels as a flag: run() re-parses the global flags, so
+	// mutating the package variables before the call would be overwritten and
+	// the command would fall back to the local daemon.
+	if err := run([]string{
+		"--config", path, "--endpoint", "test", "--json",
+		"pane", "split", "--pane", "pane-1", "--session", "session-2", "--axis", "vertical",
+	}); err != nil {
+		t.Fatalf("pane split: %v", err)
+	}
+	close(requests)
+	var update map[string]any
+	for envelope := range requests {
+		if envelope["method"] == "pane-group.update" {
+			update = envelope
+		}
+	}
+	if update == nil {
+		t.Fatal("no pane-group.update was sent")
+	}
+	params, _ := update["params"].(map[string]any)
+	if params["id"] != "group-a" {
+		t.Fatalf("update id = %#v", params["id"])
+	}
+	if params["expectedRevision"] != float64(4) {
+		t.Fatalf("expectedRevision = %#v, want the revision read from the roster", params["expectedRevision"])
+	}
+	tree, _ := params["tree"].(map[string]any)
+	if tree["axis"] != "vertical" {
+		t.Fatalf("tree axis = %#v", tree["axis"])
+	}
+	first, _ := tree["first"].(map[string]any)
+	second, _ := tree["second"].(map[string]any)
+	if first["paneId"] != "pane-1" || first["sessionId"] != "session-1" {
+		t.Fatalf("the existing pane was not preserved: %#v", first)
+	}
+	if second["sessionId"] != "session-2" || second["paneId"] != nil {
+		t.Fatalf("the new pane must arrive without an id for the Host to assign: %#v", second)
 	}
 }

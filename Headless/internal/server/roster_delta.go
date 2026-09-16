@@ -19,13 +19,34 @@ type rosterDeltaMessage struct {
 	Projects     *rosterEntityDelta[api.Project]       `json:"projects,omitempty"`
 	Workspaces   *rosterEntityDelta[api.Workspace]     `json:"workspaces,omitempty"`
 	Groups       *rosterEntityDelta[api.TerminalGroup] `json:"terminalGroups,omitempty"`
+	PaneGroups   *rosterEntityDelta[api.PaneGroup]     `json:"paneGroups,omitempty"`
 	Sessions     *rosterEntityDelta[api.Session]       `json:"sessions,omitempty"`
+	// SessionMetadata carries high-frequency foreground metadata that changes
+	// on every prompt or `cd`. Keeping it out of the Session entity keeps a
+	// directory change from retransmitting the whole Session and its agent
+	// projection over a Relay link.
+	SessionMetadata *rosterSessionMetadataDelta `json:"sessionMetadata,omitempty"`
 }
 
 type rosterEntityDelta[T any] struct {
 	Upsert []T      `json:"upsert,omitempty"`
 	Remove []string `json:"remove,omitempty"`
 	Order  []string `json:"order,omitempty"`
+}
+
+// rosterSessionMetadataDelta is an upsert-only per-session diff. A session
+// never leaves the roster through this message; removal still travels in the
+// Session entity delta. The fields are not optional on the client: an omitted
+// value means the field is empty, not unchanged.
+type rosterSessionMetadataDelta struct {
+	Upsert []rosterSessionMetadata `json:"upsert,omitempty"`
+}
+
+type rosterSessionMetadata struct {
+	ID          string `json:"id"`
+	Process     string `json:"process,omitempty"`
+	CommandLine string `json:"commandLine,omitempty"`
+	Directory   string `json:"directory,omitempty"`
 }
 
 func makeRosterDelta(before, after api.State, baseRevision, revision uint64) rosterDeltaMessage {
@@ -50,14 +71,71 @@ func makeRosterDelta(before, after api.State, baseRevision, revision uint64) ros
 	if delta := rosterEntries(before.TerminalGroups, after.TerminalGroups, func(value api.TerminalGroup) string { return value.ID }); delta.hasChanges() {
 		result.Groups = &delta
 	}
-	if delta := rosterEntries(before.Sessions, after.Sessions, func(value api.Session) string { return value.ID }); delta.hasChanges() {
-		result.Sessions = &delta
+	if delta := rosterEntries(before.PaneGroups, after.PaneGroups, func(value api.PaneGroup) string { return value.ID }); delta.hasChanges() {
+		result.PaneGroups = &delta
+	}
+	sessionDelta := rosterEntriesWithEqual(
+		before.Sessions,
+		after.Sessions,
+		func(value api.Session) string { return value.ID },
+		sessionsEqualIgnoringMetadata,
+	)
+	if sessionDelta.hasChanges() {
+		result.Sessions = &sessionDelta
+	}
+	if metadata := rosterSessionMetadataChanges(before.Sessions, after.Sessions, sessionDelta.Upsert); len(metadata.Upsert) > 0 {
+		result.SessionMetadata = &metadata
+	}
+	return result
+}
+
+// sessionsEqualIgnoringMetadata compares everything a client needs to
+// re-render the Session entity. The foreground metadata is excluded because it
+// travels in the dedicated metadata delta.
+func sessionsEqualIgnoringMetadata(a, b api.Session) bool {
+	a.Process, a.CommandLine, a.Directory = "", "", ""
+	b.Process, b.CommandLine, b.Directory = "", "", ""
+	return reflect.DeepEqual(a, b)
+}
+
+// rosterSessionMetadataChanges reports sessions whose metadata changed without
+// any other Session field changing. Sessions already present in the entity
+// upsert carry their metadata there, so they are skipped here.
+func rosterSessionMetadataChanges(before, after []api.Session, entityUpsert []api.Session) rosterSessionMetadataDelta {
+	skip := make(map[string]struct{}, len(entityUpsert))
+	for _, session := range entityUpsert {
+		skip[session.ID] = struct{}{}
+	}
+	beforeByID := make(map[string]api.Session, len(before))
+	for _, session := range before {
+		beforeByID[session.ID] = session
+	}
+	result := rosterSessionMetadataDelta{}
+	for _, session := range after {
+		if _, ok := skip[session.ID]; ok {
+			continue
+		}
+		previous, ok := beforeByID[session.ID]
+		if !ok {
+			continue
+		}
+		if previous.Process == session.Process &&
+			previous.CommandLine == session.CommandLine &&
+			previous.Directory == session.Directory {
+			continue
+		}
+		result.Upsert = append(result.Upsert, rosterSessionMetadata{
+			ID:          session.ID,
+			Process:     session.Process,
+			CommandLine: session.CommandLine,
+			Directory:   session.Directory,
+		})
 	}
 	return result
 }
 
 func (m rosterDeltaMessage) hasChanges() bool {
-	return m.Host != nil || m.Tasks != nil || m.Projects != nil || m.Workspaces != nil || m.Groups != nil || m.Sessions != nil
+	return m.Host != nil || m.Tasks != nil || m.Projects != nil || m.Workspaces != nil || m.Groups != nil || m.Sessions != nil || m.SessionMetadata != nil
 }
 
 func (d rosterEntityDelta[T]) hasChanges() bool {
@@ -65,6 +143,10 @@ func (d rosterEntityDelta[T]) hasChanges() bool {
 }
 
 func rosterEntries[T any](before, after []T, id func(T) string) rosterEntityDelta[T] {
+	return rosterEntriesWithEqual(before, after, id, func(a, b T) bool { return reflect.DeepEqual(a, b) })
+}
+
+func rosterEntriesWithEqual[T any](before, after []T, id func(T) string, equal func(T, T) bool) rosterEntityDelta[T] {
 	beforeByID := make(map[string]T, len(before))
 	for _, value := range before {
 		beforeByID[id(value)] = value
@@ -80,7 +162,7 @@ func rosterEntries[T any](before, after []T, id func(T) string) rosterEntityDelt
 		key := id(value)
 		afterByID[key] = value
 		orderAfter = append(orderAfter, key)
-		if previous, ok := beforeByID[key]; !ok || !reflect.DeepEqual(previous, value) {
+		if previous, ok := beforeByID[key]; !ok || !equal(previous, value) {
 			result.Upsert = append(result.Upsert, value)
 		}
 	}

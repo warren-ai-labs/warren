@@ -414,7 +414,19 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         }
         guard delta != 0 else { return }
         lock.withLock {
+            let wasInSync = syncDepth > 0
             syncDepth = max(0, syncDepth + delta)
+            if syncDepth > 0 {
+                // `presentNow()` refuses to draw while a synchronized-output
+                // block is open, unless `isSyncStalled` says the block has
+                // been pending longer than its window. That escape compares
+                // against this timestamp, which had never been recorded, so a
+                // promotion that landed inside a block deferred until the
+                // block closed and the pane stayed black for seconds.
+                if !wasInSync { syncEnteredAt = ContinuousClock.now }
+            } else {
+                syncEnteredAt = nil
+            }
         }
     }
 

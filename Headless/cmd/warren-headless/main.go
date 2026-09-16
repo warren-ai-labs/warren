@@ -141,6 +141,12 @@ func main() {
 	defer stopGhostlineCleanup()
 	go maintainGhostlineArtifactCleanup(ghostlineCleanupContext, *ghostlineSocket, logger)
 
+	// Materialize the shell integration scripts before any session can start.
+	// A failure is not fatal: the launch-directory fallback still applies.
+	if err := runtime.WriteShellIntegration(runtime.ShellIntegrationDir()); err != nil {
+		logger.Warn("write shell integration", "error", err)
+	}
+
 	token, err := loadOrCreateToken(*tokenPath)
 	if err != nil {
 		fatal(err)

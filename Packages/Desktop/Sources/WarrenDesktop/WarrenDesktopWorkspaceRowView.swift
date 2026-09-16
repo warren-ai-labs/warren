@@ -54,13 +54,18 @@ struct WarrenDesktopWorkspaceRow: View {
     /// Project-list copies of Task workspaces remain visible for context but
     /// are not navigation targets; the Task-list copy owns selection.
     let isSelectionDisabled: Bool
-    /// True when the rich presentation lists this workspace's Sessions as child
-    /// rows.
+    /// True when the rich presentation lists at least one of this workspace's
+    /// Sessions as a child row.
     ///
     /// The row then drops its activity marker entirely: every state it could
     /// summarise is already spelled out one row below, by name, with its own
     /// reason text. Keeping the aggregate made the workspace restate its
     /// children and left two markers competing in one 28pt band.
+    ///
+    /// The same flag makes the row stop navigating. A workspace that shows its
+    /// Sessions hands navigation to them; selecting the row instead would move
+    /// the user into one of the leaves they can already see and click. Double
+    /// click still opens the workspace, as it does in compact mode.
     var showsSessionChildren: Bool = false
     /// The tree's row rhythm, owned by the display mode so a workspace, its
     /// project, and its Session leaves stay on one grid.
@@ -161,7 +166,10 @@ struct WarrenDesktopWorkspaceRow: View {
     private var expandedRow: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         return Button(action: {
-            guard !isSelectionDisabled else { return }
+            // See showsSessionChildren: a row that lists its Sessions does not
+            // navigate, so a single click is inert. The leaves, the context
+            // menu, and the double-click open stay live.
+            guard !isSelectionDisabled, !showsSessionChildren else { return }
             onSelect()
         }) {
             HStack(spacing: WarrenSpacing.compact) {
@@ -215,7 +223,10 @@ struct WarrenDesktopWorkspaceRow: View {
         }
         .buttonStyle(WarrenInteractiveRowStyle(
             isSelected: isSelected && !isSelectionDisabled,
-            isFocused: isFocused
+            isFocused: isFocused,
+            // Hover belongs to the rail this row hangs from; see
+            // WarrenDesktopSessionLeafGroup.
+            showsHoverBackground: !showsSessionChildren
         ))
         .disabled(isInteractionDisabled || isSelectionDisabled)
         .focused($isFocused)

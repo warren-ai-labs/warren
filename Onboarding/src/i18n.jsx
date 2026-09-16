@@ -118,6 +118,56 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.15.0",
+        dateISO: "2026-09-16",
+        date: "September 16, 2026",
+        title: "Warren makes split layouts durable and search consistent.",
+        summary:
+          "A minor release that makes a split terminal arrangement durable Host state any client can render, shares one search engine across Desktop, iOS, and Web, and turns selecting a pane into a reparent instead of a cold attach; the JSON control protocol remains at 4.0.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Make a split arrangement durable Host state: a Workspace or Terminal Group holds several arrangements, and `warren pane` lists, creates, splits, closes, renames, moves, and removes them.",
+              "Share one search engine across Desktop, iOS, and Web with the same ranking and `w:`/`p:`/`s:`/`t:`/`g:`/`@blocked` grammar, with results led by the provider's own mark.",
+              "Inject an OSC 7 working-directory hook for zsh and fish sessions so the pane title, tab, and sidebar track `cd`.",
+              "Share Session label rules across clients, add `RUN` and `CWD` columns to `warren session list`, and stream foreground metadata in its own roster delta.",
+              "Support GFM markdown callout alerts in iOS Agent transcripts.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Render exactly one of a scope's arrangements per window, with Cycle Pane Group (⌘`) and Previous Pane Group (⇧⌘`) to step through them.",
+              "Gather a split's Sessions into one labelled, unbroken run in the pane bar so no Tab can fall inside the group.",
+              "Stop a rich-mode workspace row from navigating on a single click; hovering now lights the group's rail, and double-click starts a new Session.",
+              "Read a sidebar Session leaf as its running command and directory, with a fallback to the launch directory until the shell reports OSC 7.",
+              "Promote every retained surface so selecting a visible pane is a reparent instead of a snapshot re-seed.",
+              "Raise the warm surface budget to 32 surfaces and a 3 GiB byte limit.",
+              "Pace iOS chat streaming, cache markdown layout, and hand a send off without re-rendering the transcript.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Keep a split group on screen while another Session is visited and land a pending split as soon as its Session exists.",
+              "Make every close command act on the layout its chip belongs to, and stop deleting a local arrangement the Host has not seen yet.",
+              "Apply PTY resizes and focus viewports off the connection reader so a slow resize no longer delays later commands.",
+              "Recover a retained surface whose renderer is gone, and treat restored Agent turns as a baseline instead of new completions.",
+              "Present the iOS photo picker from the composer menu, and smooth compact chat bubbles and send-time transitions.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The protocol remains at 4.0 with the `pane-group.*` methods behind the `pane-groups-v1` capability, and Host state moves to schema 4 additively. Validate host-owned pane groups across a rolling Host upgrade.",
+              "The warm surface budget raises the worst-case retained pool to roughly 2-3 GB; watch resident memory on a long-running Desktop.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is for internal or temporary testing.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.14.0",
         dateISO: "2026-09-14",
         date: "September 14, 2026",
@@ -1075,6 +1125,56 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.15.0",
+        dateISO: "2026-09-16",
+        date: "2026 年 9 月 16 日",
+        title: "Warren 让分屏布局持久化，也让搜索在各端一致。",
+        summary:
+          "次版本：将分屏终端布局变为可由任意客户端渲染的 Host 持久状态，在 Desktop、iOS 与 Web 之间共享同一套搜索引擎，并把切换可见 pane 从冷附加变为 reparent；JSON 控制协议仍为 4.0。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "将分屏布局变为 Host 持久状态：一个 Workspace 或 Terminal Group 可容纳多套布局，`warren pane` 可列出、创建、分屏、关闭、重命名、移动和删除。",
+              "在 Desktop、iOS 与 Web 之间共享同一套搜索引擎，排序规则与 `w:`/`p:`/`s:`/`t:`/`g:`/`@blocked` 语法一致，结果行以 provider 自身标识开头。",
+              "为 zsh 和 fish 注入 OSC 7 工作目录钩子，让 pane 标题、Tab 与侧边栏跟随 `cd`。",
+              "跨端共享 Session 标签规则，为 `warren session list` 增加 `RUN` 与 `CWD` 列，并用独立的 roster delta 推送前台元数据。",
+              "在 iOS Agent transcript 中支持 GFM markdown callout。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "每个窗口只渲染当前作用域的一套布局，可用 Cycle Pane Group（⌘`）与 Previous Pane Group（⇧⌘`）切换。",
+              "在 pane bar 中把同一分屏组的 Session 聚为一段连续且带标签的区段，避免有 Tab 落在组内。",
+              "富模式 workspace 行不再单击导航；悬停点亮所属组的导轨，双击在该 workspace 新建 Session。",
+              "侧边栏 Session 叶子显示运行命令与目录，shell 尚未上报 OSC 7 时回退到启动目录。",
+              "所有 retained surface 统一走 promotion，选中可见 pane 变为 reparent，而非重新装载快照。",
+              "预热 surface 上限提升到 32 个、字节上限提升到 3 GiB。",
+              "为 iOS 聊天加入流式节流、markdown 布局缓存，并让发送不再重渲染整段 transcript。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "在浏览其他 Session 时保持分屏组显示，并在其 Session 出现后立即落地待完成的分屏。",
+              "让每个关闭命令作用于其 chip 所属的布局，并停止删除 Host 尚未见过的本地布局。",
+              "将 PTY resize 与 focus 视口移出连接 reader，慢 resize 不再阻塞同一连接上的后续命令。",
+              "恢复原生渲染器已消失的 retained surface，并把恢复出来的 Agent turn 视为基线而非新完成。",
+              "修复 iOS 相册选择器弹出、紧凑聊天气泡换行与发送时的滚动/底部栏过渡。",
+            ],
+          },
+          {
+            title: "发布说明",
+            items: [
+              "协议仍为 4.0，`pane-group.*` 方法由 `pane-groups-v1` capability 保护，Host state 以追加方式升至 schema 4。请在 Host 滚动升级场景下验证 Host 托管的分屏组。",
+              "预热 surface 预算使最坏情况的 retained pool 约为 2-3 GB；请关注长时间运行且打开大量 Session 的 Desktop 内存占用。",
+              "本地打包使用现有 Apple Development 签名且未 notarize；归档仅适合内部或临时测试。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.14.0",
         dateISO: "2026-09-14",

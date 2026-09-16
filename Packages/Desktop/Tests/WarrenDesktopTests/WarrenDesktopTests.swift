@@ -8,6 +8,39 @@ import WarrenDomain
 import WarrenClientCore
 import WarrenObservation
 
+/// Chrome must not depend on live metadata: a rendered title can be empty for a
+/// moment while a Session's metadata is rewritten, and letting the pane header
+/// disappear with it changes the pane's height by 28 pt, resizes the PTY, and
+/// makes a full-screen TUI repaint end to end.
+final class WarrenDesktopPaneHeaderTitleTests: XCTestCase {
+    func testHeaderLabelNeverCollapsesToEmpty() {
+        XCTAssertEqual(
+            WarrenDesktopPaneView<EmptyView>.stablePaneHeaderTitle(
+                rendered: "pi · main",
+                sessionTitle: "Session",
+                kindName: "pi"
+            ),
+            "pi · main"
+        )
+        XCTAssertEqual(
+            WarrenDesktopPaneView<EmptyView>.stablePaneHeaderTitle(
+                rendered: "   ",
+                sessionTitle: "Session",
+                kindName: "pi"
+            ),
+            "Session"
+        )
+        XCTAssertEqual(
+            WarrenDesktopPaneView<EmptyView>.stablePaneHeaderTitle(
+                rendered: "",
+                sessionTitle: "\n",
+                kindName: "pi"
+            ),
+            "pi"
+        )
+    }
+}
+
 private struct TestTerminalSurface: View {
     let context: WarrenDesktopTerminalContext
 
@@ -128,7 +161,7 @@ private func makeTabBar(
         onAddTab: {},
         onCloseTab: { _ in },
         onCloseOtherTabs: { _ in },
-        onCloseAllTabs: {},
+        onCloseAllTabs: { _ in },
         onRequestRename: { _ in },
         onToggleSessionPin: { _, _ in },
         onDismissActivity: { _, _ in }
@@ -3146,6 +3179,58 @@ final class WarrenDesktopTests: XCTestCase {
         )
     }
 
+    func testSidebarSessionTitleUsesForegroundCommandForUnnamedShell() {
+        let session = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: WorkspaceID(),
+            title: "Shell",
+            kind: .shell,
+            runtimeProcess: "npm",
+            runtimeCommandLine: "npm run dev",
+            workingDirectory: "/Users/me/Workspace/warren"
+        )
+
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceSessionRow.displayTitle(for: session),
+            "npm run dev · warren"
+        )
+    }
+
+    func testSidebarSessionTitleUsesDirectoryForIdleShell() {
+        let session = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: WorkspaceID(),
+            title: "Shell",
+            kind: .shell,
+            runtimeProcess: "zsh",
+            runtimeCommandLine: "-zsh",
+            workingDirectory: "/Users/me/Workspace/warren"
+        )
+
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceSessionRow.displayTitle(for: session),
+            "warren"
+        )
+    }
+
+    func testSidebarSessionTitlePrefersAUserSetName() {
+        let session = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: WorkspaceID(),
+            title: "Shell",
+            customTitle: "My Agent",
+            kind: .shell,
+            runtimeProcess: "npm",
+            runtimeCommandLine: "npm run dev",
+            workingDirectory: "/Users/me/Workspace/warren"
+        )
+
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceSessionRow.displayTitle(for: session),
+            "My Agent"
+        )
+    }
+
     func testSessionDisplayTitlePrefersCustomTitle() {
         let session = WarrenDesktopSession(
             id: TerminalSessionID(),
@@ -4130,7 +4215,7 @@ final class WarrenDesktopTests: XCTestCase {
             "A bound Agent names its provider and explains what it is waiting for"
         )
         XCTAssertEqual(
-            rowsByLabel["Shell Session Shell"],
+            rowsByLabel["Shell Session npm run dev"],
             "npm run dev · API · feature",
             "A plain shell reports its process without claiming an activity it cannot observe"
         )
@@ -4367,11 +4452,15 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertFalse(titles.contains { $0.localizedCaseInsensitiveContains("Close Tab") })
     }
 
-    /// A Task-linked workspace appears twice in the tree. Its Agent rows must
-    /// stay in the Projects subtree in both Task states, so a running Session
-    /// neither moves between rows nor disappears when Tasks is collapsed.
+    /// A Task-linked workspace appears twice in the tree, but only one copy owns
+    /// navigation: the Task copy. Leaves follow navigability, so the Projects
+    /// copy lists none and the Task copy lists them.
+    ///
+    /// With the Task collapsed the Task copy is not mounted at all, so those
+    /// Sessions leave the tree the same way collapsing Projects hides the ones
+    /// that copy owns.
     @MainActor
-    func testRichSessionRowsStayInProjectsTreeForTaskLinkedWorkspaces() throws {
+    func testRichSessionRowsFollowTheNavigableWorkspaceCopy() throws {
         let host = WarrenDomain.Host(name: "Agent Host")
         let task = WarrenTask(hostID: host.id, name: "Delivery")
         let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
@@ -4433,16 +4522,35 @@ final class WarrenDesktopTests: XCTestCase {
             hostingView.layoutSubtreeIfNeeded()
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
-            XCTAssertEqual(
-                recorder.snapshot().nodes
-                    .filter { $0.id.hasPrefix("workspace-session.") }
-                    .map(\.id),
-                [
-                    "workspace-session.project-list.\(workspace.id.description)"
+            let sessionIDs = recorder.snapshot().nodes
+                .filter { $0.id.hasPrefix("workspace-session.") }
+                .map(\.id)
+            let expected: [String] = expandedTaskIDs.isEmpty
+                ? []
+                : [
+                    "workspace-session.task-list.\(workspace.id.description)"
                         + ".\(session.id.description)",
-                ],
+                ]
+            XCTAssertEqual(
+                sessionIDs,
+                expected,
                 "Task expansion \(expandedTaskIDs.isEmpty ? "collapsed" : "expanded")"
             )
+
+            // The row that owns the leaves is the row the user can act on.
+            let snapshot = recorder.snapshot()
+            XCTAssertFalse(
+                snapshot.node(id: "workspace.project-list.\(workspace.id.description)")?
+                    .isEnabled ?? true,
+                "The Projects copy stays context-only"
+            )
+            if !expandedTaskIDs.isEmpty {
+                XCTAssertTrue(
+                    snapshot.node(id: "workspace.task-list.\(workspace.id.description)")?
+                        .isEnabled ?? false,
+                    "The Task copy owns navigation and therefore the leaves"
+                )
+            }
         }
     }
 

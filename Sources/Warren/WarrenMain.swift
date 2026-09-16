@@ -176,9 +176,6 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Split layout writes are coalesced, so quitting right after a divider
-        // drag would otherwise drop the last ratio.
-        WarrenDesktopSplitLayoutPersistence.flushPendingSave()
         updateCheckTask?.cancel()
         updateInstallTask?.cancel()
         cliInstallTask?.cancel()
@@ -725,6 +722,24 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         otherPaneItem.target = target
         otherPaneItem.keyEquivalentModifierMask = [.command]
         otherPaneItem.representedObject = WarrenDesktopCommand.otherPane.rawValue
+
+        let nextPaneGroupItem = viewMenu.addItem(
+            withTitle: "Next Pane Group",
+            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            keyEquivalent: "`"
+        )
+        nextPaneGroupItem.target = target
+        nextPaneGroupItem.keyEquivalentModifierMask = [.command]
+        nextPaneGroupItem.representedObject = WarrenDesktopCommand.nextPaneGroup.rawValue
+
+        let previousPaneGroupItem = viewMenu.addItem(
+            withTitle: "Previous Pane Group",
+            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            keyEquivalent: "`"
+        )
+        previousPaneGroupItem.target = target
+        previousPaneGroupItem.keyEquivalentModifierMask = [.command, .shift]
+        previousPaneGroupItem.representedObject = WarrenDesktopCommand.previousPaneGroup.rawValue
 
         viewMenuItem.submenu = viewMenu
 

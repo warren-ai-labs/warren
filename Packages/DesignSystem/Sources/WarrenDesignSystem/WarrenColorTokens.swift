@@ -62,6 +62,14 @@ public struct WarrenColorTokens: Sendable {
     /// Callers apply these with a very small opacity; they are not status
     /// colors and must never be used for row foregrounds or selection states.
     public let hostSectionTints: [Color]
+    /// Identity hues for the pane bar's split groups.
+    ///
+    /// A group is not a Host section, but it needs the same kind of quiet
+    /// identity color: its rule and chip are the only place the hue appears,
+    /// so a status color there would be read as agent state. The values are
+    /// the shared identity palette; the names stay separate so neither
+    /// feature's contract can drift into the other's.
+    public let tabGroupTints: [Color]
 
     /// Foreground-derived washes preserve Superset's contrast relationships.
     public let fillHover: Color
@@ -89,6 +97,7 @@ public struct WarrenColorTokens: Sendable {
         popoverSurface: Color,
         inputSurface: Color,
         hostSectionTints: [Color],
+        tabGroupTints: [Color],
         fillHover: Color,
         fillSelected: Color,
         tertiaryWash: Color
@@ -113,6 +122,7 @@ public struct WarrenColorTokens: Sendable {
         self.popoverSurface = popoverSurface
         self.inputSurface = inputSurface
         self.hostSectionTints = hostSectionTints
+        self.tabGroupTints = tabGroupTints
         self.fillHover = fillHover
         self.fillSelected = fillSelected
         self.tertiaryWash = tertiaryWash
@@ -134,6 +144,8 @@ public struct WarrenColorTokens: Sendable {
         info: Color(red: 97 / 255, green: 175 / 255, blue: 239 / 255), // #61afef
         link: Color(red: 126 / 255, green: 192 / 255, blue: 245 / 255), // #7ec0f5
         amber: Color(red: 245 / 255, green: 158 / 255, blue: 11 / 255), // #f59e0b
+        hostSectionTints: Self.identityTints,
+        tabGroupTints: Self.identityTints,
         chromeOpacity: 0.35,
         sidebarOpacity: 0.35,
         hoverOpacity: 0.07,
@@ -145,6 +157,20 @@ public struct WarrenColorTokens: Sendable {
     public static func resolved(for _: ColorScheme) -> Self {
         .dark
     }
+
+    /// The one low-saturation identity palette. Host sections and split groups
+    /// both index it; keeping the literals in a single place is what stops the
+    /// two features from drifting into different colors for the same idea.
+    private static let identityTints: [Color] = [
+        Color(red: 104 / 255, green: 157 / 255, blue: 188 / 255),
+        Color(red: 178 / 255, green: 128 / 255, blue: 173 / 255),
+        Color(red: 137 / 255, green: 174 / 255, blue: 126 / 255),
+        Color(red: 198 / 255, green: 157 / 255, blue: 106 / 255),
+        Color(red: 145 / 255, green: 137 / 255, blue: 190 / 255),
+        Color(red: 105 / 255, green: 177 / 255, blue: 168 / 255),
+        Color(red: 187 / 255, green: 133 / 255, blue: 124 / 255),
+        Color(red: 145 / 255, green: 160 / 255, blue: 111 / 255),
+    ]
 
     private static func make(
         background: Color,
@@ -161,6 +187,8 @@ public struct WarrenColorTokens: Sendable {
         info: Color,
         link: Color,
         amber: Color,
+        hostSectionTints: [Color],
+        tabGroupTints: [Color],
         chromeOpacity: Double,
         sidebarOpacity: Double,
         hoverOpacity: Double,
@@ -201,16 +229,8 @@ public struct WarrenColorTokens: Sendable {
             ),
             popoverSurface: Color(red: 32 / 255, green: 30 / 255, blue: 28 / 255), // #201e1c
             inputSurface: Color(red: 24 / 255, green: 22 / 255, blue: 21 / 255),
-            hostSectionTints: [
-                Color(red: 104 / 255, green: 157 / 255, blue: 188 / 255),
-                Color(red: 178 / 255, green: 128 / 255, blue: 173 / 255),
-                Color(red: 137 / 255, green: 174 / 255, blue: 126 / 255),
-                Color(red: 198 / 255, green: 157 / 255, blue: 106 / 255),
-                Color(red: 145 / 255, green: 137 / 255, blue: 190 / 255),
-                Color(red: 105 / 255, green: 177 / 255, blue: 168 / 255),
-                Color(red: 187 / 255, green: 133 / 255, blue: 124 / 255),
-                Color(red: 145 / 255, green: 160 / 255, blue: 111 / 255),
-            ],
+            hostSectionTints: hostSectionTints,
+            tabGroupTints: tabGroupTints,
             fillHover: foreground.opacity(hoverOpacity),
             fillSelected: foreground.opacity(selectedOpacity),
             tertiaryWash: foreground.opacity(tertiaryOpacity)
@@ -271,6 +291,16 @@ public extension WarrenColorTokens {
     /// eye. `WarrenLayoutMetrics.sidebarRailWidth` owns the matching width, and
     /// a Host section rule uses the same pair so the tree has one rail spec.
     var sidebarTreeGuide: Color { mutedForeground.opacity(0.30) }
+
+    /// The rail while the pointer is over the group it ties.
+    ///
+    /// Rich mode's workspace row does not act on a click, so the row can no
+    /// longer spend its hover wash on a navigation affordance it does not have.
+    /// The feedback moves to the figure the pointer is actually over. Lifting
+    /// the same hue past the resting 0.30 keeps the rail structural rather than
+    /// turning it into `highlight`, which already means agent activity in this
+    /// rail.
+    var sidebarTreeGuideHighlight: Color { mutedForeground.opacity(0.65) }
 
     /// Section headings that name a region rather than participate in it.
     ///
