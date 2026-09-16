@@ -96,7 +96,8 @@ _No changes yet._
   terminal turn.
 - Render a lone tool call as a single non-expandable row, and render dotted
   canonical control-plane events as markers in the Web client.
-- Present the iOS photo picker from the composer menu, let a compact chat bubble
+- Present the iOS photo picker from the composer menu, stop the composer from
+  dropping IME input or lagging on each keystroke, let a compact chat bubble
   wrap past its max width, and smooth the send-time scroll and bottom tray
   transitions.
 

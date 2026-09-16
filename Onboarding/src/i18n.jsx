@@ -154,7 +154,7 @@ const messages = {
               "Make every close command act on the layout its chip belongs to, and stop deleting a local arrangement the Host has not seen yet.",
               "Apply PTY resizes and focus viewports off the connection reader so a slow resize no longer delays later commands.",
               "Recover a retained surface whose renderer is gone, and treat restored Agent turns as a baseline instead of new completions.",
-              "Present the iOS photo picker from the composer menu, and smooth compact chat bubbles and send-time transitions.",
+              "Present the iOS photo picker from the composer menu, stop the composer from dropping IME input or lagging on each keystroke, and smooth compact chat bubbles and send-time transitions.",
             ],
           },
           {
@@ -1162,7 +1162,7 @@ const messages = {
               "让每个关闭命令作用于其 chip 所属的布局，并停止删除 Host 尚未见过的本地布局。",
               "将 PTY resize 与 focus 视口移出连接 reader，慢 resize 不再阻塞同一连接上的后续命令。",
               "恢复原生渲染器已消失的 retained surface，并把恢复出来的 Agent turn 视为基线而非新完成。",
-              "修复 iOS 相册选择器弹出、紧凑聊天气泡换行与发送时的滚动/底部栏过渡。",
+              "修复 iOS 相册选择器弹出、输入法丢字与逐键延迟，以及紧凑聊天气泡换行和发送时的滚动/底部栏过渡。",
             ],
           },
           {
