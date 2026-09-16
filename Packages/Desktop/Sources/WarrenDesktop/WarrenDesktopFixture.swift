@@ -425,6 +425,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             && lhs.sessionTerminalGroupIDs == rhs.sessionTerminalGroupIDs
             && lhs.tabWorkspaceIDs == rhs.tabWorkspaceIDs
             && lhs.tabTerminalGroupIDs == rhs.tabTerminalGroupIDs
+            && lhs.paneGroups == rhs.paneGroups
             && lhs.connectionState == rhs.connectionState
             && lhs.unreadNoticeCount == rhs.unreadNoticeCount
     }
@@ -440,6 +441,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         hasher.combine(sessionTerminalGroupIDs)
         hasher.combine(tabWorkspaceIDs)
         hasher.combine(tabTerminalGroupIDs)
+        hasher.combine(paneGroups)
         hasher.combine(connectionState)
         hasher.combine(unreadNoticeCount)
     }

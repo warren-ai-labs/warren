@@ -29,7 +29,7 @@ final class WarrenRemoteClientTests: XCTestCase {
         XCTAssertEqual(object["t"] as? String, "auth")
         XCTAssertEqual(object["version"] as? String, "4.0")
         XCTAssertEqual(object["terminalStateFormats"] as? [String], ["ghostline-vt-replay-v1"])
-        XCTAssertEqual(object["capabilities"] as? [String], ["roster-delta"])
+        XCTAssertEqual(object["capabilities"] as? [String], ["roster-delta", "pane-groups-v1"])
 
         try await waitUntil { await client.roster() != nil }
         let initialRevision = await client.roster()?.revision
@@ -1001,4 +1001,3 @@ final class WarrenPaneGroupDecodingTests: XCTestCase {
         XCTAssertTrue(text.contains("\"sessionId\":\"session-9\""))
     }
 }
-

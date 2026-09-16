@@ -143,6 +143,7 @@ private actor WarrenRemoteSocket {
         clientID: String? = nil,
         capabilities: [String] = [
             "roster-delta",
+            "pane-groups-v1",
             WarrenRemoteAgentCapability.timeline,
             WarrenRemoteAgentCapability.interactions,
             WarrenRemoteAgentCapability.interrupt,
@@ -738,6 +739,7 @@ public actor WarrenRemoteClient {
         self.tokenUpdateHandler = tokenUpdateHandler
         self.advertisedCapabilities = [
             "roster-delta",
+            "pane-groups-v1",
             WarrenRemoteAgentCapability.timeline,
             WarrenRemoteAgentCapability.interactions,
             WarrenRemoteAgentCapability.interrupt,
@@ -759,7 +761,7 @@ public actor WarrenRemoteClient {
         configuration: WarrenRemoteEndpointConfiguration,
         task: any WarrenWebSocketTaskAdapter,
         codec: WarrenWireCodec = WarrenWireCodec(),
-        capabilities: [String] = ["roster-delta"],
+        capabilities: [String] = ["roster-delta", "pane-groups-v1"],
         terminalStateFormats: [String] = [WarrenRemoteClient.replayTerminalStateFormat],
         urlSession: URLSession? = nil,
         clientID: String? = nil,
@@ -786,7 +788,7 @@ public actor WarrenRemoteClient {
         configuration: WarrenRemoteEndpointConfiguration,
         tasks: [any WarrenWebSocketTaskAdapter],
         codec: WarrenWireCodec = WarrenWireCodec(),
-        capabilities: [String] = ["roster-delta"],
+        capabilities: [String] = ["roster-delta", "pane-groups-v1"],
         terminalStateFormats: [String] = [WarrenRemoteClient.replayTerminalStateFormat],
         urlSession: URLSession? = nil,
         clientID: String? = nil,

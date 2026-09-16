@@ -124,14 +124,19 @@ struct WarrenDesktopSessionTreeGuideShape: Shape {
 /// a scoped Host's render their leaves through here, so the two cannot drift
 /// apart.
 ///
-/// The same figure carries the hover state: the pointer anywhere in the group
-/// lights the whole rail, because the group is what is being pointed at. The
-/// workspace row above it does not navigate on a click, so this is the only
-/// place the pointer can be answered, and answering it needs a sensor rather
-/// than `.onHover`; see `WarrenDesktopHoverSensor`.
+/// The same figure carries the emphasis: the pointer anywhere in the group
+/// lights the whole rail, because the group is what is being pointed at, and so
+/// does the workspace the center is showing, because that is the row the figure
+/// hangs from. The workspace row above it does not navigate on a click, so this
+/// is the only place the pointer can be answered, and answering it needs a
+/// sensor rather than `.onHover`; see `WarrenDesktopHoverSensor`.
 struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
     let leafCount: Int
     let guide: WarrenDesktopSessionTreeGuide
+    /// True when the navigation scope is this workspace: the workspace itself,
+    /// or one of the Sessions under it. The rail then stays lit with no pointer
+    /// on it, the same way the workspace row's own text stays bright.
+    let isCurrentScope: Bool
     let row: Row
     let leaves: Leaves
 
@@ -139,6 +144,7 @@ struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
         leafCount: Int,
         mode: WarrenDesktopWorkspaceDisplayMode,
         workspaceGlyph: WarrenDesktopWorkspaceGlyph,
+        isCurrentScope: Bool = false,
         @ViewBuilder row: () -> Row,
         @ViewBuilder leaves: () -> Leaves
     ) {
@@ -148,6 +154,7 @@ struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
             rowSpacing: WarrenSpacing.xxs,
             workspaceGlyph: workspaceGlyph
         )
+        self.isCurrentScope = isCurrentScope
         self.row = row()
         self.leaves = leaves()
     }
@@ -218,5 +225,5 @@ struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
     ///
     /// The offscreen probe has no pointer, so it forces the hover state every
     /// other hover-revealed control reads; see `WarrenForceHoverKey`.
-    private var isEmphasized: Bool { isHovered || forceHover }
+    private var isEmphasized: Bool { isHovered || forceHover || isCurrentScope }
 }

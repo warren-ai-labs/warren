@@ -773,6 +773,11 @@ final class WarrenRemoteModelTests: XCTestCase {
             title: "Second",
             sessionID: secondSessionID
         )
+        let paneGroup = PaneGroup(
+            hostID: host.id,
+            workspaceID: workspace.id,
+            tree: .leaf(paneID: PaneID(), sessionID: firstSessionID)
+        )
         let projection = WarrenDesktopProjection(
             host: host,
             tasks: [task],
@@ -794,7 +799,9 @@ final class WarrenRemoteModelTests: XCTestCase {
             sessionWorkspaceIDs: [
                 firstSessionID: workspace.id,
                 secondSessionID: workspace.id,
-            ]
+            ],
+            paneGroups: [paneGroup],
+            unreadNoticeCount: 3
         )
 
         let reordered = projection.reorderingTabs(
@@ -805,17 +812,51 @@ final class WarrenRemoteModelTests: XCTestCase {
         XCTAssertEqual(reordered.taskGroups.map(\.task), [task])
         XCTAssertEqual(reordered.taskGroups.first?.workspaces, [workspace])
         XCTAssertEqual(reordered.tabs.map(\.id), [secondTab.id, firstTab.id])
+        XCTAssertEqual(reordered.paneGroups, [paneGroup])
+        XCTAssertEqual(reordered.unreadNoticeCount, 3)
+    }
+
+    /// A projection that differs only in the Host's arrangements is a real
+    /// change: `publishProjectionIfChanged` reads equality, so leaving pane
+    /// groups out of it silently drops every roster update that only shaped a
+    /// split.
+    func testProjectionEqualityCoversPaneGroups() {
+        let host = WarrenDomain.Host(name: "Pane Host")
+        let sessionID = TerminalSessionID()
+        let workspaceID = WorkspaceID()
+        let base = WarrenDesktopProjection(host: host, projects: [], workspaces: [])
+        let withGroup = WarrenDesktopProjection(
+            host: host,
+            projects: [],
+            workspaces: [],
+            paneGroups: [
+                PaneGroup(
+                    hostID: host.id,
+                    workspaceID: workspaceID,
+                    tree: .leaf(paneID: PaneID(), sessionID: sessionID)
+                )
+            ]
+        )
+
+        XCTAssertNotEqual(base, withGroup)
+        XCTAssertNotEqual(base.hashValue, withGroup.hashValue)
     }
 
     @MainActor
     func testConnectionStateChangePreservesTasksAndUnreadNotices() {
         let host = WarrenDomain.Host(name: "Task Host")
         let task = WarrenTask(hostID: host.id, name: "Delivery")
+        let paneGroup = PaneGroup(
+            hostID: host.id,
+            workspaceID: WorkspaceID(),
+            tree: .leaf(paneID: PaneID(), sessionID: TerminalSessionID())
+        )
         let projection = WarrenDesktopProjection(
             host: host,
             tasks: [task],
             projects: [],
             workspaces: [],
+            paneGroups: [paneGroup],
             unreadNoticeCount: 3
         )
 
@@ -823,6 +864,7 @@ final class WarrenRemoteModelTests: XCTestCase {
 
         XCTAssertEqual(next.taskGroups.map(\.task), [task])
         XCTAssertEqual(next.unreadNoticeCount, 3)
+        XCTAssertEqual(next.paneGroups, [paneGroup])
         XCTAssertEqual(next.connectionState, .reconnecting)
     }
 

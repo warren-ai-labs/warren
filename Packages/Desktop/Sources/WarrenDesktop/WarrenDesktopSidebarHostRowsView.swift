@@ -285,6 +285,10 @@ struct WarrenDesktopSidebarHostRows: View {
                                 mode: workspaceDisplayMode,
                                 workspaceGlyph: WarrenDesktopWorkspaceGlyph(
                                     scopedWorkspace.workspace
+                                ),
+                                isCurrentScope: isSelected(
+                                    workspace: scopedWorkspace.workspace.id,
+                                    in: host
                                 )
                             ) {
                                 hostWorkspaceRow(

@@ -336,8 +336,9 @@ final class WarrenDesktopSessionTreeGuideTests: XCTestCase {
         XCTAssertEqual(reports, [true, false])
     }
 
-    /// The emphasis is what the pointer produces, so it is measured through the
-    /// rendering path rather than from the color value alone.
+    /// The emphasis has two sources, the pointer and the current scope, so both
+    /// are measured through the rendering path rather than from the color value
+    /// alone.
     ///
     /// The offscreen harness has no pointer, so the hover state is forced
     /// through the environment the same way every other hover-revealed control
@@ -351,11 +352,12 @@ final class WarrenDesktopSessionTreeGuideTests: XCTestCase {
         /// The darkest pixel the rail puts on white, scanned across the line and
         /// its anti-aliased edges so one half-covered pixel cannot decide the
         /// answer.
-        func railInk(forcedHover: Bool) throws -> CGFloat {
+        func railInk(forcedHover: Bool, isCurrentScope: Bool = false) throws -> CGFloat {
             let group = WarrenDesktopSessionLeafGroup(
                 leafCount: leafCount,
                 mode: mode,
-                workspaceGlyph: .checkout
+                workspaceGlyph: .checkout,
+                isCurrentScope: isCurrentScope
             ) {
                 Color.clear.frame(height: mode.rowHeight)
             } leaves: {
@@ -393,13 +395,19 @@ final class WarrenDesktopSessionTreeGuideTests: XCTestCase {
         }
 
         let resting = try railInk(forcedHover: false)
-        let emphasized = try railInk(forcedHover: true)
+        let hovered = try railInk(forcedHover: true)
+        let inScope = try railInk(forcedHover: false, isCurrentScope: true)
 
         XCTAssertLessThan(resting, 1, "The resting rail must be painted at all")
         XCTAssertLessThan(
-            emphasized,
+            hovered,
             resting,
             "Hover must reach the rail, not only the state that selects its color"
+        )
+        XCTAssertLessThan(
+            inScope,
+            resting,
+            "The workspace the center is showing must light its rail without a pointer"
         )
     }
 

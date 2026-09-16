@@ -115,16 +115,28 @@ struct WarrenDesktopSidebarHeader: View {
                 .accessibilityHidden(true)
 
             if WarrenBuildVariant.isBuild {
-                WarrenDesktopBuildBadge(
-                    updateStatus: .none,
-                    showsBuildMarker: true,
-                    onUpdateAction: onUpdateAction
-                )
+                // The provenance marker is the header's only disposable child.
+                // It spends the reserved slot while the rail can carry it, then
+                // the compact form, then nothing — so a narrow rail truncates
+                // nothing and never widens the sidebar's content column.
+                ViewThatFits(in: .horizontal) {
+                    buildMarker()
+                    buildMarker(isCompact: true)
+                    EmptyView()
+                }
                 .padding(.trailing, WarrenSpacing.compact)
-                .fixedSize(horizontal: true, vertical: false)
             }
         }
         .frame(height: WarrenLayoutMetrics.tabBarHeight)
+    }
+
+    private func buildMarker(isCompact: Bool = false) -> some View {
+        WarrenDesktopBuildBadge(
+            updateStatus: .none,
+            showsBuildMarker: true,
+            isCompact: isCompact,
+            onUpdateAction: onUpdateAction
+        )
     }
 
     private var expandedSearchButton: some View {

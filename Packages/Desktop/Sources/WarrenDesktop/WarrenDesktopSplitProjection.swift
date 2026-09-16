@@ -102,3 +102,26 @@ enum WarrenDesktopSplitProjection {
         )
     }
 }
+
+/// Whether the Host's arrangement may replace a scope's local layout.
+///
+/// A local edit the Host has not echoed yet is the one case a roster must not
+/// overwrite: the roster can still carry the arrangement from before the edit,
+/// and adopting that collapses the split for as long as the Host's answer is in
+/// flight — visible as a split that flashes and disappears when the roster is
+/// slow, and a split whose new pane never lands at all.
+///
+/// An in-flight edit waits for the Host to show the same panes. Pane identity is
+/// the Host's to assign, so the tabs — not the pane IDs — are what confirm it;
+/// comparing IDs would make every echo look different and the edit would never
+/// settle.
+enum WarrenDesktopPaneGroupAdoption {
+    static func shouldAdopt(
+        local: SplitLayoutTree?,
+        adopted: SplitLayoutTree?,
+        host: SplitLayoutTree
+    ) -> Bool {
+        guard let local, local != adopted else { return true }
+        return host.allTabIDs == local.allTabIDs
+    }
+}

@@ -189,4 +189,87 @@ final class WarrenDesktopSplitProjectionTests: XCTestCase {
         let named = WarrenDesktopSplitProjection.lonePane(tabID: "a", paneID: "pane-a").leaves[0]
         XCTAssertEqual(named.id, "pane-a")
     }
+
+    // MARK: - Adopting the Host's arrangement
+
+    /// The bug this guard closes: a split's roster echo is slow, and a roster
+    /// that still carries the pre-edit arrangement arrives first. Adopting that
+    /// stale tree made the split flash and collapse until the real answer came.
+    func testAStaleRosterCannotCollapseAnEditInFlight() {
+        let beforeEdit = panes("a", "b")
+        let edit = panes("a", "b", "c")
+
+        XCTAssertFalse(
+            WarrenDesktopPaneGroupAdoption.shouldAdopt(
+                local: edit,
+                adopted: beforeEdit,
+                host: beforeEdit
+            ),
+            "the pre-edit arrangement is not an answer to the edit"
+        )
+        XCTAssertFalse(
+            WarrenDesktopPaneGroupAdoption.shouldAdopt(
+                local: edit,
+                adopted: beforeEdit,
+                host: panes("a", "b", "d")
+            ),
+            "while the edit is unconfirmed, nothing but its own panes may replace it"
+        )
+        XCTAssertTrue(
+            WarrenDesktopPaneGroupAdoption.shouldAdopt(
+                local: edit,
+                adopted: beforeEdit,
+                host: panes("a", "b", "c")
+            ),
+            "the Host's echo of the edit confirms it"
+        )
+    }
+
+    /// The Host assigns pane identity, so the tree it echoes back is not `==`
+    /// to the local edit even when it shows the same panes. Confirmation has to
+    /// compare the tabs, or every split would wait forever for an equality that
+    /// never comes.
+    func testConfirmationComparesTabsNotPaneIdentity() {
+        let beforeEdit = SplitLayoutTree.leaf(
+            SplitPaneItem(id: "host-pane-a", tabID: "a")
+        )
+        let edit = beforeEdit.split(
+            targetPaneID: "host-pane-a",
+            newTabID: "b",
+            axis: .horizontal
+        )
+        let echo = SplitLayoutTree.split(
+            axis: .horizontal,
+            ratio: 0.5,
+            first: .leaf(SplitPaneItem(id: "pane-1", tabID: "a")),
+            second: .leaf(SplitPaneItem(id: "pane-2", tabID: "b"))
+        )
+
+        XCTAssertNotEqual(echo, edit, "same panes, different identities")
+        XCTAssertTrue(
+            WarrenDesktopPaneGroupAdoption.shouldAdopt(
+                local: edit,
+                adopted: beforeEdit,
+                host: echo
+            )
+        )
+    }
+
+    func testAdoptionWithoutAnEditInFlightAlwaysTakesTheHost() {
+        let beforeEdit = panes("a", "b")
+        XCTAssertTrue(
+            WarrenDesktopPaneGroupAdoption.shouldAdopt(
+                local: beforeEdit,
+                adopted: beforeEdit,
+                host: panes("a", "b", "c")
+            )
+        )
+        XCTAssertTrue(
+            WarrenDesktopPaneGroupAdoption.shouldAdopt(
+                local: nil,
+                adopted: nil,
+                host: beforeEdit
+            )
+        )
+    }
 }

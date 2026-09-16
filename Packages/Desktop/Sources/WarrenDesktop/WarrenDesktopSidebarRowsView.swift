@@ -137,7 +137,8 @@ struct WarrenDesktopSidebarRows: View {
                                             semanticScope: "project-list"
                                         ) ? activeSessions(in: workspace.id).count : 0,
                                         mode: workspaceDisplayMode,
-                                        workspaceGlyph: WarrenDesktopWorkspaceGlyph(workspace)
+                                        workspaceGlyph: WarrenDesktopWorkspaceGlyph(workspace),
+                                        isCurrentScope: selection == .workspace(workspace.id)
                                     ) {
                                         workspaceRow(
                                             workspace,
@@ -473,7 +474,8 @@ struct WarrenDesktopSidebarRows: View {
                                                 semanticScope: "task-list"
                                             ) ? activeSessions(in: workspace.id).count : 0,
                                             mode: workspaceDisplayMode,
-                                            workspaceGlyph: WarrenDesktopWorkspaceGlyph(workspace)
+                                            workspaceGlyph: WarrenDesktopWorkspaceGlyph(workspace),
+                                            isCurrentScope: selection == .workspace(workspace.id)
                                         ) {
                                             workspaceRow(
                                                 workspace,
