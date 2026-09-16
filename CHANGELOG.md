@@ -6,6 +6,115 @@ All notable changes to Warren are documented here.
 
 _No changes yet._
 
+## [0.15.0] - 2026-09-16
+
+> Minor release: makes a split arrangement durable Host state that any client
+> can render, unifies search across Desktop, iOS, and Web, and turns selecting a
+> pane into a reparent instead of a cold attach. The JSON control protocol
+> remains at 4.0; Host state moves to schema 4.
+
+### Added
+
+- Make a split arrangement durable Host state: a Workspace or Terminal Group
+  can hold several arrangements, the Host stores the pane tree, and
+  `warren pane` lists, creates, splits, closes, renames, moves, and removes
+  them. `warren session panes` now reports the Host's arrangement and the
+  client displaying it, instead of depending on a connected Desktop.
+- Inject a minimal OSC 7 working-directory hook for zsh and fish sessions, so
+  the pane title, tab, and sidebar track `cd` without depending on the user's
+  own shell setup.
+- Share Session label rules across Desktop, iOS, and Web so every client shows
+  the shell-reported directory and the running command, and add `RUN` and `CWD`
+  columns to `warren session list`.
+- Split high-frequency foreground metadata into its own roster delta, so a
+  directory change no longer retransmits the full Session and its Agent
+  projection over a Relay link.
+- Share one search engine across Desktop, iOS, and Web: the same role weights,
+  match tiers, phrase bonus, abbreviation rule, and
+  `w:`/`p:`/`s:`/`t:`/`g:`/`@blocked` query grammar, with Tasks searchable by
+  name and by the branches they span. A result is one compact line carrying its
+  ancestry and the field that explains the match, led by the provider's own mark
+  instead of a terminal glyph, and iOS reaches the same index behind a compact
+  sheet.
+- Support GFM markdown callout alerts in iOS Agent transcripts.
+- Break the terminal attach's latency down by phase and trace the
+  output-subscription lifecycle, so a slow attach names the phase that spent the
+  time.
+
+### Changed
+
+- Stop a rich-mode workspace row from navigating on a single click. Hovering
+  the row or one of its Sessions now lights the rail that ties the group
+  together, and double-click starts a new Session in the workspace.
+- List a Task-linked Workspace's Sessions under its Task row, which is the row
+  that owns navigation, and leave the context-only Projects copy without leaves;
+  collapsing Tasks now hides those Sessions the same way collapsing Projects
+  hides the ones that copy owns.
+- Read a Desktop sidebar Session leaf as its running command and directory
+  instead of the generic "Shell", matching the tab label; a user-set or
+  generated name still wins.
+- Fall back to the directory a Session was launched in when the shell has not
+  reported OSC 7, and carry the reported directory across a Ghostline rolling
+  upgrade (Ghostline v1.3.2).
+- Let a window render exactly one of a scope's arrangements, with Cycle Pane
+  Group (⌘`) and Previous Pane Group (⇧⌘`) stepping through them. The choice is
+  per viewer and never sent to the Host, and a write is gated on the negotiated
+  `pane-groups-v1` capability so an older Host sees no unknown method.
+- Gather a split's Sessions into one unbroken run in the pane bar, drawn as a
+  labelled group at the first member's place, and stop a member from being
+  dragged on its own so the rule and the chip cannot describe a layout the strip
+  no longer shows.
+- Promote every retained surface, local or remote, so selecting a pane that is
+  already on screen is a reparent plus a control-lease swap instead of a
+  snapshot re-seed; only a cold Session, or one whose transport dropped, still
+  subscribes.
+- Raise the warm surface budget to 32 surfaces and the warm byte limit to 3 GiB
+  so the count limit is what binds, at the cost of roughly 2-3 GB of warm memory
+  in the worst case.
+- Pace iOS chat streaming through a dedicated pacer, cache markdown layout, and
+  hand a send off without re-rendering the transcript.
+
+### Fixed
+
+- Keep a split group on screen while another Session is visited, hold the pane a
+  split in flight was aimed at, and land a pending split as soon as its Session
+  exists instead of waiting for a change notification.
+- Make every close command act on the layout its chip belongs to, name every
+  close by its Tab, and let a split move the Tab order.
+- Stop deleting a local arrangement the Host has not seen yet, so a first split
+  whose write is still in flight keeps its optimistic tree.
+- Apply PTY resizes and the viewport carried by `session.focus` off the
+  connection reader, with latest-wins semantics per Session, so a slow resize no
+  longer delays every later command on the same connection.
+- Recover a retained surface whose native renderer is gone, and report and
+  recover a promotion that never draws, instead of leaving a black pane behind
+  its recovery gate.
+- Draw a lone pane through the split view so it survives a split, keep its title
+  row in compact mode, and keep the pane view when a Session is created.
+- Treat restored Agent turns as a baseline instead of completions, so a Desktop
+  that connects during a transcript replay no longer rings for every restored
+  terminal turn.
+- Render a lone tool call as a single non-expandable row, and render dotted
+  canonical control-plane events as markers in the Web client.
+- Present the iOS photo picker from the composer menu, let a compact chat bubble
+  wrap past its max width, and smooth the send-time scroll and bottom tray
+  transitions.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0; the release adds the `pane-group.*`
+  methods behind the `pane-groups-v1` capability, and Host state moves to schema
+  4 additively. Pre-4.0 clients are still rejected at authentication. Validate
+  host-owned pane groups across a rolling Host upgrade: a Host without the
+  capability projects no groups, so a scope renders its Tab alone rather than
+  failing.
+- The warm surface budget rises to 32 surfaces and a 3 GiB byte limit, so a
+  fully warm pool can retain on the order of 2-3 GB. Watch resident memory on a
+  long-running Desktop with many open Sessions.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.14.0] - 2026-09-14
 
 > Minor release: adds native split terminal workflows, historical Usage

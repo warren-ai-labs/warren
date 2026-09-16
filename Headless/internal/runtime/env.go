@@ -235,7 +235,7 @@ func LoginShellArgs() []string { return []string{"-il"} }
 // where a session explicitly requests variables to be unset. Ghostline's v1
 // environment API can override values but cannot remove keys from its own
 // process environment, so the login shell performs the final unsets.
-func ShellCommandWithUnsets(shell string, keys []string) (string, error) {
+func ShellCommandWithUnsets(shell string, args []string, keys []string) (string, error) {
 	if shell == "" {
 		shell = LoginShellPath()
 	}
@@ -258,7 +258,11 @@ func ShellCommandWithUnsets(shell string, keys []string) (string, error) {
 	if len(ordered) == 0 {
 		return "", nil
 	}
-	return "unset " + strings.Join(ordered, " ") + "; exec " + shellQuote(shell) + " -il", nil
+	command := "exec " + shellQuote(shell)
+	for _, arg := range args {
+		command += " " + shellQuote(arg)
+	}
+	return "unset " + strings.Join(ordered, " ") + "; " + command, nil
 }
 
 func environmentMap(environment []string) map[string]string {

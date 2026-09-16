@@ -1103,7 +1103,8 @@ func TestOnlyFocusedPeerCanResizeSharedRuntime(t *testing.T) {
 		memoryRuntime: memoryRuntime{sessions: map[string][]byte{session.Runtime: []byte("prompt")}},
 		captureSeen:   make(chan struct{}),
 	}
-	httpServer := httptest.NewServer(NewHTTPServer(&Service{Store: state, Runtime: runtime}, "secret", slog.Default()).Handler())
+	service := &Service{Store: state, Runtime: runtime}
+	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", slog.Default()).Handler())
 	defer httpServer.Close()
 
 	first := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
@@ -1143,6 +1144,7 @@ func TestOnlyFocusedPeerCanResizeSharedRuntime(t *testing.T) {
 	if !focused["focused"] || !focused["resized"] {
 		t.Fatalf("focus handoff result = %#v", focused)
 	}
+	service.flushResizes()
 
 	oldOwner := requestResult[map[string]bool](t, first, "session.resize", map[string]any{
 		"id": session.ID, "cols": 101, "rows": 33,
@@ -1156,6 +1158,7 @@ func TestOnlyFocusedPeerCanResizeSharedRuntime(t *testing.T) {
 	if !newOwner["resized"] {
 		t.Fatal("current focus owner resize was ignored")
 	}
+	service.flushResizes()
 	sameSize := requestResult[map[string]bool](t, second, "session.focus", map[string]any{
 		"id": session.ID, "focused": true, "cols": 78, "rows": 28,
 	})
@@ -1181,6 +1184,86 @@ func TestOnlyFocusedPeerCanResizeSharedRuntime(t *testing.T) {
 	}
 }
 
+// gatedResizeRuntime blocks Resize until the test releases it, so a test can
+// hold a slow PTY resize in flight while exercising the connection reader.
+type gatedResizeRuntime struct {
+	memoryRuntime
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (runtime *gatedResizeRuntime) Resize(ctx context.Context, _ string, _, _ int) error {
+	runtime.once.Do(func() { close(runtime.entered) })
+	select {
+	case <-runtime.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// A slow PTY resize must not stall the connection's reader. The resize is
+// queued behind a per-session worker, so a later session.subscribe on the same
+// socket still completes; this is the regression for a remote resize that took
+// ~10s and left the next pane black behind its recovery gate.
+func TestSlowResizeDoesNotBlockTheConnectionReader(t *testing.T) {
+	state, firstSession := testSession(t)
+	secondSession := api.Session{
+		ID: sessionIDForTest(), WorkspaceID: firstSession.WorkspaceID,
+		Title: "Shell", Kind: "shell", Runtime: "runtime-second",
+		Lifecycle: "running", CreatedAt: time.Now().UTC(),
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions = append(value.Sessions, secondSession)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &gatedResizeRuntime{
+		memoryRuntime: memoryRuntime{sessions: map[string][]byte{
+			firstSession.Runtime:  []byte("one"),
+			secondSession.Runtime: []byte("two"),
+		}},
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	service := &Service{Store: state, Runtime: runtime}
+	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", slog.Default()).Handler())
+	defer httpServer.Close()
+
+	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer connection.Close()
+
+	subscribeForSeed(t, connection, firstSession.ID)
+	resized := requestResult[map[string]bool](t, connection, "session.resize", map[string]any{
+		"id": firstSession.ID, "cols": 100, "rows": 30,
+	})
+	if !resized["resized"] {
+		t.Fatal("viewport resize was not accepted")
+	}
+	select {
+	case <-runtime.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("resize worker never started")
+	}
+
+	// The first session's Resize is still blocked. The reader must already be
+	// free, so a second session can subscribe on the same connection, and a
+	// focus for the first session (which queues another resize) must not wait
+	// on the lock the worker holds.
+	subscribeForSeed(t, connection, secondSession.ID)
+	focused := requestResult[map[string]bool](t, connection, "session.focus", map[string]any{
+		"id": firstSession.ID, "focused": true, "cols": 101, "rows": 31,
+	})
+	if !focused["focused"] {
+		t.Fatalf("focus while a resize was in flight = %#v", focused)
+	}
+
+	close(runtime.release)
+	service.flushResizes()
+}
+
 // A passive subscriber owns the runtime size while the session is unowned, so
 // a split pane that is not the keyboard target can still follow its own
 // viewport. The first resizer becomes the size owner, and releasing that owner
@@ -1192,7 +1275,8 @@ func TestUnownedSessionSizeIsAdoptedByTheFirstSubscriber(t *testing.T) {
 		memoryRuntime: memoryRuntime{sessions: map[string][]byte{session.Runtime: []byte("prompt")}},
 		captureSeen:   make(chan struct{}),
 	}
-	httpServer := httptest.NewServer(NewHTTPServer(&Service{Store: state, Runtime: runtime}, "secret", slog.Default()).Handler())
+	service := &Service{Store: state, Runtime: runtime}
+	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", slog.Default()).Handler())
 	defer httpServer.Close()
 
 	first := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
@@ -1225,6 +1309,7 @@ func TestUnownedSessionSizeIsAdoptedByTheFirstSubscriber(t *testing.T) {
 	if !adopted["resized"] {
 		t.Fatal("unowned session resize was ignored")
 	}
+	service.flushResizes()
 
 	contested := requestResult[map[string]bool](t, second, "session.resize", map[string]any{
 		"id": session.ID, "cols": 77, "rows": 27,
@@ -1249,6 +1334,7 @@ func TestUnownedSessionSizeIsAdoptedByTheFirstSubscriber(t *testing.T) {
 		t.Fatal("second subscriber could not adopt the released size")
 	}
 
+	service.flushResizes()
 	_, resizes = runtime.snapshotOrder()
 	want := []recordedResize{{columns: 91, rows: 31}, {columns: 77, rows: 27}}
 	if len(resizes) != len(want) {

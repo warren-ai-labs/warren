@@ -3,6 +3,7 @@ import { webAssetURL } from "./runtime.js";
 import { terminalSearchSummary } from "./terminal.js";
 import { terminalTabTitle } from "./title.js";
 import { shouldDismissOnBackdrop } from "./presentation.js";
+import { createSearch, fieldRole, highlightSegments } from "./search.js";
 import {
   AGENT_REASONING_OPTIONS,
   formatAgentModel,
@@ -1981,7 +1982,7 @@ export function SettingsPage({
               <section className="settings-section">
                 <header className="settings-page-heading">
                   <h2>Pane auxiliary title</h2>
-                  <p>Tab owns the primary title. This template drives the auxiliary bar below the preset row (session name · directory · command by default). Custom session names fill the {"{session}"} placeholder; each value is shortened to fit the pane.</p>
+                  <p>Tab owns the primary title. This template drives the auxiliary bar below the preset row (session name · directory name · command by default). Custom session names fill the {"{session}"} placeholder; each value is shortened to fit the pane.</p>
                 </header>
                 <label>
                   Auxiliary template
@@ -2023,20 +2024,28 @@ function BellIcon() {
   );
 }
 
+/**
+ * Search over everything the web client can navigate to.
+ *
+ * Ranking, the query grammar, and each row's match explanation come from
+ * `search.js`, the port of the engine the Desktop and iOS clients use, so the
+ * same query returns the same order on every surface. Rows render in one global
+ * ranking: per-kind sections would have to reorder results to group them, and a
+ * heading that appears and disappears while typing moves every row under the
+ * cursor.
+ */
 export function SearchPanel({
   open,
   query,
   catalog,
   onQueryChange,
   onClose,
-  onChooseWorkspace,
-  onChooseProject,
+  onChooseTarget,
 }) {
   const inputRef = useRef(null);
   const panelRef = useRef(null);
   const itemRefs = useRef(new Map());
   const [activeIndex, setActiveIndex] = useState(0);
-  const [debouncedQuery, setDebouncedQuery] = useState("");
   useFocusRestore(open);
   useFocusTrap(open, panelRef);
   useBodyScrollLock(open);
@@ -2048,59 +2057,31 @@ export function SearchPanel({
     }
   }, [open]);
 
-  useEffect(() => {
-    if (!query) {
-      setDebouncedQuery("");
-      return undefined;
-    }
-    const timer = setTimeout(() => setDebouncedQuery(query), 80);
-    return () => clearTimeout(timer);
-  }, [query]);
+  // The panel stays mounted, and the catalog is a new object on every roster
+  // delta, so indexing is gated on `open`: a closed panel must not re-index the
+  // Host every time an agent reports progress.
+  const search = useMemo(() => (open ? createSearch(catalog) : null), [open, catalog]);
+  // Querying is synchronous. A ranked pass costs about a millisecond, so
+  // debouncing would only add latency the user can feel.
+  const rows = useMemo(() => (search ? search.results(query) : []), [search, query]);
 
   useEffect(() => {
-    setActiveIndex(0);
-  }, [debouncedQuery]);
-
-  const needle = debouncedQuery.trim().toLowerCase();
-  const groups = useMemo(() => {
-    const matches = value => !needle || String(value || "").toLowerCase().includes(needle);
-    const result = [];
-    let nextIndex = 0;
-    for (const project of catalog.projects) {
-      const workspaces = catalog.workspacesByProject.get(project.id) || [];
-      const projectMatches = matches(project.name) || matches(project.path);
-      const visibleWorkspaces = workspaces.filter(workspace =>
-        projectMatches || matches(workspace.name) || matches(workspace.branch),
-      );
-      if (!projectMatches && !visibleWorkspaces.length) continue;
-      const rows = [{ kind: "project", project, workspace: null, index: nextIndex++ }];
-      for (const workspace of visibleWorkspaces) {
-        rows.push({ kind: "workspace", project, workspace, index: nextIndex++ });
-      }
-      result.push({ project, rows });
-    }
-    return result;
-  }, [catalog, needle]);
-
-  const flatRows = useMemo(() => groups.flatMap(group => group.rows), [groups]);
-  const rowCount = flatRows.length;
-  const activeRow = flatRows[activeIndex] || null;
+    setActiveIndex(index => (index < rows.length ? index : 0));
+  }, [rows.length]);
 
   useEffect(() => {
-    const node = itemRefs.current.get(activeIndex);
-    node?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex, debouncedQuery]);
+    itemRefs.current.get(activeIndex)?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, rows]);
 
-  const chooseRow = row => {
-    if (!row) return;
-    if (row.kind === "project") onChooseProject(row.project.id);
-    else onChooseWorkspace(row.workspace.id);
+  const choose = row => {
+    if (!row?.target) return;
+    onChooseTarget(row.target);
   };
 
   const handleKeyDown = event => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      if (rowCount) setActiveIndex(index => Math.min(index + 1, rowCount - 1));
+      if (rows.length) setActiveIndex(index => Math.min(index + 1, rows.length - 1));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       setActiveIndex(index => Math.max(index - 1, 0));
@@ -2109,10 +2090,10 @@ export function SearchPanel({
       setActiveIndex(0);
     } else if (event.key === "End") {
       event.preventDefault();
-      setActiveIndex(rowCount - 1);
+      setActiveIndex(Math.max(rows.length - 1, 0));
     } else if (event.key === "Enter") {
       event.preventDefault();
-      chooseRow(activeRow);
+      choose(rows[activeIndex]);
     } else if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -2127,10 +2108,12 @@ export function SearchPanel({
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <section ref={panelRef} className="search-panel" role="dialog" aria-modal="true" aria-label="Project search">
+      <section ref={panelRef} className="search-panel" role="dialog" aria-modal="true" aria-label="Search">
         <div className="search-input-wrap">
           <SearchIcon />
-          <label className="visually-hidden" htmlFor="warren-search">Search projects and workspaces</label>
+          <label className="visually-hidden" htmlFor="warren-search">
+            Search sessions, workspaces, and projects
+          </label>
           <input
             ref={inputRef}
             id="warren-search"
@@ -2138,68 +2121,110 @@ export function SearchPanel({
             value={query}
             onChange={event => onQueryChange(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a command or search…"
+            placeholder="Search sessions, branches, projects…  w: p: s: @blocked"
             autoComplete="off"
             spellCheck="false"
           />
+          {query && (
+            <button
+              type="button"
+              className="search-clear"
+              aria-label="Clear search"
+              onClick={() => onQueryChange("")}
+            >
+              <CloseIcon />
+            </button>
+          )}
           <kbd className="search-kbd">esc</kbd>
         </div>
-        <div className="search-results">
-          {groups.map(group => (
-            <div className="search-group" key={group.project.id}>
-              <div className="search-group-heading">{group.project.name}</div>
-              {group.rows.map(row => {
-                const active = row.index === activeIndex;
-                const shared = {
-                  ref: node => {
-                    if (node) itemRefs.current.set(row.index, node);
-                    else itemRefs.current.delete(row.index);
-                  },
-                  onMouseEnter: () => setActiveIndex(row.index),
-                };
-                return row.kind === "project" ? (
-                  <button
-                    type="button"
-                    key={row.project.id}
-                    className={`search-item search-project-item${active ? " active" : ""}`}
-                    {...shared}
-                    onClick={() => onChooseProject(row.project.id)}
-                  >
-                    {folderIcon}
-                    <span className="search-copy">
-                      <span className="search-name">{row.project.name}</span>
-                      <span className="search-path">{row.project.path || ""}</span>
-                    </span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    key={row.workspace.id}
-                    className={`search-item search-workspace-item${active ? " active" : ""}`}
-                    {...shared}
-                    onClick={() => onChooseWorkspace(row.workspace.id)}
-                  >
-                    {row.workspace.mergeState === "merged"
-                      ? <MergedBadge tabs={catalog.tabsByWorkspace.get(row.workspace.id) || []} />
-                      : <BranchIcon />}
-                    <span className="search-name">{row.workspace.branch || row.workspace.name || "Workspace"}</span>
-                    <span className="search-kind">Workspace</span>
-                  </button>
-                );
-              })}
-            </div>
+        <div className="search-results" role="listbox" aria-label="Search results">
+          {rows.map((row, index) => (
+            <SearchResultRow
+              key={row.key}
+              row={row}
+              active={index === activeIndex}
+              onHover={() => setActiveIndex(index)}
+              onChoose={() => choose(row)}
+              registerRef={node => {
+                if (node) itemRefs.current.set(index, node);
+                else itemRefs.current.delete(index);
+              }}
+            />
           ))}
-          {!rowCount && (
+          {!rows.length && (
             <div className="search-empty">
-              {needle
-                ? <>No results for “{query.trim()}”. Try a different name or path.</>
-                : "Search projects and workspaces by name or path."}
+              {query.trim()
+                ? <>No results for “{query.trim()}”. Try a branch, a command, or a path.</>
+                : "Search sessions, workspaces, and projects. Narrow with w: p: s: or @blocked."}
             </div>
           )}
         </div>
       </section>
     </div>
   );
+}
+
+/**
+ * One line, three fields: what it is, where it lives, and why it matched.
+ *
+ * The kind glyph carries the row's activity as colour, which is why no row spends
+ * horizontal space on the words "Session" or "Working".
+ */
+function SearchResultRow({ row, active, onHover, onChoose, registerRef }) {
+  // A Session row leads with its provider's own mark, so the kind reads at a
+  // glance instead of every session looking like a bare terminal.
+  const glyph = row.provider
+    ? <SessionPresetIcon kind={row.provider} />
+    : ({
+      workspace: <BranchIcon />,
+      project: folderIcon,
+      terminalGroup: terminalIcon,
+    }[row.scope] || folderIcon);
+
+  return (
+    <button
+      type="button"
+      ref={registerRef}
+      role="option"
+      aria-selected={active}
+      className={`search-item search-${row.scope}-item${active ? " active" : ""}`}
+      onMouseEnter={onHover}
+      onClick={onChoose}
+    >
+      <span className="search-glyph">{glyph}</span>
+      <span className="search-name">
+        <Highlighted text={row.title} ranges={row.titleRanges} />
+      </span>
+      {row.subtitle && <span className="search-context">{row.subtitle}</span>}
+      {row.evidence && (
+        <span className={`search-evidence${row.evidence.role === fieldRole.path ? " path" : ""}`}>
+          <Highlighted text={row.evidence.text} ranges={row.evidence.ranges} />
+        </span>
+      )}
+      {/* Activity is a dot, not the glyph's colour: the glyph now carries the
+          provider's own mark, and this is the marker the sidebar already uses. */}
+      {row.activity && <ActivityDot status={{ activity: row.activity }} />}
+      {row.pinned && <span className="search-pin" title="Pinned">{pinIcon}</span>}
+      {active && <kbd className="search-enter">⏎</kbd>}
+    </button>
+  );
+}
+
+/**
+ * Emboldens the characters the query actually matched.
+ *
+ * Ranges always come from the index, which folded this text once at build time.
+ * Re-deriving them here would normalize a string per row per render, and that
+ * lands directly on typing latency.
+ */
+function Highlighted({ text, ranges }) {
+  if (!ranges?.length) return text;
+  const segments = highlightSegments(text, ranges);
+  return segments.map((segment, index) => (
+    segment.isMatch
+      ? <mark key={index} className="search-match">{segment.text}</mark>
+      : <span key={index}>{segment.text}</span>
+  ));
 }
 
 export function Loading({ message }) {

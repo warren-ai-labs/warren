@@ -38,15 +38,6 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
     case leaf(SplitPaneItem)
     case split(axis: SplitAxis, ratio: Double, first: SplitLayoutTree, second: SplitLayoutTree)
 
-    /// Identity for SwiftUI tree replacement. Ratios are intentionally omitted
-    /// so a divider drag updates the existing terminal hosts instead of
-    /// rebuilding every surface on each pointer event. Maximization is encoded
-    /// by the resulting tree shape, which naturally changes this identity.
-    public indirect enum StructuralIdentity: Hashable, Sendable {
-        case leaf(paneID: String, tabID: String)
-        case split(axis: SplitAxis, first: StructuralIdentity, second: StructuralIdentity)
-    }
-
     public static let maxPanes = 4
     public static let minimumInteractiveRatio = 0.15
     public static let maximumInteractiveRatio = 0.85
@@ -221,21 +212,6 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
         leaves.map(\.tabID)
     }
 
-    /// A structural identity suitable for SwiftUI's `.id(...)` modifier.
-    /// Unlike `Hashable` on the full tree, this value ignores divider ratios.
-    public var structuralIdentity: StructuralIdentity {
-        switch self {
-        case .leaf(let item):
-            return .leaf(paneID: item.id, tabID: item.tabID)
-        case .split(let axis, _, let first, let second):
-            return .split(
-                axis: axis,
-                first: first.structuralIdentity,
-                second: second.structuralIdentity
-            )
-        }
-    }
-
     public func item(for paneID: String) -> SplitPaneItem? {
         leaves.first { $0.id == paneID }
     }
@@ -254,11 +230,17 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
 
     /// Split the target pane in the specified direction.
     /// Strictly limits the total number of split panes to `maxPanes` (4).
+    ///
+    /// `newPaneID` names the pane the new Session lands in. Callers pass it when
+    /// the Session already had a pane identity — a Session the panel is showing
+    /// alone, for instance — so that adopting it into the layout does not
+    /// re-create the very terminal the user is looking at.
     public func split(
         targetPaneID: String,
         newTabID: String,
         axis: SplitAxis,
-        placeAfter: Bool = true
+        placeAfter: Bool = true,
+        newPaneID: String? = nil
     ) -> SplitLayoutTree {
         guard count < Self.maxPanes,
               !contains(tabID: newTabID),
@@ -269,6 +251,7 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
         return splitRecursive(
             targetPaneID: targetPaneID,
             newTabID: newTabID,
+            newPaneID: newPaneID,
             axis: axis,
             placeAfter: placeAfter,
             didSplit: &didSplit
@@ -278,6 +261,7 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
     private func splitRecursive(
         targetPaneID: String,
         newTabID: String,
+        newPaneID: String?,
         axis: SplitAxis,
         placeAfter: Bool,
         didSplit: inout Bool
@@ -286,7 +270,10 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
         case .leaf(let existingItem):
             if existingItem.id == targetPaneID, !didSplit {
                 didSplit = true
-                let newItem = SplitPaneItem(tabID: newTabID)
+                let newItem = SplitPaneItem(
+                    id: newPaneID ?? UUID().uuidString,
+                    tabID: newTabID
+                )
                 let first = placeAfter ? SplitLayoutTree.leaf(existingItem) : SplitLayoutTree.leaf(newItem)
                 let second = placeAfter ? SplitLayoutTree.leaf(newItem) : SplitLayoutTree.leaf(existingItem)
                 return .split(axis: axis, ratio: 0.5, first: first, second: second)
@@ -296,6 +283,7 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
             let newFirst = first.splitRecursive(
                 targetPaneID: targetPaneID,
                 newTabID: newTabID,
+                newPaneID: newPaneID,
                 axis: axis,
                 placeAfter: placeAfter,
                 didSplit: &didSplit
@@ -303,6 +291,7 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
             let newSecond = second.splitRecursive(
                 targetPaneID: targetPaneID,
                 newTabID: newTabID,
+                newPaneID: newPaneID,
                 axis: axis,
                 placeAfter: placeAfter,
                 didSplit: &didSplit
@@ -630,6 +619,197 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
     }
 }
 
+/// Where one layout puts its panes and dividers inside a container.
+///
+/// The layout is flattened here rather than rendered as a recursive tree,
+/// because a pane's view has to keep its identity when the tree's shape
+/// changes. A recursive `switch` replaces its whole subtree — including the
+/// panes that were already on screen — the moment a sibling appears, which
+/// tears down and re-attaches their terminals: the panel flashes, every pane
+/// re-reports its geometry, and the Sessions that did not move are resized
+/// anyway.
+public struct SplitLayoutPlacement: Equatable {
+    public struct Pane: Equatable, Identifiable {
+        public let item: SplitPaneItem
+        public let frame: CGRect
+        public var id: String { item.id }
+    }
+
+    public struct Divider: Equatable, Identifiable {
+        /// The split node this divider belongs to, as `updateRatio(path:)`
+        /// addresses it.
+        public let path: [Bool]
+        public let axis: SplitAxis
+        public let ratio: Double
+        /// The divider's own band, hit padding included.
+        public let frame: CGRect
+        /// The distance the divider travels along its axis. Ratios are
+        /// expressed against this, so a drag converts points with it.
+        public let totalLength: CGFloat
+        public let minimumRatio: Double
+        public let maximumRatio: Double
+        public var id: [Bool] { path }
+    }
+
+    public let panes: [Pane]
+    public let dividers: [Divider]
+}
+
+public extension SplitLayoutTree {
+    /// The width a divider occupies, hit padding included.
+    static let dividerThickness: CGFloat = 5
+
+    /// Flattens the layout for a container of `size`, in preorder.
+    ///
+    /// Every frame is snapped to whole points. A divider position derived from a
+    /// fractional ratio lands between pixels, and AppKit and SwiftUI then round
+    /// it in opposite directions from one layout pass to the next: the panes
+    /// flip by a point, each flip reads as a new viewport, and the PTY is
+    /// resized for a divider that never moved. Whole-point frames make the
+    /// layout a fixed point of its own rounding, and the panes plus their
+    /// dividers still cover the container exactly because each one is measured
+    /// from the edges it shares with its neighbours.
+    func placement(
+        in size: CGSize,
+        dividerThickness: CGFloat = SplitLayoutTree.dividerThickness
+    ) -> SplitLayoutPlacement {
+        var panes: [SplitLayoutPlacement.Pane] = []
+        var dividers: [SplitLayoutPlacement.Divider] = []
+        appendPlacement(
+            in: CGRect(
+                origin: .zero,
+                size: CGSize(width: size.width.rounded(), height: size.height.rounded())
+            ),
+            path: [],
+            dividerThickness: dividerThickness,
+            panes: &panes,
+            dividers: &dividers
+        )
+        return SplitLayoutPlacement(panes: panes, dividers: dividers)
+    }
+
+    /// How far a divider may travel, given the minimum size of the subtree on
+    /// each side of it. A container too small to hold either minimum pins the
+    /// divider at an even split, which is the only position it can hold.
+    static func interactiveRatioBounds(
+        first: SplitLayoutTree,
+        second: SplitLayoutTree,
+        total: CGFloat,
+        axis: SplitAxis
+    ) -> ClosedRange<Double> {
+        guard total > 0 else {
+            return minimumInteractiveRatio...maximumInteractiveRatio
+        }
+        let firstMinimum = axis == .horizontal ? first.minimumPaneWidth : first.minimumPaneHeight
+        let secondMinimum = axis == .horizontal ? second.minimumPaneWidth : second.minimumPaneHeight
+        let lower = min(max(Double(firstMinimum / total), minimumInteractiveRatio), 0.5)
+        let upper = max(min(Double(1 - secondMinimum / total), maximumInteractiveRatio), 0.5)
+        return lower...upper
+    }
+
+    private func appendPlacement(
+        in rect: CGRect,
+        path: [Bool],
+        dividerThickness: CGFloat,
+        panes: inout [SplitLayoutPlacement.Pane],
+        dividers: inout [SplitLayoutPlacement.Divider]
+    ) {
+        switch self {
+        case .leaf(let item):
+            panes.append(SplitLayoutPlacement.Pane(item: item, frame: rect))
+
+        case .split(let axis, let rawRatio, let first, let second):
+            // The renderer clamps rather than rejects: a ratio outside the
+            // interactive range is still drawn at the edge of it.
+            let ratio = rawRatio.isFinite ? min(max(rawRatio, 0.05), 0.95) : 0.5
+            let total = max(0, (axis == .horizontal ? rect.width : rect.height) - dividerThickness)
+            // The divider's leading edge is the one number the split is built
+            // from, so rounding it once keeps both panes whole and adjacent.
+            let leading = min(
+                max(
+                    ((axis == .horizontal ? rect.minX : rect.minY) + total * CGFloat(ratio)).rounded(),
+                    axis == .horizontal ? rect.minX : rect.minY
+                ),
+                (axis == .horizontal ? rect.maxX : rect.maxY) - dividerThickness
+            )
+            let firstRect: CGRect
+            let dividerRect: CGRect
+            let secondRect: CGRect
+            switch axis {
+            case .horizontal:
+                firstRect = CGRect(
+                    x: rect.minX,
+                    y: rect.minY,
+                    width: max(0, leading - rect.minX),
+                    height: rect.height
+                )
+                dividerRect = CGRect(
+                    x: leading,
+                    y: rect.minY,
+                    width: dividerThickness,
+                    height: rect.height
+                )
+                secondRect = CGRect(
+                    x: leading + dividerThickness,
+                    y: rect.minY,
+                    width: max(0, rect.maxX - leading - dividerThickness),
+                    height: rect.height
+                )
+            case .vertical:
+                firstRect = CGRect(
+                    x: rect.minX,
+                    y: rect.minY,
+                    width: rect.width,
+                    height: max(0, leading - rect.minY)
+                )
+                dividerRect = CGRect(
+                    x: rect.minX,
+                    y: leading,
+                    width: rect.width,
+                    height: dividerThickness
+                )
+                secondRect = CGRect(
+                    x: rect.minX,
+                    y: leading + dividerThickness,
+                    width: rect.width,
+                    height: max(0, rect.maxY - leading - dividerThickness)
+                )
+            }
+            let bounds = Self.interactiveRatioBounds(
+                first: first,
+                second: second,
+                total: total,
+                axis: axis
+            )
+            dividers.append(
+                SplitLayoutPlacement.Divider(
+                    path: path,
+                    axis: axis,
+                    ratio: ratio,
+                    frame: dividerRect,
+                    totalLength: total,
+                    minimumRatio: bounds.lowerBound,
+                    maximumRatio: bounds.upperBound
+                )
+            )
+            first.appendPlacement(
+                in: firstRect,
+                path: path + [false],
+                dividerThickness: dividerThickness,
+                panes: &panes,
+                dividers: &dividers
+            )
+            second.appendPlacement(
+                in: secondRect,
+                path: path + [true],
+                dividerThickness: dividerThickness,
+                panes: &panes,
+                dividers: &dividers
+            )
+        }
+    }
+}
+
 /// Which Tabs the pane bar lists for a split layout.
 ///
 /// This is the mode-independent half of the pane bar: given a scope's Tabs and
@@ -649,7 +829,10 @@ public enum WarrenDesktopPaneBar {
     /// Session that is not currently in a pane.
     ///
     /// `selected` is the fallback for the frame between selecting a Session and
-    /// the split tree catching up; without it the bar would blink empty.
+    /// the split tree catching up; without it the bar would blink empty. It is
+    /// also how a Session selected from outside the layout stays reachable: the
+    /// bar lists it after the panes rather than in place of them, so a visit
+    /// never hides the group it is visiting from.
     public static func tabs(
         visibleIn tree: SplitLayoutTree,
         from tabs: [ClientTab],
@@ -666,6 +849,12 @@ public enum WarrenDesktopPaneBar {
             uniquingKeysWith: { first, _ in first }
         )
         let visible = tree.leaves.compactMap { tabsByID[$0.tabID] }
+        if let selected, !tree.contains(tabID: selected.id) {
+            // A visit, not a replacement: the panel's own panes come first so
+            // the group keeps its place in the strip, and the Session being
+            // looked at follows them.
+            return visible + [selected]
+        }
         if visible.isEmpty, let selected {
             return [selected]
         }
@@ -673,80 +862,103 @@ public enum WarrenDesktopPaneBar {
     }
 }
 
-/// Device-local persistence for split layouts per workspace or terminal group.
-public enum WarrenDesktopSplitLayoutPersistence {
-    private static let key = "warren.desktop.splitLayouts"
-    private static let endpointPrefix = "endpoint-"
-    /// Coalescing window for divider drags, which republish a new ratio on
-    /// every pointer event.
-    public static let saveCoalescingInterval: TimeInterval = 0.4
-    @MainActor private static var pendingSave: DispatchWorkItem?
-    @MainActor private static var pendingLayouts: [String: SplitLayoutTree]?
-    @MainActor private static var pendingDefaults: UserDefaults?
 
-    /// Writes the layouts after a short quiet period. Repeated calls replace
-    /// the pending write, so a drag persists once when it settles.
-    @MainActor
-    public static func scheduleSave(
-        _ layouts: [String: SplitLayoutTree],
-        to defaults: UserDefaults = .standard,
-        after interval: TimeInterval = saveCoalescingInterval
-    ) {
-        pendingSave?.cancel()
-        pendingLayouts = layouts
-        pendingDefaults = defaults
-        let work = DispatchWorkItem { flushPendingSave() }
-        pendingSave = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+/// Which scope owns an arrangement. A Pane Group belongs to exactly one
+/// Workspace or Terminal Group, so the owner is the addressing key a client uses
+/// to turn a scope into the Host's group.
+public enum WarrenDesktopPaneOwner: Hashable, Sendable {
+    case workspace(WorkspaceID)
+    case terminalGroup(TerminalGroupID)
+
+    public var terminalGroupID: TerminalGroupID? {
+        if case .terminalGroup(let id) = self { return id }
+        return nil
     }
 
-    /// Flushes a pending coalesced write immediately.
-    @MainActor
-    public static func flushPendingSave() {
-        pendingSave?.cancel()
-        pendingSave = nil
-        guard let layouts = pendingLayouts else { return }
-        let defaults = pendingDefaults ?? .standard
-        pendingLayouts = nil
-        pendingDefaults = nil
-        save(layouts, to: defaults)
+    public var workspaceID: WorkspaceID? {
+        if case .workspace(let id) = self { return id }
+        return nil
+    }
+}
+
+/// Translates between the Host's arrangement and the renderer's local tree.
+///
+/// The Host owns the shape, so the renderer is a pure function of it: the local
+/// tree exists to be laid out, not to be stored. A leaf carries the Host's Pane
+/// ID when it has one, which is what lets focus and pane identity survive an
+/// unrelated change.
+public enum WarrenDesktopPaneGroupMapping {
+    /// The local tree for one Host arrangement.
+    public static func tree(from group: PaneGroup) -> SplitLayoutTree {
+        tree(from: group.tree)
     }
 
-    /// Drops layouts for scopes of `endpointID` that no longer exist. Other
-    /// endpoints keep their layouts: their Workspaces are not represented in
-    /// the current projection and must not be treated as deleted.
-    public static func pruned(
-        _ layouts: [String: SplitLayoutTree],
-        endpointID: String,
-        liveScopeKeys: Set<String>
-    ) -> [String: SplitLayoutTree] {
-        let ownedPrefix = endpointPrefix + endpointID + "-"
-        return layouts.filter { key, _ in
-            guard key.hasPrefix(ownedPrefix) else { return true }
-            return liveScopeKeys.contains(key)
+    public static func tree(from node: PaneNode) -> SplitLayoutTree {
+        switch node {
+        case .leaf(let paneID, let sessionID):
+            let tabID = WarrenDesktopPaneGroupMapping.tabID(for: sessionID)
+            return .leaf(
+                SplitPaneItem(
+                    id: paneID?.description ?? SplitPaneItem.fallbackID(forTabID: tabID),
+                    tabID: tabID
+                )
+            )
+        case .split(let axis, let ratio, let first, let second):
+            return .split(
+                axis: axis == .horizontal ? .horizontal : .vertical,
+                ratio: ratio,
+                first: tree(from: first),
+                second: tree(from: second)
+            )
         }
     }
 
-    public static func restore(
-        from defaults: UserDefaults = .standard
-    ) -> [String: SplitLayoutTree] {
-        guard let data = defaults.data(forKey: key),
-              let dict = try? JSONDecoder().decode([String: SplitLayoutTree].self, from: data) else {
-            return [:]
+    /// The Host tree for one local arrangement.
+    ///
+    /// A leaf whose Tab no longer maps to a running Session is dropped together
+    /// with the split that only held it: the Host would reject the tree anyway,
+    /// and the renderer must not send a pane it cannot show.
+    public static func paneNode(
+        from tree: SplitLayoutTree,
+        sessionIDForTabID: (String) -> TerminalSessionID?
+    ) -> PaneNode? {
+        switch tree {
+        case .leaf(let item):
+            guard let sessionID = sessionIDForTabID(item.tabID) else { return nil }
+            // A fallback identity is the client's placeholder for "one pane of
+            // this Tab"; it is not a pane the Host ever assigned, so it is sent
+            // as no identity and the Host assigns one.
+            let paneID = item.id.hasPrefix("fallback-pane-") ? nil : PaneID(uuidString: item.id)
+            return .leaf(paneID: paneID, sessionID: sessionID)
+        case .split(let axis, let ratio, let first, let second):
+            switch (
+                paneNode(from: first, sessionIDForTabID: sessionIDForTabID),
+                paneNode(from: second, sessionIDForTabID: sessionIDForTabID)
+            ) {
+            case (nil, nil):
+                return nil
+            case (let only?, nil), (nil, let only?):
+                return only
+            case (let firstChild?, let secondChild?):
+                return .split(
+                    axis: axis == .horizontal ? .horizontal : .vertical,
+                    ratio: ratio,
+                    first: firstChild,
+                    second: secondChild
+                )
+            }
         }
-        // Layouts written before endpoint scoping cannot be safely rebound:
-        // their Session IDs may belong to a different Host. Keep only the
-        // namespaced form and let the current scope build a fresh fallback.
-        return dict.filter { $0.key.hasPrefix(endpointPrefix) }
     }
 
-    public static func save(
-        _ layouts: [String: SplitLayoutTree],
-        to defaults: UserDefaults = .standard
-    ) {
-        let endpointScoped = layouts.filter { $0.key.hasPrefix(endpointPrefix) }
-        if let data = try? JSONEncoder().encode(endpointScoped) {
-            defaults.set(data, forKey: key)
-        }
+    /// The Tab identity one Session has in the projection. A Tab is the
+    /// presentation entry for a Session, and its identity is derived from the
+    /// Session ID.
+    public static func tabID(for sessionID: TerminalSessionID) -> String {
+        "remote-\(sessionID.description)"
+    }
+
+    public static func sessionID(forTabID tabID: String) -> TerminalSessionID? {
+        guard tabID.hasPrefix("remote-") else { return nil }
+        return TerminalSessionID(uuidString: String(tabID.dropFirst("remote-".count)))
     }
 }

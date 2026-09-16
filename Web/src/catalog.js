@@ -55,8 +55,13 @@ export function applyRosterDelta(roster, message = {}) {
     && arrayOrEmpty(message.sessions.upsert).some(value => typeof value.lifecycle !== "string")) {
     return null;
   }
+  if (Object.prototype.hasOwnProperty.call(message, "sessionMetadata")
+    && !validSessionMetadataChanges(message.sessionMetadata)) {
+    return null;
+  }
 
   const sessionChanges = normalizeSessionChanges(message.sessions);
+  const tabs = applyEntityChanges(current.tabs, sessionChanges, value => value?.session);
   return normalizeRoster({
     ...current,
     revision,
@@ -69,7 +74,7 @@ export function applyRosterDelta(roster, message = {}) {
       terminalGroupChanges,
       value => value?.id,
     ),
-    tabs: applyEntityChanges(current.tabs, sessionChanges, value => value?.session),
+    tabs: applySessionMetadata(tabs, message.sessionMetadata),
   });
 }
 
@@ -210,6 +215,10 @@ function sessionToTab(session = {}) {
     title: session.title,
     customTitle: session.customTitle,
     kind: session.kind,
+    // The Agent family the Host has bound to this Session, which differs from
+    // the durable kind once a shell is promoted. Presentation needs it to name
+    // the provider; the kind still says what Warren launched.
+    agentProvider: session.agentProvider || "",
     command: session.command || "",
     lifecycle: session.lifecycle,
     process: session.process || session.command || "",
@@ -290,6 +299,39 @@ function applyEntityChanges(current, changes, id) {
   arrayOrEmpty(current).forEach(value => appendID(id(value)));
   arrayOrEmpty(changes.upsert).forEach(value => appendID(id(value)));
   return result;
+}
+
+/**
+ * Validates a high-frequency session metadata delta. An omitted field means
+ * empty, so the client clears it rather than keeping the previous value.
+ */
+function validSessionMetadataChanges(changes) {
+  if (!isRecord(changes)) return false;
+  if (changes.upsert !== undefined && !Array.isArray(changes.upsert)) return false;
+  return arrayOrEmpty(changes.upsert).every(value => (
+    isRecord(value) && typeof value.id === "string" && value.id.length > 0
+  ));
+}
+
+function applySessionMetadata(tabs, changes) {
+  if (!isRecord(changes) || !Array.isArray(changes.upsert) || changes.upsert.length === 0) {
+    return tabs;
+  }
+  const byID = new Map();
+  for (const change of changes.upsert) {
+    if (typeof change?.id === "string" && change.id) byID.set(change.id, change);
+  }
+  if (byID.size === 0) return tabs;
+  return arrayOrEmpty(tabs).map(tab => {
+    const change = byID.get(tab.session);
+    if (!change) return tab;
+    return {
+      ...tab,
+      process: change.process || "",
+      commandLine: change.commandLine || "",
+      directory: change.directory || "",
+    };
+  });
 }
 
 function validEntityChanges(changes, id) {

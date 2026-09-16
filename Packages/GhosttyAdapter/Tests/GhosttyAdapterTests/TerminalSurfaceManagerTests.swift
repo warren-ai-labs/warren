@@ -1320,6 +1320,210 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         XCTAssertEqual(blurred, [first.id])
     }
 
+    /// A promotion must re-mount a parked view through reconciliation when
+    /// nothing else in SwiftUI would: the requested active set already contains
+    /// the Session, so no layout update arrives to re-attach it. Without this
+    /// the presentation task exits on its host check and the pane stays black.
+    func testRequestPresentReattachesAParkedViewThatStayedInTheActiveSet() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        let surface = makeSurface()
+        manager.insert(surface)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(surface.id, to: manager, host: host)
+        try await waitUntil { manager.isDisplayVisible(surface.id) }
+        XCTAssertTrue(surface.mountedTerminalView?.window === window)
+
+        // Park the AppKit view while the residency stays active.
+        manager.prepareForVisibilityChange(sessionIDs: [])
+        XCTAssertNil(surface.mountedTerminalView?.window)
+        manager.prepareForVisibilityChange(sessionIDs: [surface.id])
+        XCTAssertNil(surface.mountedTerminalView?.window)
+
+        manager.requestPresent(surface.id)
+
+        try await waitUntil { surface.mountedTerminalView?.window === window }
+        try await waitUntil { manager.isDisplayVisible(surface.id) }
+        XCTAssertTrue(manager.snapshot().activeSessionIDs.contains(surface.id))
+    }
+
+    /// A promotion whose view and grid are ready is missing only a draw, so the
+    /// synchronized-output deferral must be escapable on demand instead of
+    /// leaving the pane black until the block closes.
+    func testForcedDrawBypassesTheSynchronizedOutputDeferral() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        let surface = makeSurface()
+        manager.insert(surface)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(surface.id, to: manager, host: host)
+        try await waitUntil { manager.isDisplayVisible(surface.id) }
+        XCTAssertTrue(surface.terminalViewIsPresentable)
+
+        surface.outputWriter.receive(Data("\u{1b}[?2026h".utf8))
+        XCTAssertTrue(surface.outputWriter.isInSynchronizedOutput)
+        XCTAssertFalse(
+            surface.outputWriter.isSyncStalled,
+            "the escape window must not have elapsed before the deferral is asserted"
+        )
+
+        XCTAssertFalse(surface.presentNow(), "an open block defers a normal present")
+        XCTAssertTrue(
+            surface.presentNow(forceDraw: true),
+            "a forced present must draw while the block is still open"
+        )
+
+        surface.outputWriter.receive(Data("\u{1b}[?2026l".utf8))
+        XCTAssertFalse(surface.outputWriter.isInSynchronizedOutput)
+        XCTAssertTrue(surface.presentNow())
+    }
+
+    /// A promotion that cannot draw must be reported instead of leaving the
+    /// pane black with nothing in flight.
+    ///
+    /// A collapsed host makes the view windowed but not presentable while the
+    /// native surface still exists, which is the state that produced a black
+    /// pane with no diagnostics at all: every gate before `presentNow()` is
+    /// silent.
+    func testPromotionThatCannotPresentReportsTheStall() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        let surface = makeSurface()
+        manager.insert(surface)
+
+        var stalled: [TerminalSessionID] = []
+        manager.onPresentStalled = { stalled.append($0) }
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(surface.id, to: manager, host: host)
+        try await waitUntil { manager.isDisplayVisible(surface.id) }
+        XCTAssertTrue(stalled.isEmpty, "a healthy promotion must not report a stall")
+
+        // Park the retained surface, keep it in the requested active set, then
+        // collapse the host so the reattached view can never be presentable.
+        manager.prepareForVisibilityChange(sessionIDs: [])
+        XCTAssertNil(surface.mountedTerminalView?.window)
+        manager.prepareForVisibilityChange(sessionIDs: [surface.id])
+        host.setFrameSize(.zero)
+
+        manager.requestPresent(surface.id)
+
+        let started = ContinuousClock.now
+        try await waitUntil(timeout: 15) { !stalled.isEmpty }
+        let elapsed = ContinuousClock.now - started
+        XCTAssertEqual(stalled, [surface.id])
+        // The draw itself gets a short bound. Waiting the whole output-stall
+        // window instead would keep the pane black for two seconds.
+        XCTAssertLessThan(
+            elapsed,
+            .milliseconds(1500),
+            "a promotion that cannot draw must escalate before the output-stall deadline"
+        )
+        XCTAssertFalse(
+            manager.isDisplayVisible(surface.id),
+            "a stalled promotion must not claim the pane is visible"
+        )
+    }
+
+    /// Ghostty reports its default surface grid before the view drives a real
+    /// size. That report reaches the client asynchronously, so the view already
+    /// matches its host by then; only a grid comparison can reject it.
+    func testReportedGridMustMatchThePanesLayout() async throws {
+        _ = NSApplication.shared
+        let manager = TerminalSurfaceManager(warmLimit: 2)
+        let surface = makeSurface()
+        manager.insert(surface)
+
+        let host = TerminalHostContainerView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = host
+        defer {
+            manager.shutdown()
+            window.orderOut(nil as Any?)
+        }
+
+        submit(surface.id, to: manager, host: host)
+        try await waitUntil { manager.isDisplayVisible(surface.id) }
+
+        let metrics = try XCTUnwrap(surface.state.surface?.size())
+        let scale = Double(window.backingScaleFactor)
+        let expectedColumns = Int(
+            (Double(host.bounds.width) * scale / Double(metrics.cellWidthPixels)).rounded(.down)
+        )
+        let expectedRows = Int(
+            (Double(host.bounds.height) * scale / Double(metrics.cellHeightPixels)).rounded(.down)
+        )
+        XCTAssertNotEqual(expectedColumns, 50, "fixture must not collide with the default grid")
+        XCTAssertTrue(
+            manager.acceptsReportedGrid(surface.id, columns: expectedColumns, rows: expectedRows)
+        )
+        XCTAssertFalse(
+            manager.acceptsReportedGrid(surface.id, columns: 50, rows: 17),
+            "the default surface grid must never resize the PTY"
+        )
+        XCTAssertFalse(
+            manager.acceptsReportedGrid(surface.id, columns: expectedColumns + 20, rows: expectedRows),
+            "a grid from a different viewport must not resize the PTY"
+        )
+
+        // A parked view has no pane to measure against.
+        manager.prepareForVisibilityChange(sessionIDs: [])
+        XCTAssertFalse(
+            manager.acceptsReportedGrid(surface.id, columns: expectedColumns, rows: expectedRows)
+        )
+    }
+
     private func waitUntil(
         timeout: TimeInterval = 5,
         _ condition: @escaping @MainActor () -> Bool

@@ -140,6 +140,67 @@ test("roster delta applies entity changes and session lifecycle updates", () => 
   assert.equal(updated.tabs[0].workspace, "workspace-b");
 });
 
+test("roster delta applies high-frequency session metadata", () => {
+  const baseline = rosterFromMessage({
+    state: {
+      revision: 5,
+      sessions: [{
+        id: "session-a", workspace: "workspace-a", lifecycle: "running", kind: "shell",
+        process: "zsh", commandLine: "-zsh", directory: "/work/old",
+      }],
+    },
+  });
+
+  const updated = applyRosterDelta(baseline, {
+    t: "roster.delta",
+    baseRevision: 5,
+    revision: 6,
+    sessionMetadata: {
+      upsert: [{ id: "session-a", process: "npm", commandLine: "npm run dev", directory: "/work/new" }],
+    },
+  });
+
+  assert.equal(updated.revision, 6);
+  const [tab] = updated.tabs;
+  assert.equal(tab.process, "npm");
+  assert.equal(tab.commandLine, "npm run dev");
+  assert.equal(tab.directory, "/work/new");
+});
+
+test("roster delta clears omitted session metadata fields", () => {
+  const baseline = rosterFromMessage({
+    state: {
+      revision: 5,
+      sessions: [{
+        id: "session-a", workspace: "workspace-a", lifecycle: "running", kind: "shell",
+        process: "npm", commandLine: "npm run dev", directory: "/work/new",
+      }],
+    },
+  });
+
+  const updated = applyRosterDelta(baseline, {
+    t: "roster.delta",
+    baseRevision: 5,
+    revision: 6,
+    sessionMetadata: { upsert: [{ id: "session-a" }] },
+  });
+
+  const [tab] = updated.tabs;
+  assert.equal(tab.process, "");
+  assert.equal(tab.commandLine, "");
+  assert.equal(tab.directory, "");
+});
+
+test("roster delta rejects malformed session metadata", () => {
+  const baseline = rosterFromMessage({ state: { revision: 3 } });
+  assert.equal(applyRosterDelta(baseline, {
+    t: "roster.delta",
+    baseRevision: 3,
+    revision: 4,
+    sessionMetadata: { upsert: [{}] },
+  }), null);
+});
+
 test("roster delta rejects stale, gapped, and malformed revisions", () => {
   const baseline = rosterFromMessage({ state: { revision: 3 } });
   assert.equal(applyRosterDelta(baseline, { t: "roster.delta", baseRevision: 2, revision: 3 }), null);
@@ -337,7 +398,7 @@ test("default pane title uses session, directory, and command", () => {
       defaultTitleTemplate,
       { title: "Codex", customTitle: "Generated summary", process: "codex", directory: "/work/warren" },
     ),
-    "Generated summary · /work/warren · codex",
+    "Generated summary · warren · codex",
   );
 });
 
@@ -366,7 +427,7 @@ test("foreground command line wins over the bare process name", () => {
       commandLine: "npm run dev",
       directory: "/work/warren",
     }),
-    "Shell · /work/warren · npm run dev",
+    "warren · npm run dev",
   );
 });
 
@@ -398,9 +459,10 @@ test("compact pane titles bound every placeholder independently", () => {
   const longValue = "x".repeat(40);
   const directory = `/${Array.from({ length: 40 }, (_, index) => `segment-${index}`).join("/")}`;
   const compact = renderCompactTerminalTitle(
-    "{session}|{command}|{directory}|{directoryName}|{workspace}|{branch}|{host}|{user}|{os}",
+    "{session}~{command}~{directory}~{directoryName}~{workspace}~{branch}~{host}~{user}~{os}",
     {
       title: longValue,
+      customTitle: longValue,
       process: longValue,
       directory,
     },
@@ -415,7 +477,7 @@ test("compact pane titles bound every placeholder independently", () => {
     },
   );
 
-  const values = compact.split("|");
+  const values = compact.split("~");
   assert.equal(values.length, 9);
   assert.ok(values.every(value => Array.from(value).length <= compactPlaceholderMaxLength));
 });

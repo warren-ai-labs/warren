@@ -322,6 +322,9 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     public let tabs: [ClientTab]
     public let sessionWorkspaceIDs: [TerminalSessionID: WorkspaceID]
     public let sessionTerminalGroupIDs: [TerminalSessionID: TerminalGroupID]
+    /// The Host's durable split arrangements. They belong to the Host, so every
+    /// client reads the same shape and a WebSocket peer never has to report one.
+    public let paneGroups: [PaneGroup]
     public let tabWorkspaceIDs: [String: WorkspaceID]
     public let tabTerminalGroupIDs: [String: TerminalGroupID]
     public let reconciliationKey: ReconciliationKey
@@ -365,6 +368,26 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     /// presentation makes the Session the leaf of the navigation tree: a tree
     /// that hides half of a Workspace's Sessions misreports what the Host is
     /// running. Ended Sessions are omitted; they own no runtime to navigate to.
+    /// The arrangements of one Workspace, in draw order.
+    public func paneGroups(in workspaceID: WorkspaceID) -> [PaneGroup] {
+        paneGroups.filter { $0.workspaceID == workspaceID }
+    }
+
+    /// The arrangements of one Terminal Group, in draw order.
+    public func paneGroups(in terminalGroupID: TerminalGroupID) -> [PaneGroup] {
+        paneGroups.filter { $0.terminalGroupID == terminalGroupID }
+    }
+
+    public func paneGroup(id: PaneGroupID) -> PaneGroup? {
+        paneGroups.first { $0.id == id }
+    }
+
+    /// The arrangement that shows one Session. A Session is in at most one pane
+    /// on one Host, so the answer is unambiguous.
+    public func paneGroup(containingSession sessionID: TerminalSessionID) -> PaneGroup? {
+        paneGroups.first { $0.tree.paneIndex(forSession: sessionID) != nil }
+    }
+
     public func activeSessions(in workspaceID: WorkspaceID) -> [WarrenDesktopSession] {
         activeSessionsByWorkspaceIDStorage[workspaceID] ?? []
     }
@@ -433,6 +456,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         terminalGroups: [TerminalGroup] = [],
         sessionTerminalGroupIDs: [TerminalSessionID: TerminalGroupID] = [:],
         tabTerminalGroupIDs: [String: TerminalGroupID] = [:],
+        paneGroups: [PaneGroup] = [],
         unreadNoticeCount: Int = 0
     ) {
         let pinnedBySessionID = Dictionary(
@@ -476,6 +500,13 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         )
         self.sessionWorkspaceIDs = resolvedSessionWorkspaceIDs
         self.sessionTerminalGroupIDs = resolvedSessionTerminalGroupIDs
+        // Draw order is the Host's order, then creation, then ID, so two clients
+        // that never reorder agree on which group sits where.
+        self.paneGroups = paneGroups.sorted { first, second in
+            if first.order != second.order { return first.order < second.order }
+            if first.createdAt != second.createdAt { return first.createdAt < second.createdAt }
+            return first.id.description < second.id.description
+        }
         let resolvedTabWorkspaceIDs = tabWorkspaceIDs.merging(
             Dictionary(uniqueKeysWithValues: tabs.compactMap { tab in
                 tab.sessionID.flatMap { resolvedSessionWorkspaceIDs[$0] }.map { (tab.id, $0) }
@@ -610,6 +641,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         terminalGroups: [TerminalGroup] = [],
         sessionTerminalGroupIDs: [TerminalSessionID: TerminalGroupID] = [:],
         tabTerminalGroupIDs: [String: TerminalGroupID] = [:],
+        paneGroups: [PaneGroup] = [],
         unreadNoticeCount: Int = 0
     ) {
         var workspacesByProjectID: [ProjectID: [Workspace]] = [:]
@@ -634,6 +666,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             terminalGroups: terminalGroups,
             sessionTerminalGroupIDs: sessionTerminalGroupIDs,
             tabTerminalGroupIDs: tabTerminalGroupIDs,
+            paneGroups: paneGroups,
             unreadNoticeCount: unreadNoticeCount
         )
     }

@@ -1726,6 +1726,10 @@ button:disabled {
   cursor: pointer;
 }
 
+.agent-activity-head.is-static {
+  cursor: default;
+}
+
 .agent-activity-title {
   flex: 0 0 auto;
   color: var(--color-text-primary);
@@ -3257,82 +3261,119 @@ button:disabled {
   padding: var(--space-sm);
 }
 
-.search-group-heading {
-  padding: 12px 14px 6px;
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-regular);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
+/* One line per result: title, ancestry, and the field that explains the match.
+   Stacking these would halve the number of results a user can see at once, and
+   they are read together anyway. */
 .search-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
-  min-height: 48px;
-  padding-inline: 14px;
+  min-height: 30px;
+  padding-inline: 10px;
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-primary);
   text-align: start;
   cursor: pointer;
-  font-size: var(--text-md);
-}
-
-.search-item svg {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-  color: var(--color-text-secondary);
-}
-
-.search-item .merge-badge {
-  width: 16px;
-  height: 16px;
+  font-size: var(--text-2sm);
 }
 
 .search-item.active {
   background: var(--fill-selected);
 }
 
-.search-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+/* A session leads with its provider's own mark, so the kind reads at a glance
+   and no row spends width on the word "Session". */
+.search-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
 }
 
+.search-glyph svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* `.preset-brand-icon` already sizes itself to the 16px slot. */
+
 .search-name,
-.search-path {
+.search-context,
+.search-evidence {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .search-name {
-  font-size: var(--text-md);
-  font-weight: var(--weight-light);
-  line-height: 1.4;
-}
-
-.search-path,
-.search-kind {
-  color: var(--color-text-secondary);
+  flex: 0 1 auto;
   font-size: var(--text-2sm);
+  font-weight: var(--weight-regular);
 }
 
-.search-workspace-item .search-name {
-  font-weight: var(--weight-light);
-  flex: 1;
-  min-width: 0;
+.search-context {
+  flex: 0 1 auto;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
 }
 
-.search-kind {
+/* The match explanation sits at the trailing edge: it answers a question the
+   user only asks when the title does not already contain what they typed. */
+.search-evidence {
   margin-inline-start: auto;
+  flex: 0 1 auto;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  opacity: 0.85;
+}
+
+.search-evidence.path {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.search-match {
+  background: none;
+  color: var(--color-text-primary);
+  font-weight: var(--weight-medium);
+}
+
+.search-pin,
+.search-enter {
   flex: 0 0 auto;
+  color: var(--color-text-secondary);
+}
+
+.search-pin svg {
+  width: 11px;
+  height: 11px;
+}
+
+.search-enter {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.search-clear {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--radius-circle);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.search-clear svg {
+  width: 13px;
+  height: 13px;
 }
 
 .search-empty {

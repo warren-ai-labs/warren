@@ -732,6 +732,186 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         }
     }
 
+    /// One whole-screen arrangement of running Sessions. The Host owns it, so any
+    /// client reads the same shape and several arrangements can coexist in one
+    /// Workspace or Terminal Group. Pane order is preorder leaf order.
+    ///
+    /// The wire shape is flat: a leaf carries `paneId`/`sessionId`, a split
+    /// carries `axis`/`ratio`/`first`/`second`. `paneId` is optional on the way
+    /// in because pane identity belongs to the Host, which assigns one for a
+    /// pane a client is creating.
+    public indirect enum PaneNode: Codable, Equatable, Hashable, Sendable {
+        case leaf(paneID: String?, sessionID: String)
+        case split(axis: String, ratio: Double, first: PaneNode, second: PaneNode)
+
+        public var paneID: String? {
+            switch self {
+            case .leaf(let paneID, _): return paneID
+            case .split: return nil
+            }
+        }
+
+        public var sessionID: String? {
+            switch self {
+            case .leaf(_, let sessionID): return sessionID
+            case .split: return nil
+            }
+        }
+
+        /// Leaves in preorder: the order a client renders and numbers panes in.
+        public var leaves: [PaneNode] {
+            switch self {
+            case .leaf: return [self]
+            case .split(_, _, let first, let second): return first.leaves + second.leaves
+            }
+        }
+
+        public var paneCount: Int { leaves.count }
+
+        /// The number of splits, which is what the group mark draws.
+        public var splitCount: Int {
+            switch self {
+            case .leaf: return 0
+            case .split(_, _, let first, let second): return 1 + first.splitCount + second.splitCount
+            }
+        }
+
+        public func paneIndex(forSession sessionID: String) -> Int? {
+            leaves.firstIndex { $0.sessionID == sessionID }.map { $0 + 1 }
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case paneId, sessionId, axis, ratio, first, second
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            if let axis = try values.decodeIfPresent(String.self, forKey: .axis), !axis.isEmpty {
+                self = .split(
+                    axis: axis,
+                    ratio: try values.decodeIfPresent(Double.self, forKey: .ratio) ?? 0.5,
+                    first: try values.decode(PaneNode.self, forKey: .first),
+                    second: try values.decode(PaneNode.self, forKey: .second)
+                )
+                return
+            }
+            let sessionID = try values.decodeIfPresent(String.self, forKey: .sessionId) ?? ""
+            self = .leaf(
+                paneID: try values.decodeIfPresent(String.self, forKey: .paneId),
+                sessionID: sessionID
+            )
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            switch self {
+            case .leaf(let paneID, let sessionID):
+                try values.encodeIfPresent(paneID, forKey: .paneId)
+                try values.encode(sessionID, forKey: .sessionId)
+            case .split(let axis, let ratio, let firstChild, let secondChild):
+                try values.encode(axis, forKey: .axis)
+                try values.encode(ratio, forKey: .ratio)
+                try values.encode(firstChild, forKey: .first)
+                try values.encode(secondChild, forKey: .second)
+            }
+        }
+
+        /// Replaces one session's pane, keeping pane identity and geometry, which
+        /// is what a client does before it offers a local edit.
+        public func replacingSession(_ sessionID: String, with replacement: String) -> PaneNode? {
+            switch self {
+            case .leaf(let paneID, let existing):
+                guard existing == sessionID else { return nil }
+                return .leaf(paneID: paneID, sessionID: replacement)
+            case .split(let axis, let ratio, let first, let second):
+                if let updated = first.replacingSession(sessionID, with: replacement) {
+                    return .split(axis: axis, ratio: ratio, first: updated, second: second)
+                }
+                if let updated = second.replacingSession(sessionID, with: replacement) {
+                    return .split(axis: axis, ratio: ratio, first: first, second: updated)
+                }
+                return nil
+            }
+        }
+    }
+
+    public struct PaneGroup: Codable, Equatable, Hashable, Sendable, Identifiable {
+        public let id: String
+        public let workspace: String?
+        public let terminalGroup: String?
+        public let scope: String?
+        public let name: String?
+        public let order: Int
+        public let tree: PaneNode
+        /// The compare-and-swap token for `pane-group.update`. A rename or a
+        /// reorder is not a tree change and leaves it alone.
+        public let revision: UInt64
+        public let createdAt: String?
+        public let updatedAt: String?
+
+        public init(
+            id: String,
+            workspace: String? = nil,
+            terminalGroup: String? = nil,
+            scope: String? = nil,
+            name: String? = nil,
+            order: Int = 0,
+            tree: PaneNode,
+            revision: UInt64 = 0,
+            createdAt: String? = nil,
+            updatedAt: String? = nil
+        ) {
+            self.id = id
+            self.workspace = workspace
+            self.terminalGroup = terminalGroup
+            self.scope = scope
+            self.name = name
+            self.order = order
+            self.tree = tree
+            self.revision = revision
+            self.createdAt = createdAt
+            self.updatedAt = updatedAt
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, workspace, terminalGroup, scope, name, order, tree, revision, createdAt, updatedAt
+        }
+
+        /// The Host omits an empty name, a zero order, and a zero revision, so
+        /// every optional-shaped field is decoded with a default rather than
+        /// required. A delta upsert is a partial record in the same way a
+        /// Session upsert is.
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decode(String.self, forKey: .id)
+            workspace = try values.decodeIfPresent(String.self, forKey: .workspace)
+            terminalGroup = try values.decodeIfPresent(String.self, forKey: .terminalGroup)
+            scope = try values.decodeIfPresent(String.self, forKey: .scope)
+            name = try values.decodeIfPresent(String.self, forKey: .name)
+            order = try values.decodeIfPresent(Int.self, forKey: .order) ?? 0
+            tree = try values.decode(PaneNode.self, forKey: .tree)
+            revision = try values.decodeIfPresent(UInt64.self, forKey: .revision) ?? 0
+            createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
+            updatedAt = try values.decodeIfPresent(String.self, forKey: .updatedAt)
+        }
+
+        /// The Workspace or Terminal Group that owns the arrangement.
+        public var ownerID: String { workspace ?? terminalGroup ?? "" }
+
+        public var ownerScope: SessionScope {
+            if let scope, let parsed = SessionScope(rawValue: scope) {
+                return parsed
+            }
+            return terminalGroup == nil ? .workspace : .terminalGroup
+        }
+
+        public var paneCount: Int { tree.paneCount }
+
+        public func paneIndex(forSession sessionID: String) -> Int? {
+            tree.paneIndex(forSession: sessionID)
+        }
+    }
+
     public enum SessionScope: String, Codable, Hashable, Sendable {
         case workspace
         case terminalGroup
@@ -752,9 +932,9 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let agentProvider: String?
         public let agentHandler: String?
         public let command: String?
-        public let commandLine: String?
-        public let process: String?
-        public let directory: String?
+        public var commandLine: String?
+        public var process: String?
+        public var directory: String?
         public let runtime: String?
         public let runtimeKind: String?
         public let lifecycle: String
@@ -998,6 +1178,50 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         }
     }
 
+    /// One Session's high-frequency foreground metadata, projected separately
+    /// so a directory change does not retransmit the whole Session entity.
+    public struct SessionMetadata: Codable, Equatable, Hashable, Sendable {
+        public let id: String
+        public let process: String?
+        public let commandLine: String?
+        public let directory: String?
+
+        public init(
+            id: String,
+            process: String? = nil,
+            commandLine: String? = nil,
+            directory: String? = nil
+        ) {
+            self.id = id
+            self.process = process
+            self.commandLine = commandLine
+            self.directory = directory
+        }
+    }
+
+    /// Upsert-only metadata diff. An omitted field means empty, not unchanged.
+    public struct SessionMetadataChanges: Codable, Equatable, Hashable, Sendable {
+        public let upsert: [SessionMetadata]
+
+        public init(upsert: [SessionMetadata] = []) {
+            self.upsert = upsert
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case upsert
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            upsert = try values.decodeIfPresent([SessionMetadata].self, forKey: .upsert) ?? []
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(upsert, forKey: .upsert)
+        }
+    }
+
     public struct Delta: Codable, Equatable, Hashable, Sendable {
         public let baseRevision: UInt64
         public let revision: UInt64
@@ -1006,7 +1230,9 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let projects: EntityChanges<Project>?
         public let workspaces: EntityChanges<Workspace>?
         public let terminalGroups: EntityChanges<TerminalGroup>?
+        public let paneGroups: EntityChanges<PaneGroup>?
         public let sessions: EntityChanges<Session>?
+        public let sessionMetadata: SessionMetadataChanges?
 
         public init(
             baseRevision: UInt64,
@@ -1016,7 +1242,9 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             projects: EntityChanges<Project>? = nil,
             workspaces: EntityChanges<Workspace>? = nil,
             terminalGroups: EntityChanges<TerminalGroup>? = nil,
-            sessions: EntityChanges<Session>? = nil
+            paneGroups: EntityChanges<PaneGroup>? = nil,
+            sessions: EntityChanges<Session>? = nil,
+            sessionMetadata: SessionMetadataChanges? = nil
         ) {
             self.baseRevision = baseRevision
             self.revision = revision
@@ -1025,14 +1253,18 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.projects = projects
             self.workspaces = workspaces
             self.terminalGroups = terminalGroups
+            self.paneGroups = paneGroups
             self.sessions = sessions
+            self.sessionMetadata = sessionMetadata
         }
 
         private enum CodingKeys: String, CodingKey {
             case baseRevision, revision, host, tasks, projects, workspaces
             case terminalGroups
+            case paneGroups
             case groups
             case sessions
+            case sessionMetadata
         }
 
         public init(from decoder: Decoder) throws {
@@ -1045,7 +1277,9 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             workspaces = try values.decodeIfPresent(EntityChanges<Workspace>.self, forKey: .workspaces)
             terminalGroups = try values.decodeIfPresent(EntityChanges<TerminalGroup>.self, forKey: .terminalGroups)
                 ?? values.decodeIfPresent(EntityChanges<TerminalGroup>.self, forKey: .groups)
+            paneGroups = try values.decodeIfPresent(EntityChanges<PaneGroup>.self, forKey: .paneGroups)
             sessions = try values.decodeIfPresent(EntityChanges<Session>.self, forKey: .sessions)
+            sessionMetadata = try values.decodeIfPresent(SessionMetadataChanges.self, forKey: .sessionMetadata)
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -1057,7 +1291,9 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             try values.encodeIfPresent(projects, forKey: .projects)
             try values.encodeIfPresent(workspaces, forKey: .workspaces)
             try values.encodeIfPresent(terminalGroups, forKey: .terminalGroups)
+            try values.encodeIfPresent(paneGroups, forKey: .paneGroups)
             try values.encodeIfPresent(sessions, forKey: .sessions)
+            try values.encodeIfPresent(sessionMetadata, forKey: .sessionMetadata)
         }
     }
 
@@ -1086,6 +1322,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
     public let projects: [Project]
     public let workspaces: [Workspace]
     public let terminalGroups: [TerminalGroup]
+    public let paneGroups: [PaneGroup]
     public let sessions: [Session]
 
     public init(
@@ -1096,6 +1333,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         projects: [Project] = [],
         workspaces: [Workspace] = [],
         terminalGroups: [TerminalGroup] = [],
+        paneGroups: [PaneGroup] = [],
         sessions: [Session] = []
     ) {
         self.schema = schema
@@ -1105,11 +1343,12 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         self.projects = projects
         self.workspaces = workspaces
         self.terminalGroups = terminalGroups
+        self.paneGroups = paneGroups
         self.sessions = sessions
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schema, revision, host, tasks, projects, workspaces, terminalGroups, sessions
+        case schema, revision, host, tasks, projects, workspaces, terminalGroups, paneGroups, sessions
     }
 
     public init(from decoder: Decoder) throws {
@@ -1121,6 +1360,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         projects = try values.decodeIfPresent([Project].self, forKey: .projects) ?? []
         workspaces = try values.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
         terminalGroups = try values.decodeIfPresent([TerminalGroup].self, forKey: .terminalGroups) ?? []
+        paneGroups = try values.decodeIfPresent([PaneGroup].self, forKey: .paneGroups) ?? []
         sessions = try values.decodeIfPresent([Session].self, forKey: .sessions) ?? []
     }
 
@@ -1136,8 +1376,34 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             projects: Self.applying(projects, changes: delta.projects, id: \.id),
             workspaces: Self.applying(workspaces, changes: delta.workspaces, id: \.id),
             terminalGroups: Self.applying(terminalGroups, changes: delta.terminalGroups, id: \.id),
-            sessions: Self.applying(sessions, changes: delta.sessions, id: \.id)
+            paneGroups: Self.applying(paneGroups, changes: delta.paneGroups, id: \.id),
+            sessions: Self.applying(
+                Self.applyingMetadata(sessions, changes: delta.sessionMetadata),
+                changes: delta.sessions,
+                id: \.id
+            )
         )
+    }
+
+    // Metadata travels separately from the Session entity, so it is applied
+    // first and then any entity upsert overrides it with the full record.
+    private static func applyingMetadata(
+        _ current: [Session],
+        changes: SessionMetadataChanges?
+    ) -> [Session] {
+        guard let changes, !changes.upsert.isEmpty else { return current }
+        var byID: [String: SessionMetadata] = [:]
+        for change in changes.upsert {
+            byID[change.id] = change
+        }
+        return current.map { session in
+            guard let change = byID[session.id] else { return session }
+            var updated = session
+            updated.process = change.process
+            updated.commandLine = change.commandLine
+            updated.directory = change.directory
+            return updated
+        }
     }
 
     private static func applying<Value: Codable & Sendable & Equatable>(

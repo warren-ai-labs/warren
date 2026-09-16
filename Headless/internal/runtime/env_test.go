@@ -133,17 +133,17 @@ func TestCleanEnvironmentKeepsOnlyValidSSHAgentSocket(t *testing.T) {
 }
 
 func TestShellCommandWithUnsetsUsesLoginShell(t *testing.T) {
-	command, err := ShellCommandWithUnsets("/bin/sh", []string{"CODEX_SESSION_ID", "PAGER", "CODEX_SESSION_ID"})
+	command, err := ShellCommandWithUnsets("/bin/sh", LoginShellArgs(), []string{"CODEX_SESSION_ID", "PAGER", "CODEX_SESSION_ID"})
 	if err != nil {
 		t.Fatalf("ShellCommandWithUnsets: %v", err)
 	}
-	if want := "unset CODEX_SESSION_ID PAGER; exec '/bin/sh' -il"; command != want {
+	if want := "unset CODEX_SESSION_ID PAGER; exec '/bin/sh' '-il'"; command != want {
 		t.Fatalf("command = %q, want %q", command, want)
 	}
 	if got := LoginShellArgs(); len(got) != 1 || got[0] != "-il" {
 		t.Fatalf("LoginShellArgs = %#v, want [-il]", got)
 	}
-	if _, err := ShellCommandWithUnsets("/bin/sh", []string{"BAD-NAME"}); err == nil {
+	if _, err := ShellCommandWithUnsets("/bin/sh", LoginShellArgs(), []string{"BAD-NAME"}); err == nil {
 		t.Fatal("invalid unset key was accepted")
 	}
 }

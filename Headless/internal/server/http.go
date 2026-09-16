@@ -2807,6 +2807,64 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, map[string]bool{"moved": true})
+	case "pane-group.create":
+		workspaceID := stringParam(params, "workspace")
+		groupID := stringParam(params, "group")
+		if workspaceID != "" && groupID != "" {
+			return errors.New("workspace and terminal group are mutually exclusive")
+		}
+		ownerScope := api.SessionScopeWorkspace
+		ownerID := workspaceID
+		if groupID != "" {
+			ownerScope = api.SessionScopeTerminalGroup
+			ownerID = groupID
+		}
+		value, err := p.server.Service.CreatePaneGroup(
+			ownerScope,
+			ownerID,
+			stringParam(params, "session"),
+			stringParam(params, "name"),
+			stringParam(params, "before"),
+		)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
+	case "pane-group.rename":
+		value, err := p.server.Service.RenamePaneGroup(stringParam(params, "id"), stringParam(params, "name"))
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
+	case "pane-group.move":
+		value, err := p.server.Service.MovePaneGroup(stringParam(params, "id"), stringParam(params, "before"))
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
+	case "pane-group.remove":
+		if err := p.server.Service.RemovePaneGroup(stringParam(params, "id")); err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]bool{"removed": true})
+	case "pane-group.update":
+		id := stringParam(params, "id")
+		if id == "" {
+			return errors.New("pane group ID is required")
+		}
+		tree, err := paneNodeParam(params)
+		if err != nil {
+			return err
+		}
+		expected, ok := uint64Param(params, "expectedRevision")
+		if !ok {
+			return errors.New("expectedRevision is required: a structural edit must name the revision it observed")
+		}
+		value, err := p.server.Service.UpdatePaneGroup(id, tree, expected)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
 	case "session.create":
 		var value api.Session
 		var err error
@@ -3023,7 +3081,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		p.server.Service.registerPeer(session.ID, p)
 		attachmentID := p.ensureAttachment(session.ID)
 		if claimControl {
-			if _, focusErr := p.server.Service.focusPeerLocked(ctx, p, session, true, columns, rows, sizeSpecified); focusErr != nil {
+			if _, focusErr := p.server.Service.focusPeerLocked(ctx, p, session, true, columns, rows, sizeSpecified, false); focusErr != nil {
 				lock.Unlock()
 				resume()
 				p.server.Service.detachPeer(p, session.ID)
@@ -3144,6 +3202,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			columns,
 			rows,
 			resizeSpecified && focused,
+			// The lease is granted before the size is applied, so a slow PTY
+			// resize can no longer delay the focus reply or the next command.
+			true,
 		)
 		if err != nil {
 			return err
@@ -4062,6 +4123,25 @@ func (p *wsPeer) releaseControl(sessionID string) {
 		p.controlSession = ""
 	}
 	p.enqueueMu.Unlock()
+}
+
+// paneNodeParam decodes the PaneNode tree of a pane-group request through JSON
+// so a WebSocket client and the Go client share one wire shape, exactly as
+// decodeAgentParams does for structured Agent parameters.
+func paneNodeParam(values map[string]any) (api.PaneNode, error) {
+	raw, present := values["tree"]
+	if !present || raw == nil {
+		return api.PaneNode{}, errors.New("pane group tree is required")
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return api.PaneNode{}, fmt.Errorf("invalid request parameters: %w", err)
+	}
+	var tree api.PaneNode
+	if err := json.Unmarshal(data, &tree); err != nil {
+		return api.PaneNode{}, fmt.Errorf("invalid pane tree: %w", err)
+	}
+	return tree, nil
 }
 
 func stringParam(values map[string]any, key string) string {

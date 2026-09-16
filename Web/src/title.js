@@ -1,4 +1,4 @@
-export const defaultTitleTemplate = "{session} · {directory} · {command}";
+export const defaultTitleTemplate = "{session} · {directoryName} · {command}";
 
 export const titlePlaceholders = {
   session: "Session name",
@@ -50,9 +50,14 @@ export function renderCompactTerminalTitle(template, session = {}, workspace = {
 }
 
 function titleValues(session, workspace, host, directory) {
+  const command = resolvedCommand(session);
+  const customTitle = String(session.customTitle || "").trim();
+  const generatedTitle = String(session.title || "").trim();
   return {
-    session: sessionDisplayTitle(session) || "Session",
-    command: resolvedCommand(session),
+    // The generated default repeats the kind the icon already shows, so it
+    // only stands in when the directory and command are both empty.
+    session: customTitle || ((directory || command) ? "" : generatedTitle),
+    command,
     directory,
     directoryName: directoryName(directory),
     workspace: workspace.name || "",

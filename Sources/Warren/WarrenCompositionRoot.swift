@@ -192,6 +192,9 @@ struct WarrenCompositionRoot: View {
                 remoteModel.ensureVisibleSessions(sessions)
                 remoteModel.reportActiveScreenSessions(sessions)
             },
+            onCommitPaneTree: { owner, tree in
+                remoteModel.commitPaneTree(owner: owner, tree: tree)
+            },
             endpointOptions: endpointOptions,
             selectedEndpointID: selectedEndpointID,
             onSelectEndpoint: { id in selectEndpoint(id) },

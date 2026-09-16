@@ -29,4 +29,9 @@ public enum WarrenDesktopCommand {
     public static let closePane = Notification.Name("WarrenDesktopCommand.closePane")
     public static let maximizePane = Notification.Name("WarrenDesktopCommand.maximizePane")
     public static let otherPane = Notification.Name("WarrenDesktopCommand.otherPane")
+    /// Steps to another arrangement of the same scope. Pane geometry is relative
+    /// to the whole content area, so swapping the arrangement swaps the screen;
+    /// only one is rendered at a time.
+    public static let nextPaneGroup = Notification.Name("WarrenDesktopCommand.nextPaneGroup")
+    public static let previousPaneGroup = Notification.Name("WarrenDesktopCommand.previousPaneGroup")
 }

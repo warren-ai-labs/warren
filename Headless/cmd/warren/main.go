@@ -24,6 +24,7 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/client"
 	"github.com/abcdlsj/warren/Headless/internal/config"
+	"github.com/abcdlsj/warren/Headless/internal/pane"
 	"github.com/abcdlsj/warren/Headless/internal/sshclient"
 	"github.com/abcdlsj/warren/Headless/internal/store"
 )
@@ -110,7 +111,7 @@ func run(arguments []string) error {
 		return sshCommand(args[1:])
 	case "agent":
 		return agentCommand(args[1:])
-	case "task", "project", "workspace", "worktree", "terminal-group", "group", "session":
+	case "task", "project", "workspace", "worktree", "terminal-group", "group", "session", "pane":
 		if args[0] == "task" && len(args) > 1 && args[1] == "workspace" {
 			return taskWorkspaceCommand(args[2:])
 		}
@@ -1054,6 +1055,10 @@ var resourceActions = map[string]map[string]bool{
 		"kill": true, "rename": true, "pin": true, "move": true, "send": true, "read": true,
 		"current": true, "panes": true, "undo": true,
 	},
+	"pane": {
+		"list": true, "create": true, "split": true, "close": true,
+		"rename": true, "move": true, "remove": true, "delete": true,
+	},
 }
 
 func knownResourceAction(resource, action string) bool {
@@ -1079,6 +1084,8 @@ func requiredPositionals(resource, action string) []string {
 	case "session.remove", "session.delete", "session.kill", "session.rename", "session.pin", "session.move",
 		"session.send", "session.read":
 		return []string{"SESSION_ID"}
+	case "pane.rename", "pane.move", "pane.remove", "pane.delete":
+		return []string{"PANE_GROUP_ID"}
 	case "session.undo":
 		return []string{"OPERATION_ID"}
 	}
@@ -1121,6 +1128,28 @@ func missingRequiredFlag(resource, action string, params map[string]any) string 
 	case "terminal-group.home":
 		if stringValue(params, "path") == "" {
 			return "--path PATH"
+		}
+	case "pane.rename":
+		if stringValue(params, "name") == "" {
+			return "--name NAME"
+		}
+	case "pane.create":
+		if stringValue(params, "workspace") == "" && stringValue(params, "group") == "" {
+			return "--workspace WORKSPACE_ID or --group GROUP_ID"
+		}
+		if stringValue(params, "session") == "" {
+			return "--session SESSION_ID"
+		}
+	case "pane.split":
+		if stringValue(params, "pane") == "" {
+			return "--pane PANE_ID"
+		}
+		if stringValue(params, "session") == "" {
+			return "--session SESSION_ID"
+		}
+	case "pane.close":
+		if stringValue(params, "pane") == "" {
+			return "--pane PANE_ID"
 		}
 	}
 	return ""
@@ -1410,11 +1439,18 @@ func resourceCommand(args []string) error {
 		return printValue(currentSessionValue{Session: session, WarrenSessionID: session.ID, AgentThreadID: session.AgentSessionID, Current: true})
 	}
 	if resource == "session" && action == "panes" {
+		// The arrangement is durable Host state, so the pane list comes from the
+		// roster. Peer telemetry only adds which connected client is displaying
+		// the Session right now.
+		state, err := c.Roster(ctx)
+		if err != nil {
+			return err
+		}
 		var result api.ScreenPanesResult
 		if err := c.Request(ctx, "screen.panes", map[string]any{"id": resolvedPanesID}, &result); err != nil {
 			return err
 		}
-		return printValue(screenPaneRows(result))
+		return printValue(screenPaneRows(state, resolvedPanesID, result))
 	}
 	if action == "list" {
 		state, err := c.Roster(ctx)
@@ -1446,6 +1482,12 @@ func resourceCommand(args []string) error {
 			return printValue(limitListRows(filtered, limit))
 		case "terminal-group":
 			filtered, err := filterTerminalGroupRows(state.TerminalGroups, params)
+			if err != nil {
+				return newUsageError(err.Error(), actionUsageText(commandName, action))
+			}
+			return printValue(limitListRows(filtered, limit))
+		case "pane":
+			filtered, err := filterPaneGroupRows(state.PaneGroups, params)
 			if err != nil {
 				return newUsageError(err.Error(), actionUsageText(commandName, action))
 			}
@@ -1539,6 +1581,22 @@ func resourceCommand(args []string) error {
 	case "terminal-group.move":
 		method = "terminal-group.move"
 		result = &map[string]any{}
+	case "pane.create":
+		method = "pane-group.create"
+		result = &api.PaneGroup{}
+	case "pane.rename":
+		method = "pane-group.rename"
+		result = &api.PaneGroup{}
+	case "pane.move":
+		method = "pane-group.move"
+		result = &api.PaneGroup{}
+	case "pane.remove", "pane.delete":
+		method = "pane-group.remove"
+		result = &map[string]any{}
+	case "pane.split":
+		return paneSplit(ctx, c, params)
+	case "pane.close":
+		return paneClose(ctx, c, params)
 	case "session.create", "session.add":
 		method = "session.create"
 		result = &api.Session{}
@@ -4459,6 +4517,11 @@ func printValue(value any) error {
 				fmt.Println(item.ID)
 			}
 			return nil
+		case []api.PaneGroup:
+			for _, item := range items {
+				fmt.Println(item.ID)
+			}
+			return nil
 		case []SessionRow:
 			for _, item := range items {
 				fmt.Println(item.ID)
@@ -4571,18 +4634,24 @@ func printValue(value any) error {
 			rows = append(rows, terminalGroupRowCells(item))
 		}
 		printTable([]string{"ID", "NAME", "HOME", "ORDER", "CREATED"}, rows...)
+	case []api.PaneGroup:
+		rows := make([][]string, 0, len(items))
+		for _, item := range items {
+			rows = append(rows, paneGroupRowCells(item))
+		}
+		printTable([]string{"ID", "SCOPE", "OWNER", "NAME", "PANES", "ORDER", "REVISION", "SESSIONS"}, rows...)
 	case []SessionRow:
 		rows := make([][]string, 0, len(items))
 		for _, item := range items {
 			rows = append(rows, sessionRowCells(item))
 		}
-		printTable([]string{"WARREN SESSION ID", "PROJECT", "WORKSPACE", "GROUP", "BRANCH", "TITLE", "CURRENT", "KIND", "COMMAND", "AGENT/THREAD ID", "TRANSCRIPT PATH", "LIFECYCLE", "ACTIVITY", "ENDED AT", "PINNED", "CREATED"}, rows...)
+		printTable([]string{"WARREN SESSION ID", "PROJECT", "WORKSPACE", "GROUP", "BRANCH", "TITLE", "CURRENT", "KIND", "COMMAND", "RUN", "CWD", "AGENT/THREAD ID", "TRANSCRIPT PATH", "LIFECYCLE", "ACTIVITY", "ENDED AT", "PINNED", "CREATED"}, rows...)
 	case []ScreenPaneRow:
 		rows := make([][]string, 0, len(items))
 		for _, item := range items {
 			rows = append(rows, screenPaneRowCells(item))
 		}
-		printTable([]string{"SCREEN", "PANE", "WARREN SESSION ID", "TITLE", "CURRENT"}, rows...)
+		printTable([]string{"GROUP", "NAME", "PANE", "PANE ID", "WARREN SESSION ID", "TITLE", "REVISION", "SCREEN", "CURRENT"}, rows...)
 	case api.WorkspaceCreateResult:
 		printKVTable(workspaceCreateResultPairs(items))
 	case *api.WorkspaceCreateResult:
@@ -4732,6 +4801,8 @@ func sessionRowCells(item SessionRow) []string {
 		displayBool(item.Current),
 		item.Kind,
 		displayTruncated(item.Command, 30),
+		displayTruncated(sessionForegroundCommand(item.Session), 40),
+		displayTruncated(item.Directory, 40),
 		displayTruncated(item.AgentSessionID, 20),
 		displayTruncatedPath(item.TranscriptPath, 30),
 		item.Lifecycle,
@@ -4740,6 +4811,16 @@ func sessionRowCells(item SessionRow) []string {
 		displayBool(item.Pinned),
 		formatTime(item.CreatedAt),
 	}
+}
+
+// sessionForegroundCommand is the command line currently running in a Session,
+// which is more useful than the fixed launch command once a shell has started
+// something. It falls back to the foreground process name.
+func sessionForegroundCommand(session api.Session) string {
+	if value := strings.TrimSpace(session.CommandLine); value != "" {
+		return value
+	}
+	return strings.TrimSpace(session.Process)
 }
 
 func workspaceCreateResultPairs(value api.WorkspaceCreateResult) [][2]string {
@@ -4836,32 +4917,274 @@ func currentSessionPairs(value currentSessionValue) [][2]string {
 	return pairs
 }
 
-// ScreenPaneRow flattens the screens returned by `screen.panes` for tabular
-// output. Screen numbers the client screen, so a Session displayed by two
-// windows at once stays readable as two groups of rows.
+// ScreenPaneRow flattens one Session's arrangement and screens for tabular
+// output. The GROUP/PANE cells describe the durable Host arrangement, which
+// exists whether or not any client is connected; the SCREEN cell names a
+// connected client that is displaying the Session right now, so a Session
+// displayed by two windows at once stays readable as two groups of rows.
 type ScreenPaneRow struct {
-	Screen int `json:"screen"`
-	api.ScreenPane
+	Screen     int    `json:"screen,omitempty"`
+	Group      string `json:"group"`
+	GroupName  string `json:"groupName,omitempty"`
+	Revision   uint64 `json:"revision,omitempty"`
+	Pane       int    `json:"pane"`
+	PaneID     string `json:"paneId"`
+	SessionID  string `json:"sessionId"`
+	Title      string `json:"title,omitempty"`
+	Current    bool   `json:"current,omitempty"`
+	Displayed  bool   `json:"displayed,omitempty"`
+	OnScreenAt int    `json:"onScreenPane,omitempty"`
 }
 
-func screenPaneRows(result api.ScreenPanesResult) []ScreenPaneRow {
-	rows := make([]ScreenPaneRow, 0, len(result.Screens))
+// screenPaneRows joins the Host's arrangement with the peer telemetry: the
+// roster says how the Session is arranged, `screen.panes` says who is showing
+// it. A Session in no group is reported once with a blank group, so "not
+// arranged" stays distinguishable from "not displayed".
+func screenPaneRows(state api.State, sessionID string, result api.ScreenPanesResult) []ScreenPaneRow {
+	displayedAt := make(map[string]int)
 	for index, screen := range result.Screens {
 		for _, pane := range screen.Panes {
-			rows = append(rows, ScreenPaneRow{Screen: index + 1, ScreenPane: pane})
+			if pane.SessionID == sessionID {
+				displayedAt[pane.SessionID] = index + 1
+			}
+		}
+	}
+	titles := make(map[string]string, len(state.Sessions))
+	for _, session := range state.Sessions {
+		title := session.CustomTitle
+		if strings.TrimSpace(title) == "" {
+			title = session.Title
+		}
+		titles[session.ID] = title
+	}
+	for _, group := range state.PaneGroups {
+		for index, leaf := range pane.Leaves(&group.Tree) {
+			if leaf.SessionID != sessionID {
+				continue
+			}
+			return []ScreenPaneRow{{
+				Screen:     displayedAt[sessionID],
+				Group:      group.ID,
+				GroupName:  group.Name,
+				Revision:   group.Revision,
+				Pane:       index + 1,
+				PaneID:     leaf.PaneID,
+				SessionID:  leaf.SessionID,
+				Title:      titles[leaf.SessionID],
+				Current:    true,
+				Displayed:  displayedAt[sessionID] > 0,
+				OnScreenAt: displayedAt[sessionID],
+			}}
+		}
+	}
+	// No arrangement holds the Session: fall back to what connected clients are
+	// showing, so an unplaced Tab stays readable.
+	if len(result.Screens) == 0 {
+		return nil
+	}
+	rows := make([]ScreenPaneRow, 0, len(result.Screens))
+	for _, screen := range result.Screens {
+		for _, pane := range screen.Panes {
+			rows = append(rows, ScreenPaneRow{
+				Pane:       pane.Index,
+				SessionID:  pane.SessionID,
+				Title:      pane.Title,
+				Current:    pane.Current,
+				Displayed:  true,
+				Screen:     screen.Position,
+				OnScreenAt: screen.Position,
+			})
 		}
 	}
 	return rows
 }
 
 func screenPaneRowCells(row ScreenPaneRow) []string {
+	screen := "-"
+	if row.Displayed {
+		screen = strconv.Itoa(row.Screen)
+	}
+	revision := "-"
+	if row.Revision > 0 {
+		revision = strconv.FormatUint(row.Revision, 10)
+	}
 	return []string{
-		strconv.Itoa(row.Screen),
-		strconv.Itoa(row.Index),
+		displayValue(row.Group),
+		displayValue(row.GroupName),
+		strconv.Itoa(row.Pane),
+		displayValue(row.PaneID),
 		row.SessionID,
 		displayValue(row.Title),
+		revision,
+		screen,
 		displayBool(row.Current),
 	}
+}
+
+// filterPaneGroupRows applies `--workspace`, `--group`, and `--search` to the
+// roster's arrangements. It never opens a second request: the roster is the
+// list.
+func filterPaneGroupRows(groups []api.PaneGroup, params map[string]any) ([]api.PaneGroup, error) {
+	workspaceID := stringValue(params, "workspace")
+	groupID := stringValue(params, "group")
+	if workspaceID != "" && groupID != "" {
+		return nil, fmt.Errorf("--workspace and --group are mutually exclusive")
+	}
+	search := strings.ToLower(strings.TrimSpace(stringValue(params, "search")))
+	result := make([]api.PaneGroup, 0, len(groups))
+	for _, group := range groups {
+		if workspaceID != "" && group.WorkspaceID != workspaceID {
+			continue
+		}
+		if groupID != "" && group.TerminalGroupID != groupID {
+			continue
+		}
+		if search != "" {
+			haystack := strings.ToLower(group.ID + " " + group.Name + " " + group.OwnerID())
+			if !strings.Contains(haystack, search) {
+				continue
+			}
+		}
+		result = append(result, group)
+	}
+	return result, nil
+}
+
+func paneGroupRowCells(group api.PaneGroup) []string {
+	owner := group.WorkspaceID
+	if group.TerminalGroupID != "" {
+		owner = group.TerminalGroupID
+	}
+	return []string{
+		group.ID,
+		group.OwnerScope(),
+		displayValue(owner),
+		displayValue(group.Name),
+		strconv.Itoa(pane.Count(&group.Tree)),
+		strconv.Itoa(group.Order),
+		strconv.FormatUint(group.Revision, 10),
+		strings.Join(pane.Sessions(&group.Tree), ","),
+	}
+}
+
+// paneGroupContaining finds the group that shows one pane, or that holds one
+// Session when paneID is empty.
+func paneGroupContaining(state api.State, paneID, sessionID string) (api.PaneGroup, bool) {
+	for _, group := range state.PaneGroups {
+		if paneID != "" {
+			if pane.Find(&group.Tree, paneID) != nil {
+				return group, true
+			}
+			continue
+		}
+		for _, leaf := range pane.Leaves(&group.Tree) {
+			if leaf.SessionID == sessionID {
+				return group, true
+			}
+		}
+	}
+	return api.PaneGroup{}, false
+}
+
+// paneSplit reads the arrangement from the roster, adds one pane around an
+// existing Session, and writes the replacement tree back under the revision it
+// observed. The read-compute-write is one compare-and-swap: a concurrent edit
+// fails with a revision conflict instead of being overwritten.
+func paneSplit(ctx context.Context, c *client.Client, params map[string]any) error {
+	paneID := stringValue(params, "pane")
+	sessionID := stringValue(params, "session")
+	axis := pane.AxisHorizontal
+	switch strings.ToLower(stringValue(params, "axis")) {
+	case "", pane.AxisHorizontal:
+	case pane.AxisVertical:
+		axis = pane.AxisVertical
+	default:
+		return newUsageError("--axis must be horizontal or vertical", actionUsageText("pane", "split"))
+	}
+	state, err := c.Roster(ctx)
+	if err != nil {
+		return err
+	}
+	group, ok := paneGroupContaining(state, paneID, "")
+	if !ok {
+		return fmt.Errorf("pane group not found for pane: %s", paneID)
+	}
+	for _, existing := range pane.Leaves(&group.Tree) {
+		if existing.SessionID == sessionID {
+			return fmt.Errorf("pane group session in use: %s is already shown by pane group %s", sessionID, group.ID)
+		}
+	}
+	before := boolValue(params, "before")
+	tree := clonePaneTree(&group.Tree)
+	// Split returns the new root: splitting the root leaf replaces it rather
+	// than mutating in place, so the returned value has to be used.
+	splitted, err := pane.Split(tree, paneID, axis, before, api.PaneNode{SessionID: sessionID})
+	if err != nil {
+		return err
+	}
+	tree = splitted
+	var updated api.PaneGroup
+	if err := c.Request(ctx, "pane-group.update", map[string]any{
+		"id":               group.ID,
+		"tree":             tree,
+		"expectedRevision": group.Revision,
+	}, &updated); err != nil {
+		return err
+	}
+	return printValue(updated)
+}
+
+// paneClose removes one pane from its arrangement. The Session keeps running:
+// closing a pane is a layout edit, and ending a Session stays an explicit
+// Session command. The last pane of a group removes the group.
+func paneClose(ctx context.Context, c *client.Client, params map[string]any) error {
+	paneID := stringValue(params, "pane")
+	state, err := c.Roster(ctx)
+	if err != nil {
+		return err
+	}
+	group, ok := paneGroupContaining(state, paneID, "")
+	if !ok {
+		return fmt.Errorf("pane group not found for pane: %s", paneID)
+	}
+	tree := clonePaneTree(&group.Tree)
+	next, err := pane.Remove(tree, paneID)
+	if err != nil {
+		return err
+	}
+	if next == nil {
+		var removed map[string]any
+		if err := c.Request(ctx, "pane-group.remove", map[string]any{"id": group.ID}, &removed); err != nil {
+			return err
+		}
+		return printValue(map[string]any{"closed": true, "groupRemoved": true, "session": group.Tree.SessionID})
+	}
+	var updated api.PaneGroup
+	if err := c.Request(ctx, "pane-group.update", map[string]any{
+		"id":               group.ID,
+		"tree":             next,
+		"expectedRevision": group.Revision,
+	}, &updated); err != nil {
+		return err
+	}
+	return printValue(updated)
+}
+
+// clonePaneTree copies a tree before a local edit, so a failed request cannot
+// leave a mutation on the caller's roster value.
+func clonePaneTree(node *api.PaneNode) *api.PaneNode {
+	if node == nil {
+		return nil
+	}
+	cloned := &api.PaneNode{
+		PaneID:    node.PaneID,
+		SessionID: node.SessionID,
+		Axis:      node.Axis,
+		Ratio:     node.Ratio,
+	}
+	cloned.First = clonePaneTree(node.First)
+	cloned.Second = clonePaneTree(node.Second)
+	return cloned
 }
 
 func sessionMovePreflightPairs(value api.SessionMovePreflight) [][2]string {
@@ -5082,6 +5405,7 @@ Commands:
   project list|add|remove|rename|pin|move
   workspace list|create|remove|rename|pin|move  (alias: worktree)
   terminal-group list|create|remove|rename|home|move  (alias: group)
+  pane list|create|split|close|rename|move|remove
   session list|current|create|delete|rename|pin|move|send|read|undo
   ssh list|TARGET                   list SSH aliases or start a tunnel
   headless [FLAGS]                  run the installed daemon
@@ -5339,6 +5663,22 @@ func resourceUsageText(commandName string) string {
 Session is a generic PTY resource. Use agent create for Codex, Claude, OpenCode, or Pi;
 Trae is only a shell preset and has no Agent transcript/activity semantics.
 `
+	case "pane":
+		return `Usage:
+  warren pane list [--workspace WORKSPACE_ID | --group GROUP_ID] [--search TEXT] [--all] [--limit N] [-q]
+  warren pane create (--workspace WORKSPACE_ID | --group GROUP_ID) --session SESSION_ID [--name NAME] [--before PANE_GROUP_ID]
+  warren pane split --pane PANE_ID --session SESSION_ID [--axis horizontal|vertical] [--before]
+  warren pane close --pane PANE_ID
+  warren pane rename PANE_GROUP_ID --name NAME
+  warren pane move PANE_GROUP_ID [--before OTHER_PANE_GROUP_ID]
+  warren pane remove PANE_GROUP_ID
+
+A pane is one whole-screen arrangement of Sessions, and several arrangements may
+coexist in one Workspace or Terminal Group. Only one is rendered at a time, so
+switching arrangements never changes how the others are laid out.
+Splitting and closing panes edit the arrangement only: a Session keeps running
+and stays reachable as an ordinary Tab. Use --json for the tree itself.
+`
 	}
 	return ""
 }
@@ -5377,6 +5717,20 @@ func actionUsageText(commandName, action string) string {
 		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--search TEXT] [--has-workspaces] [--pinned] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
 	case "terminal-group.list":
 		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--search TEXT] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
+	case "pane.list":
+		return fmt.Sprintf("Usage:\n  warren %s %s [--workspace WORKSPACE_ID | --group GROUP_ID] [--search TEXT] [--all] [--limit N] [-q]\n\nDefault output is limited to 10 rows. Use --all for the complete list, and -q for IDs only.\n", name, action)
+	case "pane.create":
+		return fmt.Sprintf("Usage:\n  warren %s create (--workspace WORKSPACE_ID | --group GROUP_ID) --session SESSION_ID [--name NAME] [--before PANE_GROUP_ID]\n", name)
+	case "pane.split":
+		return fmt.Sprintf("Usage:\n  warren %s split --pane PANE_ID --session SESSION_ID [--axis horizontal|vertical] [--before]\n\nThe new pane goes after the named pane unless --before is given.\n", name)
+	case "pane.close":
+		return fmt.Sprintf("Usage:\n  warren %s close --pane PANE_ID\n\nClosing the last pane of an arrangement removes the arrangement. The Session keeps running.\n", name)
+	case "pane.rename":
+		return fmt.Sprintf("Usage:\n  warren %s rename PANE_GROUP_ID --name NAME\n", name)
+	case "pane.move":
+		return fmt.Sprintf("Usage:\n  warren %s move PANE_GROUP_ID [--before OTHER_PANE_GROUP_ID]\n", name)
+	case "pane.remove", "pane.delete":
+		return fmt.Sprintf("Usage:\n  warren %s remove PANE_GROUP_ID\n\nThe arrangement is deleted; its Sessions keep running and stay reachable as Tabs.\n", name)
 	case "task.create", "task.add":
 		return fmt.Sprintf("Usage:\n  warren %s create --name NAME [--source SOURCE --external-id ID] [--url URL]\n", name)
 	case "task.remove", "task.delete":
@@ -5436,7 +5790,7 @@ func actionUsageText(commandName, action string) string {
 	case "session.current":
 		return fmt.Sprintf("Usage:\n  warren %s current\n", name)
 	case "session.panes":
-		return fmt.Sprintf("Usage:\n  warren %s panes [SESSION_ID] [--json] [-q]\n", name)
+		return fmt.Sprintf("Usage:\n  warren %s panes [SESSION_ID] [--json] [-q]\n\nGROUP/PANE columns come from the Host's arrangement; SCREEN names a connected client\nthat is displaying the Session right now, and is empty when none is.\n", name)
 	case "session.undo":
 		return fmt.Sprintf("Usage:\n  warren %s undo OPERATION_ID\n", name)
 	}

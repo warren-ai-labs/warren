@@ -132,9 +132,10 @@ struct WarrenDesktopSidebarRows: View {
                                 || hasDeletingWorkspace(in: group.project.id) {
                                 ForEach(group.workspaces) { workspace in
                                     WarrenDesktopSessionLeafGroup(
-                                        leafCount: showsSessionRows
-                                            ? activeSessions(in: workspace.id).count
-                                            : 0,
+                                        leafCount: ownsSessionLeaves(
+                                            workspace,
+                                            semanticScope: "project-list"
+                                        ) ? activeSessions(in: workspace.id).count : 0,
                                         mode: workspaceDisplayMode,
                                         workspaceGlyph: WarrenDesktopWorkspaceGlyph(workspace)
                                     ) {
@@ -146,7 +147,8 @@ struct WarrenDesktopSidebarRows: View {
                                     } leaves: {
                                         workspaceSessionRows(
                                             for: workspace,
-                                            project: group.project
+                                            project: group.project,
+                                            semanticScope: "project-list"
                                         )
                                     }
                                     .padding(.top, workspaceDisplayMode.sessionGroupSpacing)
@@ -380,27 +382,50 @@ struct WarrenDesktopSidebarRows: View {
         workspaceDisplayMode.isRich && !isCollapsed
     }
 
+    /// Whether a workspace's Session leaves belong to the copy rendered in
+    /// `semanticScope`.
+    ///
+    /// Leaves follow navigation: a Task-linked workspace routes selection to its
+    /// Task copy, so the Projects copy stays context-only. The collapsed rail
+    /// lists no leaves at all. The row and both call sites ask this one question,
+    /// so the leaf count and the leaf rows cannot disagree.
+    private func ownsSessionLeaves(
+        _ workspace: Workspace,
+        semanticScope: String
+    ) -> Bool {
+        showsSessionRows && !routesSelectionToTaskRow(workspace, semanticScope: semanticScope)
+    }
+
+    /// Whether this copy is context-only because the Task copy owns navigation.
+    private func routesSelectionToTaskRow(
+        _ workspace: Workspace,
+        semanticScope: String
+    ) -> Bool {
+        semanticScope == "project-list" && workspace.taskID != nil
+    }
+
     /// Whether the workspace row itself carries the selection fill.
     ///
     /// Opening a Session keeps its workspace as the navigation scope, so both
     /// rows match the selection. The leaf is the row the user clicked and the
     /// more specific answer, so it wins; the workspace states containment
-    /// instead.
+    /// instead. A copy that owns no leaf has nothing more specific to defer to,
+    /// so it keeps the fill for itself.
     private func isWorkspaceRowSelected(
         _ workspace: Workspace,
-        semanticScope: String
+        ownsSessionLeaves: Bool
     ) -> Bool {
         guard selection == .workspace(workspace.id) else { return false }
-        guard showsSessionRows, semanticScope == "project-list" else { return true }
+        guard ownsSessionLeaves else { return true }
         return !activeSessions(in: workspace.id).contains(where: isSessionSelected)
     }
 
     private func workspaceRowContainsSelection(
         _ workspace: Workspace,
-        semanticScope: String
+        ownsSessionLeaves: Bool
     ) -> Bool {
         guard selection == .workspace(workspace.id) else { return false }
-        return !isWorkspaceRowSelected(workspace, semanticScope: semanticScope)
+        return !isWorkspaceRowSelected(workspace, ownsSessionLeaves: ownsSessionLeaves)
     }
 
     private var visibleTaskGroups: [WarrenDesktopTaskGroup] {
@@ -442,12 +467,28 @@ struct WarrenDesktopSidebarRows: View {
                             if isCollapsed || tree.expandedTaskIDs.contains(group.task.id) {
                                 ForEach(group.workspaces) { workspace in
                                     if let project = groups.first(where: { $0.project.id == workspace.projectID }) {
-                                        workspaceRow(
-                                            workspace,
-                                            in: project,
-                                            semanticScope: "task-list",
-                                            displayName: "\(project.project.name) · \(workspace.name)"
-                                        )
+                                        WarrenDesktopSessionLeafGroup(
+                                            leafCount: ownsSessionLeaves(
+                                                workspace,
+                                                semanticScope: "task-list"
+                                            ) ? activeSessions(in: workspace.id).count : 0,
+                                            mode: workspaceDisplayMode,
+                                            workspaceGlyph: WarrenDesktopWorkspaceGlyph(workspace)
+                                        ) {
+                                            workspaceRow(
+                                                workspace,
+                                                in: project,
+                                                semanticScope: "task-list",
+                                                displayName: "\(project.project.name) · \(workspace.name)"
+                                            )
+                                        } leaves: {
+                                            workspaceSessionRows(
+                                                for: workspace,
+                                                project: project.project,
+                                                semanticScope: "task-list"
+                                            )
+                                        }
+                                        .padding(.top, workspaceDisplayMode.sessionGroupSpacing)
                                     }
                                 }
                             }
@@ -798,7 +839,14 @@ struct WarrenDesktopSidebarRows: View {
         let rowID = "workspace.\(semanticScope).\(workspace.id.description)"
         let isProjectDeleting = deletingProjectIDs.contains(group.project.id)
         let isDeleting = deletingWorkspaceIDs.contains(workspace.id)
-        let isSelectionDisabled = semanticScope == "project-list" && workspace.taskID != nil
+        let isSelectionDisabled = routesSelectionToTaskRow(
+            workspace,
+            semanticScope: semanticScope
+        )
+        // Leaves belong to the copy that owns navigation: a row the user cannot
+        // act on must not list the only rows they can.
+        let ownsLeaves = ownsSessionLeaves(workspace, semanticScope: semanticScope)
+        let leafCount = ownsLeaves ? activeSessions(in: workspace.id).count : 0
         ZStack {
             let activitySummary = workspaceActivitySummary(workspace.id)
             WarrenDesktopWorkspaceRow(
@@ -807,26 +855,35 @@ struct WarrenDesktopSidebarRows: View {
                 activity: activitySummary?.activity,
                 activeTabCount: activitySummary?.activeTabCount ?? 0,
                 isCollapsed: isCollapsed,
-                isSelected: isWorkspaceRowSelected(workspace, semanticScope: semanticScope)
-                    && !isSelectionDisabled,
+                isSelected: isWorkspaceRowSelected(
+                    workspace,
+                    ownsSessionLeaves: ownsLeaves
+                ) && !isSelectionDisabled,
                 containsSelection: workspaceRowContainsSelection(
                     workspace,
-                    semanticScope: semanticScope
+                    ownsSessionLeaves: ownsLeaves
                 ) && !isSelectionDisabled,
                 isPinned: workspace.pinned,
                 isDeleting: isDeleting,
                 isInteractionDisabled: isInteractionDisabled || isProjectDeleting || isDeleting,
                 isMutationDisabled: false,
                 isSelectionDisabled: isSelectionDisabled,
-                showsSessionChildren: showsSessionRows
-                    && semanticScope == "project-list",
+                showsSessionChildren: leafCount > 0,
                 rowHeight: workspaceDisplayMode.rowHeight,
                 taskName: taskName,
                 taskID: workspace.taskID,
                 tasks: taskGroups.map(\.task),
                 onSelectTask: onFocusTask,
                 onSelect: { select(.workspace(workspace.id)) },
-                onDoubleClick: { onAction(.openWorkspace(workspace.id)) },
+                onDoubleClick: {
+                    // Rich mode already lists the Sessions, so the gesture that
+                    // opens a workspace in compact mode becomes the new-Session
+                    // gesture the add control gives every scope. Compact mode
+                    // keeps the switch-driven open it has always had.
+                    onAction(workspaceDisplayMode.isRich
+                        ? .requestNewSession(workspace.id)
+                        : .openWorkspace(workspace.id))
+                },
                 onRename: {
                     onRequestRename(.workspace(workspace.id, name: workspace.name))
                 },
@@ -896,23 +953,25 @@ struct WarrenDesktopSidebarRows: View {
     }
 
     /// A Task-linked workspace is rendered twice: once in the Projects tree and
-    /// once beneath its Task heading. Session leaves belong to the Projects
-    /// copy only, because that position is the Session's canonical place in the
-    /// resource graph and it stays mounted regardless of Task expansion. Tying
-    /// ownership to the Task copy would move a running Session between two rows
-    /// whenever the Tasks section is collapsed, and would hide it entirely
-    /// while that section is closed.
+    /// once beneath its Task heading. Session leaves belong to the Task copy,
+    /// because that is the row selection routes to (`workspaceScrollTarget`) and
+    /// the only copy the user can act on; the Projects copy is context-only, so
+    /// leaves under it would hang off a row that cannot be clicked.
+    ///
+    /// The cost is explicit: collapsing the Tasks section hides those Sessions,
+    /// exactly as collapsing Projects hides the ones that copy owns.
     @ViewBuilder
     private func workspaceSessionRows(
         for workspace: Workspace,
-        project: Project
+        project: Project,
+        semanticScope: String
     ) -> some View {
         ForEach(activeSessions(in: workspace.id)) { session in
             WarrenDesktopWorkspaceSessionRow(
                 session: session,
                 project: project,
                 workspace: workspace,
-                semanticScope: "project-list",
+                semanticScope: semanticScope,
                 isSelected: isSessionSelected(session),
                 isInteractionDisabled: isInteractionDisabled
                     || deletingProjectIDs.contains(project.id)
@@ -1074,8 +1133,24 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     }
 
     private var title: String {
-        let value = session.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? providerName : value
+        Self.displayTitle(for: session)
+    }
+
+    /// The row label: a user-set name wins, otherwise the running command and
+    /// the directory, so an unnamed shell never reads as the generic "Shell".
+    static func displayTitle(for session: WarrenDesktopSession) -> String {
+        let providerName = session.presentedKind.displayName
+        let fallback = session.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = TerminalSessionPresentation.tabTitle(
+            customTitle: session.customTitle,
+            title: session.title,
+            kind: session.presentedKind,
+            process: session.runtimeProcess,
+            commandLine: session.runtimeCommandLine,
+            directory: session.workingDirectory,
+            fallbackTitle: fallback.isEmpty ? providerName : fallback
+        )
+        return resolved.isEmpty ? providerName : resolved
     }
 
     private var attention: AgentAttention? {

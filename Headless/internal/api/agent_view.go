@@ -23,6 +23,11 @@ const (
 	CapabilityAgentInterrupt    = "agent-interrupt-v1"
 	CapabilityAgentAttachments  = "agent-attachments-v1"
 	CapabilityAgentGoals        = "agent-goals-v1"
+	// CapabilityPaneGroups advertises that this Host owns Pane Groups: it stores
+	// the split arrangements, projects them through the roster, and accepts
+	// `pane-group.*` mutations. A client that does not negotiate it must not
+	// offer split UI, because there is no device-local layout path any more.
+	CapabilityPaneGroups = "pane-groups-v1"
 )
 
 var (
@@ -50,9 +55,10 @@ var AgentViewCapabilities = []string{
 // negotiation list so a welcome message is a true intersection rather than a
 // second, agent-only capability channel.
 func HostCapabilities() []string {
-	result := make([]string, 0, len(AgentViewCapabilities)+2)
+	result := make([]string, 0, len(AgentViewCapabilities)+3)
 	result = append(result, CapabilityAppHeartbeat)
 	result = append(result, CapabilityRosterDelta)
+	result = append(result, CapabilityPaneGroups)
 	result = append(result, AgentViewCapabilities...)
 	return result
 }

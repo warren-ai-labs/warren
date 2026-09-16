@@ -197,7 +197,7 @@ final class WarrenDomainTests: XCTestCase {
 
         XCTAssertEqual(
             TerminalDisplayTitleTemplate.defaultValue.render(context),
-            "Claude · /Users/me/Workspace/warren · claude"
+            "Claude · warren · claude"
         )
         XCTAssertEqual(
             TerminalDisplayTitleTemplate(
@@ -216,7 +216,7 @@ final class WarrenDomainTests: XCTestCase {
 
         XCTAssertEqual(
             TerminalDisplayTitleTemplate.defaultValue.render(context),
-            "Generated session summary · /Users/me/Workspace/warren · codex"
+            "Generated session summary · warren · codex"
         )
     }
 

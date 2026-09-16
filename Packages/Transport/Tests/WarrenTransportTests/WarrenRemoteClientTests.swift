@@ -929,3 +929,76 @@ private actor EventRecorder {
         events.contains(where: predicate)
     }
 }
+
+// Pane groups are Host-owned state: the client has to decode the flat tree the
+// Host stores, and a delta that omits the entity must mean "unchanged" rather
+// than "empty".
+final class WarrenPaneGroupDecodingTests: XCTestCase {
+    func testRosterDecodesNestedPaneGroupsAndDeltasApplyThem() throws {
+        let rosterJSON = """
+        {"schema":4,"revision":9,"host":{"id":"host-1","name":"Test Host","version":"dev"},
+         "tasks":[],"projects":[],"workspaces":[],"terminalGroups":[],"sessions":[],
+         "paneGroups":[
+           {"id":"group-1","workspace":"workspace-1","scope":"workspace","name":"left","order":0,"revision":4,
+            "tree":{"axis":"horizontal","ratio":0.5,
+                    "first":{"paneId":"pane-1","sessionId":"session-1"},
+                    "second":{"axis":"vertical","ratio":0.25,
+                              "first":{"paneId":"pane-2","sessionId":"session-2"},
+                              "second":{"paneId":"pane-3","sessionId":"session-3"}}}}]}
+        """
+        let roster: WarrenRemoteRoster = try JSONDecoder().decode(
+            WarrenRemoteRoster.self,
+            from: Data(rosterJSON.utf8)
+        )
+        XCTAssertEqual(roster.paneGroups.count, 1)
+        guard let group = roster.paneGroups.first else { return XCTFail("no pane group decoded") }
+        XCTAssertEqual(group.revision, 4)
+        XCTAssertEqual(group.ownerID, "workspace-1")
+        XCTAssertEqual(group.ownerScope, .workspace)
+        XCTAssertEqual(group.paneCount, 3)
+        XCTAssertEqual(group.tree.splitCount, 2)
+        XCTAssertEqual(group.paneIndex(forSession: "session-3"), 3)
+        XCTAssertEqual(group.tree.leaves.compactMap(\.sessionID), ["session-1", "session-2", "session-3"])
+        // A split carries geometry and no identity of its own.
+        XCTAssertNil(group.tree.paneID)
+        XCTAssertNil(group.tree.sessionID)
+
+        let deltaJSON = """
+        {"t":"roster.delta","baseRevision":9,"revision":10,
+         "paneGroups":{"upsert":[{"id":"group-1","workspace":"workspace-1","scope":"workspace","revision":5,
+            "tree":{"paneId":"pane-1","sessionId":"session-1"}}]}}
+        """
+        let message: WarrenRemoteRoster.StreamMessage = try JSONDecoder().decode(
+            WarrenRemoteRoster.StreamMessage.self,
+            from: Data(deltaJSON.utf8)
+        )
+        guard let delta = message.delta else { return XCTFail("no delta decoded") }
+        XCTAssertEqual(delta.paneGroups?.upsert.count, 1)
+        guard let applied = roster.applying(delta) else { return XCTFail("delta did not apply") }
+        XCTAssertEqual(applied.paneGroups.first?.revision, 5)
+        XCTAssertEqual(applied.paneGroups.first?.paneCount, 1)
+
+        // A delta without the entity must not clear the arrangement.
+        let unrelatedJSON = """
+        {"t":"roster.delta","baseRevision":9,"revision":11,"sessions":{"upsert":[]}}
+        """
+        let unrelatedMessage: WarrenRemoteRoster.StreamMessage = try JSONDecoder().decode(
+            WarrenRemoteRoster.StreamMessage.self,
+            from: Data(unrelatedJSON.utf8)
+        )
+        guard let unrelated = unrelatedMessage.delta else { return XCTFail("no delta decoded") }
+        XCTAssertNil(unrelated.paneGroups)
+        guard let unchanged = roster.applying(unrelated) else { return XCTFail("delta did not apply") }
+        XCTAssertEqual(unchanged.paneGroups.count, 1)
+        XCTAssertEqual(unchanged.paneGroups.first?.revision, 4)
+
+        // Round-tripping a tree preserves the flat wire shape the Host reads,
+        // including a leaf that arrives without an identity.
+        let leaf: WarrenRemoteRoster.PaneNode = .leaf(paneID: nil, sessionID: "session-9")
+        let encoded = try JSONEncoder().encode(leaf)
+        let text = String(decoding: encoded, as: UTF8.self)
+        XCTAssertFalse(text.contains("paneId"))
+        XCTAssertTrue(text.contains("\"sessionId\":\"session-9\""))
+    }
+}
+

@@ -38,6 +38,67 @@ final class WarrenDesktopCommandPaletteTests: XCTestCase {
         )
     }
 
+    func testSearchIndexesTaskNameAndTheBranchesItSpans() {
+        let host = Host(name: "Search Host")
+        let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
+        let task = WarrenTask(hostID: host.id, name: "Palette rewrite")
+        let workspace = Workspace(
+            projectID: project.id,
+            taskID: task.id,
+            name: "Review",
+            path: "/tmp/warren-review",
+            branch: "feature/search"
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            tasks: [task],
+            projects: [project],
+            workspaces: [workspace]
+        )
+
+        XCTAssertTrue(
+            results(for: "palette rewrite", in: projection).contains { $0.kind == .task(task.id) }
+        )
+        // A Task is how work is named, so the branches it holds must find it.
+        XCTAssertTrue(
+            results(for: "feature/search", in: projection).contains { $0.kind == .task(task.id) }
+        )
+    }
+
+    func testTaskWithoutWorkspacesIsNotIndexedBecauseItOpensNothing() {
+        let host = Host(name: "Search Host")
+        let task = WarrenTask(hostID: host.id, name: "Empty task")
+        let projection = WarrenDesktopProjection(
+            host: host,
+            tasks: [task],
+            projects: [],
+            workspaces: []
+        )
+
+        XCTAssertTrue(results(for: "empty", in: projection).isEmpty)
+    }
+
+    func testEndedSessionsAreNotSearchable() {
+        let host = Host(name: "Search Host")
+        let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
+        let workspace = Workspace(projectID: project.id, name: "Main", path: "/tmp/warren")
+        let ended = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Deploy API",
+            state: .exited,
+            workingDirectory: workspace.path
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [ended]
+        )
+
+        XCTAssertTrue(results(for: "deploy", in: projection).isEmpty)
+    }
+
     func testSearchIndexesCustomSessionTitleAndUsesOpenSessionResult() {
         let host = Host(name: "Search Host")
         let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
@@ -75,7 +136,134 @@ final class WarrenDesktopCommandPaletteTests: XCTestCase {
         }
 
         XCTAssertEqual(result?.title, "Deploy API")
-        XCTAssertTrue(result?.detail.contains("zsh") ?? false)
+        XCTAssertEqual(result?.context, "Warren › Main")
+    }
+
+    func testRowExplainsAMatchOnAHiddenFacet() {
+        let host = Host(name: "Search Host")
+        let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
+        let workspace = Workspace(projectID: project.id, name: "Main", path: "/tmp/warren")
+        let session = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Shell",
+            runtimeProcess: "npm",
+            runtimeCommandLine: "npm run dev",
+            workingDirectory: workspace.path
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [session]
+        )
+
+        // The match happened on the running command, which is not otherwise on
+        // screen, so the row has to say so.
+        let evidence = results(for: "npm", in: projection).first?.evidence
+        XCTAssertEqual(evidence?.text, "npm run dev")
+        XCTAssertEqual(evidence?.role, .alias)
+
+        // A title match needs no explanation.
+        XCTAssertNil(results(for: "shell", in: projection).first?.evidence)
+    }
+
+    func testSessionRowsCarryTheProviderThatOwnsTheirIcon() {
+        let host = Host(name: "Search Host")
+        let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
+        let workspace = Workspace(projectID: project.id, name: "Main", path: "/tmp/warren")
+        let agent = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Review",
+            kind: .codex,
+            workingDirectory: workspace.path
+        )
+        // A shell the Host has promoted through an Agent binding reads as that
+        // Agent: the row names what is running, not what Warren launched.
+        let promoted = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Review runner",
+            kind: .shell,
+            agentProvider: .claude,
+            workingDirectory: workspace.path
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [agent, promoted]
+        )
+
+        let rows = results(for: "review", in: projection)
+        XCTAssertEqual(
+            rows.first { $0.kind == .session(agent.id) }?.providerKind,
+            .codex
+        )
+        XCTAssertEqual(
+            rows.first { $0.kind == .session(promoted.id) }?.providerKind,
+            .claude
+        )
+        // Every provider Warren integrates owns a catalog entry, which is what
+        // supplies the mark; a missing one would silently fall back to a glyph.
+        XCTAssertNotNil(WarrenDesktopSessionPreset.builtIn(for: .codex))
+        XCTAssertNotNil(WarrenDesktopSessionPreset.builtIn(for: .claude))
+        XCTAssertNotNil(WarrenDesktopSessionPreset.builtIn(for: .shell))
+    }
+
+    func testNonSessionRowsHaveNoProviderAndKeepTheirScopeGlyph() {
+        let host = Host(name: "Search Host")
+        let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "Warren review",
+            path: "/tmp/warren-review"
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace]
+        )
+
+        for row in results(for: "warren", in: projection) {
+            XCTAssertNil(row.providerKind, "\(row.kind) is not a Session")
+        }
+    }
+
+    func testStatusFilterNarrowsToAttentionWorthySessions() {
+        let host = Host(name: "Search Host")
+        let project = Project(hostID: host.id, name: "Warren", rootPath: "/tmp/warren")
+        let workspace = Workspace(projectID: project.id, name: "Main", path: "/tmp/warren")
+        let blocked = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Deploy API",
+            agentStatus: AgentStatus(activity: .blocked),
+            workingDirectory: workspace.path
+        )
+        let ready = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Deploy Worker",
+            agentStatus: AgentStatus(activity: .ready),
+            workingDirectory: workspace.path
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [blocked, ready]
+        )
+
+        XCTAssertEqual(
+            results(for: "@blocked deploy", in: projection).map(\.kind),
+            [.session(blocked.id)]
+        )
+        XCTAssertEqual(
+            results(for: "s:deploy", in: projection).count,
+            2
+        )
     }
 
     func testSearchIndexesTerminalGroupTitle() {
@@ -186,8 +374,9 @@ final class WarrenDesktopCommandPaletteTests: XCTestCase {
             $0.kind == .workspace(workspace.id)
         }
 
-        XCTAssertFalse(titleMatch?.detail.contains("hidden-location") ?? true)
-        XCTAssertTrue(pathMatch?.detail.contains("hidden-location") ?? false)
+        XCTAssertNil(titleMatch?.evidence)
+        XCTAssertEqual(pathMatch?.evidence?.role, .path)
+        XCTAssertTrue(pathMatch?.evidence?.text.contains("hidden-location") ?? false)
     }
 
     func testEmptyQuerySuggestionsContainOnlyActiveOrPinnedResources() {
@@ -215,7 +404,7 @@ final class WarrenDesktopCommandPaletteTests: XCTestCase {
         ).suggestions()
 
         XCTAssertEqual(suggestions.map(\.kind), [.workspace(pinned.id)])
-        XCTAssertEqual(suggestions.first?.accessoryLabel, "Pinned")
+        XCTAssertEqual(suggestions.first?.status, .pinned)
     }
 
     func testSelectionMovementWrapsAndSupportsBoundaries() {

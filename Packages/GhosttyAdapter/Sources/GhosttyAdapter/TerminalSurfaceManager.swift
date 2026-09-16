@@ -9,8 +9,19 @@ public enum TerminalSurfaceResidency: String, Equatable, Sendable {
 }
 
 public struct TerminalSurfaceRetentionPolicy: Equatable, Sendable {
-    public static let defaultWarmLimit = 8
-    public static let defaultWarmByteLimit = 1024 * 1024 * 1024
+    /// How many parked surfaces stay resident behind the active ones.
+    ///
+    /// A warm surface is what makes an ordinary tab switch a reparent instead of
+    /// a cold attach, and a cold attach installs a complete atomic state, which
+    /// a TUI repaints end to end. The budget therefore has to cover the Sessions
+    /// a user actually cycles through; at 8 a second lap through ten open
+    /// Sessions evicted surfaces and turned every revisit into that reflow.
+    public static let defaultWarmLimit = 32
+    /// Ceiling for the estimated warm-surface memory, which is what actually
+    /// evicts on a large viewport: every warm surface keeps its IOSurface
+    /// (~86 MB measured at 1512x982), so a count cap alone cannot bind. Sized so
+    /// the 32-surface limit is the binding constraint on ordinary displays.
+    public static let defaultWarmByteLimit = 3 * 1024 * 1024 * 1024
 
     public let warmLimit: Int
     public let warmByteLimit: Int
@@ -170,6 +181,17 @@ public final class TerminalSurfaceManager {
         var presentationTask: Task<Void, Never>?
         var postRevealRedrawGeneration: UInt64 = 0
         var postRevealRedrawTask: Task<Void, Never>?
+        /// Bounded retry that guarantees a promotion eventually draws. A
+        /// retained surface whose view was parked needs a reconciliation to
+        /// re-mount it, and nothing in SwiftUI re-mounts it when the promotion
+        /// does not change the active set; without this the presentation task
+        /// can exit before drawing and the pane stays black forever.
+        var presentWatchdogTask: Task<Void, Never>?
+        var presentWatchdogGeneration: UInt64 = 0
+        /// Consecutive promotion retries that failed to draw. Bounds the
+        /// watchdog so a surface that can never present cannot reconcile on a
+        /// loop; a successful present resets it.
+        var presentWatchdogStreak = 0
         var recoveryPhase: RecoveryPresentationPhase = .ready
         var displayVisible = false
         /// Set when a displayed surface is parked and needs the bounded
@@ -201,6 +223,11 @@ public final class TerminalSurfaceManager {
         var lastPresentedSurface: ObjectIdentifier?
         var lastPresentedEpoch: UInt64?
         var lastPresentedSequence: UInt64 = 0
+        /// Which path asked for the draw that is in flight, reported by
+        /// `present_complete`. A repaint the user did not ask for — during heavy
+        /// output, with no resize and no selection — is otherwise
+        /// indistinguishable from a promotion that was supposed to happen.
+        var pendingPresentReason: String?
 
         init(surface: GhosttySurface, view: AppTerminalView) {
             self.surface = surface
@@ -309,6 +336,13 @@ public final class TerminalSurfaceManager {
     /// lease to the pane the user actually clicked.
     public var onFocusRequested: ((TerminalSessionID) -> Void)?
 
+    /// Reports an active Session whose promotion could not draw within its
+    /// bound. The pane is black with nothing in flight: the presentation task
+    /// either exited on a host/generation check or waits on a native surface or
+    /// AppKit view that will not become ready on its own. Only the client can
+    /// recover it, by re-subscribing and installing a fresh snapshot.
+    public var onPresentStalled: ((TerminalSessionID) -> Void)?
+
     /// Accessors keep the weak-box bookkeeping in one place: a dead box is
     /// indistinguishable from a missing mapping for every caller.
     private func activeHost(_ sessionID: TerminalSessionID) -> TerminalHostContainerView? {
@@ -400,6 +434,48 @@ public final class TerminalSurfaceManager {
     public func isPresentable(_ sessionID: TerminalSessionID) -> Bool {
         guard isActive(sessionID), let entry = entries[sessionID] else { return false }
         return entry.surface.terminalViewIsPresentable
+    }
+
+    /// Whether a reported grid describes the pane the surface is laid out
+    /// into right now.
+    ///
+    /// A surface reports a grid whenever Ghostty recomputes metrics, including
+    /// the default 640x480 surface every surface is created with before the
+    /// view has driven a real size. That report reaches the client
+    /// asynchronously, so by the time it arrives the view already matches its
+    /// host and a geometry-only check cannot tell it apart from a real resize.
+    /// Compare against the grid the current view geometry implies instead: the
+    /// cell size is fixed per font, so a mismatch means the report was produced
+    /// for a different viewport. Forwarding that would reflow the running
+    /// program at the wrong width, which reads as a history replay.
+    public func acceptsReportedGrid(
+        _ sessionID: TerminalSessionID,
+        columns: Int,
+        rows: Int
+    ) -> Bool {
+        guard isActive(sessionID),
+              let entry = entries[sessionID],
+              let host = activeHost(sessionID),
+              entry.view.superview === host,
+              entry.view.window != nil,
+              !entry.view.isHidden else { return false }
+        let viewSize = entry.view.bounds.size
+        let hostSize = host.bounds.size
+        guard viewSize.width > 0, viewSize.height > 0,
+              hostSize.width > 0, hostSize.height > 0,
+              abs(viewSize.width - hostSize.width) < 1,
+              abs(viewSize.height - hostSize.height) < 1,
+              let metrics = entry.surface.state.surface?.size(),
+              metrics.cellWidthPixels > 0, metrics.cellHeightPixels > 0
+        else { return false }
+        let scale = Double(entry.view.window?.backingScaleFactor ?? 2)
+        let expectedColumns = Int((Double(viewSize.width) * scale / Double(metrics.cellWidthPixels)).rounded(.down))
+        let expectedRows = Int((Double(viewSize.height) * scale / Double(metrics.cellHeightPixels)).rounded(.down))
+        guard expectedColumns > 0, expectedRows > 0 else { return false }
+        // Ghostty floors the grid, and the view's pixel size is floored before
+        // it is sent, so an exact match is expected; one cell of slack absorbs
+        // a rounding difference between the two paths.
+        return abs(columns - expectedColumns) <= 1 && abs(rows - expectedRows) <= 1
     }
 
     /// Whether a surface is safe to use as the destination of an atomic
@@ -673,7 +749,8 @@ public final class TerminalSurfaceManager {
             schedulePresent(
                 entry,
                 host: host,
-                generation: entry.transitionGeneration
+                generation: entry.transitionGeneration,
+                reason: "viewReady"
             )
             return
         }
@@ -754,7 +831,139 @@ public final class TerminalSurfaceManager {
             scheduleReconciliation(.presentDeferred)
             return
         }
-        schedulePresent(entry, host: host, generation: entry.transitionGeneration)
+        // A parked surface has its view removed from the host, and nothing in
+        // SwiftUI re-mounts it when the promotion does not change the active
+        // set. `schedulePresent` requires the view to be attached to its host
+        // and the generations to agree, so presenting now would silently do
+        // nothing and leave the pane black until an unrelated reconciliation.
+        // Route through reconciliation, which re-attaches the view through the
+        // same path as a cold attach.
+        guard entry.view.superview === host,
+              entry.transitionGeneration == transitionGeneration else {
+            TerminalDiagnostics.log("present_request_reattach", [
+                "session": sessionID.description,
+                "attached": entry.view.superview === host ? "true" : "false",
+                "entryGeneration": String(entry.transitionGeneration),
+                "transitionGeneration": String(transitionGeneration),
+            ])
+            scheduleReconciliation(.presentDeferred)
+            return
+        }
+        schedulePresent(
+            entry,
+            host: host,
+            generation: entry.transitionGeneration,
+            reason: "promote"
+        )
+    }
+
+    /// Bounded retry that keeps a promotion from ending in a permanently black
+    /// pane.
+    ///
+    /// Presentation depends on state no caller can verify synchronously: the
+    /// view must still be attached to the host when the task runs, and the
+    /// generations captured at scheduling time must still be current. A single
+    /// interrupted turn would otherwise leave the pane black until the user
+    /// navigates away and back. Reconcile if a promotion has not drawn after a
+    /// delay longer than the presentation task's own stall deadline;
+    /// reconciliation re-runs `attach`, which re-mounts the view and resets the
+    /// generations. Bounded so an unrecoverable surface cannot spin.
+    private func armPresentWatchdog(
+        for entry: Entry,
+        sessionID: TerminalSessionID
+    ) {
+        guard entry.presentWatchdogTask == nil else { return }
+        entry.presentWatchdogGeneration &+= 1
+        let generation = entry.presentWatchdogGeneration
+        entry.presentWatchdogTask = Task { @MainActor [weak self, weak entry] in
+            defer {
+                if entry?.presentWatchdogGeneration == generation {
+                    entry?.presentWatchdogTask = nil
+                }
+            }
+            while !Task.isCancelled {
+                do {
+                    // Longer than `schedulePresent`'s own 2s output-stall
+                    // deadline: a legitimately slow drain must be allowed to
+                    // present before the watchdog assumes the work is dead.
+                    try await Task.sleep(for: .milliseconds(2500))
+                } catch {
+                    return
+                }
+                guard let self, let entry else { return }
+                guard entry.presentWatchdogGeneration == generation else { return }
+                guard self.entries[sessionID] === entry, self.isActive(sessionID) else { return }
+                // A drawn frame, a newer promotion, or an in-flight recovery
+                // owns the next step; the watchdog only covers a silently dead
+                // one.
+                guard !entry.displayVisible || entry.view.isHidden else { return }
+                guard entry.recoveryPhase == .ready else { return }
+                entry.presentWatchdogStreak += 1
+                // Keep retrying for as long as the pane is unpresentable: a
+                // bounded retry count used to give up here and leave the pane
+                // black until something unrelated re-anchored it. Only the log
+                // is capped so a permanently broken surface cannot flood it.
+                if entry.presentWatchdogStreak <= 5 || entry.presentWatchdogStreak % 8 == 0 {
+                    TerminalDiagnostics.log("present_watchdog_retry", [
+                        "session": sessionID.description,
+                        "streak": String(entry.presentWatchdogStreak),
+                        "attached": entry.view.superview === self.activeHost(sessionID)
+                            && self.activeHost(sessionID) != nil ? "true" : "false",
+                        "entryGeneration": String(entry.transitionGeneration),
+                        "transitionGeneration": String(self.transitionGeneration),
+                    ])
+                }
+                self.scheduleReconciliation(.presentDeferred)
+            }
+        }
+    }
+
+    /// Records why a promotion could not draw.
+    ///
+    /// Every gate between `schedulePresent` and `presentNow()` is silent, so a
+    /// stalled promotion used to leave no trace at all. The fields distinguish
+    /// the two families: the AppKit view is not presentable (`viewAttached`,
+    /// `viewHidden`, `viewVisible`, `viewFrame`), or the native renderer is not
+    /// ready (`surfaceReady`).
+    private func logPresentStall(
+        _ event: String,
+        sessionID: TerminalSessionID,
+        entry: Entry,
+        host: TerminalHostContainerView?,
+        outputReady: Bool,
+        targetEpoch: UInt64?,
+        targetSequence: UInt64
+    ) {
+        let view = entry.view
+        TerminalDiagnostics.log(event, [
+            "session": sessionID.description,
+            "viewAttached": view.window != nil ? "true" : "false",
+            "viewHidden": view.isHidden ? "true" : "false",
+            "viewVisible": view.visibleRect.isEmpty ? "false" : "true",
+            "viewFrame": GhosttyDiagnosticsFormat.finiteSize(view.frame.size),
+            "hostMounted": host != nil ? "true" : "false",
+            "hostBounds": host.map { GhosttyDiagnosticsFormat.finiteSize($0.bounds.size) } ?? "nil",
+            "surfaceReady": entry.surface.terminalSurfaceIsReady ? "true" : "false",
+            "viewportValid": entry.surface.terminalViewportIsValid ? "true" : "false",
+            "outputReady": outputReady ? "true" : "false",
+            "displayVisible": entry.displayVisible ? "true" : "false",
+            "recoveryPhase": entry.recoveryPhase.rawValue,
+            // Inside a synchronized-output block `presentNow()` defers the draw
+            // until the block closes or its stall escape fires. That is the
+            // only failure inside `presentNow()` that is not reported as
+            // `present_now`, so name it here.
+            "syncPending": entry.surface.outputWriter.isInSynchronizedOutput
+                && !entry.surface.outputWriter.isSyncStalled ? "true" : "false",
+            "syncStalled": entry.surface.outputWriter.isSyncStalled ? "true" : "false",
+            "targetEpoch": targetEpoch.map(String.init) ?? "nil",
+            "targetSequence": String(targetSequence),
+        ])
+    }
+
+    private func disarmPresentWatchdog(for entry: Entry) {
+        entry.presentWatchdogGeneration &+= 1
+        entry.presentWatchdogTask?.cancel()
+        entry.presentWatchdogTask = nil
     }
 
     /// Prevents automatic presentation while a remote recovery is staged.
@@ -820,7 +1029,12 @@ public final class TerminalSurfaceManager {
                 setDisplayVisible(false, for: entry)
                 prepareHiddenRendering(for: entry)
             }
-            schedulePresent(entry, host: host, generation: entry.transitionGeneration)
+            schedulePresent(
+                entry,
+                host: host,
+                generation: entry.transitionGeneration,
+                reason: "recoveryReady"
+            )
         } else {
             // The remote marker can arrive before the AppKit reconciliation
             // that activates this surface. Reconcile the ready phase into the
@@ -1143,7 +1357,12 @@ public final class TerminalSurfaceManager {
             }
             entry.view.fitToSize()
             entry.surface.resyncIfNeeded()
-            schedulePresent(entry, host: host, generation: generation)
+            schedulePresent(
+                entry,
+                host: host,
+                generation: generation,
+                reason: "reconcile"
+            )
             if latestIntents[sessionID]?.wantsTerminalFocus == true {
                 focus(sessionID, generation: generation, trigger: reason.rawValue)
             }
@@ -1322,7 +1541,8 @@ public final class TerminalSurfaceManager {
     private func schedulePresent(
         _ entry: Entry,
         host: TerminalHostContainerView,
-        generation: UInt64
+        generation: UInt64,
+        reason: String
     ) {
         guard entry.recoveryPhase == .ready else { return }
         let sessionID = entry.surface.id
@@ -1358,15 +1578,29 @@ public final class TerminalSurfaceManager {
         // consumed exposes a partially applied TUI frame. Bytes enqueued
         // after this point remain live output and do not extend the promotion
         // wait (the Zeno case).
+        entry.pendingPresentReason = reason
         let targetEpoch = currentEpoch
         let targetSequence = currentSequence
         let waitsForOutput = !entry.displayVisible || entry.waitsForRecoveryBoundary
         let schedulePostRevealRedraw = entry.warmPromotionPending
             && !entry.waitsForRecoveryBoundary
+        // A second line of defence behind the stall report below: reconciliation
+        // re-attaches the view and resets the generations, which is the only
+        // thing that can revive a promotion that died before it started.
+        armPresentWatchdog(for: entry, sessionID: sessionID)
         let stallDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+        // A promotion that is only missing a draw must not wait the whole
+        // output-stall window: the pane is black for that entire time. Give the
+        // draw itself a much shorter bound and escalate from there.
+        let drawStallDeadline = ContinuousClock.now.advanced(by: .milliseconds(200))
         if !entry.displayVisible {
             prepareHiddenRendering(for: entry)
         }
+        // Every gate between `schedulePresent` and `presentNow()` is silent — a
+        // stopped view or a cleared native surface leaves nothing in the log —
+        // so report the state once if the promotion has not drawn by its own
+        // stall deadline, and hand the Session back to the client to recover.
+        var stallReported = false
         entry.presentationTask = Task { @MainActor [weak self, weak entry] in
             guard let self, let entry else { return }
             defer {
@@ -1384,10 +1618,23 @@ public final class TerminalSurfaceManager {
                     generation: generation
                 ) else {
                     staleCommandCancellationCount &+= 1
+                    TerminalDiagnostics.logVerbose("present_task_abandoned", [
+                        "session": sessionID.description,
+                        "attached": entry.view.superview === host ? "true" : "false",
+                        "window": entry.view.window != nil ? "true" : "false",
+                        "entryGeneration": String(entry.transitionGeneration),
+                        "transitionGeneration": String(transitionGeneration),
+                        "generation": String(generation),
+                    ])
                     return
                 }
 
-                if let until = resizingUntil, ContinuousClock.now < until {
+                // A resize window is refreshed by every geometry change, so a
+                // sustained stream of them would otherwise starve the draw path
+                // below and keep the pane black indefinitely.
+                if let until = resizingUntil,
+                   ContinuousClock.now < until,
+                   ContinuousClock.now < stallDeadline {
                     do {
                         try await Task.sleep(until: until, tolerance: .milliseconds(10))
                     } catch { return }
@@ -1401,7 +1648,8 @@ public final class TerminalSurfaceManager {
                 )
                 let timedOut = waitsForOutput && ContinuousClock.now >= stallDeadline
                 let viewReady = entry.surface.terminalViewIsPresentable
-                if (outputReady || timedOut), viewReady, entry.surface.terminalSurfaceIsReady {
+                let surfaceReady = entry.surface.terminalSurfaceIsReady
+                if (outputReady || timedOut), viewReady, surfaceReady {
                     if timedOut, !outputReady {
                         TerminalDiagnostics.log("present_wait_timeout", [
                             "session": sessionID.description,
@@ -1413,37 +1661,66 @@ public final class TerminalSurfaceManager {
                         ])
                     }
                     if entry.surface.presentNow() {
-                        entry.view.isHidden = false
-                        entry.view.alphaValue = 1
-                        setDisplayVisible(true, for: entry)
-                        let presentedSurface = entry.surface.state.surface
-                        entry.lastPresentedSurface = presentedSurface.map(ObjectIdentifier.init)
-                        let presentedBoundary = entry.surface.outputWriter.enqueuedBoundary
-                        entry.lastPresentedEpoch = presentedBoundary.epoch
-                        entry.lastPresentedSequence = presentedBoundary.sequence
-                        entry.waitsForRecoveryBoundary = false
-                        entry.warmPromotionPending = false
-                        if schedulePostRevealRedraw,
-                           let presentedSurface
-                        {
-                            self.schedulePostRevealRedraw(
-                                entry,
-                                host: self.host,
-                                generation: generation,
-                                nativeSurfaceID: ObjectIdentifier(presentedSurface)
-                            )
-                        }
-                        TerminalDiagnostics.log("present_complete", [
-                            "session": sessionID.description,
-                            "targetEpoch": targetEpoch.map(String.init) ?? "nil",
-                            "targetSequence": String(targetSequence),
-                            "enqueuedNow": String(presentedBoundary.sequence),
-                            "renderedEpoch": String(entry.surface.renderedEpoch),
-                            "renderedSequence": String(entry.surface.renderedSequence),
-                            "recoveryPhase": entry.recoveryPhase.rawValue,
-                        ])
+                        finishPresentation(
+                            entry: entry,
+                            sessionID: sessionID,
+                            generation: generation,
+                            targetEpoch: targetEpoch,
+                            targetSequence: targetSequence,
+                            schedulePostRevealRedraw: schedulePostRevealRedraw
+                        )
                         return
                     }
+                }
+
+                // Pending output is a legitimate reason to wait; a stopped view,
+                // a cleared native surface, or an open synchronized-output block
+                // is not. Force the draw for the latter and hand the Session to
+                // the client only if even that fails.
+                let outputPending = waitsForOutput && !outputReady
+                if !outputPending, ContinuousClock.now >= drawStallDeadline {
+                    if viewReady, surfaceReady, entry.surface.presentNow(forceDraw: true) {
+                        finishPresentation(
+                            entry: entry,
+                            sessionID: sessionID,
+                            generation: generation,
+                            targetEpoch: targetEpoch,
+                            targetSequence: targetSequence,
+                            schedulePostRevealRedraw: schedulePostRevealRedraw,
+                            forceDraw: true
+                        )
+                        return
+                    }
+                    logPresentStall(
+                        "present_wait_state",
+                        sessionID: sessionID,
+                        entry: entry,
+                        host: host,
+                        outputReady: outputReady,
+                        targetEpoch: targetEpoch,
+                        targetSequence: targetSequence
+                    )
+                    onPresentStalled?(sessionID)
+                    return
+                }
+
+                // The stall check runs after the draw attempts above: a
+                // promotion that is merely slow still presents once its output
+                // boundary passes its deadline. Only one that cannot draw at all
+                // reaches the report.
+                if !stallReported, ContinuousClock.now >= stallDeadline {
+                    stallReported = true
+                    logPresentStall(
+                        "present_wait_state",
+                        sessionID: sessionID,
+                        entry: entry,
+                        host: host,
+                        outputReady: outputReady,
+                        targetEpoch: targetEpoch,
+                        targetSequence: targetSequence
+                    )
+                    onPresentStalled?(sessionID)
+                    return
                 }
 
                 do {
@@ -1455,6 +1732,54 @@ public final class TerminalSurfaceManager {
                 }
             }
         }
+    }
+
+    /// Marks one successful draw as the pane's current presentation.
+    ///
+    /// Shared by the normal path and the forced draw that rescues a promotion
+    /// whose view and grid are ready while its draw keeps being deferred.
+    private func finishPresentation(
+        entry: Entry,
+        sessionID: TerminalSessionID,
+        generation: UInt64,
+        targetEpoch: UInt64?,
+        targetSequence: UInt64,
+        schedulePostRevealRedraw scheduleRedraw: Bool,
+        forceDraw: Bool = false
+    ) {
+        entry.view.isHidden = false
+        entry.view.alphaValue = 1
+        setDisplayVisible(true, for: entry)
+        let presentedSurface = entry.surface.state.surface
+        entry.lastPresentedSurface = presentedSurface.map(ObjectIdentifier.init)
+        let presentedBoundary = entry.surface.outputWriter.enqueuedBoundary
+        entry.lastPresentedEpoch = presentedBoundary.epoch
+        entry.lastPresentedSequence = presentedBoundary.sequence
+        entry.waitsForRecoveryBoundary = false
+        entry.warmPromotionPending = false
+        entry.presentWatchdogStreak = 0
+        disarmPresentWatchdog(for: entry)
+        if scheduleRedraw, let presentedSurface {
+            schedulePostRevealRedraw(
+                entry,
+                host: host,
+                generation: generation,
+                nativeSurfaceID: ObjectIdentifier(presentedSurface)
+            )
+        }
+        let view = entry.view.bounds.size
+        TerminalDiagnostics.log("present_complete", [
+            "session": sessionID.description,
+            "reason": entry.pendingPresentReason ?? "unknown",
+            "view": "\(Int(view.width))x\(Int(view.height))",
+            "forceDraw": forceDraw ? "true" : "false",
+            "targetEpoch": targetEpoch.map(String.init) ?? "nil",
+            "targetSequence": String(targetSequence),
+            "enqueuedNow": String(presentedBoundary.sequence),
+            "renderedEpoch": String(entry.surface.renderedEpoch),
+            "renderedSequence": String(entry.surface.renderedSequence),
+            "recoveryPhase": entry.recoveryPhase.rawValue,
+        ])
     }
 
     /// Gives a successfully promoted warm surface one additional native draw
@@ -1521,6 +1846,7 @@ public final class TerminalSurfaceManager {
         entry.postRevealRedrawGeneration &+= 1
         entry.postRevealRedrawTask?.cancel()
         entry.postRevealRedrawTask = nil
+        disarmPresentWatchdog(for: entry)
     }
 
     private func setDisplayVisible(_ visible: Bool, for entry: Entry) {

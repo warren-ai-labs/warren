@@ -192,8 +192,11 @@ public final class GhosttySurface: Identifiable {
     /// (`state.surface` is nil), which happens right after a worktree switch
     /// recreates the terminal view. The render tick is only requested once the
     /// view is mounted, so polling while unmounted stays free of render work.
+    /// `forceDraw` bypasses the synchronized-output deferral below. A caller
+    /// that has already established the grid is current uses it to guarantee a
+    /// draw instead of leaving a pane black while a block stays open.
     @discardableResult
-    public func presentNow() -> Bool {
+    public func presentNow(forceDraw: Bool = false) -> Bool {
         let size = state.surfaceSize.map {
             "\($0.columns)x\($0.rows)"
         } ?? "nil"
@@ -246,7 +249,11 @@ public final class GhosttySurface: Identifiable {
         // pending sync and present immediately. Force after 50ms to avoid
         // a permanently black warm promotion when the closing sequence is
         // split across Data boundaries or never arrives.
-        if outputWriter.isInSynchronizedOutput, !outputWriter.isSyncStalled {
+        // A view that is already presentable and a grid that is already
+        // current are missing only a draw. Forcing one beats leaving the pane
+        // black while a synchronized-output block stays open: the block's bytes
+        // are already applied to the grid this would draw.
+        if !forceDraw, outputWriter.isInSynchronizedOutput, !outputWriter.isSyncStalled {
             state.controller.tick()
             TerminalDiagnostics.logVerbose("present_now_deferred", [
                 "session": id.description,
@@ -255,6 +262,13 @@ public final class GhosttySurface: Identifiable {
                 "reason": "sync-pending",
             ])
             return false
+        }
+        if forceDraw, outputWriter.isInSynchronizedOutput {
+            TerminalDiagnostics.logVerbose("present_now_forced", [
+                "session": id.description,
+                "enqueued": String(outputWriter.enqueuedSequence),
+                "rendered": String(outputWriter.renderedSequence),
+            ])
         }
         state.controller.tick()
         ghostty_surface_draw(raw)

@@ -49,6 +49,7 @@ const (
 var Capabilities = []string{
 	"app-heartbeat-v1",
 	"roster-delta",
+	"pane-groups-v1",
 	"agent-timeline-v1",
 	"agent-interactions-v1",
 	"agent-interrupt-v1",

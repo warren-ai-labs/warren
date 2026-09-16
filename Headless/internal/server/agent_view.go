@@ -83,7 +83,14 @@ type AgentViewAtomicController interface {
 // while the per-session projection prevents an unsupported provider from
 // receiving the Codex-specific PTY interaction controls.
 func (s *Service) AgentViewCapabilities() []string {
-	capabilities := []string{api.CapabilityAppHeartbeat, api.CapabilityRosterDelta}
+	// Pane Groups are part of the Host's durable resource model, not of the
+	// Agent transport negotiation, so the capability is unconditional: a client
+	// that negotiated it must never be told the Host cannot own an arrangement.
+	capabilities := []string{
+		api.CapabilityAppHeartbeat,
+		api.CapabilityRosterDelta,
+		api.CapabilityPaneGroups,
+	}
 	if s == nil {
 		return capabilities
 	}

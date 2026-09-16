@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -218,4 +219,55 @@ func TestGhostlineRuntimeAdoptsAfterRestart(t *testing.T) {
 		t.Fatalf("Input after restart: %v", err)
 	}
 	waitGhostlineOutput(t, restarted, "warren_ghost_adopt", "adopt-ok")
+}
+
+// TestGhostlineRuntimeShellIntegrationReportsDirectory starts a real login
+// shell and waits for the injected prompt hook to report its working
+// directory through OSC 7. HOME is isolated so a developer's dotfiles cannot
+// change the shell under test.
+func TestGhostlineRuntimeShellIntegrationReportsDirectory(t *testing.T) {
+	for _, shellName := range []string{"zsh", "fish"} {
+		shell, err := exec.LookPath(shellName)
+		if err != nil {
+			t.Logf("%s is not installed; skipping", shellName)
+			continue
+		}
+		t.Run(shellName, func(t *testing.T) {
+			integrationDir := t.TempDir()
+			t.Setenv(warrenruntime.ShellIntegrationDirEnv, integrationDir)
+			t.Setenv("SHELL", shell)
+			t.Setenv("ZDOTDIR", "")
+			if err := warrenruntime.WriteShellIntegration(integrationDir); err != nil {
+				t.Fatalf("WriteShellIntegration: %v", err)
+			}
+
+			runtimeAdapter, _ := startGhostlineRuntime(t)
+			ctx := context.Background()
+			home := t.TempDir()
+			sessionDirectory := t.TempDir()
+			name := "warren_ghost_integration"
+			if err := runtimeAdapter.Create(ctx, name, sessionDirectory, "", []string{"HOME=" + home}); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			t.Cleanup(func() { _ = runtimeAdapter.Kill(context.Background(), name) })
+
+			want, err := filepath.EvalSymlinks(sessionDirectory)
+			if err != nil {
+				t.Fatalf("EvalSymlinks: %v", err)
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			var last string
+			for time.Now().Before(deadline) {
+				metadata, metadataErr := runtimeAdapter.Metadata(ctx, name)
+				if metadataErr == nil {
+					last = metadata.Directory
+					if got, resolveErr := filepath.EvalSymlinks(metadata.Directory); resolveErr == nil && got == want {
+						return
+					}
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			t.Fatalf("shell integration did not report %q; last directory %q", sessionDirectory, last)
+		})
+	}
 }

@@ -31,6 +31,22 @@ public enum WarrenLayoutMetrics {
     /// The close control is a 20pt button inside a 28pt accessory column.
     public static let tabCloseButtonSize: CGFloat = 20
     public static let tabAccessoryColumnWidth: CGFloat = 28
+    /// A split group's mark: the layout glyph that labels the run.
+    ///
+    /// The mark owns a slot of its own before the group's first Tab rather
+    /// than living inside that Tab, so the first member keeps its full title
+    /// width. The slot is therefore added once to the track's width and to
+    /// every Tab origin behind it. The glyph scales from its own 12pt design
+    /// square, so this value sets the whole mark's weight.
+    public static let tabGroupMarkSize: CGFloat = 15
+    public static let tabGroupMarkLeadingInset: CGFloat = 6
+    public static let tabGroupMarkTrailingInset: CGFloat = 6
+    public static let tabGroupMarkSlotWidth: CGFloat = tabGroupMarkSize
+        + tabGroupMarkLeadingInset + tabGroupMarkTrailingInset
+    /// The group rule binds its members to the mark without competing with the
+    /// active Tab's own selection rule, which sits on the same pixel row.
+    public static let tabGroupRuleHeight: CGFloat = 1
+    public static let tabGroupRuleOpacity: Double = 0.5
     /// Compact action controls used by popovers and dense chrome rows.
     public static let compactControlHeight: CGFloat = 28
     /// The Web popover needs room for a tokenized URL and its adjacent
@@ -137,6 +153,10 @@ public enum WarrenLayoutMetrics {
     public static let commandInputHeight: CGFloat = 48
     /// Idle search guidance stays a single compact row until a query is entered.
     public static let commandPaletteIdleHeight: CGFloat = 32
+    /// Command-palette results are one line each. The row carries a title, its
+    /// ancestry, and the field that explains the match side by side, so height
+    /// buys nothing and costs the number of results a user can see at once.
+    public static let commandPaletteRowHeight: CGFloat = 28
     /// Superset's settings search field is `h-8`.
     public static let settingsSearchHeight: CGFloat = 32
 

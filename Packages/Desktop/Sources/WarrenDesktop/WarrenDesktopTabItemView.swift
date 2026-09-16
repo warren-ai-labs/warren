@@ -9,7 +9,19 @@ struct WarrenDesktopTabItem: View {
     let displayTitle: String
     let activity: AgentActivityState?
     let isSelected: Bool
-    var isSplitVisible: Bool = false
+    /// Whether this Tab still draws the hairline that divides it from the Tab
+    /// after it. Members of one pane-group run hide theirs: the group's rule is
+    /// what binds them, and a hairline between them would divide what the rule
+    /// just joined.
+    var showsTrailingSeparator: Bool = true
+    /// Whether this Tab can start a drag.
+    ///
+    /// A pane group is one placement rather than a set of slots, so its members
+    /// are not draggable: the layout decides which Session sits where, and a
+    /// member that moved on its own would leave the group's chip and rule
+    /// describing an arrangement the strip no longer shows. Selection, the
+    /// context menu, and the close control are untouched.
+    var canStartDrag: Bool = true
     let isPinned: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
@@ -129,12 +141,6 @@ struct WarrenDesktopTabItem: View {
                             .foregroundStyle(tokens.mutedForeground)
                             .accessibilityHidden(true)
                     }
-                    if isSplitVisible {
-                        Image(systemName: "rectangle.split.2x1")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(tokens.info.opacity(0.85))
-                            .accessibilityLabel("Split visible")
-                    }
                     if let activity {
                         WarrenDesktopActivityIndicator(activity: activity)
                             .accessibilityHidden(true)
@@ -156,7 +162,7 @@ struct WarrenDesktopTabItem: View {
                     .overlay {
                         WarrenDesktopTabDragHandle(
                             tabID: tab.id,
-                            isEnabled: isEnabled && tab.sessionID != nil,
+                            isEnabled: isEnabled && tab.sessionID != nil && canStartDrag,
                             // The handle owns the title press now, so it has
                             // to restore the keyboard focus the Button used to
                             // take on click.
@@ -238,9 +244,7 @@ struct WarrenDesktopTabItem: View {
         .background(
             isSelected
                 ? tokens.background
-                : (isSplitVisible
-                    ? tokens.fillHover.opacity(0.4)
-                    : (isHovered ? tokens.fillHover : .clear))
+                : (isHovered ? tokens.fillHover : .clear)
         )
         .animation(
             WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
@@ -258,7 +262,7 @@ struct WarrenDesktopTabItem: View {
             // Tabs separate with a hairline. The active tab keeps its own
             // stroke instead, so the boundary never doubles.
             Rectangle()
-                .fill(isSelected ? .clear : tokens.border)
+                .fill(isSelected || !showsTrailingSeparator ? .clear : tokens.border)
                 .frame(width: WarrenSpacing.hairline)
         }
         .overlay(alignment: .bottom) {

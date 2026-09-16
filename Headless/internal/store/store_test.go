@@ -68,7 +68,7 @@ func TestOpenMigratesCompatibleStateSchemas(t *testing.T) {
 		t.Fatalf("persisted schema = %d, want %d", persisted.Schema, currentSchema)
 	}
 
-	for _, schema := range []int{1, 2} {
+	for _, schema := range []int{1, 2, 3} {
 		data, err := json.Marshal(api.State{Schema: schema, Host: api.Host{ID: "host-1", Name: "test"}})
 		if err != nil {
 			t.Fatal(err)
@@ -83,6 +83,47 @@ func TestOpenMigratesCompatibleStateSchemas(t *testing.T) {
 		if state.Snapshot().Schema != currentSchema {
 			t.Fatalf("schema %d snapshot = %d, want %d", schema, state.Snapshot().Schema, currentSchema)
 		}
+	}
+}
+
+func TestOpenMigratesSchema3AndKeepsPaneGroups(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	data, err := json.Marshal(api.State{
+		Schema:     3,
+		Host:       api.Host{ID: "host-1", Name: "test"},
+		Workspaces: []api.Workspace{{ID: "workspace-1", ProjectID: "project-1", Name: "main", Kind: "main"}},
+		Sessions: []api.Session{{
+			ID: "session-1", WorkspaceID: "workspace-1", Scope: api.SessionScopeWorkspace, Lifecycle: "running",
+		}},
+		PaneGroups: []api.PaneGroup{{
+			ID: "group-1", WorkspaceID: "workspace-1", Scope: api.SessionScopeWorkspace,
+			Name: "left", Revision: 2,
+			Tree: api.PaneNode{PaneID: "pane-1", SessionID: "session-1"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Open(path, "test")
+	if err != nil {
+		t.Fatalf("open schema 3: %v", err)
+	}
+	snapshot := state.Snapshot()
+	if snapshot.Schema != currentSchema {
+		t.Fatalf("schema = %d, want %d", snapshot.Schema, currentSchema)
+	}
+	if len(snapshot.PaneGroups) != 1 {
+		t.Fatalf("pane groups were not preserved: %#v", snapshot.PaneGroups)
+	}
+	group := snapshot.PaneGroups[0]
+	if group.ID != "group-1" || group.Name != "left" || group.Revision != 2 || group.Tree.SessionID != "session-1" {
+		t.Fatalf("unexpected group after migration: %#v", group)
+	}
+	if len(snapshot.Sessions) != 1 || len(snapshot.Workspaces) != 1 {
+		t.Fatalf("existing resources were dropped: %#v", snapshot)
 	}
 }
 

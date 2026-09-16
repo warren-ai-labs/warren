@@ -1,6 +1,7 @@
 # RFC 0008: Desktop split windows for independent terminal Sessions
 
-- Status: Implemented
+- Status: Implemented (layout ownership and persistence superseded by
+  [RFC 0020](0020-host-owned-pane-groups.md))
 - Owner: Warren Desktop, Ghostty Adapter, and Headless
 - Created: 2026-08-25
 - Scope: macOS Desktop presentation for Warren Terminal Sessions
@@ -31,6 +32,11 @@ persists no Pane tree and does not need to understand the layout. Web and CLI
 continue to see ordinary Host Sessions.
 
 ## Ownership and invariants
+
+> The Pane tree, its ratios, and the active Pane moved to the Host in
+> [RFC 0020](0020-host-owned-pane-groups.md): an arrangement is now durable Host
+> state that several clients share, and one scope may hold several arrangements.
+> The invariants below still describe the renderer, which remains unchanged.
 
 | Resource | Owner | Shared across clients |
 | --- | --- | --- |
@@ -270,10 +276,12 @@ embedded editor. Entering editor mode parks those hosts as warm surfaces and
 reports an empty screen set; returning to terminal mode reactivates the same
 hosts without creating a second PTY viewport.
 
-Warm promotion of a retained surface stays limited to remote endpoints, as
-before this feature; a local endpoint keeps taking the cold seeding path. This
-RFC does not change that boundary, and neither path duplicates the Session's
-PTY.
+Warm promotion of a retained surface is endpoint-independent: while it is
+retained, a surface keeps applying background output to its grid even when it
+is parked, so tab selection is a reparent plus a control-lease swap for both an
+on-screen pane and a hidden warm Session. Only a cold Session, or one whose
+transport dropped, takes the cold seeding path. This RFC does not duplicate the
+Session's PTY on either path.
 
 Promoting a retained sibling has to claim the control lease, because siblings
 were seeded without one. That claim is gated on the surface actually owning
