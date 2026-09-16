@@ -829,10 +829,12 @@ public enum WarrenDesktopPaneBar {
     /// Session that is not currently in a pane.
     ///
     /// `selected` is the fallback for the frame between selecting a Session and
-    /// the split tree catching up; without it the bar would blink empty. It is
-    /// also how a Session selected from outside the layout stays reachable: the
-    /// bar lists it after the panes rather than in place of them, so a visit
-    /// never hides the group it is visiting from.
+    /// the split tree catching up; without it the bar would blink empty. In rich
+    /// mode the tree on screen already lists what the strip should show, so a
+    /// Session visited from outside the layout is simply that tree alone — the
+    /// sidebar leaf that selected it is the way back into the split. In compact
+    /// mode the bar owns the Session list, so it enumerates every Tab and a
+    /// visit never hides the group it is visiting from.
     public static func tabs(
         visibleIn tree: SplitLayoutTree,
         from tabs: [ClientTab],
@@ -849,12 +851,6 @@ public enum WarrenDesktopPaneBar {
             uniquingKeysWith: { first, _ in first }
         )
         let visible = tree.leaves.compactMap { tabsByID[$0.tabID] }
-        if let selected, !tree.contains(tabID: selected.id) {
-            // A visit, not a replacement: the panel's own panes come first so
-            // the group keeps its place in the strip, and the Session being
-            // looked at follows them.
-            return visible + [selected]
-        }
         if visible.isEmpty, let selected {
             return [selected]
         }

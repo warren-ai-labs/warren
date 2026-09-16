@@ -6,6 +6,20 @@ All notable changes to Warren are documented here.
 
 _No changes yet._
 
+## [0.16.1] - 2026-09-16
+
+> Fix release: rich mode's pane bar draws only the panes on screen, so a visit
+> to a Session outside the layout no longer pins a split group to the top chrome.
+> The JSON control protocol remains at 4.0.
+
+### Fixed
+
+- Stop the pane bar from pinning a split group on the top chrome in rich mode.
+  The sidebar already lists Sessions there, so the bar now draws only the panes
+  on screen: visiting a Session outside the layout no longer keeps a group for
+  panes the user cannot see. Compact mode keeps the group on the strip, where it
+  is the only way back into the split.
+
 ## [0.16.0] - 2026-09-16
 
 > Fix release: restores the Desktop's pane-group writes, which 0.15.0 dropped
