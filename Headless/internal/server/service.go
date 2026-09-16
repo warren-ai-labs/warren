@@ -5747,7 +5747,7 @@ func (s *Service) canonicalExecutionForSession(sessionID string) (api.AgentExecu
 	switch status.Activity {
 	case api.AgentActivityWorking:
 		state = api.AgentExecutionWorking
-	case api.AgentActivityBlocked, api.AgentActivityStalled:
+	case api.AgentActivityBlocked:
 		state = api.AgentExecutionBlocked
 	case api.AgentActivityFailed:
 		state = api.AgentExecutionFailed
@@ -6327,7 +6327,7 @@ func (s *Service) markPendingAgentTurnRequest(sessionID string, request api.Agen
 	// that only publish turn cursors.
 	switch entry.status.Activity {
 	case "":
-	case api.AgentActivityWorking, api.AgentActivityBlocked, api.AgentActivityStalled:
+	case api.AgentActivityWorking, api.AgentActivityBlocked:
 	default:
 		return fmt.Errorf("turn %d is not active", request.Turn)
 	}
@@ -6457,7 +6457,7 @@ func (s *Service) applyAgentState(session api.Session) {
 		if current.Activity != api.AgentActivityExited && current.Activity != api.AgentActivityFailed && !current.Equal(state.Status) {
 			s.recordAgentStatus(session.ID, state.Status)
 		}
-	case api.AgentActivityBlocked, api.AgentActivityStalled:
+	case api.AgentActivityBlocked:
 		if current.Activity != api.AgentActivityExited && current.Activity != api.AgentActivityFailed && !current.Equal(state.Status) {
 			s.recordAgentStatus(session.ID, state.Status)
 		}

@@ -71,7 +71,7 @@ Warren Host PTY (injected env: WARREN_SESSION_ID, WARREN_BIND_FILE, WARREN_STATE
          │
          ├──> Tails ~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl
          ├──> `parseAntigravity`: normalizes to []api.AgentEvent (message, reasoning, tool_call, tool_output)
-         ├──> `ActivityTracker`: marks lifecycle (working, ready, blocked, stalled)
+         ├──> `ActivityTracker`: marks lifecycle (working, ready, blocked)
          └──> WebSocket protocol 2.0 ──────────────> Desktop & Web Agent Conversation View
 ```
 

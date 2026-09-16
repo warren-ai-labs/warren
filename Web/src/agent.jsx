@@ -728,23 +728,21 @@ export function AgentView({
 }
 
 function AgentAttention({ attention, onOpenTerminal, onFocusComposer }) {
-  const kind = attention.kind || "warning";
-  const reason = String(attention.reason || "").trim().toLowerCase();
+  const kind = attention.kind;
+  // Only an explicit provider request renders a banner. A kind this client
+  // does not know stays on the base fallback instead of claiming attention.
   const labels = {
     input: ["text-bubble", "Question · Reply in the composer to continue."],
     approval: ["shield-check", "Permission · Review the request in Terminal."],
-    warning: ["triangle-exclamation", "Check the Agent in Terminal."],
   };
-  const [icon, fallback] = labels[kind] || labels.warning;
+  const label = labels[kind];
+  if (!label) return null;
+  const reason = String(attention.reason || "").trim().toLowerCase();
+  const [icon, fallback] = label;
   const reasonLabel = {
     question: "Question · Reply in the composer to continue.",
     permission: "Permission · Review the request in Terminal.",
     approval: "Permission · Review the request in Terminal.",
-    stalled: "No progress detected · Check the Agent in Terminal.",
-    no_progress: "No progress detected · Check the Agent in Terminal.",
-    no_progress_detected: "No progress detected · Check the Agent in Terminal.",
-    unexpectedabort: "Unexpected interruption · Check the Agent in Terminal.",
-    unexpected_abort: "Unexpected interruption · Check the Agent in Terminal.",
   }[reason] || fallback;
   return (
     <div className={`agent-attention ${kind}`} role="status">
@@ -770,7 +768,7 @@ function AgentAttention({ attention, onOpenTerminal, onFocusComposer }) {
 function canSendForStatus(status) {
   if (!status) return true;
   const activity = String(status.activity || "").toLowerCase();
-  if (["failed", "stalled", "exited", "unknown"].includes(activity)) return false;
+  if (["failed", "exited", "unknown"].includes(activity)) return false;
   // An input/question attention is intentionally answerable in the composer.
   return !status.attention || status.attention.kind === "input";
 }
@@ -824,12 +822,9 @@ function agentInputDisabledReason({ ready, hasControl, status }) {
   if (!hasControl) return "";
   const activity = String(status?.activity || "").toLowerCase();
   if (status?.attention?.kind === "approval") return "Permission required — review the request.";
-  if (status?.attention && status.attention.kind !== "input") return "Agent needs your attention.";
   switch (activity) {
-  case "stalled": return "Agent is stalled.";
   case "failed": return "Agent failed.";
   case "exited": return "Agent has exited.";
-  case "unknown": return "Agent status is unavailable.";
   default: return "";
   }
 }

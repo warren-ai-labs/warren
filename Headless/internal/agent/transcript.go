@@ -621,7 +621,6 @@ func (w *Watcher) loop() {
 			if turns := w.parser.DrainTurns(); len(turns) > 0 && w.onTurns != nil {
 				w.onTurns(turns, false)
 			}
-			w.parser.Tick(time.Now())
 			if status := w.parser.Status(); !status.Equal(w.lastStatus) {
 				w.lastStatus = status
 				if w.onStatus != nil {

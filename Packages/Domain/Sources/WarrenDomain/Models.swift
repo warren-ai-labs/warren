@@ -397,7 +397,6 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
 public enum AgentActivityState: String, Codable, CaseIterable, Hashable, Sendable {
     case working
     case blocked
-    case stalled
     case failed
     case ready
     case exited
@@ -406,7 +405,6 @@ public enum AgentActivityState: String, Codable, CaseIterable, Hashable, Sendabl
 public enum AgentAttentionKind: String, Codable, CaseIterable, Hashable, Sendable {
     case input
     case approval
-    case warning
 }
 
 /// Bounded, provider-neutral metadata explaining why a person should inspect

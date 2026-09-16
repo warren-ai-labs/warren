@@ -13,7 +13,6 @@ import {
 const activityLabels = {
   working: "Working",
   blocked: "Needs attention",
-  stalled: "Needs attention",
   failed: "Failed",
   ready: "Ready",
   exited: "Exited",
@@ -23,7 +22,6 @@ const activityLabels = {
 const activityPriority = {
   failed: 6,
   blocked: 5,
-  stalled: 4,
   connecting: 3,
   working: 2,
   ready: 1,
@@ -241,7 +239,7 @@ function statusActivity(status) {
 function statusLabel(status) {
   const activity = statusActivity(status);
   if (activity === "failed") return activityLabels.failed;
-  if (status?.attention || activity === "blocked" || activity === "stalled") return "Needs attention";
+  if (status?.attention || activity === "blocked") return "Needs attention";
   return activityLabels[activity];
 }
 
@@ -2273,7 +2271,6 @@ function statusPriority(status) {
   const activity = statusActivity(status);
   if (activity === "failed") return 6;
   if (status.attention || activity === "blocked") return 5;
-  if (activity === "stalled") return 4;
   return activityPriority[activity] || 0;
 }
 

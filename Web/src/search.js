@@ -436,7 +436,6 @@ export function highlightRanges(text, tokens) {
 export function activityBoost(activity, pinned) {
   const base = {
     blocked: 70,
-    stalled: 65,
     failed: 60,
     working: 50,
     ready: 20,

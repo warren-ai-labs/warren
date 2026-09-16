@@ -1171,7 +1171,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         guard let activity = session.activity else { return nil }
         switch activity {
         case .working: return "Working"
-        case .blocked, .stalled: return "Needs attention"
+        case .blocked: return "Needs attention"
         case .failed: return "Failed"
         case .ready: return "Idle"
         case .exited: return "Exited"
@@ -1191,7 +1191,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             return reason.isEmpty ? statusLabel : reason
         }
         switch session.activity {
-        case .blocked, .stalled, .failed, .exited:
+        case .blocked, .failed, .exited:
             return statusLabel
         case .working, .ready:
             return nil
@@ -1373,7 +1373,6 @@ private extension AgentAttentionKind {
         switch self {
         case .input: "Input needed"
         case .approval: "Approval needed"
-        case .warning: "Needs attention"
         }
     }
 }

@@ -6,6 +6,36 @@ All notable changes to Warren are documented here.
 
 _No changes yet._
 
+## [0.17.0] - 2026-09-16
+
+> Minor release: removes the Agent `stalled` activity and the `warning` attention
+> kind, so Agent state means only what a provider explicitly reports. The JSON
+> control protocol remains at 4.0.
+
+### Removed
+
+- Remove the Agent `stalled` activity. A transcript that only grows at message
+  and tool boundaries cannot separate a long-running tool from a hung turn, so
+  the 30-second grace-period warning fired on ordinary work and withheld client
+  input. Agent activity is now `ready | working | blocked | failed | exited`,
+  and `attention` is created only by an explicit provider input or approval
+  observation. The Desktop, iOS, Web, and CLI clients drop the state as well;
+  an activity value they do not know renders no indicator and no message.
+- Remove the Agent `warning` attention kind, which only ever carried the
+  `stalled` warning. `attention.kind` is now `input | approval`; a client that
+  receives an unknown kind renders no banner.
+
+### Release notes
+
+- The wire vocabulary loses two values but stays compatible across a rolling
+  upgrade, and the protocol remains at 4.0 with no state migration: a Host that
+  still sends `stalled` or an unknown attention kind renders no indicator and no
+  banner on an upgraded client instead of an error, and an upgraded Host never
+  sends them.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.16.1] - 2026-09-16
 
 > Fix release: rich mode's pane bar draws only the panes on screen, so a visit

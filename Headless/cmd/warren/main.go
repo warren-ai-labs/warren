@@ -3990,8 +3990,7 @@ func sessionActivity(session api.Session) string {
 	if session.AgentStatus == nil {
 		return ""
 	}
-	if session.AgentStatus.Activity == api.AgentActivityBlocked ||
-		session.AgentStatus.Activity == api.AgentActivityStalled {
+	if session.AgentStatus.Activity == api.AgentActivityBlocked {
 		return "attention"
 	}
 	return string(session.AgentStatus.Activity)

@@ -61,7 +61,6 @@ enum WarrenDesktopCommandPaletteSearch {
             switch self {
             case .activity(.working): return "Working"
             case .activity(.blocked): return "Blocked"
-            case .activity(.stalled): return "Stalled"
             case .activity(.failed): return "Failed"
             case .activity(.ready): return "Ready"
             case .activity(.exited): return "Exited"
@@ -75,7 +74,6 @@ enum WarrenDesktopCommandPaletteSearch {
         static func boost(activity: AgentActivityState?, pinned: Bool) -> Int {
             let activityBoost = switch activity {
             case .blocked: 70
-            case .stalled: 65
             case .failed: 60
             case .working: 50
             case .ready: 20

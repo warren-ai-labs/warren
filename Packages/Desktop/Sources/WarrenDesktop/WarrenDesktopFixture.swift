@@ -809,7 +809,6 @@ private extension AgentActivityState {
         switch self {
         case .failed: 6
         case .blocked: 5
-        case .stalled: 4
         case .working: 3
         case .ready: 1
         case .exited: 0

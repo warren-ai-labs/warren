@@ -403,7 +403,7 @@ struct WarrenDesktopActivityIndicator: View {
     var body: some View {
         WarrenStatusIndicator(
             color: color,
-            isActive: activity == .working || activity == .blocked || activity == .stalled,
+            isActive: activity == .working || activity == .blocked,
             size: indicatorSize,
             accessibilityLabel: accessibilityLabel
         )
@@ -411,14 +411,14 @@ struct WarrenDesktopActivityIndicator: View {
     }
 
     private var indicatorSize: CGFloat {
-        activity == .blocked || activity == .stalled ? 6 : 7
+        activity == .blocked ? 6 : 7
     }
 
     private var color: Color {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         return switch activity {
         case .failed: tokens.destructive
-        case .blocked, .stalled: tokens.warning
+        case .blocked: tokens.warning
         case .working: tokens.amber
         case .ready: tokens.success
         case .exited: tokens.mutedForeground
@@ -428,7 +428,7 @@ struct WarrenDesktopActivityIndicator: View {
     private var accessibilityLabel: String {
         switch activity {
         case .failed: "Session failed"
-        case .blocked, .stalled: "Session needs attention"
+        case .blocked: "Session needs attention"
         case .working: "Agent working"
         case .ready: "Agent ready"
         case .exited: "Session exited"

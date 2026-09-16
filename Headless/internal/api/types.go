@@ -311,20 +311,17 @@ const (
 	AgentActivityReady   AgentActivity = "ready"
 	AgentActivityWorking AgentActivity = "working"
 	AgentActivityBlocked AgentActivity = "blocked"
-	AgentActivityStalled AgentActivity = "stalled"
 	AgentActivityFailed  AgentActivity = "failed"
 	AgentActivityExited  AgentActivity = "exited"
 )
 
 // AgentAttentionKind identifies why a person should inspect an agent
-// session. A warning is intentionally less certain than an input or approval
-// request; it describes an abnormal condition such as a stalled turn.
+// session: the provider explicitly asked for an answer or for permission.
 type AgentAttentionKind string
 
 const (
 	AgentAttentionInput    AgentAttentionKind = "input"
 	AgentAttentionApproval AgentAttentionKind = "approval"
-	AgentAttentionWarning  AgentAttentionKind = "warning"
 )
 
 // AgentAttention is bounded, provider-neutral metadata. It must never carry
