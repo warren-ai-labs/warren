@@ -174,19 +174,32 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
         XCTAssertEqual(elements.groupMarkAnchorIndex, 0)
     }
 
-    /// A Session the user is only visiting still has to be reachable from the
-    /// strip, and the layout it is visiting has to stay visible while they are
-    /// there. Listing the visit after the panes does both: the group keeps its
-    /// place, and the way back into the split never disappears.
-    func testAVisitedSessionIsListedAfterTheLayoutsPanes() {
+    /// Rich mode's tree already lists the Sessions, so the bar is a pure pane
+    /// control and draws the tree on screen. A Session visited from outside the
+    /// layout is therefore that tree alone, with no group for panes the user
+    /// cannot see; the sidebar leaf that selected it is the way back.
+    func testAVisitedSessionIsDrawnWithoutTheGroupInRichMode() {
         let tabs = listings("a", "b", "c")
+        let rendered = WarrenDesktopSplitProjection.rendered(
+            tree(tabIDs: ["a", "b"]),
+            selectedTabID: "c",
+            validTabIDs: Set(tabs.map(\.id)),
+            isHoldingForCreation: false
+        )
+        XCTAssertEqual(rendered.allTabIDs, ["c"])
+
         let listed = WarrenDesktopPaneBar.tabs(
-            visibleIn: tree(tabIDs: ["a", "b"]),
+            visibleIn: rendered,
             from: tabs,
             selected: tabs[2],
             mode: .rich
         )
-        XCTAssertEqual(listed.map(\.id), ["a", "b", "c"])
+        XCTAssertEqual(listed.map(\.id), ["c"])
+
+        let elements = WarrenDesktopPaneBar.rowElements(listings: listed, group: nil)
+        XCTAssertEqual(elements.map(\.id), ["c"])
+        XCTAssertFalse(elements.contains(where: \.drawsGroupMark))
+        XCTAssertEqual(elements.groupMarkSlotWidth, 0)
     }
 
     /// The visiting Session is added to the panes, not drawn in place of one.

@@ -969,13 +969,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
         embeddedEditorChromeAvailable: Bool
     ) -> AnyView {
-        // The bar draws the scope's layout, not the tree the content is showing.
-        // While the selection visits a Session outside the split, the layout is
-        // still what the strip is about: it is where the group lives, and the
-        // only way back into it.
-        let scopeTree = scopeSplitTree(presentation: presentation)
+        // The bar draws the tree it is about, and the display mode decides
+        // which one that is. Rich mode's tree already lists Sessions, so the bar
+        // is a pure pane control: it draws what is on screen, and a Session
+        // visited from outside the layout is drawn alone rather than under a
+        // group for panes the user cannot see. Compact mode's tree does not list
+        // Sessions, so the bar keeps the scope's layout throughout: the group is
+        // the only way back into the split while another Session is visited.
+        let barTree = workspaceDisplayMode.isRich
+            ? currentSplitTree(presentation: presentation)
+            : scopeSplitTree(presentation: presentation)
         let paneBar = WarrenDesktopPaneBar.presentation(
-            visibleIn: scopeTree,
+            visibleIn: barTree,
             from: presentation.tabs,
             selected: presentation.tab,
             mode: workspaceDisplayMode,
@@ -995,7 +1000,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             tabActivities: tabActivities,
             pinnedSessionIDs: pinnedSessionIDs,
             selectedTabID: navigation.selectedTabID,
-            splitGroup: splitGroup(tree: scopeTree, presentation: presentation),
+            splitGroup: splitGroup(tree: barTree, presentation: presentation),
             onCopyPaneTitle: {
                 copySoloPaneTitle(presentation: presentation)
             },
@@ -1702,9 +1707,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// The scope's layout: what the store holds, reconciled against the roster.
     ///
     /// This is the layout the panel belongs to, whether or not it is the one on
-    /// screen — a Session selected from outside it is a visit, and the pane bar
-    /// keeps drawing this layout throughout so the group stays visible and
-    /// remains the way back into the split.
+    /// screen — a Session selected from outside it is a visit, and the layout
+    /// survives it so the split can be returned to.
     private func scopeSplitTree(presentation: Presentation) -> SplitLayoutTree {
         guard let scope = currentScopeKey(presentation: presentation) else {
             return WarrenDesktopSplitProjection.lonePane(
@@ -1794,12 +1798,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         ) ?? "pane-default"
     }
 
-    /// The pane group the bar labels, or nil when the scope is not split.
+    /// The pane group the bar labels, or nil when the tree it is given is not
+    /// split.
     ///
-    /// The group is derived from the scope's layout rather than from the tree
-    /// the content renders, so it keeps its members — and its place in the
-    /// strip — while the selection visits a Session outside it. One pane is not
-    /// a group: there is no second pane to bind it to, and no mark to draw.
+    /// The tree comes from the caller, which is what makes the group follow the
+    /// display mode: rich mode hands over the tree on screen, so a visit draws
+    /// no group; compact mode hands over the scope's layout, so the group stays
+    /// on the strip as the way back into the split. One pane is not a group:
+    /// there is no second pane to bind it to, and no mark to draw.
     private func splitGroup(
         tree: SplitLayoutTree,
         presentation: Presentation

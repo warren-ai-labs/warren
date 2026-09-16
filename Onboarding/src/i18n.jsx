@@ -118,6 +118,28 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.16.1",
+        dateISO: "2026-09-16",
+        date: "September 16, 2026",
+        title: "Warren keeps rich mode's pane bar to the panes on screen.",
+        summary:
+          "A patch release that stops rich mode's pane bar from pinning a split group to the top chrome when the user visits a Session outside the layout; the JSON control protocol remains at 4.0.",
+        sections: [
+          {
+            title: "Fixed",
+            items: [
+              "Stop the pane bar from pinning a split group on the top chrome in rich mode: the sidebar already lists Sessions there, so the bar draws only the panes on screen, and compact mode keeps the group on the strip as the way back into the split.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "No control-protocol or state-schema change. Local packaging uses the available Apple Development signing identity and is not notarized; the archive is for internal or temporary testing.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.16.0",
         dateISO: "2026-09-16",
         date: "September 16, 2026",
@@ -1164,6 +1186,28 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.16.1",
+        dateISO: "2026-09-16",
+        date: "2026 年 9 月 16 日",
+        title: "Warren 让富模式的 pane bar 只显示在屏的 pane。",
+        summary:
+          "修补版本：富模式下当用户浏览布局之外的 Session 时，pane bar 不再把分屏组钉在顶部 chrome；JSON 控制协议仍为 4.0。",
+        sections: [
+          {
+            title: "修复",
+            items: [
+              "富模式下 pane bar 不再把分屏组钉在顶部 chrome：该模式的侧边栏已列出全部 Session，因此条带只绘制在屏的 pane；紧凑模式仍在条带保留分组，作为回到分屏的入口。",
+            ],
+          },
+          {
+            title: "发布说明",
+            items: [
+              "无控制协议或 state schema 变化。本地打包使用现有 Apple Development 签名且未 notarize；归档仅适合内部或临时测试。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.16.0",
         dateISO: "2026-09-16",
