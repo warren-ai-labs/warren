@@ -144,8 +144,7 @@ func (s *Service) liveActivitySnapshot() LiveActivitySnapshot {
 		if session.AgentStatus != nil {
 			activity = string(session.AgentStatus.Activity)
 			attention = session.AgentStatus.Attention != nil ||
-				session.AgentStatus.Activity == api.AgentActivityBlocked ||
-				session.AgentStatus.Activity == api.AgentActivityStalled
+				session.AgentStatus.Activity == api.AgentActivityBlocked
 		}
 		if connection == "connected" {
 			if activity == string(api.AgentActivityWorking) {

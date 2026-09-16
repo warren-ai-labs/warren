@@ -17,7 +17,6 @@ type Parser interface {
 	Status() api.AgentStatus
 	Activity() api.AgentActivity
 	DrainTurns() []api.AgentTurn
-	Tick(now time.Time)
 }
 
 // baseParser provides common event observing and activity tracking functionality
@@ -44,10 +43,6 @@ func (b *baseParser) Activity() api.AgentActivity {
 
 func (b *baseParser) DrainTurns() []api.AgentTurn {
 	return b.tracker.DrainTurns()
-}
-
-func (b *baseParser) Tick(now time.Time) {
-	b.tracker.Tick(now)
 }
 
 func (b *baseParser) content(value json.RawMessage) string {

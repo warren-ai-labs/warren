@@ -78,32 +78,6 @@ func TestActivityTrackerEmitsStableTurnBoundaries(t *testing.T) {
 	}
 }
 
-func TestActivityTrackerNoticesStalledTool(t *testing.T) {
-	tracker := NewActivityTracker()
-	started := time.Now()
-
-	tracker.Observe(api.AgentEvent{Type: "user"})
-	tracker.Observe(api.AgentEvent{Type: "tool_call", Timestamp: started})
-	tracker.Tick(started.Add(29 * time.Second))
-	if got := tracker.Activity(); got != api.AgentActivityWorking {
-		t.Fatalf("before timeout = %q, want working", got)
-	}
-
-	tracker.Tick(started.Add(31 * time.Second))
-	if got := tracker.Activity(); got != api.AgentActivityStalled {
-		t.Fatalf("after stall = %q, want stalled", got)
-	}
-	status := tracker.Status()
-	if status.Attention == nil || status.Attention.Kind != api.AgentAttentionWarning || status.Attention.Reason != "stalled" {
-		t.Fatalf("stalled status = %#v, want warning/stalled", status)
-	}
-
-	tracker.Observe(api.AgentEvent{Type: "tool_output", ToolStatus: "success"})
-	if got := tracker.Activity(); got != api.AgentActivityWorking {
-		t.Fatalf("after tool result = %q, want working", got)
-	}
-}
-
 func TestActivityTrackerSeparatesExplicitAttention(t *testing.T) {
 	tracker := NewActivityTracker()
 	tracker.TurnStarted()
@@ -123,20 +97,19 @@ func TestActivityTrackerSeparatesExplicitAttention(t *testing.T) {
 	}
 }
 
-func TestActivityTrackerTurnFailedResetsPendingTools(t *testing.T) {
+func TestActivityTrackerTurnFailedStaysFailed(t *testing.T) {
 	tracker := NewActivityTracker()
-	started := time.Now()
 
 	tracker.Observe(api.AgentEvent{Type: "user"})
-	tracker.Observe(api.AgentEvent{Type: "tool_call", Timestamp: started})
+	tracker.Observe(api.AgentEvent{Type: "tool_call"})
 	tracker.TurnFailed()
 	if got := tracker.Activity(); got != api.AgentActivityFailed {
 		t.Fatalf("after turn failed = %q, want failed", got)
 	}
 
-	tracker.Tick(started.Add(time.Hour))
+	tracker.Observe(api.AgentEvent{Type: "tool_output", ToolStatus: "success"})
 	if got := tracker.Activity(); got != api.AgentActivityFailed {
-		t.Fatalf("failed turn moved to %q, want failed", got)
+		t.Fatalf("after late tool result = %q, want failed", got)
 	}
 }
 

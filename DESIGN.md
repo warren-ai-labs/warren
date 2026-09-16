@@ -234,7 +234,7 @@ Warren bifurcates terminal execution into two first-class tracks:
 
 1. **PTY Stream Independence**: The transcript tails the agent execution; it never replaces the PTY stream. If a transcript is missing or unparseable, the session continues seamlessly as a standard terminal.
 2. **Canonical Tool Metadata**: Normalized events extract tool name, inputs, status, and outputs for rich UI presentation (e.g. file edits, bash executions).
-3. **Status Aggregation**: Workspace status aggregates Session activity across all Sessions, prioritized: `failed > attention/blocked > stalled > working > ready > exited`.
+3. **Status Aggregation**: Workspace status aggregates Session activity across all Sessions, prioritized: `failed > attention/blocked > working > ready > exited`.
 4. **Prompt Mutex and Attention Guarding**: When human attention or permission is requested by an agent, Warren surfaces an attention banner and status dot, guarding interactive inputs against corruption.
 
 ## 9. Session and Runtime Design

@@ -691,8 +691,7 @@ button:disabled {
   background: var(--color-status-working);
 }
 
-.activity.blocked,
-.activity.stalled {
+.activity.blocked {
   background: var(--color-status-waiting);
 }
 
@@ -1118,10 +1117,6 @@ button:disabled {
 
 .agent-attention.input {
   border-top-color: color-mix(in srgb, var(--color-text-link) 34%, transparent);
-}
-
-.agent-attention.warning {
-  border-top-color: color-mix(in srgb, var(--color-status-warning) 34%, transparent);
 }
 
 .agent-attention-icon {

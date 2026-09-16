@@ -538,7 +538,7 @@ The Host normalizes provider-specific JSONL records into events such as:
 - tool calls and tool output;
 - usage;
 - errors and attachments;
-- activity states including working, blocked, stalled, failed, ready, and
+- activity states including working, blocked, failed, ready, and
   exited, with human attention carried separately in `AgentStatus`.
 
 Initial attach sends only a bounded conversation tail. Older history is

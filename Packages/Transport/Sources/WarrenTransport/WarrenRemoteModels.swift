@@ -1536,7 +1536,7 @@ public enum WarrenRemoteJSONValue: Codable, Equatable, Hashable, Sendable {
 }
 
 public enum WarrenRemoteAgentActivity: String, Codable, CaseIterable, Sendable {
-    case ready, working, blocked, stalled, failed, exited
+    case ready, working, blocked, failed, exited
     case unknown
 
     public init(rawValue: String) {
@@ -1544,7 +1544,6 @@ public enum WarrenRemoteAgentActivity: String, Codable, CaseIterable, Sendable {
         case "ready": self = .ready
         case "working": self = .working
         case "blocked": self = .blocked
-        case "stalled": self = .stalled
         case "failed": self = .failed
         case "exited": self = .exited
         default: self = .unknown
@@ -1563,14 +1562,13 @@ public enum WarrenRemoteAgentActivity: String, Codable, CaseIterable, Sendable {
 }
 
 public enum WarrenRemoteAgentAttentionKind: String, Codable, CaseIterable, Sendable {
-    case input, approval, warning
+    case input, approval
     case unknown
 
     public init(rawValue: String) {
         switch rawValue {
         case "input": self = .input
         case "approval": self = .approval
-        case "warning": self = .warning
         default: self = .unknown
         }
     }

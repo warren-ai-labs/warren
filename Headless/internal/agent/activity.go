@@ -7,22 +7,15 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/api"
 )
 
-// pendingToolTimeout is a liveness warning, not an input timeout. A short
-// tool call can be perfectly normal, so five seconds must never turn a
-// session yellow.
-const pendingToolTimeout = 30 * time.Second
-
 // ActivityTracker folds normalized transcript events into an AgentStatus. It
-// owns lifecycle and liveness state; provider-specific attention observations
-// can be applied through MarkAttention without teaching the tracker provider
-// event names.
+// owns lifecycle state; provider-specific attention observations can be
+// applied through MarkAttention without teaching the tracker provider event
+// names.
 type ActivityTracker struct {
-	status       api.AgentStatus
-	pendingTools int
-	pendingSince time.Time
-	turn         uint64
-	turnActive   bool
-	turns        []api.AgentTurn
+	status     api.AgentStatus
+	turn       uint64
+	turnActive bool
+	turns      []api.AgentTurn
 }
 
 // NewActivityTracker starts an agent in the ready state: open and idle.
@@ -61,7 +54,7 @@ func (t *ActivityTracker) Observe(event api.AgentEvent) {
 	case "user":
 		t.TurnStarted()
 	case "tool_call":
-		t.toolStarted(event.Timestamp)
+		t.toolStarted()
 	case "tool_output":
 		failed := event.ToolStatus == "error"
 		t.toolFinished(failed)
@@ -129,7 +122,6 @@ func (t *ActivityTracker) TurnStarted() {
 // TurnComplete marks a finished turn. The agent is idle and ready for the
 // next instruction.
 func (t *ActivityTracker) TurnComplete() {
-	t.resetPendingTools()
 	t.finishTurn(api.AgentTurnCompleted)
 	t.setActivity(api.AgentActivityReady)
 	t.clearAttention()
@@ -137,7 +129,6 @@ func (t *ActivityTracker) TurnComplete() {
 
 // TurnFailed marks a turn that ended with an error.
 func (t *ActivityTracker) TurnFailed() {
-	t.resetPendingTools()
 	t.finishTurn(api.AgentTurnFailed)
 	t.setActivity(api.AgentActivityFailed)
 	t.clearAttention()
@@ -147,7 +138,6 @@ func (t *ActivityTracker) TurnFailed() {
 // not know whether a Warren cancel command caused it, so Host correlation is
 // deliberately left to the service layer.
 func (t *ActivityTracker) TurnInterrupted() {
-	t.resetPendingTools()
 	t.finishTurn(api.AgentTurnInterrupted)
 	t.setActivity(api.AgentActivityReady)
 	t.clearAttention()
@@ -159,13 +149,13 @@ func (t *ActivityTracker) TurnAborted() {
 	t.TurnInterrupted()
 }
 
-// MarkAttention applies a provider-neutral human-facing observation. The
-// reducer owns the resulting activity so callers cannot accidentally create a
-// yellow state without the corresponding blocked/warning lifecycle state.
+// MarkAttention applies a provider-neutral human-facing observation. Only an
+// explicit provider request creates attention, and it blocks the lifecycle
+// until the request is answered or withdrawn.
 func (t *ActivityTracker) MarkAttention(kind api.AgentAttentionKind, reason, requestID string, since time.Time) {
 	if kind == "" {
 		t.clearAttention()
-		if t.status.Activity == api.AgentActivityBlocked || t.status.Activity == api.AgentActivityStalled {
+		if t.status.Activity == api.AgentActivityBlocked {
 			t.working()
 		}
 		return
@@ -179,18 +169,14 @@ func (t *ActivityTracker) MarkAttention(kind api.AgentAttentionKind, reason, req
 		RequestID: requestID,
 		Since:     since,
 	}
-	if kind == api.AgentAttentionInput || kind == api.AgentAttentionApproval {
-		t.setActivity(api.AgentActivityBlocked)
-	} else {
-		t.setActivity(api.AgentActivityStalled)
-	}
+	t.setActivity(api.AgentActivityBlocked)
 }
 
 // ClearAttention removes a pending human-facing condition without changing
-// the current lifecycle state unless it was blocked or stalled by the attention.
+// the current lifecycle state unless it was blocked by the attention.
 func (t *ActivityTracker) ClearAttention() {
 	t.clearAttention()
-	if t.status.Activity == api.AgentActivityBlocked || t.status.Activity == api.AgentActivityStalled {
+	if t.status.Activity == api.AgentActivityBlocked {
 		t.working()
 	}
 }
@@ -218,59 +204,23 @@ func (t *ActivityTracker) finishTurn(status api.AgentTurnStatus) {
 
 // Exited marks the agent process as gone.
 func (t *ActivityTracker) Exited() {
-	t.resetPendingTools()
 	t.setActivity(api.AgentActivityExited)
 	t.clearAttention()
-}
-
-// Tick notices a tool call that has made no progress for the liveness grace
-// period. It intentionally produces a stalled warning, never an input or
-// approval request.
-func (t *ActivityTracker) Tick(now time.Time) {
-	if t.status.Activity != api.AgentActivityWorking || t.pendingTools == 0 || t.pendingSince.IsZero() {
-		return
-	}
-	if now.Sub(t.pendingSince) >= pendingToolTimeout {
-		t.MarkAttention(api.AgentAttentionWarning, "stalled", "", t.pendingSince)
-	}
 }
 
 func (t *ActivityTracker) working() {
 	t.setActivity(api.AgentActivityWorking)
 }
 
-func (t *ActivityTracker) toolStarted(at time.Time) {
-	t.pendingTools++
-	if t.pendingSince.IsZero() {
-		if at.IsZero() {
-			at = time.Now()
-		}
-		t.pendingSince = at
-	}
+func (t *ActivityTracker) toolStarted() {
 	t.clearAttention()
 	t.working()
 }
 
 func (t *ActivityTracker) toolFinished(failed bool) {
-	if t.pendingTools > 0 {
-		t.pendingTools--
-	}
-	if t.pendingTools == 0 {
-		t.pendingSince = time.Time{}
-	}
 	if failed {
 		t.TurnFailed()
-		return
 	}
-	if t.status.Activity == api.AgentActivityStalled {
-		t.clearAttention()
-		t.working()
-	}
-}
-
-func (t *ActivityTracker) resetPendingTools() {
-	t.pendingTools = 0
-	t.pendingSince = time.Time{}
 }
 
 func (t *ActivityTracker) clearAttention() {

@@ -600,7 +600,7 @@ export function composerHeightForText(text = "", {
 export function agentComposerAction(status, { hasControl = true, hasText = false } = {}) {
   if (!hasControl) return "unavailable";
   const activity = String(status?.activity || "").toLowerCase();
-  if (["failed", "stalled", "exited", "unknown"].includes(activity)) return "unavailable";
+  if (["failed", "exited", "unknown"].includes(activity)) return "unavailable";
   if (activity === "working") return "interrupt";
   if (status?.attention && status.attention.kind !== "input") return "unavailable";
   if (activity === "blocked" && status?.attention?.kind !== "input") return "unavailable";

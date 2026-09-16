@@ -230,7 +230,7 @@ If an agent CLI does not support blocking pre-tool hooks:
 
 ### 3.4 Active Attention Surfacing for Small / Folded Interfaces
 
-RFC 0006 established the status and attention data model (`ready | working | blocked | stalled | failed | exited` and `attention: input | approval | warning`). On desktop displays with horizontal sidebars, visual dot indicators are sufficient.
+RFC 0006 established the status and attention data model (`ready | working | blocked | failed | exited` and `attention: input | approval`). On desktop displays with horizontal sidebars, visual dot indicators are sufficient.
 
 On mobile devices (iOS) and collapsed sidebar layouts, deep navigation hierarchies conceal blocked sessions. This section specifies the proactive surfacing mechanism.
 

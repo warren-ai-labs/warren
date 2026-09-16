@@ -118,6 +118,30 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.17.0",
+        dateISO: "2026-09-16",
+        date: "September 16, 2026",
+        title: "Warren drops the guessed Agent stall states.",
+        summary:
+          "A minor release that removes the Agent `stalled` activity and the `warning` attention kind, so Agent state means only what a provider explicitly reports; the JSON control protocol remains at 4.0.",
+        sections: [
+          {
+            title: "Removed",
+            items: [
+              "Remove the Agent `stalled` activity: the 30-second grace-period warning fired on ordinary long-running work and withheld client input, so activity is now `ready | working | blocked | failed | exited` and attention comes only from an explicit provider input or approval observation.",
+              "Remove the Agent `warning` attention kind, which only ever carried the stalled warning; `attention.kind` is now `input | approval`, and a client receiving an unknown kind renders no banner.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The protocol remains at 4.0 with no state migration, and a rolling upgrade stays compatible: a Host that still sends `stalled` or an unknown attention kind renders no indicator on an upgraded client instead of an error.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is for internal or temporary testing.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.16.1",
         dateISO: "2026-09-16",
         date: "September 16, 2026",
@@ -1186,6 +1210,30 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.17.0",
+        dateISO: "2026-09-16",
+        date: "2026 年 9 月 16 日",
+        title: "Warren 移除凭猜测得出的 Agent 停滞状态。",
+        summary:
+          "次版本：移除 Agent 的 `stalled` activity 与 `warning` attention kind，使 Agent 状态只表达 provider 明确报告的事实；JSON 控制协议仍为 4.0。",
+        sections: [
+          {
+            title: "移除",
+            items: [
+              "移除 Agent 的 `stalled` activity：30 秒宽限警告在普通长任务上误报并扣住客户端输入，现在 activity 为 `ready | working | blocked | failed | exited`，attention 只来自 provider 明确的 input 或 approval 观测。",
+              "移除 Agent 的 `warning` attention kind（它只承载 stalled 警告）：`attention.kind` 现为 `input | approval`，客户端收到未知 kind 不再显示横幅。",
+            ],
+          },
+          {
+            title: "发布说明",
+            items: [
+              "协议仍为 4.0，无 state migration，滚动升级兼容：仍发送 `stalled` 或未知 attention kind 的 Host 在升级后的客户端上不显示指示，而不会报错。",
+              "本地打包使用现有 Apple Development 签名且未 notarize；归档仅适合内部或临时测试。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.16.1",
         dateISO: "2026-09-16",

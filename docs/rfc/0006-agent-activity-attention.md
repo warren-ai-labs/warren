@@ -1,11 +1,21 @@
 # RFC 0006: Agent activity and human attention
 
-- Status: Implemented
+- Status: Implemented (amended 2026-09-16: the `stalled` activity and the `warning` attention kind were removed)
 - Owner: Warren Headless, Web, Desktop, and CLI clients
 - Created: 2026-08-22
 - Scope: Codex, Claude, OpenCode, Pi, Qoder, and Antigravity session status projection
 - Supersedes: the `waitingForInput` activity heuristic described in the first
   agent status implementation
+
+> Amended 2026-09-16: the `stalled` activity was removed from the protocol. A
+> transcript that only grows at message and tool boundaries cannot separate a
+> long-running tool from a hung turn, so the grace-period warning fired on
+> ordinary work and withheld client input. Read every `stalled` statement below
+> as historical; the current contract is `ready | working | blocked | failed |
+> exited`, and `attention` is created only by an explicit provider input or
+> approval observation. The `warning` kind was removed with it, so
+> `attention.kind` is `input | approval`. Clients carry the same five values;
+> an activity or kind they do not know renders no indicator and no message.
 
 ## Summary
 
