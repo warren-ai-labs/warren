@@ -75,15 +75,26 @@ public enum WarrenDesktopUpdateStatus: Equatable, Sendable {
 struct WarrenDesktopBuildBadge: View {
     let updateStatus: WarrenDesktopUpdateStatus
     let showsBuildMarker: Bool
+    /// Drops the reserved slot so the marker shrinks with its rail.
+    ///
+    /// The sidebar header is the first surface to run out of width when the
+    /// rail is dragged narrow. A marker that refuses to compress does not
+    /// truncate — it widens the sidebar's whole content column, and SwiftUI
+    /// then centres that column inside the rail, so every row loses its
+    /// leading edge. The footer keeps the reserved slot because its status chip
+    /// must not wander as the label changes length.
+    var isCompact: Bool
     let onUpdateAction: () -> Void
 
     init(
         updateStatus: WarrenDesktopUpdateStatus = .none,
         showsBuildMarker: Bool = true,
+        isCompact: Bool = false,
         onUpdateAction: @escaping () -> Void = {}
     ) {
         self.updateStatus = updateStatus
         self.showsBuildMarker = showsBuildMarker
+        self.isCompact = isCompact
         self.onUpdateAction = onUpdateAction
     }
 
@@ -97,16 +108,19 @@ struct WarrenDesktopBuildBadge: View {
                 Text("BUILD")
                     .fontWeight(.medium)
                     .foregroundStyle(tokens.amber)
+                    .lineLimit(1)
             }
 
-            if showsBuildMarker {
+            // The compact form answers "is this a local build?" inside a narrow
+            // rail, so it does not pad the marker out to the status slot.
+            if showsBuildMarker, !isCompact {
                 Spacer(minLength: WarrenSpacing.medium)
             }
             statusControl(tokens: tokens)
         }
         .font(WarrenTypography.sectionLabel)
         .tracking(1.0)
-        .frame(minWidth: showsBuildMarker ? 132 : 0, alignment: .trailing)
+        .frame(minWidth: showsBuildMarker && !isCompact ? 132 : 0, alignment: .trailing)
         .frame(height: 28, alignment: .center)
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityElement(children: .contain)

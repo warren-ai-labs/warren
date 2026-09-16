@@ -118,6 +118,45 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.16.0",
+        dateISO: "2026-09-16",
+        date: "September 16, 2026",
+        title: "Warren restores the Desktop's host-owned split panes.",
+        summary:
+          "A fix release that restores the Desktop's pane-group writes, which 0.15.0 dropped because the Swift client never advertised the `pane-groups-v1` capability, and repairs the split-adoption path that made a scope's second split revert or land on the wrong pair; the JSON control protocol remains at 4.0.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Keep the sidebar rail lit for the workspace the center is showing, so the tree marks the live workspace with no pointer on it.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Keep the pane bar's group on the strip while another Session is visited, so the strip stays the way back into the split.",
+              "Keep the sidebar's content column on the rail when the rail narrows, instead of pushing every row's leading text off the window.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Advertise `pane-groups-v1` from the Swift transport client so the Host's negotiated set includes it and the Desktop can create, split, rename, move, and remove arrangements again; 0.15.0 shipped only the Host-side advertisement, so those writes were silently dropped while CLI layouts kept working.",
+              "Keep pane groups through a projection copy, so the Tab move that ends a split no longer empties them and a second split in the same scope can land.",
+              "Stop a stale roster from collapsing a split in flight, split the Session the user aimed at instead of a stale pane, and drop a scope's local tree once the Host owns no group for it.",
+              "Show a spinner in the iOS send button while sending or uploading, and stop the bottom status text from flickering.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The protocol remains at 4.0 and this release migrates no state; a Host that already owns pane groups keeps them. If 0.15.0 is installed, upgrade the Desktop to 0.16.0 before relying on split panes there.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is for internal or temporary testing.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.15.0",
         dateISO: "2026-09-16",
         date: "September 16, 2026",
@@ -1125,6 +1164,45 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.16.0",
+        dateISO: "2026-09-16",
+        date: "2026 年 9 月 16 日",
+        title: "Warren 恢复 Desktop 的 Host 托管分屏。",
+        summary:
+          "修复版本：恢复 Desktop 的 pane group 写操作（0.15.0 因 Swift 客户端未 advertise `pane-groups-v1` 而被静默丢弃），并修复让同一作用域第二次分屏回退或落在错误组合上的采纳路径；JSON 控制协议仍为 4.0。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "当前显示的 workspace 会让侧边栏导轨常亮，无需指针悬停即可标出活动 workspace。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "浏览其他 Session 时，pane bar 仍保留分屏组，使条带继续作为回到分屏的入口。",
+              "侧边栏收窄时内容列保持在导轨上，不再把每行前导文字挤出窗口。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "让 Swift 客户端 advertise `pane-groups-v1`，使 Host 协商结果包含它，Desktop 重新可以创建、分屏、重命名、移动和删除布局；0.15.0 只做了 Host 侧 advertise，导致这些写操作被静默丢弃，而 CLI 布局一直可用。",
+              "投影副本不再丢失 pane groups，使结束分屏的 Tab 移动不再清空它们，同一作用域的第二次分屏可以落地。",
+              "过期 roster 不再折叠在途分屏，分屏对准用户点击的 Session，并在 Host 不再拥有该组时清理本地树。",
+              "iOS 发送按钮在发送或上传时显示 spinner，并停止底部状态文字闪烁。",
+            ],
+          },
+          {
+            title: "发布说明",
+            items: [
+              "协议仍为 4.0，本版本无 state migration；已拥有 pane groups 的 Host 会保留它们。若已安装 0.15.0，请在 Desktop 上先升级到 0.16.0 再使用分屏。",
+              "本地打包使用现有 Apple Development 签名且未 notarize；归档仅适合内部或临时测试。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.15.0",
         dateISO: "2026-09-16",

@@ -6,6 +6,57 @@ All notable changes to Warren are documented here.
 
 _No changes yet._
 
+## [0.16.0] - 2026-09-16
+
+> Fix release: restores the Desktop's pane-group writes, which 0.15.0 dropped
+> because the Swift client never advertised the `pane-groups-v1` capability, and
+> repairs the split-adoption path that made a scope's second split revert or land
+> on the wrong pair. The JSON control protocol remains at 4.0.
+
+### Added
+
+- Keep the sidebar rail lit for the workspace the center is showing, so the tree
+  marks the live workspace even with no pointer on it.
+
+### Changed
+
+- Keep the pane bar's group on the strip while another Session is visited, so the
+  strip stays the way back into the split instead of hiding the group.
+- Keep the sidebar's content column on the rail when the rail narrows; the
+  build-provenance marker reserved a fixed slot and refused to compress, and
+  centring that over-wide column pushed every row's leading text off the window.
+
+### Fixed
+
+- Advertise `pane-groups-v1` from the Swift transport client, so the Host's
+  negotiated capability set includes it and the Desktop can create, split,
+  rename, move, and remove arrangements again. Capability negotiation is an
+  intersection and 0.15.0 shipped only the Host-side advertisement, so every
+  pane-group write from the Desktop was gated off and silently dropped while
+  CLI-driven layouts kept working.
+- Keep pane groups through a projection copy: `reorderingTabs` and
+  `withConnectionState` rebuilt the projection field by field and omitted
+  `paneGroups`, so the Tab move that ends a split emptied them and the following
+  tree commit could not find the scope's existing group. A second split in the
+  same scope could therefore never land.
+- Stop a stale roster from collapsing a split in flight, and split the Session
+  the user aimed at instead of a stale pane: drop a scope's local tree when the
+  Host owns no group for it and nothing is in flight, and match a pending split
+  by the Tab rather than the pane ID the Host's echo replaces.
+- Show a spinner in the iOS send button while a message is sending or
+  attachments are uploading, and stop the bottom status text from flickering as
+  the send state changes.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and this release migrates no state, so
+  a Host that already owns pane groups keeps them. If 0.15.0 is installed,
+  upgrade the Desktop to 0.16.0 before relying on split panes there; the CLI was
+  never affected.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.15.0] - 2026-09-16
 
 > Minor release: makes a split arrangement durable Host state that any client
@@ -46,6 +97,8 @@ _No changes yet._
 - Stop a rich-mode workspace row from navigating on a single click. Hovering
   the row or one of its Sessions now lights the rail that ties the group
   together, and double-click starts a new Session in the workspace.
+- Keep that rail lit for the workspace the center is showing, so the tree marks
+  the live workspace even with no pointer on it.
 - List a Task-linked Workspace's Sessions under its Task row, which is the row
   that owns navigation, and leave the context-only Projects copy without leaves;
   collapsing Tasks now hides those Sessions the same way collapsing Projects

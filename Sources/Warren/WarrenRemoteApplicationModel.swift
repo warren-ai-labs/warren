@@ -5852,6 +5852,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             "tabs": String(tabs.count),
             "selectedTab": navigation.selectedTabID ?? "nil",
             "mounted": String(surfaceManager.retainedSurfaceCount),
+            "paneGroups": String(paneGroups.count),
         ])
         let liveTabSessionIDs = Set(tabs.compactMap(\.sessionID))
         for sessionID in Array(outputAnchors.keys) where !liveTabSessionIDs.contains(sessionID) {
@@ -6841,6 +6842,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 }
 
 extension WarrenDesktopProjection {
+    /// A copy with the scope's Tabs in a new order.
+    ///
+    /// These builders spell out every stored property, so a field added to the
+    /// projection has to be added here too. `paneGroups` and `unreadNoticeCount`
+    /// were each lost this way; the tests next to this helper are what keep the
+    /// next field from joining them.
     func reorderingTabs(tabID: String, accordingTo orderedIDs: [String]) -> Self {
         let tabsByID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         var orderedTabs = orderedIDs.compactMap { tabsByID[$0] }.makeIterator()
@@ -6861,10 +6868,13 @@ extension WarrenDesktopProjection {
             connectionState: connectionState,
             terminalGroups: terminalGroups,
             sessionTerminalGroupIDs: sessionTerminalGroupIDs,
-            tabTerminalGroupIDs: tabTerminalGroupIDs
+            tabTerminalGroupIDs: tabTerminalGroupIDs,
+            paneGroups: paneGroups,
+            unreadNoticeCount: unreadNoticeCount
         )
     }
 
+    /// A copy that reports a different connection state.
     func withConnectionState(_ state: WarrenDesktopConnectionState) -> Self {
         Self(
             host: host,
@@ -6878,6 +6888,7 @@ extension WarrenDesktopProjection {
             terminalGroups: terminalGroups,
             sessionTerminalGroupIDs: sessionTerminalGroupIDs,
             tabTerminalGroupIDs: tabTerminalGroupIDs,
+            paneGroups: paneGroups,
             unreadNoticeCount: unreadNoticeCount
         )
     }

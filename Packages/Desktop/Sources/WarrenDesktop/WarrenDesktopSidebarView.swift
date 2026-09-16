@@ -96,7 +96,12 @@ struct WarrenDesktopSidebar: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        VStack(spacing: 0) {
+        // The rail owns the column's width. A child that cannot compress widens
+        // the column instead of truncating, and SwiftUI then centres that
+        // over-wide column inside the rail's frame — every row would lose its
+        // leading edge off the window. Pinning the column to the rail and
+        // clipping keeps overflow on the trailing edge, where it is harmless.
+        VStack(alignment: .leading, spacing: 0) {
             WarrenDesktopSidebarHeader(
                 isCollapsed: sidebarState.isCollapsed,
                 chromeMode: chromeMode,
@@ -312,6 +317,8 @@ struct WarrenDesktopSidebar: View {
             }
             sidebarFooter(tokens: tokens)
         }
+        .frame(width: sidebarState.renderedWidth, alignment: .leading)
+        .clipped()
         .frame(maxHeight: .infinity)
         .background(tokens.sidebarSurface)
         .overlay(alignment: .trailing) {

@@ -1910,25 +1910,53 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// Adopts the Host's arrangements after a roster change, so a summary of
     /// every scope that gained, changed, or lost a group is reflected locally.
     private func adoptHostPaneGroups() {
+        let endpointPrefix = "endpoint-\(selectedEndpointID)-"
+        var ownedScopes: Set<String> = []
         for group in projection.paneGroups {
-            let scope: String
-            if let workspaceID = group.workspaceID {
-                scope = "endpoint-\(selectedEndpointID)-workspace-\(workspaceID.rawValue.uuidString)"
-            } else if let terminalGroupID = group.terminalGroupID {
-                scope = "endpoint-\(selectedEndpointID)-terminalGroup-\(terminalGroupID.rawValue.uuidString)"
-            } else {
-                continue
-            }
+            guard let scope = paneGroupScopeKey(for: group) else { continue }
+            ownedScopes.insert(scope)
             let adopted = WarrenDesktopPaneGroupMapping.tree(from: group)
+            // A roster can still carry the arrangement from before a local edit,
+            // so adopting it here would collapse the split until the Host's own
+            // answer arrives. Keep the edit and let the confirming tree land.
+            guard WarrenDesktopPaneGroupAdoption.shouldAdopt(
+                local: splitTrees[scope],
+                adopted: adoptedPaneTrees[scope],
+                host: adopted
+            ) else { continue }
             if splitTrees[scope] != adopted {
                 splitTrees[scope] = adopted
             }
             adoptedPaneTrees[scope] = adopted
         }
-        // Real deletions are handled by pruneSplitTreesForDeletedScopes, which
-        // asks whether the owner still exists. Treating "the Host has no group
-        // here" as stale would delete the tree of every scope that has never
-        // been split, and the optimistic tree of a first split still in flight.
+        // A scope the Host no longer owns has no arrangement; a local tree left
+        // behind is the remnant of one removed on the Host, and keeping it made
+        // the next split adopt one of its surviving Sessions instead of the
+        // Session being split. An edit still in flight is the exception — the
+        // Host has simply not echoed it yet — and the endpoint prefix keeps
+        // another Host's arrangements out of this window's cleanup.
+        let staleScopes = splitTrees.compactMap { scope, local -> String? in
+            guard scope.hasPrefix(endpointPrefix),
+                  !ownedScopes.contains(scope),
+                  adoptedPaneTrees[scope] == local else { return nil }
+            return scope
+        }
+        for scope in staleScopes {
+            splitTrees.removeValue(forKey: scope)
+            adoptedPaneTrees.removeValue(forKey: scope)
+            activePaneIDs.removeValue(forKey: scope)
+        }
+    }
+
+    /// The scope key a Host arrangement belongs to, for this window's endpoint.
+    private func paneGroupScopeKey(for group: PaneGroup) -> String? {
+        if let workspaceID = group.workspaceID {
+            return "endpoint-\(selectedEndpointID)-workspace-\(workspaceID.rawValue.uuidString)"
+        }
+        if let terminalGroupID = group.terminalGroupID {
+            return "endpoint-\(selectedEndpointID)-terminalGroup-\(terminalGroupID.rawValue.uuidString)"
+        }
+        return nil
     }
 
     /// Persist the same reconciled tree that the renderer uses. Keeping this
@@ -2376,8 +2404,16 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             // layout itself is the base — and if the pane is gone, the user has
             // reshaped the split since, so the request is dropped rather than
             // applied to whatever happens to be on screen now.
+            //
+            // The pane is named by the Tab it holds, not by its pane ID.
+            // Adopting a visited Session creates that pane under a local ID,
+            // and the Host's echo of the adoption replaces the ID before this
+            // Session arrives; matching only the ID dropped the request and
+            // left the split at the adopted pair with no new pane.
             let tree = currentSplitTree(presentation: presentation)
-            guard tree.contains(paneID: pending.targetPaneID) else {
+            let targetPaneID = tree.item(forTabID: pending.targetTabID)?.id
+                ?? (tree.contains(paneID: pending.targetPaneID) ? pending.targetPaneID : nil)
+            guard let targetPaneID else {
                 pendingSplits.removeValue(forKey: scope)
                 continue
             }
@@ -2397,7 +2433,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 continue
             }
             let newTree = tree.split(
-                targetPaneID: pending.targetPaneID,
+                targetPaneID: targetPaneID,
                 newTabID: newTab.id,
                 axis: pending.axis,
                 placeAfter: true

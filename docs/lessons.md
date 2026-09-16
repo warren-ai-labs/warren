@@ -853,3 +853,49 @@ that appears to replay: `terminal_view_appear`, `attach_start`, or
 `atomic_recovery_installed` means Warren re-created a view or installed a state;
 a single `resize_request` with none of those means the pane was resized and the
 application decided what to draw.
+
+## 014 - A replay that follows output, with no client event, is the application repainting
+
+### Symptom
+
+A `pi` pane looked like it replayed its whole screen while it streamed a reply,
+with the user touching nothing.
+
+### What the logs said
+
+During the replay, `terminal-diagnostics.log` held no terminal event at all: no
+`resize_request`, no `terminal_geometry_change`, no `atomic_recovery_installed`,
+no `terminal_view_appear`, and the daemon logged no `session.subscribe` or
+`reanchor`. Everything that could make a client reapply state was absent.
+
+With Ghostty verbose on (`--terminal-diagnostics`), the bytes that cleared the
+screen arrived through the ordinary output path (`feed_output`, `terminal <-
+host`): a kitty-image delete, then `ESC[2J ESC[H ESC[3J`, then the conversation's
+text. Those bytes are the program's stdout. Warren wrote them; it did not author
+them.
+
+### Root cause
+
+pi's TUI repaints everything when differential rendering cannot reach the change.
+`TuiMainScreen.doRender` calls `fullRender(true)` for a width change, a height
+change, `clearOnShrink`, `deleted lines moved viewport up`, `extraLines > height`,
+or `firstChanged < viewportTop`. The last one fires while a long streamed message
+re-lays-out (re-wrap, final highlighting) above the visible viewport. There was
+no size change at the replay moment, which left that trigger.
+
+### Workaround
+
+Nothing in Warren: the bytes are the program's own. pi's `tuiMode: "fullscreen"`
+(`~/.pi/agent/settings.json`) renders through the alternate screen, where the
+viewport is the whole screen and the viewport top is always 0, so the trigger
+cannot fire. Measured after the switch: a whole reply produced zero `ESC[2J` /
+`ESC[3J` and at most 8 of 47 rows changed in any second. The cost is the
+terminal's native scrollback.
+
+`PI_TUI_DEBUG_REDRAW=1` makes pi write `pi-tui-debug.log` with the exact reason.
+
+### Lesson
+
+**A replay has two possible authors, and only one of them is ours.** Read the
+client's terminal events first: if none of them fire around the repaint, the
+bytes came from the program's own output and the fix belongs on that side.
