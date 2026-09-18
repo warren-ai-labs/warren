@@ -9,6 +9,14 @@ import SwiftUI
 /// the moment it lands on the row the user is pointing at. An AppKit tracking
 /// area does not go through hit testing, so this view keeps one over its whole
 /// frame and lets every click pass through to the rows underneath.
+///
+/// Only a pointer that moved lights the group. An enter answers where the
+/// pointer is, not how it got there, and AppKit re-sends one whenever the area
+/// is rebuilt or slides under a resting pointer — which is what a sidebar
+/// scroll does. Answering enters lit whole rails nobody had pointed at, so
+/// `mouseMoved` is the only thing that lights and `mouseExited` is the only
+/// thing that clears. The exit stays live on purpose: a lit rail that the
+/// scroll carries away has to go dark with the group, not travel with it.
 struct WarrenDesktopHoverSensor: NSViewRepresentable {
     let onHover: (Bool) -> Void
 
@@ -30,13 +38,20 @@ struct WarrenDesktopHoverSensor: NSViewRepresentable {
             for area in trackingAreas { removeTrackingArea(area) }
             addTrackingArea(NSTrackingArea(
                 rect: .zero,
-                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                options: [
+                    .mouseEnteredAndExited,
+                    // See the type comment: the move is the pointer's own
+                    // answer, and the enter is not.
+                    .mouseMoved,
+                    .activeAlways,
+                    .inVisibleRect,
+                ],
                 owner: self,
                 userInfo: nil
             ))
         }
 
-        override func mouseEntered(with event: NSEvent) {
+        override func mouseMoved(with event: NSEvent) {
             onHover?(true)
         }
 

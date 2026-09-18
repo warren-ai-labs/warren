@@ -696,9 +696,6 @@ func relayLocalShareCommand(flags map[string]any) error {
 	}
 	link := strings.TrimSpace(stringValueAny(object, "pairing_url"))
 	if link == "" {
-		link = strings.TrimSpace(stringValueAny(object, "web_url"))
-	}
-	if link == "" {
 		return errors.New("local Host returned no Relay share link")
 	}
 	expiresIn := intValueAny(object, "expires_in")

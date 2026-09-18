@@ -1501,6 +1501,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// spinning forever in the background. RetryConnection starts a fresh
     /// budget after the user fixes credentials or host-key configuration.
     private static let maxReconnectAttempts = 8
+    /// Granularity of the reconnect wait. The delay is served in slices so a
+    /// wake or network change can end it early without cancelling the
+    /// connection task.
+    private static let reconnectWaitSlice = 250
 
     @Published private(set) var connectionError: String?
     @Published private(set) var hostProbes: [WarrenRemoteEndpointConfiguration: WarrenHostProbe] = [:]
@@ -1706,6 +1710,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Active surfaces in the above set keep their last presented frame while
     /// the replacement atomic state is installed.
     private var reconnectPreservedSessions: Set<TerminalSessionID> = []
+    /// Set by `resumeConnectionNow` so a pending backoff wait ends early.
+    private var reconnectResumeRequested = false
+    /// Lifetime-scoped like `terminationObserver`: the model lives as long as
+    /// the app, and a nonisolated deinit cannot touch these tokens.
+    private var wakeObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
     private var retainedSurfaceRebindTask: Task<Void, Never>?
     private var tabOrderByWorkspaceID: [WorkspaceID: [String]] = [:]
     private var tabOrderByTerminalGroupID: [TerminalGroupID: [String]] = [:]
@@ -1740,6 +1750,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // Keep termination flushing synchronous: the process may exit before
             // an asynchronous persistence task gets a chance to run.
             self?.flushNavigationPersistence()
+        }
+        // Sleep freezes the reconnect wait and leaves a socket that still looks
+        // connected. Both notifications mean the user is back and expects the
+        // terminal to be live, so shorten the wait and verify the transport.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.resumeConnectionNow() }
+        }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.resumeConnectionNow() }
         }
         let tabOrders = WarrenDesktopNavigationPersistence.restoreTabOrders(scope: scope)
         self.tabOrderByWorkspaceID = tabOrders.workspace.reduce(into: [:]) { result, entry in
@@ -1967,6 +1994,43 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         TerminalDiagnostics.log("remote_disconnect_end", ["endpoint": prevEndpoint, "duration_ms": String(ms)])
     }
 
+    /// Shortens a pending reconnect wait and verifies a socket that still looks
+    /// alive. Wake from sleep and network changes both invalidate the delay the
+    /// backoff computed before the environment changed: a Mac that slept for an
+    /// hour would otherwise sit out the full ceiling, and its socket usually
+    /// reports connected until the first write fails.
+    func resumeConnectionNow() {
+        reconnectResumeRequested = true
+        guard let wire else { return }
+        Task { await wire.probeConnection() }
+    }
+
+    /// Waits before the next reconnect attempt in slices so `resumeConnectionNow`
+    /// can end the wait early. Returns true when a resume cut the wait short.
+    private func waitBeforeReconnect(milliseconds: Int) async -> Bool {
+        reconnectResumeRequested = false
+        var remaining = max(0, milliseconds)
+        while remaining > 0 {
+            if Task.isCancelled { return false }
+            if reconnectResumeRequested {
+                reconnectResumeRequested = false
+                return true
+            }
+            let step = min(Self.reconnectWaitSlice, remaining)
+            do {
+                try await Task.sleep(for: .milliseconds(step))
+            } catch {
+                return false
+            }
+            remaining -= step
+        }
+        if reconnectResumeRequested {
+            reconnectResumeRequested = false
+            return true
+        }
+        return false
+    }
+
     /// Retries the currently selected endpoint after a terminal connection
     /// failure. Keeping this explicit avoids an unbounded retry loop and gives
     /// keyboard/accessibility clients a deterministic action target.
@@ -2074,7 +2138,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     publishProjectionIfChanged(projection.withConnectionState(.reconnecting))
                     let delay = Self.reconnectDelay(attempt: attempt)
                     attempt += 1
-                    try? await Task.sleep(for: .milliseconds(delay))
+                    // A wake or network change is a new opportunity, not a
+                    // continuation of the failed sequence: retry at once and
+                    // give the endpoint a fresh attempt budget.
+                    if await waitBeforeReconnect(milliseconds: delay) { attempt = 0 }
                     continue
                 }
             }
@@ -2174,7 +2241,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
             let delay = Self.reconnectDelay(attempt: attempt)
             attempt += 1
-            try? await Task.sleep(for: .milliseconds(delay))
+            if await waitBeforeReconnect(milliseconds: delay) { attempt = 0 }
         }
         if isCurrentConnection(configuration, generation: generation) {
             eventTask = nil
@@ -2510,7 +2577,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// history. The Host leaves the canonical journal and all other databases
     /// untouched; the settings surface asks for confirmation before calling.
     func rebuildUsageData(
-        completion: @escaping (Result<Void, Error>) -> Void = { _ in }
+        completion: @escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void = { _ in }
     ) {
         guard let wire else {
             let error = NSError(domain: "WarrenRemote", code: 1, userInfo: [
@@ -2524,8 +2591,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 // Historical transcript scans are Host-owned background work;
                 // the transport applies the method's no-timeout policy so a
                 // healthy rebuild cannot look like a failure after 15 seconds.
-                _ = try await wire.request("usage.rebuild")
-                completion(.success(()))
+                let response: WarrenUsageRebuildResponse = try await wire.request("usage.rebuild")
+                completion(.success(response.model))
             } catch {
                 self?.present(error)
                 completion(.failure(error))

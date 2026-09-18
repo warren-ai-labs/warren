@@ -95,17 +95,15 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 		t.Fatalf("pair: response=%v err=%v", pairResponse, err)
 	}
 	var paired struct {
-		Token         string `json:"access_token"`
-		WebURL        string `json:"web_url"`
-		PairingURL    string `json:"pairing_url"`
-		InviteID      string `json:"invite_id"`
-		PairingTicket string `json:"pairing_ticket"`
+		Token      string `json:"access_token"`
+		PairingURL string `json:"pairing_url"`
+		InviteID   string `json:"invite_id"`
 	}
-	if json.NewDecoder(pairResponse.Body).Decode(&paired) != nil || paired.Token == "" || paired.PairingTicket == "" {
+	if json.NewDecoder(pairResponse.Body).Decode(&paired) != nil || paired.Token == "" || paired.InviteID == "" {
 		t.Fatal("missing access token")
 	}
 	pairResponse.Body.Close()
-	if paired.WebURL != paired.PairingURL || paired.InviteID == "" || !strings.Contains(paired.WebURL, "/invite/") || strings.Contains(paired.WebURL, hostID) {
+	if !strings.Contains(paired.PairingURL, "/invite/") || strings.Contains(paired.PairingURL, hostID) {
 		t.Fatalf("unexpected opaque pairing URL: %#v", paired)
 	}
 
@@ -128,10 +126,13 @@ func TestPairingDiscoveryAndBidirectionalRelay(t *testing.T) {
 		t.Fatalf("rotate pairing code: response=%v err=%v", rotatedResponse, err)
 	}
 	rotatedResponse.Body.Close()
-	oldTicketBody, _ := json.Marshal(map[string]string{"pairing_ticket": paired.PairingTicket})
-	oldTicketResponse, err := http.Post(httpServer.URL+"/v1/session/exchange", "application/json", bytes.NewReader(oldTicketBody))
+	oldTicketResponse, err := http.Post(
+		httpServer.URL+"/invite/"+url.PathEscape(paired.InviteID)+"/v1/session/exchange",
+		"application/json",
+		bytes.NewReader([]byte(`{"client_id":"late-client"}`)),
+	)
 	if err != nil || oldTicketResponse.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("old pairing ticket remained valid: response=%v err=%v", oldTicketResponse, err)
+		t.Fatalf("old pairing invite remained valid: response=%v err=%v", oldTicketResponse, err)
 	}
 	oldTicketResponse.Body.Close()
 
@@ -720,22 +721,21 @@ func TestPairingInviteSurvivesRelayRestartAndStoresOnlyHash(t *testing.T) {
 		t.Fatalf("pair: response=%v err=%v", pairResponse, err)
 	}
 	var paired struct {
-		InviteID      string `json:"invite_id"`
-		PairingTicket string `json:"pairing_ticket"`
-		WebURL        string `json:"web_url"`
+		InviteID   string `json:"invite_id"`
+		PairingURL string `json:"pairing_url"`
 	}
 	if json.NewDecoder(pairResponse.Body).Decode(&paired) != nil {
 		t.Fatal("invalid pairing response")
 	}
 	pairResponse.Body.Close()
-	if paired.InviteID == "" || paired.InviteID != paired.PairingTicket || strings.Contains(paired.WebURL, hostID) {
-		t.Fatalf("pairing response disclosed Host identity: %#v", paired)
+	if paired.InviteID == "" || !strings.Contains(paired.PairingURL, "/invite/"+paired.InviteID+"/") {
+		t.Fatalf("pairing response did not return an opaque invite: %#v", paired)
 	}
 	data, err := os.ReadFile(dataURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(data, []byte(paired.InviteID)) || bytes.Contains(data, []byte(paired.PairingTicket)) {
+	if bytes.Contains(data, []byte(paired.InviteID)) {
 		t.Fatal("registry persisted the clear-text pairing invite")
 	}
 
@@ -752,7 +752,7 @@ func TestPairingInviteSurvivesRelayRestartAndStoresOnlyHash(t *testing.T) {
 	reconnectedHost := dialV2Host(t, restartedBase, hostID, hostCredential, "Mac")
 	waitForHost(t, restartedHTTP.URL, restarted, hostID)
 
-	exchangeBody, _ := json.Marshal(map[string]string{"invite_id": paired.InviteID})
+	exchangeBody, _ := json.Marshal(map[string]string{"client_id": "restart-client"})
 	for attempt := 0; attempt < 2; attempt++ {
 		exchangeURL := restartedHTTP.URL + "/invite/" + url.PathEscape(paired.InviteID) + "/v1/session/exchange"
 		exchange, exchangeErr := http.Post(exchangeURL, "application/json", bytes.NewReader(exchangeBody))

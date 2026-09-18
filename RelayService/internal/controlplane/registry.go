@@ -77,6 +77,37 @@ type registry struct {
 	enrollmentKeys map[string]*enrollmentKeyRecord
 	now            func() time.Time
 	dataURL        string
+	// presence broadcasts the next Host connection per Host ID. A client that
+	// arrives while its Mac is asleep or restarting waits on this instead of
+	// being told the Host is offline and left to poll through its own backoff.
+	presenceMu sync.Mutex
+	presence   map[string]chan struct{}
+}
+
+// hostOnlineSignal returns a channel closed by the next connection from this
+// Host. The channel is shared by every waiter and replaced after it fires.
+func (registry *registry) hostOnlineSignal(id string) <-chan struct{} {
+	registry.presenceMu.Lock()
+	defer registry.presenceMu.Unlock()
+	if registry.presence == nil {
+		registry.presence = make(map[string]chan struct{})
+	}
+	signal, ok := registry.presence[id]
+	if !ok {
+		signal = make(chan struct{})
+		registry.presence[id] = signal
+	}
+	return signal
+}
+
+func (registry *registry) signalHostOnline(id string) {
+	registry.presenceMu.Lock()
+	signal := registry.presence[id]
+	delete(registry.presence, id)
+	registry.presenceMu.Unlock()
+	if signal != nil {
+		close(signal)
+	}
 }
 
 func newRegistry(dataURL string) (*registry, error) {

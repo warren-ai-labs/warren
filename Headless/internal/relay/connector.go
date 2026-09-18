@@ -71,7 +71,27 @@ const (
 	connectorControlFairness      = 32
 	relayHeartbeatInterval        = 30 * time.Second
 	relayHeartbeatTimeout         = 75 * time.Second
+	// Terminal traffic is mostly tiny frames: a keystroke echo is a few bytes,
+	// and permessage-deflate without context takeover has a per-message floor of
+	// its own, so compressing those spends CPU to make them larger. Output
+	// bursts, HTTP bodies, and terminal snapshots are where the ratio is worth
+	// having, so compression is applied by size rather than globally.
+	compressionThreshold = 1024
+	// A connection that stayed authenticated this long is evidence the endpoint
+	// is healthy, so a later drop starts a fresh backoff sequence instead of
+	// escalating the previous one.
+	relayStableConnection = 60 * time.Second
 )
+
+// relayDialer matches websocket.DefaultDialer but negotiates permessage-deflate.
+// The Host's uplink carries every byte a remote client reads, and it is usually
+// the narrowest link in the path (home upstream bandwidth), so a compressible
+// output burst should not cross it verbatim.
+var relayDialer = &websocket.Dialer{
+	Proxy:             http.ProxyFromEnvironment,
+	HandshakeTimeout:  45 * time.Second,
+	EnableCompression: true,
+}
 
 var magic = [4]byte{'B', 'R', 'L', 'Y'}
 
@@ -171,6 +191,7 @@ type Config struct {
 	RelayPublicKeys map[string]ed25519.PublicKey
 	Dial            func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 	Random          func() float64
+	Now             func() time.Time
 	OnState         func(string)
 	OnControl       func(context.Context, StreamOpen, Frame) error
 }
@@ -199,6 +220,33 @@ type Connector struct {
 	// lastError is the most recent connectOnce failure, retained so /healthz
 	// can surface a stable error while the connector is between attempts.
 	lastError string
+	// openedAt marks when the current attempt became authenticated. It is zero
+	// while an attempt has not reached the open state.
+	openedAt time.Time
+}
+
+func (connector *Connector) now() time.Time {
+	if connector.config.Now != nil {
+		return connector.config.Now()
+	}
+	return time.Now()
+}
+
+func (connector *Connector) markOpen() {
+	connector.mu.Lock()
+	connector.openedAt = connector.now()
+	connector.mu.Unlock()
+}
+
+// connectionUptime reports how long the most recent attempt stayed
+// authenticated. Zero means the attempt never reached the open state.
+func (connector *Connector) connectionUptime() time.Duration {
+	connector.mu.Lock()
+	defer connector.mu.Unlock()
+	if connector.openedAt.IsZero() {
+		return 0
+	}
+	return connector.now().Sub(connector.openedAt)
 }
 
 type queuedWrite struct {
@@ -314,6 +362,9 @@ func (writer *connectionWriter) run() {
 			}
 		}
 		_ = writer.connection.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		// Safe from this goroutine: it owns every data write, and the heartbeat's
+		// WriteControl never consults the compression flag.
+		writer.connection.EnableWriteCompression(len(value.data) >= compressionThreshold)
 		err := writer.connection.WriteMessage(value.messageType, value.data)
 		value.done <- err
 		if err != nil {
@@ -443,6 +494,9 @@ func (connector *Connector) runLoop(ctx context.Context, done chan struct{}) {
 			return
 		}
 		connector.state("connecting")
+		connector.mu.Lock()
+		connector.openedAt = time.Time{}
+		connector.mu.Unlock()
 		err := connector.connectOnce(ctx)
 		if ctx.Err() != nil {
 			return
@@ -453,6 +507,13 @@ func (connector *Connector) runLoop(ctx context.Context, done chan struct{}) {
 			connector.recordError(nil)
 		}
 		connector.state("waiting")
+		// A normal disconnect (read error, EOF, Relay restart) returns a non-nil
+		// error, so without this reset a daemon that has been connected for hours
+		// keeps escalating toward the 30s ceiling and a waking phone finds its Host
+		// still offline. Judge the endpoint by how long the socket survived.
+		if connector.connectionUptime() >= relayStableConnection {
+			attempt = 0
+		}
 		delay := BackoffDelay(attempt, connector.config.Random)
 		attempt++
 		timer := time.NewTimer(delay)
@@ -531,7 +592,7 @@ func (connector *Connector) connectOnce(ctx context.Context) error {
 	dial := connector.config.Dial
 	if dial == nil {
 		dial = func(ctx context.Context, endpoint string, header http.Header) (*websocket.Conn, *http.Response, error) {
-			return websocket.DefaultDialer.DialContext(ctx, endpoint, header)
+			return relayDialer.DialContext(ctx, endpoint, header)
 		}
 	}
 	connection, _, err := dial(ctx, endpoint, header)
@@ -631,6 +692,7 @@ func (connector *Connector) connectOnce(ctx context.Context) error {
 			}
 		}
 	}()
+	connector.markOpen()
 	connector.state("open")
 	for {
 		messageType, payload, err := connection.ReadMessage()

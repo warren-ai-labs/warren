@@ -148,7 +148,7 @@ struct WarrenDesktopSettingsView: View {
     let onLoadUsage: ((Int, String?, Bool) -> Void)?
     /// Replaces only the Host's derived Usage projections from retained Agent
     /// history. The settings page asks for confirmation before invoking it.
-    let onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
+    let onRebuildUsage: ((@escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void) -> Void)?
 
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
@@ -209,6 +209,7 @@ struct WarrenDesktopSettingsView: View {
     @State private var usageRebuildConfirmation = false
     @State private var usageRebuildBusy = false
     @State private var usageRebuildError: String?
+    @State private var usageRebuildSummary: WarrenUsageRebuildSummary?
     /// The day picked in either Usage surface, shared so Overview can open the
     /// Detail page on the day the person clicked.
     @State private var usageSelectedDay: String?
@@ -276,7 +277,7 @@ struct WarrenDesktopSettingsView: View {
         usageStats: WarrenUsageStats = WarrenUsageStats(),
         usageState: WarrenUsageLoadState = .idle,
         onLoadUsage: ((Int, String?, Bool) -> Void)? = nil,
-        onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
+        onRebuildUsage: ((@escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void) -> Void)? = nil,
         initialSettingsSection: WarrenDesktopSettingsSection? = nil,
         publicAccessPrefill: WarrenDesktopPublicAccessPrefill? = nil,
         relayPrefill: WarrenDesktopRelayPrefill? = nil
@@ -1407,7 +1408,7 @@ struct WarrenDesktopSettingsView: View {
                 .onAppear { onLoadUsage?(usageRange.days, usageSelectedDay, false) }
 
                 VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                    WarrenSettingsSectionHeader("Maintenance", description: "Rebuild cached aggregate statistics from session event history.", tokens: tokens)
+                    WarrenSettingsSectionHeader("Maintenance", tokens: tokens)
                     usageRebuildSection(tokens: tokens)
                 }
             }
@@ -1419,9 +1420,10 @@ struct WarrenDesktopSettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(
-                "Warren will delete the current daily and intraday Usage aggregates "
-                    + "and rebuild them from retained Agent history. The Agent journal "
-                    + "and all other databases will remain unchanged."
+                "Warren will re-read the transcripts of every Agent that reports token "
+                    + "counts and replace those Agents' Usage aggregates. An Agent whose "
+                    + "transcripts cannot be found keeps its current numbers. The Agent "
+                    + "journal and all other databases remain unchanged."
             )
         }
     }
@@ -1448,7 +1450,9 @@ struct WarrenDesktopSettingsView: View {
         WarrenSettingsCard(tokens: tokens) {
             WarrenSettingsRow(
                 title: "Rebuild Usage Data",
-                subtitle: "Use this once after upgrading if historical days are present but token totals are incomplete. Only aggregate cache is affected.",
+                // When to press it, in one line. What it does in detail belongs to
+                // the confirmation, which is the moment anyone needs to know.
+                subtitle: "Recounts every call from the stored transcripts. Use it after upgrading, or when totals look inflated.",
                 tokens: tokens
             ) {
                 HStack(spacing: WarrenSpacing.compact) {
@@ -1465,6 +1469,26 @@ struct WarrenDesktopSettingsView: View {
                 }
             }
 
+            // The age of the stored figures, taken from the rebuild that just
+            // finished when there is one so the line moves without waiting for
+            // the panel to refetch.
+            WarrenSettingsCardDivider(tokens: tokens)
+            HStack(alignment: .top, spacing: WarrenSpacing.small) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .foregroundStyle(tokens.mutedForeground)
+                Text(
+                    WarrenUsageFormatting.rebuildAge(
+                        usageRebuildSummary?.stamp ?? usageStats.lastRebuild
+                    )
+                )
+                .font(WarrenTypography.settingsSupporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, WarrenSpacing.standard)
+            .padding(.vertical, WarrenSpacing.compact)
+            .accessibilityIdentifier("settings.usage.rebuild.age")
+
             if let usageRebuildError, !usageRebuildError.isEmpty {
                 WarrenSettingsCardDivider(tokens: tokens)
                 HStack(spacing: WarrenSpacing.small) {
@@ -1478,6 +1502,19 @@ struct WarrenDesktopSettingsView: View {
                 .padding(.horizontal, WarrenSpacing.standard)
                 .padding(.vertical, WarrenSpacing.compact)
                 .accessibilityIdentifier("settings.usage.rebuild.error")
+            } else if let usageRebuildSummary {
+                WarrenSettingsCardDivider(tokens: tokens)
+                HStack(alignment: .top, spacing: WarrenSpacing.small) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(tokens.success)
+                    Text(WarrenUsageFormatting.rebuildOutcome(usageRebuildSummary))
+                        .font(WarrenTypography.settingsSupporting)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, WarrenSpacing.standard)
+                .padding(.vertical, WarrenSpacing.compact)
+                .accessibilityIdentifier("settings.usage.rebuild.summary")
             }
         }
     }
@@ -1486,11 +1523,15 @@ struct WarrenDesktopSettingsView: View {
         guard !usageRebuildBusy, let onRebuildUsage else { return }
         usageRebuildBusy = true
         usageRebuildError = nil
+        usageRebuildSummary = nil
         onRebuildUsage { result in
             DispatchQueue.main.async {
                 usageRebuildBusy = false
                 switch result {
-                case .success:
+                case .success(let summary):
+                    // Reporting what changed is the point: a rebuild that says
+                    // nothing leaves no way to tell a correction from a no-op.
+                    usageRebuildSummary = summary
                     onLoadUsage?(usageRange.days, usageSelectedDay, true)
                 case .failure(let error):
                     usageRebuildError = error.localizedDescription

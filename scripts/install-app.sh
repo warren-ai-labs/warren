@@ -5,50 +5,45 @@ set -euo pipefail
 repository_root="$(cd "$(dirname "$0")/.." && pwd)"
 app_path="$repository_root/Warren.app"
 install_path="/Applications/Warren.app"
-executable_path="$app_path/Contents/MacOS/Warren"
-installed_executable_path="$install_path/Contents/MacOS/Warren"
-menubar_executable_path="$app_path/Contents/MacOS/WarrenDaemonMenuBar"
-installed_menubar_executable_path="$install_path/Contents/MacOS/WarrenDaemonMenuBar"
-daemon_executable_path="$app_path/Contents/MacOS/warren-headless"
-installed_daemon_executable_path="$install_path/Contents/MacOS/warren-headless"
-ssh_tunnel_executable_path="$app_path/Contents/MacOS/warren-ssh-tunnel"
-installed_ssh_tunnel_executable_path="$install_path/Contents/MacOS/warren-ssh-tunnel"
-
+# Every Warren component has to be stopped before its executable is replaced,
+# whichever bundle it was launched from: /Applications, the repository root, or
+# a worktree. Detection therefore matches any absolute path ending in
+# `Warren.app/Contents/MacOS/<name>` instead of one fixed build path.
+#
 # macOS pgrep/pkill cannot always see processes whose executable file has
 # been replaced while running, so resolve PIDs from `ps` and kill by PID.
-pids_for_path() {
-    local executable="$1"
-    # Match only argument-less invocations (exactly `pid executable`), so the
-    # separate Ghostline serve process (started with --ghostline-serve)
-    # is never matched or killed.
-    # WARNING: never loosen this filter. The ghostline serve process owns the
-    # PTY sessions and is designed to survive installs, restarts and updates;
-    # killing it takes every running session down with it.
-    ps -axo pid=,command= | awk -v exe="$executable" '$2 == exe && NF == 2 { print $1 }'
+pids_for_bundle_executable() {
+    local name="$1"
+    local require_no_arguments="${2:-true}"
+    local suffix="/Warren.app/Contents/MacOS/$name"
+    # The control-plane binaries are matched only as argument-less invocations
+    # (exactly `pid executable`), so the separate Ghostline serve process
+    # (started with --ghostline-serve) is never matched or killed. The SSH
+    # helper is launched with arguments and passes `false`.
+    # WARNING: never loosen this filter for warren-headless. The ghostline serve
+    # process owns the PTY sessions and is designed to survive installs,
+    # restarts and updates; killing it takes every running session down with it.
+    ps -axo pid=,command= | awk -v suffix="$suffix" -v noargs="$require_no_arguments" '
+        index($2, "/") == 1 &&
+        length($2) > length(suffix) &&
+        substr($2, length($2) - length(suffix) + 1) == suffix &&
+        (noargs != "true" || NF == 2) { print $1 }'
 }
 
 is_running() {
-    [[ -n "$(pids_for_path "$executable_path")$(pids_for_path "$installed_executable_path")" ]]
+    [[ -n "$(pids_for_bundle_executable Warren)" ]]
 }
 
 is_menubar_running() {
-    [[ -n "$(pids_for_path "$menubar_executable_path")$(pids_for_path "$installed_menubar_executable_path")" ]]
+    [[ -n "$(pids_for_bundle_executable WarrenDaemonMenuBar)" ]]
 }
 
 is_daemon_running() {
-    [[ -n "$(pids_for_path "$daemon_executable_path")$(pids_for_path "$installed_daemon_executable_path")" ]]
-}
-
-ssh_tunnel_pids_for_path() {
-    local executable="$1"
-    # The helper receives --target/--remote arguments, so it is intentionally
-    # matched by its exact executable path without the argument-less filter
-    # used for the long-lived control-plane binaries above.
-    ps -axo pid=,command= | awk -v exe="$executable" '$2 == exe { print $1 }'
+    [[ -n "$(pids_for_bundle_executable warren-headless)" ]]
 }
 
 is_ssh_tunnel_running() {
-    [[ -n "$(ssh_tunnel_pids_for_path "$ssh_tunnel_executable_path")$(ssh_tunnel_pids_for_path "$installed_ssh_tunnel_executable_path")" ]]
+    [[ -n "$(pids_for_bundle_executable warren-ssh-tunnel false)" ]]
 }
 
 notify_maintenance() {
@@ -142,11 +137,11 @@ if is_running; then
 fi
 
 if is_running; then
-    force_terminate_pids "$(pids_for_path "$executable_path") $(pids_for_path "$installed_executable_path")" || true
+    force_terminate_pids "$(pids_for_bundle_executable Warren)" || true
 fi
 
 if is_menubar_running; then
-    force_terminate_pids "$(pids_for_path "$menubar_executable_path") $(pids_for_path "$installed_menubar_executable_path")" || true
+    force_terminate_pids "$(pids_for_bundle_executable WarrenDaemonMenuBar)" || true
 fi
 
 # The daemon is deliberately independent during normal Desktop shutdown, but
@@ -158,14 +153,14 @@ fi
 # session owner and must NEVER be killed during install/restart/update; the
 # new daemon reuses or adopts it so sessions keep running.
 if is_daemon_running; then
-    force_terminate_pids "$(pids_for_path "$daemon_executable_path") $(pids_for_path "$installed_daemon_executable_path")" || true
+    force_terminate_pids "$(pids_for_bundle_executable warren-headless)" || true
 fi
 
 # SSH helpers own a live forwarding socket and must not survive an app update.
-# Unlike the control-plane binaries they are launched with arguments, so use
-# the exact helper path filter above.
+# Unlike the control-plane binaries they are launched with arguments, so they
+# use the argument-tolerant match above.
 if is_ssh_tunnel_running; then
-    force_terminate_pids "$(ssh_tunnel_pids_for_path "$ssh_tunnel_executable_path") $(ssh_tunnel_pids_for_path "$installed_ssh_tunnel_executable_path")" || true
+    force_terminate_pids "$(pids_for_bundle_executable warren-ssh-tunnel false)" || true
 fi
 
 if is_running; then

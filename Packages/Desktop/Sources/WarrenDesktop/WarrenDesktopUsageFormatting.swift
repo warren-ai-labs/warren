@@ -90,16 +90,69 @@ public enum WarrenUsageFormatting {
         return display.string(from: date)
     }
 
+    /// A call count, which is a count of things rather than a token magnitude.
+    ///
+    /// Separate from `tokens` because the compact form is only right for the
+    /// latter: 12,400 calls abbreviated to "12K calls" hides the digit a person
+    /// is actually comparing between two days.
+    public static func calls(_ value: Int64) -> String {
+        value == 1 ? "1 call" : "\(exact(value)) calls"
+    }
+
+    /// One sentence describing what a Usage rebuild replaced.
+    public static func rebuildOutcome(_ summary: WarrenUsageRebuildSummary) -> String {
+        let providers = summary.providers.isEmpty
+            ? "no Agent"
+            : summary.providers.joined(separator: ", ")
+        var text = "Replaced \(providers): \(calls(summary.calls)) across "
+            + "\(summary.days) \(summary.days == 1 ? "day" : "days")."
+        if summary.collapsedRepeats > 0 {
+            text += " \(exact(summary.collapsedRepeats)) repeated measurements were counted once."
+        }
+        return text
+    }
+
+    /// How old the stored figures are.
+    ///
+    /// The gap is the useful fact, not the instant: a rebuild from three releases
+    /// ago produces numbers that look exactly like current ones. When nothing has
+    /// been rebuilt this says so rather than going quiet, since that is the state
+    /// in which the figures are most likely to be wrong.
+    public static func rebuildAge(
+        _ stamp: WarrenUsageRebuildStamp?,
+        now: Date = Date()
+    ) -> String {
+        guard let stamp else {
+            return "Never rebuilt"
+        }
+        // Relative formatting renders a rebuild that just finished as "in 0
+        // seconds", and a Host clock a little ahead of this one pushes it into the
+        // future, so the first minute is stated plainly instead.
+        let elapsed = now.timeIntervalSince(stamp.completedAt)
+        let age = elapsed < 60
+            ? "just now"
+            : stamp.completedAt.formatted(.relative(presentation: .named, unitsStyle: .wide))
+        guard !stamp.providers.isEmpty else {
+            return "Rebuilt \(age)"
+        }
+        return "Rebuilt \(age) · \(stamp.providers.joined(separator: ", "))"
+    }
+
     /// Explains why a figure is incomplete, or nil when it is not.
     ///
-    /// Kept as one function so every surface phrases the caveat identically.
+    /// Kept as one function so every surface phrases the caveat identically, and
+    /// it names what is missing rather than only how much: an unpriced model is
+    /// one catalog entry away from being fixed, and without the name nobody can
+    /// tell which entry.
     public static func incompleteReason(_ cost: WarrenUsageCost) -> String? {
         if cost.isComplete { return nil }
         var reasons: [String] = []
-        let unpriced = cost.calls - cost.pricedCalls
-        if unpriced > 0 {
-            let calls = unpriced == 1 ? "1 call" : "\(exact(unpriced)) calls"
-            reasons.append("\(calls) had no published price")
+        if cost.unpricedCalls > 0 {
+            var reason = "\(calls(cost.unpricedCalls)) had no published price"
+            if !cost.unpricedModels.isEmpty {
+                reason += " (\(cost.unpricedModels.joined(separator: ", ")))"
+            }
+            reasons.append(reason)
         }
         if !cost.unmeasuredProviders.isEmpty {
             let names = cost.unmeasuredProviders.joined(separator: ", ")

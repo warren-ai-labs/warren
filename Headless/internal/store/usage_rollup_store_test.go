@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
-	"github.com/abcdlsj/warren/Headless/internal/usage"
 )
 
 func newUsageStore(t *testing.T, project string) *AgentEventStore {
@@ -125,38 +124,104 @@ func TestUsageRollupUsesFiveMinuteLocalBuckets(t *testing.T) {
 	}
 }
 
-func TestUsageRollupBackfillsIntervalsFromRetainedJournal(t *testing.T) {
+func TestUsageRollupDayTotalsAlwaysMatchIntervals(t *testing.T) {
+	// Days are summed from the interval buckets, so the two views cannot
+	// disagree. They used to be separate tables, and they drifted: only the
+	// intraday one had a backfill path, which made the same day report a
+	// different total depending on which the panel read.
 	s := newUsageStore(t, "proj-1")
 	ctx := context.Background()
-	at := time.Date(2026, time.September, 10, 16, 42, 0, 0, time.Local)
+	base := time.Date(2026, time.September, 10, 9, 3, 0, 0, time.Local)
+	for index, at := range []time.Time{base, base.Add(90 * time.Minute), base.Add(7 * time.Hour)} {
+		if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{
+			usageEvent("evt-day-"+string(rune('a'+index)), "claude", "claude-opus-5", at,
+				&api.AgentUsage{InputTokens: 30, CacheReadInputTokens: 5, OutputTokens: 7}),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	day := base.Format("2006-01-02")
+	intervals, err := s.QueryUsageIntervals(ctx, day, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	daily, err := s.QueryUsageDaily(ctx, day, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intervals) != 3 || len(daily) != 1 {
+		t.Fatalf("intervals = %d rows, daily = %d rows", len(intervals), len(daily))
+	}
+	var calls, fresh, cacheRead, output int64
+	for _, row := range intervals {
+		calls += row.Calls
+		fresh += row.FreshInput
+		cacheRead += row.CacheRead
+		output += row.Output
+	}
+	if daily[0].Calls != calls || daily[0].FreshInput != fresh ||
+		daily[0].CacheRead != cacheRead || daily[0].Output != output {
+		t.Fatalf("daily %+v does not sum its intervals (calls %d fresh %d cacheRead %d output %d)",
+			daily[0], calls, fresh, cacheRead, output)
+	}
+}
+
+func TestUsageRollupCountsOneCallKeyOnce(t *testing.T) {
+	// The repeat that matters spans streams: a resumed conversation copies its
+	// history into a new transcript, which Warren binds to a new stream, so the
+	// journal's per-stream idempotency cannot see it. Only the call key can.
+	s := newUsageStore(t, "proj-1")
+	ctx := context.Background()
+	at := time.Now()
+	measurement := &api.AgentUsage{InputTokens: 100, OutputTokens: 20, CallKey: "msg_resumed"}
 	if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{
-		usageEvent("evt-backfill", "claude", "claude-opus-5", at,
-			&api.AgentUsage{InputTokens: 100, OutputTokens: 20}),
+		usageEvent("evt-original", "claude", "claude-opus-5", at, measurement),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM agent_usage_interval`); err != nil {
+	if _, err := s.AppendCanonicalEvents(ctx, "exec-2", "exec-2", []api.CanonicalAgentEvent{
+		usageEvent("evt-copy", "claude", "claude-opus-5", at, measurement),
+	}); err != nil {
 		t.Fatal(err)
+	}
+	calls, fresh, _, _, output := totalRows(t, s)
+	if calls != 1 || fresh != 100 || output != 20 {
+		t.Fatalf("calls=%d fresh=%d output=%d, want the copied call counted once", calls, fresh, output)
 	}
 
-	// A resolver is normally installed during Service initialization. Reinstalling
-	// it here models an upgrade where the old daily table predates intervals.
-	s.SetUsageAttributionResolver(func(string) UsageAttribution {
-		return UsageAttribution{ProjectID: "proj-1"}
-	})
-	rows, err := s.QueryUsageIntervals(ctx, "", "")
-	if err != nil {
+	// A different provider may legitimately mint the same key, and a genuine
+	// second call must still be counted.
+	if _, err := s.AppendCanonicalEvents(ctx, "exec-3", "exec-3", []api.CanonicalAgentEvent{
+		usageEvent("evt-other-provider", "codex", "gpt-5.6-luna", at,
+			&api.AgentUsage{InputTokens: 10, OutputTokens: 2, CallKey: "msg_resumed"}),
+		usageEvent("evt-second-call", "claude", "claude-opus-5", at,
+			&api.AgentUsage{InputTokens: 100, OutputTokens: 20, CallKey: "msg_next"}),
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].BucketStartMin != 1_000 || rows[0].Calls != 1 {
-		t.Fatalf("backfilled intervals = %+v", rows)
+	calls, _, _, _, _ = totalRows(t, s)
+	if calls != 3 {
+		t.Fatalf("calls = %d, want the two distinct calls added", calls)
 	}
-	daily, err := s.QueryUsageDaily(ctx, "", "")
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestUsageRollupCountsKeylessObservations(t *testing.T) {
+	// A provider that offers no call identity must still be counted. Losing real
+	// spend is worse than the risk of counting an unidentifiable repeat twice.
+	s := newUsageStore(t, "proj-1")
+	ctx := context.Background()
+	at := time.Now()
+	for index := range 2 {
+		if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{
+			usageEvent("evt-keyless-"+string(rune('a'+index)), "claude", "claude-opus-5", at,
+				&api.AgentUsage{InputTokens: 100, OutputTokens: 20}),
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if len(daily) != 1 || daily[0].Calls != 1 {
-		t.Fatalf("backfill must not duplicate daily rows: %+v", daily)
+	calls, _, _, _, _ := totalRows(t, s)
+	if calls != 2 {
+		t.Fatalf("calls = %d, want both keyless observations counted", calls)
 	}
 }
 
@@ -176,9 +241,6 @@ func TestUsageRollupRebuildReplacesOnlyUsageProjections(t *testing.T) {
 	if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", events); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM agent_usage_daily`); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := s.db.Exec(`DELETE FROM agent_usage_interval`); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +249,7 @@ func TestUsageRollupRebuildReplacesOnlyUsageProjections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Events != 2 || result.Calls != 2 || result.Days != 1 {
+	if result.Observations != 2 || result.Calls != 2 || result.Days != 1 {
 		t.Fatalf("rebuild result = %+v, want two usage events on one day", result)
 	}
 	daily, err := s.QueryUsageDaily(ctx, "", "")
@@ -419,186 +481,137 @@ func TestQueryUsageDailyBoundsAreInclusive(t *testing.T) {
 	}
 }
 
-func priceRate(value float64) *float64 { return &value }
-
-func TestRepriceUsageDailyFillsCostAndPricedCalls(t *testing.T) {
+func TestUsageRollupRebuildKeepsProvidersOutsideItsScope(t *testing.T) {
+	// A rebuild deletes before it re-reads. Deleting a provider whose transcripts
+	// the caller cannot enumerate would zero real spend with nothing left to
+	// restore it from, so the delete has to be scoped to what is being replaced.
 	s := newUsageStore(t, "proj-1")
 	ctx := context.Background()
-	// One million tokens per bucket at Anthropic's claude-opus-5 list prices:
-	// 5 + 25 + 0.5 + 6.25 = 36.75 USD.
+	at := time.Now()
 	if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{
-		usageEvent("evt-1", "claude", "claude-opus-5", time.Now(), &api.AgentUsage{
-			InputTokens:              1_000_000,
-			OutputTokens:             1_000_000,
-			CacheReadInputTokens:     1_000_000,
-			CacheCreationInputTokens: 1_000_000,
-		}),
+		usageEvent("evt-claude", "claude", "claude-opus-5", at,
+			&api.AgentUsage{InputTokens: 100, OutputTokens: 20}),
+		usageEvent("evt-pi", "pi", "deepseek-v4.1-flash", at,
+			&api.AgentUsage{InputTokens: 40, OutputTokens: 8}),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	table := &usage.PriceTable{Models: map[string]usage.ModelPrice{
-		"claude-opus-5": {
-			Input: priceRate(5), Output: priceRate(25),
-			CacheRead: priceRate(0.5), CacheWrite: priceRate(6.25),
-		},
-	}}
-	changed, err := s.RepriceUsageDaily(ctx, table)
-	if err != nil || changed != 1 {
-		t.Fatalf("changed = %d, err = %v", changed, err)
-	}
-	want := int64(36_750_000_000)
-	rows, _ := s.QueryUsageDaily(ctx, "", "")
-	if rows[0].CostNanoUSD != want {
-		t.Fatalf("cost = %d, want %d", rows[0].CostNanoUSD, want)
-	}
-	if rows[0].PricedCalls != rows[0].Calls {
-		t.Fatalf("pricedCalls = %d, calls = %d", rows[0].PricedCalls, rows[0].Calls)
-	}
-	intervals, err := s.QueryUsageIntervals(ctx, "", "")
+
+	result, err := s.RebuildUsageRollupsFromObservations(ctx, []string{"claude"},
+		[]UsageRebuildObservation{{
+			Provider: "claude", Model: "claude-opus-5", ProjectID: "proj-1", OccurredAt: at,
+			Usage: api.AgentUsage{InputTokens: 100, OutputTokens: 20, CallKey: "msg_1"},
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(intervals) != 1 || intervals[0].CostNanoUSD != want || intervals[0].PricedCalls != 1 {
-		t.Fatalf("intervals = %+v, want repriced interval cost", intervals)
-	}
-}
-
-func TestRepriceUsageDailyMarksUnpricedModel(t *testing.T) {
-	s := newUsageStore(t, "proj-1")
-	ctx := context.Background()
-	if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{
-		// `<synthetic>` really appears in Claude transcripts and is in no catalog.
-		usageEvent("evt-1", "claude", "<synthetic>", time.Now(), &api.AgentUsage{
-			InputTokens: 1_000_000, OutputTokens: 1_000_000,
-		}),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.RepriceUsageDaily(ctx, &usage.PriceTable{
-		Models: map[string]usage.ModelPrice{"claude-opus-5": {Input: priceRate(5)}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	rows, _ := s.QueryUsageDaily(ctx, "", "")
-	if rows[0].CostNanoUSD != 0 || rows[0].PricedCalls != 0 {
-		t.Fatalf("row = %+v, want zero cost and zero priced calls", rows[0])
-	}
-	if rows[0].Calls != 1 || rows[0].Output != 1_000_000 {
-		t.Fatalf("tokens must survive an unpriced model: %+v", rows[0])
-	}
-}
-
-func TestRepriceUsageDailyLeavesPartialRowShortOfCalls(t *testing.T) {
-	// A model priced for input/output but not cache: the cost covers only the
-	// priced buckets, and pricedCalls must stay below calls so the aggregate is
-	// presented as a lower bound.
-	s := newUsageStore(t, "proj-1")
-	ctx := context.Background()
-	if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{
-		usageEvent("evt-1", "claude", "claude-x", time.Now(), &api.AgentUsage{
-			InputTokens: 1_000_000, OutputTokens: 1_000_000, CacheReadInputTokens: 1_000_000,
-		}),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.RepriceUsageDaily(ctx, &usage.PriceTable{
-		Models: map[string]usage.ModelPrice{
-			"claude-x": {Input: priceRate(5), Output: priceRate(25)},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	rows, _ := s.QueryUsageDaily(ctx, "", "")
-	if want := int64(30_000_000_000); rows[0].CostNanoUSD != want {
-		t.Fatalf("cost = %d, want %d", rows[0].CostNanoUSD, want)
-	}
-	if rows[0].PricedCalls != 0 || rows[0].Calls != 1 {
-		t.Fatalf("row = %+v, want pricedCalls below calls", rows[0])
-	}
-}
-
-func TestRepriceUsageDailyRestatesHistoryWhenPricesChange(t *testing.T) {
-	// The point of recomputing instead of accruing: a corrected price must be
-	// able to restate spend that was already recorded.
-	s := newUsageStore(t, "proj-1")
-	ctx := context.Background()
-	if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{
-		usageEvent("evt-1", "claude", "claude-opus-5", time.Now(), &api.AgentUsage{
-			InputTokens: 1_000_000,
-		}),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	cheap := &usage.PriceTable{Models: map[string]usage.ModelPrice{
-		"claude-opus-5": {Input: priceRate(5)},
-	}}
-	if _, err := s.RepriceUsageDaily(ctx, cheap); err != nil {
-		t.Fatal(err)
-	}
-	rows, _ := s.QueryUsageDaily(ctx, "", "")
-	if rows[0].CostNanoUSD != 5_000_000_000 {
-		t.Fatalf("cost = %d, want 5 USD", rows[0].CostNanoUSD)
+	if result.Observations != 1 || result.Calls != 1 {
+		t.Fatalf("rebuild result = %+v", result)
 	}
 
-	dearer := &usage.PriceTable{Models: map[string]usage.ModelPrice{
-		"claude-opus-5": {Input: priceRate(7)},
-	}}
-	changed, err := s.RepriceUsageDaily(ctx, dearer)
-	if err != nil || changed != 1 {
-		t.Fatalf("changed = %d, err = %v", changed, err)
-	}
-	rows, _ = s.QueryUsageDaily(ctx, "", "")
-	if rows[0].CostNanoUSD != 7_000_000_000 {
-		t.Fatalf("cost = %d, want the restated 7 USD", rows[0].CostNanoUSD)
-	}
-
-	// An unchanged table must report no writes.
-	changed, err = s.RepriceUsageDaily(ctx, dearer)
-	if err != nil || changed != 0 {
-		t.Fatalf("changed = %d, err = %v, want no rewrite", changed, err)
-	}
-}
-
-func TestRepriceUsageDailySkipsCleanTableButPricesNewUsage(t *testing.T) {
-	// Repricing is a full scan of both Usage tables, so an unchanged price table
-	// with no new writes must be a no-op. New usage, however, lands unpriced and
-	// has to be filled in even while the price table is unchanged.
-	s := newUsageStore(t, "proj-1")
-	ctx := context.Background()
-	if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{
-		usageEvent("evt-1", "claude", "claude-opus-5", time.Now(), &api.AgentUsage{
-			InputTokens: 1_000_000,
-		}),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	table := &usage.PriceTable{FetchedAt: time.Now(), Models: map[string]usage.ModelPrice{
-		"claude-opus-5": {Input: priceRate(5)},
-	}}
-	changed, err := s.RepriceUsageDaily(ctx, table)
-	if err != nil || changed != 1 {
-		t.Fatalf("first reprice changed = %d, err = %v", changed, err)
-	}
-	if changed, err = s.RepriceUsageDaily(ctx, table); err != nil || changed != 0 {
-		t.Fatalf("clean reprice changed = %d, err = %v, want no scan result", changed, err)
-	}
-
-	if _, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{
-		usageEvent("evt-2", "claude", "claude-opus-5", time.Now(), &api.AgentUsage{
-			InputTokens: 2_000_000,
-		}),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.RepriceUsageDaily(ctx, table); err != nil {
-		t.Fatal(err)
-	}
 	rows, err := s.QueryUsageDaily(ctx, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].CostNanoUSD != 15_000_000_000 || rows[0].PricedCalls != 2 {
-		t.Fatalf("row = %+v, want the new call priced without a price refresh", rows[0])
+	byProvider := map[string]UsageDailyRow{}
+	for _, row := range rows {
+		byProvider[row.Provider] = row
+	}
+	if row, ok := byProvider["pi"]; !ok || row.Calls != 1 || row.FreshInput != 40 {
+		t.Fatalf("pi row = %+v, want it untouched by a claude-only rebuild", byProvider["pi"])
+	}
+	if row, ok := byProvider["claude"]; !ok || row.Calls != 1 || row.FreshInput != 100 {
+		t.Fatalf("claude row = %+v, want exactly one rebuilt call", byProvider["claude"])
+	}
+}
+
+func TestUsageRollupRebuildCollapsesRepeatedObservations(t *testing.T) {
+	// A resumed conversation writes its whole history into a second transcript,
+	// so the rebuild reads the same call twice. Counting both is what inflated
+	// Claude totals by 1.071x and Codex by 1.077x against local transcripts.
+	s := newUsageStore(t, "proj-1")
+	ctx := context.Background()
+	at := time.Now()
+	repeated := UsageRebuildObservation{
+		Provider: "claude", Model: "claude-opus-5", ProjectID: "proj-1", OccurredAt: at,
+		Usage: api.AgentUsage{InputTokens: 100, OutputTokens: 20, CallKey: "msg_dup"},
+	}
+	result, err := s.RebuildUsageRollupsFromObservations(ctx, []string{"claude"},
+		[]UsageRebuildObservation{repeated, repeated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Observations != 2 || result.Calls != 1 {
+		t.Fatalf("rebuild result = %+v, want two observations collapsed into one call", result)
+	}
+	calls, fresh, _, _, output := totalRows(t, s)
+	if calls != 1 || fresh != 100 || output != 20 {
+		t.Fatalf("calls=%d fresh=%d output=%d", calls, fresh, output)
+	}
+}
+
+func TestUsageRollupRebuildStampSurvivesReopen(t *testing.T) {
+	// The stamp is what lets a panel say how old its figures are, so it has to
+	// outlive the process that wrote it -- the question is asked on a later launch.
+	path := filepath.Join(t.TempDir(), "events.db")
+	first, err := OpenAgentEventStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, _, err := first.LastUsageRebuild(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := first.LastUsageRebuild(ctx); found {
+		t.Fatal("a store that never rebuilt must report no stamp")
+	}
+	result, err := first.RebuildUsageRollupsFromObservations(ctx, []string{"claude", "codex"},
+		[]UsageRebuildObservation{{
+			Provider: "claude", Model: "claude-opus-5", OccurredAt: time.Now(),
+			Usage: api.AgentUsage{InputTokens: 10, OutputTokens: 2, CallKey: "msg_1"},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CompletedAt.IsZero() {
+		t.Fatal("a completed rebuild must report when it finished")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := OpenAgentEventStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	stamp, found, err := second.LastUsageRebuild(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("want the stamp written by the previous process")
+	}
+	if !stamp.CompletedAt.Equal(result.CompletedAt.Truncate(time.Nanosecond)) {
+		t.Errorf("stamp time = %s, want %s", stamp.CompletedAt, result.CompletedAt)
+	}
+	// The scope travels with the time: "rebuilt an hour ago" is only true of the
+	// providers that rebuild actually replaced.
+	if len(stamp.Providers) != 2 || stamp.Providers[0] != "claude" || stamp.Providers[1] != "codex" {
+		t.Errorf("stamp providers = %v, want claude and codex", stamp.Providers)
+	}
+	if stamp.Calls != result.Calls {
+		t.Errorf("stamp calls = %d, want %d", stamp.Calls, result.Calls)
+	}
+}
+
+func TestUsageRollupRebuildRefusesAnEmptyScope(t *testing.T) {
+	// Without a provider there is nothing to replace, and an unscoped rebuild
+	// would be indistinguishable from clearing the projection.
+	s := newUsageStore(t, "proj-1")
+	if _, err := s.RebuildUsageRollupsFromObservations(
+		context.Background(), nil, nil); err == nil {
+		t.Fatal("want an error for a rebuild with no provider scope")
 	}
 }
 

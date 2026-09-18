@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,7 +14,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -127,6 +130,13 @@ func TestRelayE2E(t *testing.T) {
 	if err := os.WriteFile(tokenFile, []byte(hostToken), 0o600); err != nil {
 		t.Fatalf("write token: %v", err)
 	}
+	ghostlineSocket := filepath.Join(hostData, "ghostline.sock")
+	// The daemon spawns the Ghostline host detached so daemon upgrades and
+	// restarts never end sessions. Killing the daemon through the command
+	// context therefore leaves the host serving a temp directory this test
+	// deletes. t.Cleanup runs last-in-first-out, so registering here reaps the
+	// host only after the daemon cleanup has run.
+	t.Cleanup(func() { stopGhostlineHost(ghostlineSocket) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -138,7 +148,7 @@ func TestRelayE2E(t *testing.T) {
 		"WARREN_TOKEN_FILE="+tokenFile,
 		"WARREN_STATE="+filepath.Join(hostData, "state.json"),
 		"WARREN_SETTINGS_FILE="+filepath.Join(hostData, "settings.json"),
-		"WARREN_GHOSTLINE_SOCKET="+filepath.Join(hostData, "ghostline.sock"),
+		"WARREN_GHOSTLINE_SOCKET="+ghostlineSocket,
 		"WARREN_OUTPUT_DIR="+filepath.Join(hostData, "output"),
 		"WARREN_WEB_ROOT="+filepath.Join(repoRoot, "Web", "dist"),
 		"WARREN_HEADLESS_LOG=info",
@@ -203,9 +213,9 @@ func TestRelayE2E(t *testing.T) {
 		"host_id":      hostID,
 		"pairing_code": pairingCode,
 	}, "")
-	webURL := stringField(t, pairResponse, "web_url")
+	webURL := stringField(t, pairResponse, "pairing_url")
 	if webURL == "" {
-		t.Fatalf("pair response missing web_url: %+v", pairResponse)
+		t.Fatalf("pair response missing pairing_url: %+v", pairResponse)
 	}
 
 	// The web URL is a reusable, short-lived invite. Treat it like a signed link:
@@ -319,6 +329,37 @@ func buildBinary(workDir, pkg, out string) error {
 		return fmt.Errorf("go build %s: %w: %s", pkg, err, stderr.String())
 	}
 	return nil
+}
+
+// stopGhostlineHost reaps the detached Ghostline host that owns stableSocket.
+// The host is spawned with setsid so it outlives the daemon that started it,
+// and it records its pid beside the socket it served. The daemon publishes a
+// versioned socket and points the stable path at it with a symlink, so the pid
+// file follows the resolved target.
+func stopGhostlineHost(stableSocket string) {
+	socketPath, err := filepath.EvalSymlinks(stableSocket)
+	if err != nil {
+		return
+	}
+	data, err := os.ReadFile(socketPath + ".pid")
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socketPath); errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
 }
 
 func repoRoot() (string, error) {

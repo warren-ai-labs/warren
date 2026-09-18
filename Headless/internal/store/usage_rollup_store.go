@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"sort"
 	"strings"
 	"time"
 
@@ -32,19 +34,71 @@ func (s *AgentEventStore) SetUsageAttributionResolver(resolver UsageAttributionR
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.usageAttribution = resolver
-	// The intraday table was introduced after the daily rollup. When an
-	// existing Host upgrades, the retained journal is the only place that can
-	// recover the time-of-day detail; do that once while the resolver is known.
-	_ = s.backfillUsageIntervalsLocked()
 }
 
-// UsageRebuildResult describes a completed replacement of the Usage
-// projections. The canonical Agent journal is intentionally left untouched;
-// only the two derived Usage tables are cleared and rebuilt.
+// UsageRebuildResult describes a completed replacement of the Usage projection.
+// The canonical Agent journal is intentionally left untouched.
 type UsageRebuildResult struct {
-	Events int64
-	Calls  int64
-	Days   int64
+	// Providers is the scope that was actually replaced, sorted. Anything absent
+	// kept its stored usage.
+	Providers []string
+	// Observations is how many provider usage measurements were read.
+	Observations int64
+	// Calls is how many of those were counted. It is lower than Observations by
+	// the number of repeats collapsed, which is the figure worth surfacing:
+	// a resumed conversation reports its whole history again.
+	Calls int64
+	Days  int64
+	// CompletedAt is when the replacement committed, in UTC. It is durable, so a
+	// later read of the panel can say how old these figures are.
+	CompletedAt time.Time
+}
+
+// UsageRebuildStamp is the recorded age of the stored Usage projection.
+type UsageRebuildStamp struct {
+	CompletedAt time.Time
+	// Providers is the scope that rebuild covered. Providers outside it hold
+	// figures from whatever earlier rebuild or live accumulation produced them,
+	// so the age only speaks for the ones named here.
+	Providers []string
+	Calls     int64
+}
+
+// LastUsageRebuild reports the most recent completed rebuild, or false when the
+// projection has only ever been accumulated live.
+func (s *AgentEventStore) LastUsageRebuild(ctx context.Context) (UsageRebuildStamp, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return UsageRebuildStamp{}, false, nil
+	}
+	var (
+		completedAt string
+		providers   string
+		calls       int64
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT completed_at, providers, calls FROM agent_usage_rebuild WHERE id = 1
+	`).Scan(&completedAt, &providers, &calls)
+	if err == sql.ErrNoRows {
+		return UsageRebuildStamp{}, false, nil
+	}
+	if err != nil {
+		return UsageRebuildStamp{}, false, fmt.Errorf("read last usage rebuild: %w", err)
+	}
+	parsed, parseErr := time.Parse(time.RFC3339Nano, completedAt)
+	if parseErr != nil {
+		// An unreadable stamp is not worth failing the whole panel over: the
+		// figures it describes are still correct, only their age is unknown.
+		return UsageRebuildStamp{}, false, nil
+	}
+	stamp := UsageRebuildStamp{CompletedAt: parsed, Calls: calls}
+	for _, provider := range strings.Split(providers, ",") {
+		if trimmed := strings.TrimSpace(provider); trimmed != "" {
+			stamp.Providers = append(stamp.Providers, trimmed)
+		}
+	}
+	return stamp, true, nil
 }
 
 // UsageRebuildObservation is one provider usage observation read directly from
@@ -64,15 +118,9 @@ type usageRebuildInput struct {
 	attribution *UsageAttribution
 }
 
-// RebuildUsageRollups replaces the daily and intraday Usage projections from
-// every canonical event retained in the Agent journal. It is an explicit
-// maintenance operation rather than a normal write path: callers should warn
-// the user that the current Usage aggregates are discarded, while the journal
-// and every other Host database remain unchanged.
-//
-// The whole replacement is one SQLite transaction. A failed or cancelled
-// rebuild therefore leaves the previous Usage projections intact, and running
-// it again is idempotent because the source journal is immutable.
+// RebuildUsageRollups replaces the Usage projection from every canonical event
+// retained in the Agent journal, for every provider the journal holds. It is the
+// fallback for hosts that cannot enumerate historical transcripts.
 func (s *AgentEventStore) RebuildUsageRollups(ctx context.Context) (UsageRebuildResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -88,6 +136,7 @@ func (s *AgentEventStore) RebuildUsageRollups(ctx context.Context) (UsageRebuild
 		return UsageRebuildResult{}, err
 	}
 	inputs := make([]usageRebuildInput, 0, len(encodedEvents))
+	providers := map[string]struct{}{}
 	for _, encoded := range encodedEvents {
 		if err := ctx.Err(); err != nil {
 			return UsageRebuildResult{}, err
@@ -98,17 +147,22 @@ func (s *AgentEventStore) RebuildUsageRollups(ctx context.Context) (UsageRebuild
 			// the immutable source intact and skip only that unusable row.
 			continue
 		}
+		providers[strings.TrimSpace(event.Origin.Provider)] = struct{}{}
 		inputs = append(inputs, usageRebuildInput{event: event})
 	}
-	return s.replaceUsageRollupsLocked(ctx, inputs)
+	return s.replaceUsageRollupsLocked(ctx, keys(providers), inputs)
 }
 
-// RebuildUsageRollupsFromObservations replaces Usage projections from parser
-// output collected from historical transcript files. Only the derived Usage
-// tables are touched; the canonical journal and every other database remain
-// unchanged.
+// RebuildUsageRollupsFromObservations replaces the Usage projection for exactly
+// the named providers from parser output collected over historical transcripts.
+//
+// The provider list is a parameter rather than something derived from the
+// observations because it decides what gets deleted. A provider that reports
+// tokens but whose transcripts this host cannot enumerate must keep its stored
+// usage: clearing it would silently zero real spend that nothing can restore.
 func (s *AgentEventStore) RebuildUsageRollupsFromObservations(
 	ctx context.Context,
+	providers []string,
 	observations []UsageRebuildObservation,
 ) (UsageRebuildResult, error) {
 	s.mu.Lock()
@@ -156,35 +210,57 @@ func (s *AgentEventStore) RebuildUsageRollupsFromObservations(
 			attribution: &attribution,
 		})
 	}
-	return s.replaceUsageRollupsLocked(ctx, inputs)
+	return s.replaceUsageRollupsLocked(ctx, providers, inputs)
 }
 
 func (s *AgentEventStore) replaceUsageRollupsLocked(
 	ctx context.Context,
+	providers []string,
 	inputs []usageRebuildInput,
 ) (UsageRebuildResult, error) {
+	scope := map[string]struct{}{}
+	for _, provider := range providers {
+		if trimmed := strings.TrimSpace(provider); trimmed != "" {
+			scope[trimmed] = struct{}{}
+		}
+	}
+	if len(scope) == 0 {
+		return UsageRebuildResult{}, fmt.Errorf("usage rebuild needs at least one provider")
+	}
+	replaced := keys(scope)
+	sort.Strings(replaced)
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return UsageRebuildResult{}, fmt.Errorf("begin usage rebuild: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_usage_daily`); err != nil {
-		return UsageRebuildResult{}, fmt.Errorf("clear daily Usage projection: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_usage_interval`); err != nil {
-		return UsageRebuildResult{}, fmt.Errorf("clear intraday Usage projection: %w", err)
+	for provider := range scope {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM agent_usage_interval WHERE provider = ?`, provider); err != nil {
+			return UsageRebuildResult{}, fmt.Errorf("clear Usage projection for %s: %w", provider, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM agent_usage_call WHERE provider = ?`, provider); err != nil {
+			return UsageRebuildResult{}, fmt.Errorf("clear Usage call keys for %s: %w", provider, err)
+		}
 	}
 
-	result := UsageRebuildResult{}
+	result := UsageRebuildResult{Providers: replaced}
 	for _, input := range inputs {
 		if err := ctx.Err(); err != nil {
 			return UsageRebuildResult{}, err
+		}
+		provider := strings.TrimSpace(input.event.Origin.Provider)
+		if _, covered := scope[provider]; !covered {
+			// Outside the deleted scope, so re-counting it would double the rows
+			// that were deliberately kept.
+			continue
 		}
 		observed := usageFromPayload(input.event.Payload)
 		if observed == nil {
 			continue
 		}
-		provider := strings.TrimSpace(input.event.Origin.Provider)
 		if _, ok := usage.Normalize(provider, observed); !ok {
 			continue
 		}
@@ -194,27 +270,47 @@ func (s *AgentEventStore) replaceUsageRollupsLocked(
 		} else if s.usageAttribution != nil {
 			attribution = s.usageAttribution(input.event.StreamID)
 		}
-		if err := s.accumulateUsageWithAttribution(ctx, tx, input.event, attribution); err != nil {
+		result.Observations++
+		counted, err := s.accumulateUsageWithAttribution(ctx, tx, input.event, attribution)
+		if err != nil {
 			return UsageRebuildResult{}, err
 		}
-		result.Events++
-		result.Calls++
+		if counted {
+			result.Calls++
+		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO agent_usage_meta(key, value) VALUES ('last_rebuild_at', ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value
-	`, time.Now().UTC().Format(time.RFC3339)); err != nil {
-		return UsageRebuildResult{}, fmt.Errorf("record usage rebuild: %w", err)
-	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(DISTINCT local_day) FROM agent_usage_daily`).Scan(&result.Days); err != nil {
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT local_day) FROM agent_usage_interval`).Scan(&result.Days); err != nil {
 		return UsageRebuildResult{}, fmt.Errorf("count rebuilt Usage days: %w", err)
+	}
+	// Stamped inside the same transaction as the rows it describes, so a rebuild
+	// that fails leaves neither the projection nor its recorded age changed.
+	result.CompletedAt = time.Now().UTC()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO agent_usage_rebuild (id, completed_at, providers, calls)
+		VALUES (1, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			completed_at = excluded.completed_at,
+			providers    = excluded.providers,
+			calls        = excluded.calls
+	`, result.CompletedAt.Format(time.RFC3339Nano), strings.Join(replaced, ","), result.Calls); err != nil {
+		return UsageRebuildResult{}, fmt.Errorf("stamp usage rebuild: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return UsageRebuildResult{}, fmt.Errorf("commit usage rebuild: %w", err)
 	}
-	s.usageRepriceDirty = true
 	return result, nil
+}
+
+func keys(values map[string]struct{}) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 func (s *AgentEventStore) readCanonicalEventsForUsageRebuild(ctx context.Context) ([]string, error) {
@@ -242,21 +338,18 @@ func (s *AgentEventStore) readCanonicalEventsForUsageRebuild(ctx context.Context
 	return encodedEvents, nil
 }
 
-// accumulateUsage folds one newly inserted event's usage into the daily and
-// 5-minute rollups inside the caller's transaction.
+// accumulateUsage folds one newly inserted event's usage into the 5-minute
+// rollup inside the caller's transaction.
 //
-// It is deliberately only called for rows that the journal actually inserted.
-// That is what makes accounting idempotent for free: the transcript watcher
-// re-reads each file from offset zero on every restart, so a replay produces
-// byte-identical events with the same content-hashed event IDs, and the
-// journal's UNIQUE (stream_id, event_id) rejects them before they reach here.
-//
-// The invariant this relies on is that one billable model call yields exactly
-// one canonical event carrying usage. Providers that repeat a measurement --
-// Codex re-emitting a token_count per rate-limit lane, Claude copying one
-// message's usage onto each of its content blocks -- must collapse that in
-// their adapter, which is the only layer that can still see the fields needed
-// to tell a repeat from a genuine second call.
+// Counting each billable call once is enforced here by agent_usage_call, not by
+// the journal's own idempotency. The journal only guarantees that one stream
+// never holds the same event twice, and the repeats that matter cross streams:
+// a resumed conversation copies its history into a transcript Warren binds to a
+// new stream, and a Usage rebuild re-reads files the live watcher consumed. The
+// adapters still collapse the repeats they can see -- Codex re-emitting a
+// token_count per rate-limit lane, Claude and pi copying one message's usage
+// onto each of its content blocks -- because that keeps the journal itself an
+// honest record of one call per event.
 func (s *AgentEventStore) accumulateUsage(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -267,23 +360,26 @@ func (s *AgentEventStore) accumulateUsage(
 	if resolver == nil {
 		return nil
 	}
-	return s.accumulateUsageWithAttribution(ctx, tx, event, resolver(streamID))
+	_, err := s.accumulateUsageWithAttribution(ctx, tx, event, resolver(streamID))
+	return err
 }
 
+// accumulateUsageWithAttribution reports whether the call was counted. False
+// means an identical call key had already been recorded.
 func (s *AgentEventStore) accumulateUsageWithAttribution(
 	ctx context.Context,
 	tx *sql.Tx,
 	event api.CanonicalAgentEvent,
 	attribution UsageAttribution,
-) error {
+) (bool, error) {
 	observed := usageFromPayload(event.Payload)
 	if observed == nil {
-		return nil
+		return false, nil
 	}
 	provider := strings.TrimSpace(event.Origin.Provider)
 	buckets, ok := usage.Normalize(provider, observed)
 	if !ok {
-		return nil
+		return false, nil
 	}
 
 	occurred := event.OccurredAt
@@ -296,57 +392,24 @@ func (s *AgentEventStore) accumulateUsageWithAttribution(
 	bucketStartMin := local.Hour()*60 + local.Minute()
 	bucketStartMin = (bucketStartMin / api.UsageIntervalBucketMinutes) * api.UsageIntervalBucketMinutes
 
+	if key := strings.TrimSpace(observed.CallKey); key != "" {
+		claimed, err := claimUsageCall(ctx, tx, provider, key, day)
+		if err != nil {
+			return false, err
+		}
+		if !claimed {
+			return false, nil
+		}
+	}
+
 	modelRaw := payloadString(event.Payload, "model")
 	model := usage.NormalizeModelID(modelRaw)
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO agent_usage_daily
-		(local_day, provider, model, model_raw, project_id, utc_offset_min,
-		 calls, fresh_input, cache_write, cache_read, output, reasoning,
-		 cost_nano_usd, priced_calls)
-		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 0, 0)
-		ON CONFLICT(local_day, provider, model, model_raw, project_id) DO UPDATE SET
-			calls = agent_usage_daily.calls + 1,
-			fresh_input = agent_usage_daily.fresh_input + excluded.fresh_input,
-			cache_write = agent_usage_daily.cache_write + excluded.cache_write,
-			cache_read = agent_usage_daily.cache_read + excluded.cache_read,
-			output = agent_usage_daily.output + excluded.output,
-			reasoning = agent_usage_daily.reasoning + excluded.reasoning,
-			utc_offset_min = excluded.utc_offset_min
-	`,
-		day, provider, model, modelRaw, attribution.ProjectID, offsetSeconds/60,
-		buckets.FreshInput, buckets.CacheWrite, buckets.CacheRead,
-		buckets.Output, buckets.Reasoning,
-	); err != nil {
-		return fmt.Errorf("accumulate usage rollup: %w", err)
-	}
-	if err := upsertUsageInterval(ctx, tx, day, bucketStartMin, provider, model, modelRaw,
-		attribution.ProjectID, offsetSeconds/60, buckets); err != nil {
-		return fmt.Errorf("accumulate usage interval: %w", err)
-	}
-	// The row landed with a zero cost; the next reprice pass fills it in.
-	s.usageRepriceDirty = true
-	return nil
-}
-
-func upsertUsageInterval(
-	ctx context.Context,
-	tx *sql.Tx,
-	day string,
-	bucketStartMin int,
-	provider string,
-	model string,
-	modelRaw string,
-	projectID string,
-	utcOffsetMin int,
-	buckets usage.Buckets,
-) error {
-	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO agent_usage_interval
 		(local_day, bucket_start_min, provider, model, model_raw, project_id, utc_offset_min,
-		 calls, fresh_input, cache_write, cache_read, output, reasoning,
-		 cost_nano_usd, priced_calls)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 0, 0)
+		 calls, fresh_input, cache_write, cache_read, output, reasoning)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
 		ON CONFLICT(local_day, bucket_start_min, provider, model, model_raw, project_id) DO UPDATE SET
 			calls = agent_usage_interval.calls + 1,
 			fresh_input = agent_usage_interval.fresh_input + excluded.fresh_input,
@@ -356,90 +419,43 @@ func upsertUsageInterval(
 			reasoning = agent_usage_interval.reasoning + excluded.reasoning,
 			utc_offset_min = excluded.utc_offset_min
 	`,
-		day, bucketStartMin, provider, model, modelRaw, projectID, utcOffsetMin,
+		day, bucketStartMin, provider, model, modelRaw, attribution.ProjectID, offsetSeconds/60,
 		buckets.FreshInput, buckets.CacheWrite, buckets.CacheRead,
 		buckets.Output, buckets.Reasoning,
 	); err != nil {
-		return err
+		return false, fmt.Errorf("accumulate usage interval: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
-// backfillUsageIntervalsLocked reconstructs intraday rows from retained
-// canonical events after an upgrade. It only runs when the interval table is
-// empty; once any new event has populated it, repeating the scan would double
-// count. Journal trimming may make very old points unrecoverable, but it never
-// fabricates a point that was not retained.
-func (s *AgentEventStore) backfillUsageIntervalsLocked() error {
-	if s.db == nil || s.usageAttribution == nil {
-		return nil
-	}
-	var existing int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM agent_usage_interval`).Scan(&existing); err != nil {
-		return err
-	}
-	if existing > 0 {
-		return nil
-	}
-	rows, err := s.db.Query(`SELECT event_json FROM agent_event_journal ORDER BY stream_id, sequence`)
+// claimUsageCall records a provider call key and reports whether this caller is
+// the one that claimed it. A false return means the call was already counted.
+func claimUsageCall(ctx context.Context, tx *sql.Tx, provider, callKey, day string) (bool, error) {
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO agent_usage_call(fingerprint, provider, local_day)
+		VALUES (?, ?, ?)
+		ON CONFLICT(fingerprint) DO NOTHING
+	`, usageCallFingerprint(provider, callKey), provider, day)
 	if err != nil {
-		return err
+		return false, fmt.Errorf("claim usage call: %w", err)
 	}
-	var encodedEvents []string
-	for rows.Next() {
-		var encoded string
-		if err := rows.Scan(&encoded); err != nil {
-			rows.Close()
-			return err
-		}
-		encodedEvents = append(encodedEvents, encoded)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-	tx, err := s.db.BeginTx(context.Background(), nil)
+	affected, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return false, fmt.Errorf("claim usage call: %w", err)
 	}
-	defer tx.Rollback()
-	for _, encoded := range encodedEvents {
-		var event api.CanonicalAgentEvent
-		if err := json.Unmarshal([]byte(encoded), &event); err != nil {
-			continue
-		}
-		observed := usageFromPayload(event.Payload)
-		if observed == nil {
-			continue
-		}
-		provider := strings.TrimSpace(event.Origin.Provider)
-		buckets, ok := usage.Normalize(provider, observed)
-		if !ok {
-			continue
-		}
-		occurred := event.OccurredAt
-		if occurred.IsZero() {
-			occurred = event.RecordedAt
-		}
-		local := occurred.Local()
-		minute := local.Hour()*60 + local.Minute()
-		minute = (minute / api.UsageIntervalBucketMinutes) * api.UsageIntervalBucketMinutes
-		modelRaw := payloadString(event.Payload, "model")
-		if err := upsertUsageInterval(
-			context.Background(), tx, local.Format("2006-01-02"), minute,
-			provider, usage.NormalizeModelID(modelRaw), modelRaw,
-			s.usageAttribution(event.StreamID).ProjectID,
-			func() int { _, seconds := local.Zone(); return seconds / 60 }(), buckets,
-		); err != nil {
-			return err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	s.usageRepriceDirty = true
-	return nil
+	return affected > 0, nil
+}
+
+// usageCallFingerprint hashes a provider-scoped call key into the stored 64-bit
+// identity. FNV-1a is enough because the input is not adversarial and the space
+// is vast next to the number of calls a host records: the keys only have to not
+// collide, not resist being forged.
+func usageCallFingerprint(provider, callKey string) int64 {
+	digest := fnv.New64a()
+	_, _ = digest.Write([]byte(provider))
+	_, _ = digest.Write([]byte{0})
+	_, _ = digest.Write([]byte(callKey))
+	return int64(digest.Sum64())
 }
 
 // usageFromPayload reads the usage object out of a canonical payload. The value
@@ -481,202 +497,21 @@ func payloadString(payload map[string]any, key string) string {
 	return strings.TrimSpace(value)
 }
 
-// RepriceUsageDaily recomputes the cached cost of every rollup row from the
-// supplied price table and returns how many rows changed.
-//
-// Cost is recomputed rather than accrued per call because unit prices change.
-// The tokens are the durable fact; the money is a projection of them, so a price
-// correction has to be able to restate history rather than only affect new
-// spend. Rows keep their tokens either way.
-//
-// priced_calls records how many of a row's calls had a fully known price. When
-// it trails calls, the row's cost is a lower bound and every aggregate built
-// from it must be presented as such.
-func (s *AgentEventStore) RepriceUsageDaily(ctx context.Context, table *usage.PriceTable) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.db == nil || table == nil {
-		return 0, nil
-	}
-	// Skip the full-table scan when nothing can have changed. `usageRepricedPriceAt`
-	// is only trusted when the table carries a real version: a zero FetchedAt is
-	// treated as always-changed so callers that build a table by hand still
-	// restate. A dirty flag covers usage written since the last pass, which is
-	// what keeps fresh spend from waiting for the next price refresh.
-	if !s.usageRepriceDirty && !table.FetchedAt.IsZero() &&
-		table.FetchedAt.Equal(s.usageRepricedPriceAt) {
-		return 0, nil
-	}
-
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT local_day, provider, model, model_raw, project_id,
-		       calls, fresh_input, cache_write, cache_read, output,
-		       cost_nano_usd, priced_calls
-		FROM agent_usage_daily
-	`)
-	if err != nil {
-		return 0, fmt.Errorf("scan usage rollup for repricing: %w", err)
-	}
-	type update struct {
-		key         [5]string
-		cost        int64
-		pricedCalls int64
-	}
-	type intervalUpdate struct {
-		key         [6]string
-		cost        int64
-		pricedCalls int64
-	}
-	var pending []update
-	for rows.Next() {
-		var (
-			day, provider, model, modelRaw, project string
-			calls, fresh, cacheWrite, cacheRead     int64
-			output, cost, pricedCalls               int64
-		)
-		if err := rows.Scan(&day, &provider, &model, &modelRaw, &project,
-			&calls, &fresh, &cacheWrite, &cacheRead, &output, &cost, &pricedCalls); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("scan usage rollup row: %w", err)
-		}
-		price, found := table.Price(model)
-		nextCost, status := usage.Cost(usage.Buckets{
-			FreshInput: fresh,
-			CacheWrite: cacheWrite,
-			CacheRead:  cacheRead,
-			Output:     output,
-		}, price, found)
-		// A row aggregates many calls that share one model, so its price is
-		// known for all of them or none.
-		nextPriced := int64(0)
-		if status == usage.CostPriced {
-			nextPriced = calls
-		}
-		if nextCost == cost && nextPriced == pricedCalls {
-			continue
-		}
-		pending = append(pending, update{
-			key:         [5]string{day, provider, model, modelRaw, project},
-			cost:        nextCost,
-			pricedCalls: nextPriced,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, fmt.Errorf("iterate usage rollup for repricing: %w", err)
-	}
-	rows.Close()
-
-	intervalRows, err := s.db.QueryContext(ctx, `
-		SELECT local_day, bucket_start_min, provider, model, model_raw, project_id,
-		       calls, fresh_input, cache_write, cache_read, output,
-		       cost_nano_usd, priced_calls
-		FROM agent_usage_interval
-	`)
-	if err != nil {
-		return 0, fmt.Errorf("scan usage interval for repricing: %w", err)
-	}
-	var intervalPending []intervalUpdate
-	for intervalRows.Next() {
-		var (
-			day, provider, model, modelRaw, project string
-			bucketStartMin                          int
-			calls, fresh, cacheWrite, cacheRead     int64
-			output, cost, pricedCalls               int64
-		)
-		if err := intervalRows.Scan(&day, &bucketStartMin, &provider, &model, &modelRaw, &project,
-			&calls, &fresh, &cacheWrite, &cacheRead, &output, &cost, &pricedCalls); err != nil {
-			intervalRows.Close()
-			return 0, fmt.Errorf("scan usage interval row: %w", err)
-		}
-		price, found := table.Price(model)
-		nextCost, status := usage.Cost(usage.Buckets{
-			FreshInput: fresh,
-			CacheWrite: cacheWrite,
-			CacheRead:  cacheRead,
-			Output:     output,
-		}, price, found)
-		nextPriced := int64(0)
-		if status == usage.CostPriced {
-			nextPriced = calls
-		}
-		if nextCost == cost && nextPriced == pricedCalls {
-			continue
-		}
-		intervalPending = append(intervalPending, intervalUpdate{
-			key:         [6]string{day, fmt.Sprintf("%d", bucketStartMin), provider, model, modelRaw, project},
-			cost:        nextCost,
-			pricedCalls: nextPriced,
-		})
-	}
-	if err := intervalRows.Err(); err != nil {
-		intervalRows.Close()
-		return 0, fmt.Errorf("iterate usage interval for repricing: %w", err)
-	}
-	intervalRows.Close()
-	if len(pending) == 0 && len(intervalPending) == 0 {
-		s.markUsageRepricedLocked(table)
-		return 0, nil
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin usage repricing tx: %w", err)
-	}
-	defer tx.Rollback()
-	for _, item := range pending {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE agent_usage_daily
-			SET cost_nano_usd = ?, priced_calls = ?
-			WHERE local_day = ? AND provider = ? AND model = ?
-			  AND model_raw = ? AND project_id = ?
-		`, item.cost, item.pricedCalls,
-			item.key[0], item.key[1], item.key[2], item.key[3], item.key[4]); err != nil {
-			return 0, fmt.Errorf("update usage rollup cost: %w", err)
-		}
-	}
-	for _, item := range intervalPending {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE agent_usage_interval
-			SET cost_nano_usd = ?, priced_calls = ?
-			WHERE local_day = ? AND bucket_start_min = ? AND provider = ? AND model = ?
-			  AND model_raw = ? AND project_id = ?
-		`, item.cost, item.pricedCalls,
-			item.key[0], item.key[1], item.key[2], item.key[3], item.key[4], item.key[5]); err != nil {
-			return 0, fmt.Errorf("update usage interval cost: %w", err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit usage repricing: %w", err)
-	}
-	s.markUsageRepricedLocked(table)
-	return len(pending), nil
-}
-
-// markUsageRepricedLocked records the price version the stored costs now reflect
-// and clears the pending-write flag. Callers must hold s.mu.
-func (s *AgentEventStore) markUsageRepricedLocked(table *usage.PriceTable) {
-	s.usageRepriceDirty = false
-	if table != nil {
-		s.usageRepricedPriceAt = table.FetchedAt
-	}
-}
-
-// UsageDailyRow is one aggregated spend row.
+// UsageDailyRow is one local day's spend for a single provider/model/project.
+// It is summed from the interval buckets rather than stored: a second
+// materialization of the same fact is a second thing that can be wrong.
 type UsageDailyRow struct {
-	LocalDay    string `json:"localDay"`
-	Provider    string `json:"provider"`
-	Model       string `json:"model"`
-	ModelRaw    string `json:"modelRaw"`
-	ProjectID   string `json:"projectId,omitempty"`
-	Calls       int64  `json:"calls"`
-	FreshInput  int64  `json:"freshInput"`
-	CacheWrite  int64  `json:"cacheWrite"`
-	CacheRead   int64  `json:"cacheRead"`
-	Output      int64  `json:"output"`
-	Reasoning   int64  `json:"reasoning,omitempty"`
-	CostNanoUSD int64  `json:"costNanoUsd"`
-	PricedCalls int64  `json:"pricedCalls"`
+	LocalDay   string `json:"localDay"`
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	ModelRaw   string `json:"modelRaw"`
+	ProjectID  string `json:"projectId,omitempty"`
+	Calls      int64  `json:"calls"`
+	FreshInput int64  `json:"freshInput"`
+	CacheWrite int64  `json:"cacheWrite"`
+	CacheRead  int64  `json:"cacheRead"`
+	Output     int64  `json:"output"`
+	Reasoning  int64  `json:"reasoning,omitempty"`
 }
 
 // UsageIntervalRow is one 5-minute intraday aggregate. BucketStartMin is the
@@ -694,23 +529,11 @@ type UsageIntervalRow struct {
 	CacheRead      int64  `json:"cacheRead"`
 	Output         int64  `json:"output"`
 	Reasoning      int64  `json:"reasoning,omitempty"`
-	CostNanoUSD    int64  `json:"costNanoUsd"`
-	PricedCalls    int64  `json:"pricedCalls"`
 }
 
-// QueryUsageDaily returns rows for the inclusive local-day range, ascending by
-// day. Both bounds are YYYY-MM-DD; an empty bound is unconstrained.
-func (s *AgentEventStore) QueryUsageDaily(ctx context.Context, fromDay, toDay string) ([]UsageDailyRow, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.db == nil {
-		return nil, nil
-	}
-	query := `
-		SELECT local_day, provider, model, model_raw, project_id, calls,
-		       fresh_input, cache_write, cache_read, output, reasoning,
-		       cost_nano_usd, priced_calls
-		FROM agent_usage_daily`
+// usageDayRangeClause builds the shared inclusive local-day filter. Both bounds
+// are YYYY-MM-DD; an empty bound is unconstrained.
+func usageDayRangeClause(fromDay, toDay string) (string, []any) {
 	var clauses []string
 	var args []any
 	if day := strings.TrimSpace(fromDay); day != "" {
@@ -721,14 +544,32 @@ func (s *AgentEventStore) QueryUsageDaily(ctx context.Context, fromDay, toDay st
 		clauses = append(clauses, "local_day <= ?")
 		args = append(args, day)
 	}
-	if len(clauses) > 0 {
-		query += " WHERE " + strings.Join(clauses, " AND ")
+	if len(clauses) == 0 {
+		return "", nil
 	}
-	query += " ORDER BY local_day, provider, model"
+	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// QueryUsageDaily returns per-day rows for the inclusive local-day range,
+// ascending by day.
+func (s *AgentEventStore) QueryUsageDaily(ctx context.Context, fromDay, toDay string) ([]UsageDailyRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return nil, nil
+	}
+	where, args := usageDayRangeClause(fromDay, toDay)
+	query := `
+		SELECT local_day, provider, model, model_raw, project_id,
+		       SUM(calls), SUM(fresh_input), SUM(cache_write), SUM(cache_read),
+		       SUM(output), SUM(reasoning)
+		FROM agent_usage_interval` + where + `
+		GROUP BY local_day, provider, model, model_raw, project_id
+		ORDER BY local_day, provider, model`
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query usage rollup: %w", err)
+		return nil, fmt.Errorf("query usage days: %w", err)
 	}
 	defer rows.Close()
 	var result []UsageDailyRow
@@ -737,14 +578,14 @@ func (s *AgentEventStore) QueryUsageDaily(ctx context.Context, fromDay, toDay st
 		if err := rows.Scan(
 			&row.LocalDay, &row.Provider, &row.Model, &row.ModelRaw, &row.ProjectID,
 			&row.Calls, &row.FreshInput, &row.CacheWrite, &row.CacheRead,
-			&row.Output, &row.Reasoning, &row.CostNanoUSD, &row.PricedCalls,
+			&row.Output, &row.Reasoning,
 		); err != nil {
-			return nil, fmt.Errorf("scan usage rollup: %w", err)
+			return nil, fmt.Errorf("scan usage day: %w", err)
 		}
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate usage rollup: %w", err)
+		return nil, fmt.Errorf("iterate usage days: %w", err)
 	}
 	return result, nil
 }
@@ -758,20 +599,8 @@ func (s *AgentEventStore) LatestUsageIntervalDay(ctx context.Context, fromDay, t
 	if s.db == nil {
 		return "", nil
 	}
-	query := `SELECT COALESCE(MAX(local_day), '') FROM agent_usage_interval`
-	var clauses []string
-	var args []any
-	if day := strings.TrimSpace(fromDay); day != "" {
-		clauses = append(clauses, "local_day >= ?")
-		args = append(args, day)
-	}
-	if day := strings.TrimSpace(toDay); day != "" {
-		clauses = append(clauses, "local_day <= ?")
-		args = append(args, day)
-	}
-	if len(clauses) > 0 {
-		query += " WHERE " + strings.Join(clauses, " AND ")
-	}
+	where, args := usageDayRangeClause(fromDay, toDay)
+	query := `SELECT COALESCE(MAX(local_day), '') FROM agent_usage_interval` + where
 	var latest string
 	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&latest); err != nil {
 		return "", fmt.Errorf("query latest usage interval day: %w", err)
@@ -780,33 +609,19 @@ func (s *AgentEventStore) LatestUsageIntervalDay(ctx context.Context, fromDay, t
 }
 
 // QueryUsageIntervals returns the canonical 5-minute rows for an inclusive
-// local-day range, ordered by day and bucket. Both bounds are YYYY-MM-DD; an
-// empty bound is unconstrained.
+// local-day range, ordered by day and bucket.
 func (s *AgentEventStore) QueryUsageIntervals(ctx context.Context, fromDay, toDay string) ([]UsageIntervalRow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.db == nil {
 		return nil, nil
 	}
+	where, args := usageDayRangeClause(fromDay, toDay)
 	query := `
 		SELECT local_day, bucket_start_min, provider, model, model_raw, project_id, calls,
-		       fresh_input, cache_write, cache_read, output, reasoning,
-		       cost_nano_usd, priced_calls
-		FROM agent_usage_interval`
-	var clauses []string
-	var args []any
-	if day := strings.TrimSpace(fromDay); day != "" {
-		clauses = append(clauses, "local_day >= ?")
-		args = append(args, day)
-	}
-	if day := strings.TrimSpace(toDay); day != "" {
-		clauses = append(clauses, "local_day <= ?")
-		args = append(args, day)
-	}
-	if len(clauses) > 0 {
-		query += " WHERE " + strings.Join(clauses, " AND ")
-	}
-	query += " ORDER BY local_day, bucket_start_min, provider, model"
+		       fresh_input, cache_write, cache_read, output, reasoning
+		FROM agent_usage_interval` + where + `
+		ORDER BY local_day, bucket_start_min, provider, model`
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -819,7 +634,7 @@ func (s *AgentEventStore) QueryUsageIntervals(ctx context.Context, fromDay, toDa
 		if err := rows.Scan(
 			&row.LocalDay, &row.BucketStartMin, &row.Provider, &row.Model, &row.ModelRaw, &row.ProjectID,
 			&row.Calls, &row.FreshInput, &row.CacheWrite, &row.CacheRead,
-			&row.Output, &row.Reasoning, &row.CostNanoUSD, &row.PricedCalls,
+			&row.Output, &row.Reasoning,
 		); err != nil {
 			return nil, fmt.Errorf("scan usage interval: %w", err)
 		}

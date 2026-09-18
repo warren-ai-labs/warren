@@ -34,7 +34,6 @@ type PairingClient struct {
 }
 
 type pairingExchange struct {
-	WebURL     string `json:"web_url"`
 	PairingURL string `json:"pairing_url"`
 	ExpiresIn  int    `json:"pairing_expires_in"`
 	ExpiresAt  string `json:"pairing_expires_at"`
@@ -152,9 +151,6 @@ func (client *PairingClient) exchange(ctx context.Context, code string) (Pairing
 		return PairingResult{}, err
 	}
 	link := strings.TrimSpace(value.PairingURL)
-	if link == "" {
-		link = strings.TrimSpace(value.WebURL)
-	}
 	if link == "" || !sameRelayPairingOrigin(client.baseURL, link) {
 		return PairingResult{}, errors.New("Relay pairing did not return a link")
 	}
@@ -166,8 +162,8 @@ func (client *PairingClient) exchange(ctx context.Context, code string) (Pairing
 
 // sameRelayPairingOrigin rejects a compromised or misconfigured Relay that
 // attempts to hand the daemon a link on another origin. Only the Relay's own
-// opaque invite (or the legacy host-scoped path) is accepted; query strings
-// are not needed for either form and could smuggle credentials into history.
+// opaque invite is accepted; query strings are not part of that form and could
+// smuggle credentials into history.
 func sameRelayPairingOrigin(baseURL, link string) bool {
 	base, baseErr := url.Parse(baseURL)
 	candidate, candidateErr := url.Parse(strings.TrimSpace(link))
@@ -184,5 +180,5 @@ func sameRelayPairingOrigin(baseURL, link string) bool {
 	}
 	relative := strings.TrimPrefix(candidatePath, basePath)
 	parts := strings.Split(strings.Trim(relative, "/"), "/")
-	return len(parts) == 2 && (parts[0] == "invite" || parts[0] == "h") && parts[1] != ""
+	return len(parts) == 2 && parts[0] == "invite" && parts[1] != ""
 }

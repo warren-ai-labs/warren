@@ -312,9 +312,10 @@ final class WarrenDesktopSessionTreeGuideTests: XCTestCase {
     }
 
     /// The group's pointer source is AppKit, not SwiftUI: its rows are Buttons,
-    /// so a container `.onHover` never hears about them. Both halves are pinned
-    /// here — the sensor reports the pointer without taking the click, and the
-    /// reported state paints the rail.
+    /// so a container `.onHover` never hears about them. Three things are pinned
+    /// here — the sensor reports a move without taking the click, an enter that
+    /// only says where the pointer is stays dark, and the move still paints the
+    /// rail.
     @MainActor
     func testHoverSensorReportsThePointerAndLeavesClicksToTheRows() {
         var reports: [Bool] = []
@@ -326,12 +327,21 @@ final class WarrenDesktopSessionTreeGuideTests: XCTestCase {
             sensor.trackingAreas.isEmpty,
             "The sensor has to watch a tracking area to see the pointer"
         )
+        XCTAssertTrue(
+            sensor.trackingAreas.allSatisfy { $0.options.contains(.mouseMoved) },
+            "Only a move inside the area proves the pointer went there"
+        )
         XCTAssertNil(
             sensor.hitTest(NSPoint(x: 10, y: 10)),
             "The sensor watches the pointer; the row below still takes the click"
         )
 
         sensor.mouseEntered(with: Self.pointerEvent(.mouseEntered))
+        XCTAssertEqual(
+            reports, [],
+            "An enter reports position, not movement, so it must not light the rail"
+        )
+        sensor.mouseMoved(with: Self.pointerMoveEvent())
         sensor.mouseExited(with: Self.pointerEvent(.mouseExited))
         XCTAssertEqual(reports, [true, false])
     }
@@ -409,6 +419,20 @@ final class WarrenDesktopSessionTreeGuideTests: XCTestCase {
             resting,
             "The workspace the center is showing must light its rail without a pointer"
         )
+    }
+
+    private static func pointerMoveEvent() -> NSEvent {
+        NSEvent.mouseEvent(
+            with: .mouseMoved,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 0,
+            pressure: 0
+        )!
     }
 
     private static func pointerEvent(_ type: NSEvent.EventType) -> NSEvent {

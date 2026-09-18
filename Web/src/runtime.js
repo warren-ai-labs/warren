@@ -99,49 +99,47 @@ const relaySessionBase = () => usesControlPlane
   ? relayPath(`${relayScopePath}/v1/session`)
   : "";
 
-// Relay links carry a shareable pairing ticket in the fragment. Exchange it
-// immediately over HTTPS and scrub the URL before rendering or navigating;
-// only the short-lived access capability remains in memory. The ticket remains
-// valid for the Relay's configured sharing window so another device can use
-// the same link.
+// An invite page exchanges its opaque invite as soon as it loads, and scrubs any
+// legacy fragment before rendering; only the short-lived access capability and
+// the Host record id Relay returns remain in memory. The invite stays valid for
+// the Relay's sharing window, so another device can use the same link.
+const inviteIDPattern = /^[A-Za-z0-9_-]{1,128}$/;
+
+// Resolves an opaque invite from a full pairing link or a bare invite id.
+export function inviteIDFromInput(input) {
+  const trimmed = String(input ?? "").trim().replace(/^["']|["']$/g, "");
+  if (!trimmed) return "";
+  const match = trimmed.match(/\/invite\/([A-Za-z0-9_-]{1,128})\/?/);
+  if (match) return match[1];
+  return inviteIDPattern.test(trimmed) ? trimmed : "";
+}
+
+// Exchanges one invite for a capability bound to this browser's client id.
+async function exchangeInvite(inviteID) {
+  const response = await fetch(
+    relayPath(`/invite/${encodeURIComponent(inviteID)}/v1/session/exchange`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ client_id: relayClientID }),
+    },
+  );
+  if (!response.ok) throw new Error("invite exchange failed");
+  const result = await response.json();
+  if (!result.host_id) throw new Error("invite exchange returned no Host");
+  resolvedRelayHostID = result.host_id;
+  memoryToken.value = result.access_token || "";
+  return memoryToken.value;
+}
+
 export const tokenReady = usesControlPlane
   ? (hasRelayInviteID
-    ? fetch(`${relaySessionBase()}/exchange`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ invite_id: relayInviteID, client_id: relayClientID }),
+    ? exchangeInvite(relayInviteID).catch(() => {
+        memoryToken.value = "";
+        return memoryToken.value;
       })
-        .then(response => (response.ok ? response.json() : Promise.reject(new Error("invite exchange failed"))))
-        .then(result => {
-          if (!result.host_id) throw new Error("invite exchange returned no Host");
-          resolvedRelayHostID = result.host_id;
-          memoryToken.value = result.access_token || "";
-          return memoryToken.value;
-        })
-        .catch(() => {
-          memoryToken.value = "";
-          return memoryToken.value;
-        })
-    : (suppliedToken
-      ? ((hasRelayHostID && hasRelayInviteID)
-        ? fetch(`${relaySessionBase()}/exchange`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "include",
-            body: JSON.stringify({ pairing_ticket: suppliedToken, client_id: relayClientID }),
-          })
-            .then(response => (response.ok ? response.json() : Promise.reject(new Error("ticket exchange failed"))))
-            .then(result => {
-              memoryToken.value = result.access_token || "";
-              return memoryToken.value;
-            })
-            .catch(() => {
-              memoryToken.value = "";
-              return memoryToken.value;
-            })
-        : Promise.resolve(suppliedToken))
-      : refreshRelayToken().catch(() => "")))
+    : refreshRelayToken().catch(() => ""))
   : Promise.resolve(memoryToken.value);
 
 export async function refreshRelayToken() {
@@ -189,17 +187,11 @@ export async function authenticateToken(tokenOrTicket) {
   const token = typeof tokenOrTicket === "string" ? tokenOrTicket.trim() : "";
   if (!token) throw new Error("No token provided");
   if (usesControlPlane) {
-    const response = await fetch(`${relaySessionBase()}/exchange`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ pairing_ticket: token, client_id: relayClientID }),
-    });
-    if (!response.ok) throw new Error("Ticket exchange failed");
-    const result = await response.json();
-    if (!result.access_token) throw new Error("No access token returned");
-    memoryToken.value = result.access_token;
-    return memoryToken.value;
+    // A Host-scoped page holds no invite, so the only thing a paste can add is
+    // an invite link or id for this Relay.
+    const inviteID = inviteIDFromInput(token);
+    if (!inviteID) throw new Error("No pairing invite provided");
+    return exchangeInvite(inviteID);
   }
   memoryToken.value = token;
   persistDaemonToken(token);

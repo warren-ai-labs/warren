@@ -77,8 +77,8 @@ public enum WarrenRemoteNetworking {
 ///
 /// `type` is kept as a string because the shared endpoint catalog is consumed
 /// by the desktop client. A `daemon` endpoint talks to Headless directly; a `relay` endpoint
-/// uses the host-scoped Relay WebSocket path and treats `hostID` as part of the
-/// routing identity. Callers should load `token` from a Keychain-backed store
+/// uses the host-scoped Relay WebSocket path and reads its routing identity
+/// from `relayHostID`. Callers should load `token` from a Keychain-backed store
 /// on mobile instead of persisting it in UserDefaults. The desktop client
 /// keeps its historical file-backed token in its own adapter.
 public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable, Sendable {
@@ -88,7 +88,16 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
     public let ssh: String?
     public let sshRemote: String?
     public let type: String
+    /// The Host's own identity as reported by its `/healthz` payload. Direct
+    /// routes use it to prove that a discovered address still belongs to the
+    /// same Host before promoting it to the active path.
     public let hostID: String?
+    /// The Relay's host record id. Relay routes carry it in `/h/{id}/...` and
+    /// the Relay rejects the socket unless it matches the capability's
+    /// `host_id`. It is a separate identity from `hostID`: Relay assigns it
+    /// when the Host enrolls, and only the Relay's exchange/refresh reply can
+    /// be treated as authoritative for it.
+    public let relayHostID: String?
     public let routeID: String?
     /// Stable native-client identity used when a Relay capability is bound to
     /// a device. It is non-secret and persisted with the endpoint metadata so
@@ -107,21 +116,24 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
     /// this when restoring a persisted endpoint after an app reinstall.
     public func withTokens(token: String, refreshToken: String?) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
-             type: type, hostID: hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
+             type: type, hostID: hostID, relayHostID: relayHostID, routeID: routeID,
+             clientID: clientID, refreshToken: refreshToken,
              directURL: directURL, relayURL: relayURL, routePreference: routePreference,
              lanAutoRoutingEnabled: lanAutoRoutingEnabled)
     }
 
     public func withActiveRoute(url: String, type: String, token: String) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
-             type: type, hostID: hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
+             type: type, hostID: hostID, relayHostID: relayHostID, routeID: routeID,
+             clientID: clientID, refreshToken: refreshToken,
              directURL: directURL, relayURL: relayURL, routePreference: routePreference,
              lanAutoRoutingEnabled: lanAutoRoutingEnabled)
     }
 
     public func withClientID(_ clientID: String?) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
-             type: type, hostID: hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
+             type: type, hostID: hostID, relayHostID: relayHostID, routeID: routeID,
+             clientID: clientID, refreshToken: refreshToken,
              directURL: directURL, relayURL: relayURL, routePreference: routePreference,
              lanAutoRoutingEnabled: lanAutoRoutingEnabled)
     }
@@ -131,10 +143,13 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         relayURL: String? = nil,
         routePreference: String? = nil,
         hostID: String? = nil,
+        relayHostID: String? = nil,
         lanAutoRoutingEnabled: Bool? = nil
     ) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
-             type: type, hostID: hostID ?? self.hostID, routeID: routeID, clientID: clientID, refreshToken: refreshToken,
+             type: type, hostID: hostID ?? self.hostID,
+             relayHostID: relayHostID ?? self.relayHostID, routeID: routeID,
+             clientID: clientID, refreshToken: refreshToken,
              directURL: directURL ?? self.directURL,
              relayURL: relayURL ?? self.relayURL,
              routePreference: routePreference ?? self.routePreference,
@@ -149,6 +164,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         sshRemote: String? = nil,
         type: String = "daemon",
         hostID: String? = nil,
+        relayHostID: String? = nil,
         routeID: String? = nil,
         clientID: String? = nil,
         refreshToken: String? = nil,
@@ -164,6 +180,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         self.sshRemote = sshRemote
         self.type = type
         self.hostID = hostID
+        self.relayHostID = relayHostID
         self.routeID = routeID
         self.clientID = clientID
         self.refreshToken = refreshToken
@@ -202,7 +219,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         default: return nil
         }
         if isRelay {
-            guard let hostID = normalizedHostID else { return nil }
+            guard let hostID = effectiveRelayHostID else { return nil }
             components.path = relayPath(components.path, hostID: hostID, endpoint: "v1/client/connect")
         } else {
             components.path = "/v1/ws"
@@ -210,13 +227,6 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         components.query = nil
         components.fragment = nil
         return components.url
-    }
-
-    /// The HTTPS endpoint used to exchange a shareable Relay pairing ticket.
-    /// The host-scoped form preserves reverse-proxy prefixes and lets Relay
-    /// bind the ticket to the Host identity in the URL.
-    public var relaySessionExchangeURL: URL? {
-        relaySessionURL(endpoint: "v1/session/exchange")
     }
 
     /// The HTTPS endpoint used to rotate a Relay refresh capability.
@@ -231,15 +241,23 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         relaySessionURL(endpoint: "v1/live-activities")
     }
 
-    private var normalizedHostID: String? {
-        guard let hostID else { return nil }
-        let value = hostID.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty || value.contains("/") || value.contains("\\") ? nil : value
+    /// The Relay host record id used to build host-scoped Relay routes. A direct
+    /// route has no Relay identity at all, so this stays `nil` rather than
+    /// exposing the Host's own id.
+    public var effectiveRelayHostID: String? {
+        guard isRelay else { return nil }
+        return normalized(relayHostID)
+    }
+
+    private func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed.contains("/") || trimmed.contains("\\") ? nil : trimmed
     }
 
     private func relaySessionURL(endpoint: String) -> URL? {
         guard isRelay,
-              let hostID = normalizedHostID,
+              let hostID = effectiveRelayHostID,
               var components = URLComponents(string: url) else { return nil }
         switch components.scheme?.lowercased() {
         case "ws": components.scheme = "http"
@@ -262,6 +280,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
     private enum CodingKeys: String, CodingKey {
         case name, url, token, ssh, sshRemote, type
         case hostID = "host_id"
+        case relayHostID = "relay_host_id"
         case routeID = "route_id"
         case clientID = "client_id"
         case refreshToken = "refresh_token"
@@ -281,6 +300,7 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
             sshRemote: try values.decodeIfPresent(String.self, forKey: .sshRemote),
             type: try values.decodeIfPresent(String.self, forKey: .type) ?? "daemon",
             hostID: try values.decodeIfPresent(String.self, forKey: .hostID),
+            relayHostID: try values.decodeIfPresent(String.self, forKey: .relayHostID),
             routeID: try values.decodeIfPresent(String.self, forKey: .routeID),
             clientID: try values.decodeIfPresent(String.self, forKey: .clientID),
             refreshToken: try values.decodeIfPresent(String.self, forKey: .refreshToken),
@@ -320,43 +340,20 @@ public struct WarrenRelaySessionExchange: Codable, Equatable, Hashable, Sendable
 
 public struct WarrenRelayPairing: Codable, Equatable, Hashable, Sendable {
     public let relayURL: String
-    public let hostID: String
-    public let pairingTicket: String
-    /// Opaque client-facing invite ID. New links carry this value instead of
-    /// exposing the Host ID; the Relay resolves it during exchange.
-    public let inviteID: String?
+    /// Opaque client-facing invite ID. The link never exposes the Host ID; the
+    /// Relay resolves the invite during exchange and returns the scoped Host
+    /// identity in the response.
+    public let inviteID: String
 
-    public init(relayURL: String, hostID: String, pairingTicket: String, inviteID: String? = nil) {
+    public init(relayURL: String, inviteID: String) {
         self.relayURL = relayURL
-        self.hostID = hostID
-        self.pairingTicket = pairingTicket
         self.inviteID = inviteID
-    }
-
-    /// Converts the pairing into an endpoint after a successful ticket
-    /// exchange. The endpoint name is deliberately local-only metadata.
-    public func endpoint(
-        accessToken: String,
-        name: String? = nil,
-        routeID: String? = nil,
-        clientID: String? = nil
-    ) -> WarrenRemoteEndpointConfiguration {
-        WarrenRemoteEndpointConfiguration(
-            name: name ?? (hostID.isEmpty ? "Relay Host" : "Relay \(hostID.prefix(8))"),
-            url: relayURL,
-            token: accessToken,
-            type: "relay",
-            hostID: hostID,
-            routeID: routeID,
-            clientID: clientID
-        )
     }
 }
 
 public enum WarrenRelayPairingError: Error, Equatable, Sendable, LocalizedError {
     case invalidURL
-    case missingHostID
-    case missingPairingTicket
+    case missingInviteID
     case unsupportedScheme
     case exchangeFailed(String)
     case invalidExchangeResponse
@@ -364,8 +361,7 @@ public enum WarrenRelayPairingError: Error, Equatable, Sendable, LocalizedError 
     public var errorDescription: String? {
         switch self {
         case .invalidURL: return "The Relay pairing link is invalid."
-        case .missingHostID: return "The Relay pairing link does not identify a Host."
-        case .missingPairingTicket: return "The Relay pairing link has expired or has no pairing ticket."
+        case .missingInviteID: return "The Relay pairing link does not identify an invite."
         case .unsupportedScheme: return "Relay pairing requires an HTTP(S) link."
         case .exchangeFailed(let message): return "Relay pairing failed: \(message)"
         case .invalidExchangeResponse: return "Relay returned an invalid pairing response."
@@ -386,39 +382,17 @@ public enum WarrenRelayPairingClient {
             throw WarrenRelayPairingError.unsupportedScheme
         }
 
-        // New Relay links are opaque: /<optional-prefix>/invite/<invite-id>/.
-        // Keep accepting the historical host-scoped /h/<host-id>/#t= form so
-        // existing links continue to work while users move to opaque invites.
+        // Relay pairing links are opaque: /<optional-prefix>/invite/<invite-id>/.
         let path = components.path
         let pathParts = path.split(separator: "/", omittingEmptySubsequences: true)
-        guard let markerIndex = pathParts.lastIndex(where: { $0 == "invite" || $0 == "h" }),
+        guard let markerIndex = pathParts.lastIndex(where: { $0 == "invite" }),
               markerIndex + 1 < pathParts.count,
               markerIndex + 2 == pathParts.count else {
-            throw WarrenRelayPairingError.missingHostID
+            throw WarrenRelayPairingError.missingInviteID
         }
-        let isInvite = pathParts[markerIndex] == "invite"
-        let identity = String(pathParts[markerIndex + 1])
-        guard !identity.isEmpty,
-              !identity.contains("\\"),
-              !identity.contains("?"),
-              (!isInvite || Self.validInviteID(identity))
-        else { throw WarrenRelayPairingError.missingHostID }
-
-        let hostID = isInvite ? "" : identity
-        let inviteID = isInvite ? identity : nil
-
-        let ticket: String?
-        if isInvite {
-            ticket = nil
-        } else if let fragment = components.fragment {
-            let fragmentItems = URLComponents(string: "https://pairing.invalid/?\(fragment)")?.queryItems
-            ticket = fragmentItems?.first(where: { $0.name == "t" || $0.name == "pairing_ticket" })?.value
-                ?? (fragment.hasPrefix("t=") ? String(fragment.dropFirst(2)) : nil)
-        } else {
-            ticket = components.queryItems?.first(where: { $0.name == "t" || $0.name == "pairing_ticket" })?.value
-        }
-        if !isInvite && (ticket?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false) {
-            throw WarrenRelayPairingError.missingPairingTicket
+        let inviteID = String(pathParts[markerIndex + 1])
+        guard Self.validInviteID(inviteID) else {
+            throw WarrenRelayPairingError.missingInviteID
         }
 
         var relay = components
@@ -432,8 +406,6 @@ public enum WarrenRelayPairingClient {
         }
         return WarrenRelayPairing(
             relayURL: relayURL.absoluteString,
-            hostID: hostID,
-            pairingTicket: ticket ?? "",
             inviteID: inviteID
         )
     }
@@ -467,19 +439,11 @@ public enum WarrenRelayPairingClient {
         default: throw WarrenRelayPairingError.unsupportedScheme
         }
         let prefix = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        if let inviteID = pairing.inviteID {
-            guard Self.validInviteID(inviteID) else {
-                throw WarrenRelayPairingError.invalidURL
-            }
-            let path = "/invite/\(inviteID)/v1/session/exchange"
-            components.path = prefix.isEmpty ? path : "/\(prefix)\(path)"
-        } else {
-            guard !pairing.hostID.isEmpty, !pairing.pairingTicket.isEmpty else {
-                throw WarrenRelayPairingError.missingPairingTicket
-            }
-            let path = "/h/\(pairing.hostID)/v1/session/exchange"
-            components.path = prefix.isEmpty ? path : "/\(prefix)\(path)"
+        guard Self.validInviteID(pairing.inviteID) else {
+            throw WarrenRelayPairingError.missingInviteID
         }
+        let path = "/invite/\(pairing.inviteID)/v1/session/exchange"
+        components.path = prefix.isEmpty ? path : "/\(prefix)\(path)"
         components.query = nil
         components.fragment = nil
         guard let url = components.url else { throw WarrenRelayPairingError.invalidURL }
@@ -487,12 +451,7 @@ public enum WarrenRelayPairingClient {
         request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: String]
-        if let inviteID = pairing.inviteID {
-            body = ["invite_id": inviteID]
-        } else {
-            body = ["pairing_ticket": pairing.pairingTicket]
-        }
+        var body: [String: String] = ["invite_id": pairing.inviteID]
         if let clientID, !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             body["client_id"] = clientID
         }
@@ -508,9 +467,6 @@ public enum WarrenRelayPairingClient {
         guard let value = try? JSONDecoder().decode(WarrenRelaySessionExchange.self, from: data),
               !value.hostID.isEmpty,
               !value.accessToken.isEmpty else {
-            throw WarrenRelayPairingError.invalidExchangeResponse
-        }
-        guard pairing.hostID.isEmpty || value.hostID == pairing.hostID else {
             throw WarrenRelayPairingError.invalidExchangeResponse
         }
         return value

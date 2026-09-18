@@ -37,7 +37,7 @@ echo "==> headless daemon and CLI"
 
 for package in \
     Domain Protocol StateStore ClientCore Transport \
-    TerminalRenderer DesignSystem Desktop \
+    TerminalRenderer DesignSystem Desktop WarrenIOS \
     GhosttyAdapter Observation; do
     echo "==> swift test $package"
     run_package_tests "$package"

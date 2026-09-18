@@ -216,6 +216,7 @@ final class WarrenRemoteClientTests: XCTestCase {
             token: "relay-access",
             type: "relay",
             hostID: "host-123",
+            relayHostID: "host-123",
             clientID: "desktop-client-1"
         )
         let client = WarrenRemoteClient(configuration: endpoint, task: task)
@@ -237,6 +238,104 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
+    /// Relay is the authority for its own host record id. A stored endpoint that
+    /// carries the Host's LAN identity in that slot (the pre-split catalogs, and
+    /// any older direct update that overwrote it) must be told about the real
+    /// value instead of silently looping on `unauthorized`.
+    func testRelayRefreshReportsAuthoritativeHostRecordIDWhenStoredOneDisagrees() async throws {
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [RelaySessionURLProtocol.self]
+        let session = URLSession(configuration: sessionConfiguration)
+        RelaySessionURLProtocol.reset(
+            hostID: "relay-host-9",
+            accessToken: "rotated-access",
+            refreshToken: "rotated-refresh"
+        )
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: "Relay",
+            url: "https://relay.example.test/relay",
+            token: "",
+            type: "relay",
+            hostID: "lan-host-1",
+            relayHostID: "lan-host-1",
+            refreshToken: "refresh-1"
+        )
+        XCTAssertEqual(
+            endpoint.webSocketURL?.absoluteString,
+            "wss://relay.example.test/relay/h/lan-host-1/v1/client/connect"
+        )
+
+        let corrected = CorrectionRecorder()
+        let tokens = TokenRecorder()
+        let task = ScriptedWebSocketTask()
+        let client = WarrenRemoteClient(
+            configuration: endpoint,
+            task: task,
+            urlSession: session,
+            tokenUpdateHandler: { access, refresh in tokens.append(access, refresh) },
+            relayHostIDCorrectionHandler: { corrected.append($0) }
+        )
+
+        await client.start()
+        try await waitUntil { corrected.values() == ["relay-host-9"] }
+
+        // The rotated capability is persisted even when the identity disagrees:
+        // the previous refresh token is single use, so dropping its replacement
+        // would revoke the family on the next attempt.
+        XCTAssertEqual(tokens.snapshot().count, 1)
+        XCTAssertEqual(tokens.snapshot().first?.access, "rotated-access")
+        XCTAssertEqual(tokens.snapshot().first?.refresh, "rotated-refresh")
+        // The stale socket URL cannot succeed, so the client stops instead of
+        // opening an authentication error the owner is already repairing.
+        try await waitUntil { await client.state() == .disconnected }
+        let sent = await task.sentMessages
+        XCTAssertTrue(sent.isEmpty, "no auth frame may be sent to the stale host-scoped route")
+        await client.stop()
+    }
+
+    func testRelayRefreshKeepsTheStoredIdentityWhenRelayAgrees() async throws {
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.protocolClasses = [RelaySessionURLProtocol.self]
+        let session = URLSession(configuration: sessionConfiguration)
+        RelaySessionURLProtocol.reset(
+            hostID: "relay-host-9",
+            accessToken: "rotated-access",
+            refreshToken: "rotated-refresh"
+        )
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: "Relay",
+            url: "https://relay.example.test/relay",
+            token: "",
+            type: "relay",
+            hostID: "lan-host-1",
+            relayHostID: "relay-host-9",
+            refreshToken: "refresh-1"
+        )
+        XCTAssertEqual(
+            endpoint.webSocketURL?.absoluteString,
+            "wss://relay.example.test/relay/h/relay-host-9/v1/client/connect"
+        )
+
+        let corrected = CorrectionRecorder()
+        let task = ScriptedWebSocketTask()
+        let client = WarrenRemoteClient(
+            configuration: endpoint,
+            task: task,
+            urlSession: session,
+            relayHostIDCorrectionHandler: { corrected.append($0) }
+        )
+
+        await client.start()
+        let sent = await waitForSentMessages(task, count: 1)
+        guard case .text(let auth) = sent[0],
+              let object = try JSONSerialization.jsonObject(with: Data(auth.utf8)) as? [String: Any] else {
+            return XCTFail("relay auth must be sent as JSON text")
+        }
+        XCTAssertEqual(object["access_token"] as? String, "rotated-access")
+        XCTAssertTrue(corrected.values().isEmpty)
+        await client.stop()
+    }
+
     func testLiveActivityPushTokenRegistrationUsesHostScopedHTTPAPI() async throws {
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [LiveActivityURLProtocol.self]
@@ -247,7 +346,7 @@ final class WarrenRemoteClientTests: XCTestCase {
             url: "https://relay.example.test/relay",
             token: "relay-access",
             type: "relay",
-            hostID: "host-123"
+            relayHostID: "host-123"
         )
         let client = WarrenRemoteClient(
             configuration: endpoint,
@@ -919,6 +1018,115 @@ private final class LiveActivityURLProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+
+private final class RelaySessionURLProtocol: URLProtocol, @unchecked Sendable {
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var hostID = ""
+        var accessToken = ""
+        var refreshToken: String?
+        var requests: [URLRequest] = []
+
+        func set(hostID: String, accessToken: String, refreshToken: String?) {
+            lock.lock()
+            self.hostID = hostID
+            self.accessToken = accessToken
+            self.refreshToken = refreshToken
+            requests.removeAll()
+            lock.unlock()
+        }
+
+        func append(_ request: URLRequest) {
+            lock.lock()
+            requests.append(request)
+            lock.unlock()
+        }
+
+        func snapshot() -> (hostID: String, accessToken: String, refreshToken: String?, requests: [URLRequest]) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (hostID, accessToken, refreshToken, requests)
+        }
+    }
+
+    private static let state = State()
+
+    static func reset(hostID: String, accessToken: String, refreshToken: String?) {
+        state.set(hostID: hostID, accessToken: accessToken, refreshToken: refreshToken)
+    }
+
+    static func requests() -> [URLRequest] { state.snapshot().requests }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.path.hasSuffix("/v1/session/refresh") == true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: WarrenRemoteClientError.invalidEndpoint)
+            return
+        }
+        Self.state.append(request)
+        let snapshot = Self.state.snapshot()
+        var payload: [String: Any] = [
+            "host_id": snapshot.hostID,
+            "access_token": snapshot.accessToken,
+            "expires_in": 900,
+        ]
+        if let refresh = snapshot.refreshToken { payload["refresh_token"] = refresh }
+        guard let body = try? JSONSerialization.data(withJSONObject: payload),
+              let response = HTTPURLResponse(
+                  url: url,
+                  statusCode: 200,
+                  httpVersion: nil,
+                  headerFields: ["Content-Type": "application/json"]
+              ) else {
+            client?.urlProtocol(self, didFailWithError: WarrenRemoteClientError.invalidResponse)
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+private final class CorrectionRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+
+    func append(_ value: String) {
+        lock.lock()
+        storage.append(value)
+        lock.unlock()
+    }
+
+    func values() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+}
+
+private final class TokenRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [(access: String, refresh: String?)] = []
+
+    func append(_ access: String, _ refresh: String?) {
+        lock.lock()
+        storage.append((access, refresh))
+        lock.unlock()
+    }
+
+    func snapshot() -> [(access: String, refresh: String?)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+}
 
 private actor EventRecorder {
     private var events: [WarrenRemoteEvent] = []

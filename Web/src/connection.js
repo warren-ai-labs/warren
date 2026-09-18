@@ -38,6 +38,44 @@ export function connectionErrorDetail(message, fallback = "Error") {
   return message?.error?.message || message?.error || message?.message || fallback;
 }
 
+export function relativeTimeLabel(milliseconds) {
+  const seconds = Math.round(Math.max(0, milliseconds) / 1000);
+  if (seconds < 45) return "just now";
+  const units = [
+    { limit: 60, size: 1, name: "second" },
+    { limit: 3_600, size: 60, name: "minute" },
+    { limit: 86_400, size: 3_600, name: "hour" },
+    { limit: Number.POSITIVE_INFINITY, size: 86_400, name: "day" },
+  ];
+  const unit = units.find(candidate => seconds < candidate.limit);
+  const value = Math.max(1, Math.round(seconds / unit.size));
+  return `${value} ${unit.name}${value === 1 ? "" : "s"} ago`;
+}
+
+// How long an authenticated socket may show "Authenticating…" before the copy
+// admits what it is actually doing. Relay holds a client socket while it waits
+// for an absent Host, so past this point the delay is the Host being away, not
+// authentication being slow.
+export const hostWaitCopyDelayMs = 3_000;
+
+export function waitingForHostMessage(hostName) {
+  const name = typeof hostName === "string" && hostName.trim() ? hostName.trim() : "";
+  return name ? `Waiting for ${name}…` : "Waiting for the Host…";
+}
+
+// Relay reports an absent Host only after waiting for it to come back, and
+// includes when it was last seen. "Mac is offline · last seen 3 minutes ago"
+// tells the user whether to wake their machine; "host offline" does not.
+export function hostOfflineDetail(message, now = Date.now()) {
+  if (message?.code !== "host_offline") return "";
+  const name = typeof message.host_name === "string" && message.host_name.trim()
+    ? message.host_name.trim()
+    : "Host";
+  const lastSeen = Date.parse(message.last_seen_at ?? "");
+  if (!Number.isFinite(lastSeen)) return `${name} is offline`;
+  return `${name} is offline · last seen ${relativeTimeLabel(now - lastSeen)}`;
+}
+
 export class WarrenConnection {
   constructor({
     url,
@@ -50,9 +88,14 @@ export class WarrenConnection {
     setTimer = setTimeout,
     clearTimer = clearTimeout,
     random = Math.random,
+    clock = () => Date.now(),
     capabilities = ["roster-delta"],
     heartbeatIntervalMs = 20_000,
     heartbeatTimeoutMs = 10_000,
+    resumeThrottleMs = 1_000,
+    // Longer than Relay's 15s wait for an absent Host, so a Host that comes
+    // back inside that window is not cut off by this deadline.
+    welcomeTimeoutMs = 25_000,
   }) {
     this.url = url;
     this.token = token;
@@ -66,8 +109,13 @@ export class WarrenConnection {
     this.setTimer = (...args) => setTimer(...args);
     this.clearTimer = (...args) => clearTimer(...args);
     this.random = random;
+    this.clock = typeof clock === "function" ? clock : () => Date.now();
     this.heartbeatIntervalMs = Math.max(1_000, heartbeatIntervalMs);
     this.heartbeatTimeoutMs = Math.max(1_000, heartbeatTimeoutMs);
+    this.resumeThrottleMs = Math.max(0, resumeThrottleMs);
+    this.lastResumeAt = Number.NEGATIVE_INFINITY;
+    this.welcomeTimeoutMs = Math.max(1_000, welcomeTimeoutMs);
+    this.welcomeTimer = null;
     this.capabilities = [...new Set(capabilities.filter(value => typeof value === "string" && value.trim()))];
     this.negotiatedCapabilities = new Set();
     this.socket = null;
@@ -91,6 +139,7 @@ export class WarrenConnection {
     this.running = false;
     this.cancelTimer();
     this.cancelHeartbeat();
+    this.cancelWelcomeTimer();
     const socket = this.socket;
     this.socket = null;
     if (socket && socket.readyState <= open) socket.close();
@@ -104,6 +153,30 @@ export class WarrenConnection {
 
   markStable() {
     this.attempt = 0;
+  }
+
+  // A phone that was backgrounded or a laptop that changed networks must not
+  // wait out a delay that was computed before the transport went stale. An open
+  // socket is probed instead of replaced: a frozen socket usually still reports
+  // OPEN until a write fails, and discovering that through the regular
+  // heartbeat can take a full interval. A closed socket reconnects at once,
+  // throttled so several lifecycle events firing together dial only once.
+  resume({ resetBackoff = false } = {}) {
+    if (!this.running) return false;
+    if (this.socket && this.socket.readyState <= open) {
+      if (this.socket.readyState === open) {
+        this.sendHeartbeatProbe();
+        this.scheduleHeartbeat();
+      }
+      return false;
+    }
+    const now = this.clock();
+    if (now - this.lastResumeAt < this.resumeThrottleMs) return false;
+    this.lastResumeAt = now;
+    if (resetBackoff) this.attempt = 0;
+    this.cancelTimer();
+    this.connect();
+    return true;
   }
 
   reset() {
@@ -123,26 +196,30 @@ export class WarrenConnection {
       this.heartbeatTimer = null;
       const socket = this.socket;
       if (!socket || socket.readyState !== open) return;
-      // Keep at most one probe outstanding. A caller may configure an
-      // interval shorter than its timeout; replacing the pending ID would
-      // otherwise orphan the first deadline and let a half-open socket live
-      // forever.
-      if (this.pendingHeartbeatID !== null) {
-        this.scheduleHeartbeat();
-        return;
-      }
-      const id = `web-ping-${Date.now()}-${++this.heartbeatSequence}`;
-      this.pendingHeartbeatID = id;
-      if (!this.sendJSON({ t: "ping", id })) {
-        socket.close();
-        return;
-      }
-      this.heartbeatDeadlineTimer = this.setTimer(() => {
-        this.heartbeatDeadlineTimer = null;
-        if (this.pendingHeartbeatID === id && this.socket === socket) socket.close();
-      }, this.heartbeatTimeoutMs);
+      this.sendHeartbeatProbe();
       this.scheduleHeartbeat();
     }, this.heartbeatIntervalMs);
+  }
+
+  // Keep at most one probe outstanding. A caller may configure an interval
+  // shorter than its timeout; replacing the pending ID would otherwise orphan
+  // the first deadline and let a half-open socket live forever.
+  sendHeartbeatProbe() {
+    if (!this.supportsCapability(appHeartbeatCapability)) return false;
+    const socket = this.socket;
+    if (!socket || socket.readyState !== open) return false;
+    if (this.pendingHeartbeatID !== null) return true;
+    const id = `web-ping-${Date.now()}-${++this.heartbeatSequence}`;
+    this.pendingHeartbeatID = id;
+    if (!this.sendJSON({ t: "ping", id })) {
+      socket.close();
+      return false;
+    }
+    this.heartbeatDeadlineTimer = this.setTimer(() => {
+      this.heartbeatDeadlineTimer = null;
+      if (this.pendingHeartbeatID === id && this.socket === socket) socket.close();
+    }, this.heartbeatTimeoutMs);
+    return true;
   }
 
   acceptHeartbeat(message) {
@@ -160,6 +237,12 @@ export class WarrenConnection {
       this.clearTimer(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
+  }
+
+  cancelWelcomeTimer() {
+    if (this.welcomeTimer === null) return;
+    this.clearTimer(this.welcomeTimer);
+    this.welcomeTimer = null;
   }
 
   cancelHeartbeat() {
@@ -223,6 +306,15 @@ export class WarrenConnection {
         auth.token = currentToken;
       }
       this.sendJSON(auth);
+      // An authenticated socket can still be handed a Host tunnel that Relay
+      // has not yet noticed is dead: the auth frame lands in a socket buffer
+      // and no welcome ever arrives, which shows as a spinner until Relay's own
+      // read deadline expires. Bound that wait and reconnect instead.
+      this.cancelWelcomeTimer();
+      this.welcomeTimer = this.setTimer(() => {
+        this.welcomeTimer = null;
+        if (socket === this.socket) socket.close();
+      }, this.welcomeTimeoutMs);
     };
     socket.onmessage = event => {
       if (socket !== this.socket) return;
@@ -230,6 +322,9 @@ export class WarrenConnection {
         try {
           const message = JSON.parse(event.data);
           if (this.acceptHeartbeat(message)) return;
+          // Any answer from the far end ends the welcome wait: a welcome means
+          // the Host is live, an error means it answered with a refusal.
+          if (message?.t === "welcome" || message?.t === "error") this.cancelWelcomeTimer();
           if (message?.t === "welcome" && Array.isArray(message.capabilities)) {
             this.negotiatedCapabilities = new Set(
               message.capabilities.filter(value => typeof value === "string"),
@@ -246,6 +341,7 @@ export class WarrenConnection {
     socket.onclose = () => {
       if (socket !== this.socket) return;
       this.cancelHeartbeat();
+      this.cancelWelcomeTimer();
       this.socket = null;
       if (!this.running) return;
       this.onState("waiting");

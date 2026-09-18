@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -38,12 +39,17 @@ func TestOwnedRelayEnrollmentAndRefreshRotation(t *testing.T) {
 		t.Fatalf("pair: %v %v", pairResponse, err)
 	}
 	var paired struct {
-		Ticket string `json:"pairing_ticket"`
+		InviteID   string `json:"invite_id"`
+		PairingURL string `json:"pairing_url"`
 	}
 	_ = json.NewDecoder(pairResponse.Body).Decode(&paired)
 	pairResponse.Body.Close()
-	exchangeBody, _ := json.Marshal(map[string]string{"pairing_ticket": paired.Ticket, "client_id": "client-1"})
-	exchange, err := http.Post(httpServer.URL+"/v1/session/exchange", "application/json", bytes.NewReader(exchangeBody))
+	if paired.InviteID == "" || !strings.Contains(paired.PairingURL, "/invite/") {
+		t.Fatalf("pair response did not return an opaque invite: %#v", paired)
+	}
+	exchangeURL := httpServer.URL + "/invite/" + url.PathEscape(paired.InviteID) + "/v1/session/exchange"
+	exchangeBody, _ := json.Marshal(map[string]string{"client_id": "client-1"})
+	exchange, err := http.Post(exchangeURL, "application/json", bytes.NewReader(exchangeBody))
 	if err != nil || exchange.StatusCode != http.StatusOK {
 		t.Fatalf("exchange: %v %v", exchange, err)
 	}
@@ -62,7 +68,7 @@ func TestOwnedRelayEnrollmentAndRefreshRotation(t *testing.T) {
 	// The client-facing ticket is a shareable link, not a one-shot browser
 	// nonce. A second device can exchange the same QR/link and receive its own
 	// refresh-capability family.
-	secondExchange, err := http.Post(httpServer.URL+"/v1/session/exchange", "application/json", bytes.NewReader(exchangeBody))
+	secondExchange, err := http.Post(exchangeURL, "application/json", bytes.NewReader(exchangeBody))
 	if err != nil || secondExchange.StatusCode != http.StatusOK {
 		t.Fatalf("second exchange: %v %v", secondExchange, err)
 	}

@@ -6,6 +6,205 @@ All notable changes to Warren are documented here.
 
 _No changes yet._
 
+## [0.18.0] - 2026-09-18
+
+> Minor release: makes Usage count each billable model call once and derive
+> cost on read, replaces host-scoped pairing links with opaque invites, prunes
+> the Host's canonical journal, and removes the stalls, mislabelled waits, and
+> guessed states that sat between a client, a Host, and a Relay. The JSON
+> control protocol remains at 4.0.
+
+### Added
+
+- Prune retired Agent streams from the Host's canonical journal. The journal grew
+  without bound — `agent-journal.db` reached hundreds of megabytes of history no
+  client could read — so a background sweep removes streams no Session refers to,
+  retaining one exactly while its Session is in the roster plus a 24-hour grace,
+  deleting at most 2000 rows per step, and releasing freed pages with bounded
+  incremental auto-vacuum. Pending and unknown command admissions are never
+  pruned, and a Host that rebuilds Usage from the journal itself refuses to sweep
+  rather than drop spend it cannot re-derive.
+- Bind live Codex Sessions from every profile home. A Session running under a
+  profile-specific `CODEX_HOME` writes its rollout outside the primary sessions
+  root, so it never had a live transcript at all; the profile roots are searched
+  only after the primary root misses.
+
+### Changed
+
+- Pairing links are opaque invites only. The retired host-scoped
+  `/h/<host>/#t=<code>` form only duplicated the Host identity in the path, so
+  the Relay's exchange route, the body ticket fields, and the Host's acceptance
+  of a host-scoped link are gone; a link or bare invite id pasted into the invite
+  page is resolved client-side. An already-issued host-scoped link no longer
+  works.
+- A Relay route and a Host identity are two different ids. iOS kept both in one
+  field, so LAN pairing and discovery overwrote the Relay record id and every
+  Relay connect failed as unauthorized; an endpoint now stores `relay_host_id`
+  with a legacy fallback, Relay URLs are built from it alone, and an opaque
+  invite repairs an endpoint written before the split by matching the single
+  legacy Relay route on that Relay URL.
+- A Host paired over Relay alone adopts the identity a verified LAN probe
+  reports, so it can use the direct route and show its Host ID. A probe may
+  supply a missing identity but never replace a known one.
+- The Host rotates `headless.log` while it runs. The documented 5 MB bound was
+  checked only when the log was first opened, so it applied to the previous
+  run's file and a long-running daemon grew the log without limit. Rotation now
+  keeps a single `.1` generation and never closes the live handle before its
+  replacement exists.
+- Installing Warren stops a running app from any bundle path. Detection matched
+  only the repository root and `/Applications`, so an app running from a
+  worktree was left untouched while `/Applications/Warren.app` was replaced.
+- `scripts/verify.sh` runs the WarrenIOS package tests as well, and
+  `install-ios.sh` reports devicectl's own launch result instead of always
+  printing `Launch requested`.
+
+- The Usage panel shows where the money went, not only where the tokens went.
+  The two shapes disagree by an order of magnitude — over local history cache
+  reads are 94.4% of tokens but 44.2% of spend, while fresh input is 5.1% of
+  tokens and 41.6% of spend — so each class now carries its share of cost beside
+  its share of tokens, and the range overview gained the composition it never had.
+- The intraday curve can be filtered to one Agent or model. The Host sends its
+  5-minute buckets split by Agent and model, so the existing filters narrow the
+  curve instead of only tinting a chip and changing nothing; the busiest local day
+  carries 462 such rows.
+- The Usage panel explains an incomplete amount where the amount is, naming the
+  models it could not price and the Agents that report no tokens, instead of a
+  bare "≥" prefix with a footnote at the bottom of the page. The per-call average
+  divides by the calls that were actually priced, reasoning tokens are shown as
+  the share of output they are, and rebuilding Usage reports what it replaced,
+  including how many repeated measurements it collapsed.
+- The Usage panel says how long ago its figures were rebuilt, and which Agents
+  that rebuild covered. Rebuilding is the only thing that corrects historical
+  counting, so numbers a parser from an earlier release produced look exactly
+  like current ones; a projection that has never been rebuilt now says that too.
+- The intraday curve draws only the hours that carried work. A day's activity
+  rarely spans midnight to midnight, so a fixed 24-hour axis spent most of its
+  width on a flat zero line — over half of it on a typical local day.
+- The Usage panel reads tokens and cost as the two things it measures, and says
+  less about both. Token totals now sit at the same rank as spend rather than
+  below it, each token class shows its amount beside its count, and the captions
+  that explained how cost is derived, that a calendar shows daily activity, or
+  that a click opens a day are gone — none of them told anyone anything the
+  numbers beside them did not. The breakdown cards also stop absorbing spare
+  height, which had grown ~600pt of empty background under three short lists.
+- The day range control is gone from the single-day Usage view, where every
+  option was inert: that surface's strip, curve, and breakdowns all describe one
+  day, so switching 7d/30d/90d/Year changed nothing visible and read as a broken
+  control. It stays on the overview, which is the range.
+- The Host compresses its Relay uplink, and every WebSocket write on the Relay
+  path is compressed by size rather than globally. The Host dialer never offered
+  permessage-deflate, so output crossed the Mac's upstream link verbatim even
+  though a repeated log line deflates by more than 100x. Browsers did negotiate
+  compression, which meant the opposite problem: a keystroke echo of one byte was
+  deflated into eight. Frames below 1 KiB are now sent as-is.
+- An authenticated client that is waiting for its Host says so. Relay holds the
+  socket while it waits for an absent Host, and the copy claimed
+  "Authenticating…" for that whole window; after three seconds it now reads
+  "Waiting for Mac…", naming the Host when it is known.
+- Relay forwards each client stream in both directions independently. Host
+  output and client input shared one loop, so every keystroke waited behind the
+  current downstream WebSocket write and its window update; on a slow phone
+  connection that turned into visible typing lag while the terminal was
+  printing.
+- A Relay control stream now queues up to 1024 frames bounded by 8 MiB instead
+  of 64 frames. Control frames are not charged against the per-stream credit
+  window, so a burst of build or log output could overflow a 64-frame queue and
+  disconnect a client that was merely draining slowly. Public HTTP routes keep
+  the shallow queue their credit window already bounds.
+- A client that connects while its Host is away now waits up to 15 seconds for
+  the Host to return instead of being told immediately that the Host is offline.
+  A wake from sleep, a daemon restart, or a Relay restart is usually invisible;
+  when the Host really is away, the error carries a `host_offline` code, the
+  Host name, and its last-seen time, and the Web client renders that as
+  "Mac is offline · last seen 3 minutes ago". The window is bounded and
+  configurable with `WARREN_RELAY_HOST_PRESENCE_WAIT`.
+- The Web client bounds the wait for its welcome message at 25 seconds. Relay
+  can hand a client a Host tunnel it has not yet noticed is dead, in which case
+  the auth frame lands in a socket buffer and no welcome ever arrives; that
+  showed as a spinner until Relay's own 75-second read deadline expired.
+- The Host connector resets its reconnect backoff after a connection that stayed
+  authenticated for at least a minute. A normal disconnect returns an error, so
+  a daemon that had been connected for hours kept escalating toward the 30-second
+  ceiling and a waking phone found its Host still offline.
+- Web and Desktop clients reconnect on the events that invalidate a pending
+  backoff wait instead of sitting it out: network changes, returning to the
+  foreground, and wake from sleep. A socket that still reports itself as
+  connected is probed immediately rather than after a full heartbeat interval,
+  because an OS-frozen socket looks alive until the first write fails.
+
+### Fixed
+
+- The rich sidebar's session rail lights only for a pointer that moved onto the
+  group, or for the workspace the center is showing. The rail used to answer the
+  tracking area's enter, which AppKit also sends when a scroll slides a group
+  under a resting pointer or rebuilds the area, so rails lit for scrolls and
+  layout passes nobody had pointed at. The move is now the only thing that
+  lights the rail; a missed exit can no longer leave one stuck lit, because the
+  exit stays live and takes the group dark as it scrolls away.
+- Usage counts each billable model call once. The same call is routinely observed
+  more than once: pi attached one message's token counts to every content block
+  it produced (inflating pi totals 1.91x against local sessions), a resumed
+  conversation copies its whole history into a new transcript (1.07x for Claude,
+  1.14x for Codex), and a rebuild re-reads files the live watcher already
+  consumed. Adapters now stamp each measurement with the provider's own call
+  identity, and the Host records those identities durably, so a repeat is
+  recognized across transcript files, streams, processes, and rebuilds.
+- The Usage panel's day totals and its intraday curve can no longer disagree.
+  They were two stored projections of the same fact and only one of them had a
+  recovery path, so the same day answered differently depending on which surface
+  read it — by 12x on one local day. Days are now summed from the 5-minute
+  buckets.
+- Costs are derived from tokens and the current price table on every read
+  instead of being cached in the database. The cached column was refreshed only
+  when an in-memory flag said it was stale, so a Host restart left whole days
+  reading as $0.00 while their tokens were intact.
+- Rebuilding Usage no longer clears providers it cannot re-read. It deleted every
+  provider's aggregates but only enumerated Claude and Codex transcripts, so one
+  rebuild silently zeroed all pi spend. pi transcripts are now enumerated, and
+  the delete is scoped to what is actually being replaced.
+- Usage counts Codex history from every profile home, not just the primary one.
+  Tools that run several Codex accounts side by side give each profile its own
+  `CODEX_HOME` under `<home>/profiles/<name>`, so a profile keeping its own
+  sessions directory held spend nothing enumerated. Profiles that link their
+  sessions back to the source home are still read once rather than twice.
+
+- The Usage panel's Agent and model filters act on the surface they are shown on.
+  The scope was read from whether the Host had named a detail day, which it does
+  by default, so filtering the range overview silently replaced the range total
+  with the latest day's while the list the filter came from still described the
+  range. A filter naming something with no activity in scope now says so instead
+  of falling back to the unfiltered figure.
+
+- Resume the websocket ping continuation only once. URLSession can invoke a
+  `sendPing` completion twice when the task is cancelled while the ping is in
+  flight, and the second `resume` trapped the process with SIGTRAP; every
+  `WarrenIOSApp` crash log from Aug 31 through Sep 17 faulted there during Relay
+  reconnects.
+- Claim Agent control without waiting for capability negotiation. A freshly
+  created Agent Session advertises an empty capability set until its provider
+  handle is ready, and the client read that transient denial as a hard failure,
+  reporting "Agent control is unavailable while the Host is offline" for the
+  first seconds of every new Session.
+- Fix the iOS terminal shortcut bar theme and keyboard dismissal, index roster
+  lookups so list pages stop re-deriving from the whole roster, and skip equal
+  `@Published` writes so a repeated wire frame no longer republishes to every
+  observer.
+- Guard the journal prune and space reclaim against a closed store instead of
+  dereferencing a nil handle.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and the Host state schema stays at 4;
+  this release migrates no state. A host-scoped pairing link
+  (`/h/<host>/#t=<code>`) is no longer accepted, so reissue an opaque invite for
+  a client that still holds one.
+- The Host prunes retired Agent streams, but a deleted Session's conversation is
+  not reconstructible, because deleting it removes the binding that locates the
+  provider transcript. Back up `~/.warren` before upgrading a Host you rely on.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.17.0] - 2026-09-16
 
 > Minor release: removes the Agent `stalled` activity and the `warning` attention

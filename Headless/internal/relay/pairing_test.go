@@ -65,6 +65,29 @@ func TestPairingClientRejectsCrossOriginInvite(t *testing.T) {
 	}
 }
 
+// The historical host-scoped ticket link is retired: a Relay that hands one
+// back would give the daemon a pairing link no supported client can parse, so
+// the daemon must refuse it instead of printing an unusable QR code.
+func TestPairingClientRejectsLegacyHostScopedLink(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(request.URL.Path, "/pairing") {
+			_, _ = io.WriteString(writer, `{"pairing_code":"pairing-code"}`)
+			return
+		}
+		_, _ = io.WriteString(writer, `{"pairing_url":"`+server.URL+`/h/00000000-0000-4000-8000-000000000017/#t=ticket","pairing_expires_in":604800}`)
+	}))
+	defer server.Close()
+	client, err := NewPairingClient(server.URL, "00000000-0000-4000-8000-000000000017", "host-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Share(context.Background()); err == nil {
+		t.Fatal("legacy host-scoped pairing link was accepted")
+	}
+}
+
 func TestPairingClientRejectsInviteWithFragment(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

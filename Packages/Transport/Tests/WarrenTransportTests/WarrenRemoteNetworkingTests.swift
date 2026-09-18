@@ -46,6 +46,7 @@ final class WarrenRemoteNetworkingTests: XCTestCase {
             url: "wss://relay.example.test/h/host-1/v1/client/connect",
             type: "relay",
             hostID: "host-1",
+            relayHostID: "host-1",
             directURL: "http://127.0.0.1:8789"
         )
         XCTAssertFalse(WarrenRemoteNetworking.isLoopback(relay))

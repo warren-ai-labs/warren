@@ -151,11 +151,11 @@ not have to change when the address changes. Keep this exception in a private
 development build; do not add a real deployment hostname, ticket, or Host
 Secret to a public source tree.
 
-The Warren iOS pairing screen accepts the `web_url` by QR scan or paste. The
-same shareable link can be exchanged by multiple devices until it expires. Each
-exchange stores only a scoped capability and Relay metadata; the app does not
-need the Host Secret. Access capabilities remain short-lived and refresh
-through an HttpOnly cookie.
+The Warren iOS pairing screen accepts the `pairing_url` (an `/invite/<opaque>/`
+link) by QR scan or paste. The same shareable link can be exchanged by multiple
+devices until it expires. Each exchange stores only a scoped capability and
+Relay metadata; the app does not need the Host Secret. Access capabilities
+remain short-lived and refresh through an HttpOnly cookie.
 
 ## Troubleshooting
 

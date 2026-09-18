@@ -439,24 +439,132 @@ func TestHistoricalUsageTranscriptsListsAllProviderFiles(t *testing.T) {
 	root := t.TempDir()
 	codexPath := filepath.Join(root, "codex", "2026", "rollout-one.jsonl")
 	claudePath := filepath.Join(root, "claude", "project", "session.jsonl")
+	piPath := filepath.Join(root, "pi", "session", "2026_pi.jsonl")
 	writeLines(t, codexPath, `{"timestamp":"2026-08-19T10:00:00Z","type":"session_meta","payload":{"cwd":"/work/codex"}}`)
 	writeLines(t, claudePath, `{"type":"user","cwd":"/work/claude","message":{"content":"hi"}}`)
+	writeLines(t, piPath, `{"type":"session","id":"pi-1","timestamp":"2026-08-19T10:00:00Z","cwd":"/work/pi"}`)
 
 	transcripts, err := (DefaultFinder{
 		CodexRoot:  filepath.Join(root, "codex"),
 		ClaudeRoot: filepath.Join(root, "claude"),
+		PiRoot:     filepath.Join(root, "pi"),
 	}).HistoricalUsageTranscripts(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(transcripts) != 2 {
-		t.Fatalf("transcripts = %#v, want both provider files", transcripts)
+	// Every provider that reports tokens has to be enumerable, because the
+	// rebuild replaces exactly what this returns.
+	if len(transcripts) != 3 {
+		t.Fatalf("transcripts = %#v, want every measured provider's file", transcripts)
 	}
 	if transcripts[0].Provider != "claude" || transcripts[0].Path != claudePath || transcripts[0].WorkspacePath != "/work/claude" {
 		t.Fatalf("claude transcript = %#v", transcripts[0])
 	}
 	if transcripts[1].Provider != "codex" || transcripts[1].Path != codexPath || transcripts[1].WorkspacePath != "/work/codex" {
 		t.Fatalf("codex transcript = %#v", transcripts[1])
+	}
+	if transcripts[2].Provider != "pi" || transcripts[2].Path != piPath || transcripts[2].WorkspacePath != "/work/pi" {
+		t.Fatalf("pi transcript = %#v", transcripts[2])
+	}
+}
+
+func TestFindCodexFallsBackToProfileHomesOnlyOnAMiss(t *testing.T) {
+	home := t.TempDir()
+	sessions := filepath.Join(home, "sessions")
+	primary := filepath.Join(sessions, "2026", "rollout-primary.jsonl")
+	writeLines(t, primary, `{"timestamp":"2026-08-19T10:00:00Z","type":"session_meta","payload":{"cwd":"/work/primary"}}`)
+	profile := filepath.Join(home, "profiles", "isolated", "sessions", "2026", "rollout-profile.jsonl")
+	writeLines(t, profile, `{"timestamp":"2026-08-19T11:00:00Z","type":"session_meta","payload":{"cwd":"/work/profile"}}`)
+	// Profile roots are resolved, so the transcript is named by its real path.
+	// That is what the watcher tails and what the "already taken" check compares,
+	// and it is stable per file, which is all those two require.
+	profile = resolvedPath(profile)
+
+	finder := DefaultFinder{CodexRoot: sessions}
+	// A session under a profile-specific CODEX_HOME gets a live transcript, which
+	// it previously never did: nothing outside the primary root was searched.
+	found, err := finder.Find(context.Background(), "codex", "/work/profile", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found != profile {
+		t.Fatalf("found = %q, want the isolated profile's rollout %q", found, profile)
+	}
+	// The primary root still answers on its own, so the common case never reaches
+	// the profile scan.
+	found, err = finder.Find(context.Background(), "codex", "/work/primary", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found != primary {
+		t.Fatalf("found = %q, want the primary rollout %q", found, primary)
+	}
+	// An unrelated workspace must still adopt nothing rather than the newest file
+	// from whichever home happened to be scanned last.
+	found, err = finder.Find(context.Background(), "codex", "/work/elsewhere", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found != "" {
+		t.Fatalf("found = %q, want no transcript for an unrelated workspace", found)
+	}
+}
+
+func TestHistoricalUsageTranscriptsIncludesIsolatedCodexProfilesOnce(t *testing.T) {
+	// The layout codex-alias produces: one CODEX_HOME per profile under
+	// <home>/profiles/<name>, where a profile either links its sessions back to
+	// the source home or keeps its own. Both shapes exist on a real machine, and
+	// each fails differently -- the linked one by reading every rollout twice,
+	// the isolated one by never reading it at all.
+	home := t.TempDir()
+	sessions := filepath.Join(home, "sessions")
+	shared := filepath.Join(sessions, "2026", "rollout-shared.jsonl")
+	writeLines(t, shared, `{"timestamp":"2026-08-19T10:00:00Z","type":"session_meta","payload":{"cwd":"/work/shared"}}`)
+
+	own := filepath.Join(home, "profiles", "isolated", "sessions", "2026", "rollout-own.jsonl")
+	writeLines(t, own, `{"timestamp":"2026-08-19T11:00:00Z","type":"session_meta","payload":{"cwd":"/work/isolated"}}`)
+
+	linked := filepath.Join(home, "profiles", "linked")
+	if err := os.MkdirAll(linked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(sessions, filepath.Join(linked, "sessions")); err != nil {
+		t.Fatal(err)
+	}
+
+	transcripts, err := (DefaultFinder{
+		CodexRoot:  sessions,
+		ClaudeRoot: filepath.Join(home, "absent-claude"),
+		PiRoot:     filepath.Join(home, "absent-pi"),
+	}).HistoricalUsageTranscripts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transcripts) != 2 {
+		t.Fatalf("transcripts = %#v, want the shared rollout once and the isolated one", transcripts)
+	}
+	// Counting the shared rollout twice would inflate that profile's spend by
+	// exactly 2x, and the durable call keys cannot help: they are what makes the
+	// second read a no-op only if it reaches the same key, which it does -- so
+	// the waste is a full extra pass over the tree, not a wrong number.
+	paths := map[string]int{}
+	for _, transcript := range transcripts {
+		if transcript.Provider != "codex" {
+			t.Fatalf("unexpected provider in %#v", transcript)
+		}
+		paths[filepath.Base(transcript.Path)]++
+	}
+	if paths["rollout-shared.jsonl"] != 1 {
+		t.Errorf("shared rollout listed %d times, want once", paths["rollout-shared.jsonl"])
+	}
+	if paths["rollout-own.jsonl"] != 1 {
+		t.Errorf("isolated profile rollout listed %d times, want once", paths["rollout-own.jsonl"])
+	}
+	for _, transcript := range transcripts {
+		if filepath.Base(transcript.Path) == "rollout-own.jsonl" &&
+			transcript.WorkspacePath != "/work/isolated" {
+			t.Errorf("isolated transcript = %#v, want its own cwd for attribution", transcript)
+		}
 	}
 }
 

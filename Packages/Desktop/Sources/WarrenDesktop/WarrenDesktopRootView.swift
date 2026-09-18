@@ -93,7 +93,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let usageStats: WarrenUsageStats
     private let usageState: WarrenUsageLoadState
     private let onLoadUsage: ((Int, String?, Bool) -> Void)?
-    private let onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
+    private let onRebuildUsage: ((@escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void) -> Void)?
     private let embeddedEditorAvailable: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
     private let persistenceEnabled: Bool
@@ -272,7 +272,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         usageStats: WarrenUsageStats = WarrenUsageStats(),
         usageState: WarrenUsageLoadState = .idle,
         onLoadUsage: ((Int, String?, Bool) -> Void)? = nil,
-        onRebuildUsage: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
+        onRebuildUsage: ((@escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void) -> Void)? = nil,
         embeddedEditorAvailable: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
         persistenceEnabled: Bool = true,

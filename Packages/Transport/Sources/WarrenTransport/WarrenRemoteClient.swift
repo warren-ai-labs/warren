@@ -4,6 +4,9 @@ import WarrenProtocol
 
 public enum WarrenRemoteClientError: Error, Equatable, Sendable, LocalizedError {
     case invalidEndpoint
+    /// A Relay route cannot be opened because the endpoint has no Relay host
+    /// record id, which only a fresh pairing can supply.
+    case relayIdentityMissing
     case alreadyStarted
     case notConnected
     case closed
@@ -21,6 +24,8 @@ public enum WarrenRemoteClientError: Error, Equatable, Sendable, LocalizedError 
         switch self {
         case .invalidEndpoint:
             return "The Warren Host endpoint is invalid."
+        case .relayIdentityMissing:
+            return "This Host's Relay route has no pairing identity left. Pair it again from a fresh QR code or Link."
         case .alreadyStarted:
             return "The Warren remote client is already started."
         case .notConnected:
@@ -241,6 +246,20 @@ private actor WarrenRemoteSocket {
                     return
                 }
             }
+        }
+    }
+
+    /// Probes the transport now instead of waiting out the remaining heartbeat
+    /// interval. A Mac that just woke from sleep, or a client whose network
+    /// changed underneath it, usually holds a socket that still looks alive
+    /// until the first write fails; discovering that immediately turns a
+    /// minutes-long silent stall into a normal reconnect.
+    func probeNow() async {
+        guard !isClosed else { return }
+        do {
+            try await adapter.ping()
+        } catch {
+            fail(error)
         }
     }
 
@@ -683,6 +702,11 @@ public actor WarrenRemoteClient {
     private var refreshToken: String?  // OAuth2-style refresh token for Relay
     private let refreshTokenHandler: (@Sendable (String) -> Void)?
     private let tokenUpdateHandler: (@Sendable (String, String?) -> Void)?
+    /// Reports the Relay's authoritative host record id when the stored
+    /// endpoint disagrees with it. The owner rewrites the endpoint and
+    /// restarts, because the socket URL was already built from the stale id.
+    private let relayHostIDCorrectionHandler: (@Sendable (String) -> Void)?
+    private var relayIdentityCorrectionRequested = false
     /// Native pairing supplies a stable device identity so Relay capabilities
     /// remain bound to the same client across reconnects. Keeping this
     /// optional preserves compatibility with older capabilities that have no
@@ -727,7 +751,8 @@ public actor WarrenRemoteClient {
         terminalStateFormats: [String] = [WarrenRemoteClient.replayTerminalStateFormat],
         clientID: String? = nil,
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
-        tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
+        tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil,
+        relayHostIDCorrectionHandler: (@Sendable (String) -> Void)? = nil
     ) {
         self.configuration = configuration
         self.urlSession = urlSession ?? WarrenRemoteNetworking.session(for: configuration)
@@ -737,6 +762,7 @@ public actor WarrenRemoteClient {
         self.refreshToken = configuration.refreshToken
         self.refreshTokenHandler = refreshTokenHandler
         self.tokenUpdateHandler = tokenUpdateHandler
+        self.relayHostIDCorrectionHandler = relayHostIDCorrectionHandler
         self.advertisedCapabilities = [
             "roster-delta",
             "pane-groups-v1",
@@ -766,7 +792,8 @@ public actor WarrenRemoteClient {
         urlSession: URLSession? = nil,
         clientID: String? = nil,
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
-        tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
+        tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil,
+        relayHostIDCorrectionHandler: (@Sendable (String) -> Void)? = nil
     ) {
         self.init(
             configuration: configuration,
@@ -777,7 +804,8 @@ public actor WarrenRemoteClient {
             urlSession: urlSession,
             clientID: clientID,
             refreshTokenHandler: refreshTokenHandler,
-            tokenUpdateHandler: tokenUpdateHandler
+            tokenUpdateHandler: tokenUpdateHandler,
+            relayHostIDCorrectionHandler: relayHostIDCorrectionHandler
         )
     }
 
@@ -793,7 +821,8 @@ public actor WarrenRemoteClient {
         urlSession: URLSession? = nil,
         clientID: String? = nil,
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
-        tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil
+        tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil,
+        relayHostIDCorrectionHandler: (@Sendable (String) -> Void)? = nil
     ) {
         self.configuration = configuration
         self.urlSession = urlSession ?? WarrenRemoteNetworking.session(for: configuration)
@@ -802,6 +831,7 @@ public actor WarrenRemoteClient {
         self.refreshToken = configuration.refreshToken
         self.refreshTokenHandler = refreshTokenHandler
         self.tokenUpdateHandler = tokenUpdateHandler
+        self.relayHostIDCorrectionHandler = relayHostIDCorrectionHandler
         self.advertisedCapabilities = capabilities
         self.clientID = clientID ?? configuration.clientID
         self.injectedTasks = tasks
@@ -839,6 +869,16 @@ public actor WarrenRemoteClient {
         self.socket = nil
         Task { await socket?.close() }
         setConnectionState(.reconnecting)
+    }
+
+    /// Verifies the current socket instead of waiting out the remaining
+    /// heartbeat interval. Callers use this when the environment changed under
+    /// the connection (wake from sleep, network change, window reactivated): a
+    /// healthy socket answers and nothing else happens, a dead one fails now
+    /// and the connection loop reconnects.
+    public func probeConnection() async {
+        guard running, let socket else { return }
+        await socket.probeNow()
     }
 
     public func state() -> WarrenRemoteConnectionState { connectionState }
@@ -1616,11 +1656,20 @@ public actor WarrenRemoteClient {
         while running, !Task.isCancelled {
             guard let url = configuration.webSocketURL else {
                 setConnectionState(.disconnected)
-                emit(.disconnected(reason: WarrenRemoteClientError.invalidEndpoint.localizedDescription))
+                // A Relay route without its host record id cannot be built at
+                // all; say so instead of reporting a generic invalid URL.
+                let error: WarrenRemoteClientError = configuration.isRelay
+                    ? .relayIdentityMissing
+                    : .invalidEndpoint
+                emit(.disconnected(reason: error.localizedDescription))
                 return
             }
             if configuration.isRelay, accessToken.isEmpty {
                 _ = await refreshRelayAccessToken()
+                if relayIdentityCorrectionRequested {
+                    setConnectionState(.disconnected)
+                    return
+                }
             }
             setConnectionState(attempt == 0 ? .connecting : .reconnecting)
             let adapter: any WarrenWebSocketTaskAdapter
@@ -1681,6 +1730,17 @@ public actor WarrenRemoteClient {
                 if configuration.isRelay,
                    Self.isAuthenticationFailure(error) {
                     refreshedAfterAuthenticationFailure = await refreshRelayAccessToken()
+                    if relayIdentityCorrectionRequested {
+                        // The stored Relay identity disagreed with the Relay's own
+                        // record. The owner rewrites the endpoint and restarts this
+                        // client, so surface a plain disconnect rather than an
+                        // authentication error for a configuration already being
+                        // repaired.
+                        if self.socket === socket { self.socket = nil }
+                        await socket.close()
+                        setConnectionState(.disconnected)
+                        return
+                    }
                 }
                 if !refreshedAfterAuthenticationFailure {
                     emit(.disconnected(reason: error.localizedDescription))
@@ -1717,64 +1777,78 @@ public actor WarrenRemoteClient {
     private func refreshRelayAccessToken() async -> Bool {
         guard configuration.isRelay,
               let url = configuration.relaySessionRefreshURL else { return false }
-        
-        // Try OAuth2-style refresh_token first (preferred)
-        if let refreshToken = refreshToken, !refreshToken.isEmpty {
-            do {
-                var request = URLRequest(url: url)
-                request.httpMethod = "POST"
-                request.timeoutInterval = 15
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                
-                let body: [String: String] = ["refresh_token": refreshToken]
-                request.httpBody = try JSONSerialization.data(withJSONObject: body)
-                
-                let (data, response) = try await urlSession.data(for: request)
-                guard let http = response as? HTTPURLResponse,
-                      (200..<300).contains(http.statusCode) else { return false }
-                
-                let value = try JSONDecoder().decode(WarrenRelaySessionExchange.self, from: data)
-                guard value.hostID == configuration.hostID,
-                      !value.accessToken.isEmpty else { return false }
-                
-                accessToken = value.accessToken
-                if let next = value.refreshToken, !next.isEmpty {
-                    self.refreshToken = next
-                    refreshTokenHandler?(next)
-                    tokenUpdateHandler?(value.accessToken, next)
-                } else {
-                    tokenUpdateHandler?(value.accessToken, nil)
-                }
-                return true
-            } catch {
-                // OAuth2 refresh failed, fall back to cookie-based approach
+
+        // A stored refresh token is the preferred credential. The cookie the
+        // Relay sets during an exchange is the legacy fallback for clients that
+        // never received one, so it is only tried when the token request could
+        // not reach the Relay at all; a rejection applies to the family and
+        // would be answered the same way.
+        if let token = refreshToken, !token.isEmpty {
+            switch await rotateRelaySession(at: url, refreshToken: token) {
+            case .rotated: return true
+            case .rejected: return false
+            case .unreachable: break
             }
         }
-        
-        // Fallback: Cookie-based refresh (legacy)
+        return await rotateRelaySession(at: url, refreshToken: nil) == .rotated
+    }
+
+    private enum RelayRefreshOutcome { case rotated, rejected, unreachable }
+
+    /// Posts one refresh request to the host-scoped Relay endpoint. A `nil`
+    /// refresh token sends no body, which makes Foundation attach the stored
+    /// HttpOnly cookie instead.
+    private func rotateRelaySession(
+        at url: URL,
+        refreshToken token: String?
+    ) async -> RelayRefreshOutcome {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token {
+            let body: [String: String] = ["refresh_token": token]
+            guard let encoded = try? JSONSerialization.data(withJSONObject: body) else {
+                return .unreachable
+            }
+            request.httpBody = encoded
+        }
         do {
             let (data, response) = try await urlSession.data(for: request)
-            guard let http = response as? HTTPURLResponse,
-                  (200..<300).contains(http.statusCode) else { return false }
+            guard let http = response as? HTTPURLResponse else { return .unreachable }
+            guard (200..<300).contains(http.statusCode) else { return .rejected }
             let value = try JSONDecoder().decode(WarrenRelaySessionExchange.self, from: data)
-            guard value.hostID == configuration.hostID,
-                  !value.accessToken.isEmpty else { return false }
-            accessToken = value.accessToken
-            if let next = value.refreshToken, !next.isEmpty {
-                refreshToken = next
-                refreshTokenHandler?(next)
-                tokenUpdateHandler?(value.accessToken, next)
-            } else {
-                tokenUpdateHandler?(value.accessToken, nil)
-            }
-            return true
+            return adoptRelaySession(value) ? .rotated : .rejected
         } catch {
-            return false
+            return .unreachable
         }
+    }
+
+    /// Adopts a rotated Relay capability. Relay is the authority for its own
+    /// host record id, so a disagreement means the stored endpoint carries the
+    /// wrong identity (older catalogs kept the Host's LAN id in `hostID`). The
+    /// rotated tokens are persisted either way: the previous refresh token is
+    /// single-use, and dropping its replacement would revoke the family on the
+    /// next attempt. Correction itself is reported to the owner, which rewrites
+    /// the endpoint and reconnects; this socket cannot recover because its URL
+    /// was already built from the stale id.
+    private func adoptRelaySession(_ value: WarrenRelaySessionExchange) -> Bool {
+        let authoritative = value.hostID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.accessToken.isEmpty, !authoritative.isEmpty else { return false }
+        accessToken = value.accessToken
+        if let next = value.refreshToken, !next.isEmpty {
+            refreshToken = next
+            refreshTokenHandler?(next)
+            tokenUpdateHandler?(value.accessToken, next)
+        } else {
+            tokenUpdateHandler?(value.accessToken, nil)
+        }
+        guard authoritative.caseInsensitiveCompare(configuration.effectiveRelayHostID ?? "") != .orderedSame else {
+            return true
+        }
+        relayIdentityCorrectionRequested = true
+        relayHostIDCorrectionHandler?(authoritative)
+        return false
     }
 
     private func consume(_ event: WarrenRemoteSocketEvent, from socket: WarrenRemoteSocket) async {
