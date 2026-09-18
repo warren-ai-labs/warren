@@ -437,6 +437,17 @@ type AgentUsage struct {
 	OutputTokens             int64 `json:"outputTokens,omitempty"`
 	ReasoningOutputTokens    int64 `json:"reasoningOutputTokens,omitempty"`
 	TotalTokens              int64 `json:"totalTokens,omitempty"`
+	// CallKey identifies the billable model call this measurement describes,
+	// within the provider's own namespace. It exists because the same call is
+	// routinely observed more than once: a resumed conversation copies its whole
+	// history into a new transcript file, and one transcript may be read by both
+	// the live watcher and a Usage rebuild. Token accounting counts a call at
+	// most once per distinct key, so the key must be stable across those repeats
+	// and distinct between genuine calls that happen to consume identical token
+	// counts. Empty when the provider offers no usable identity, in which case
+	// the observation is counted as its own call: under-reporting real spend is
+	// worse than the risk of counting an unidentifiable repeat twice.
+	CallKey string `json:"callKey,omitempty"`
 }
 
 // AgentDiff carries normalized metrics and content for a code patch or edit.

@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -60,7 +61,9 @@ type Config struct {
 	AllowedOrigin        string
 	TunnelBaseDomain     string
 	// RefreshTTL controls optional expiry. Zero means the capability remains
-	// valid until its device association or Host is explicitly revoked.
+	// valid until its device association or Host is explicitly revoked, which
+	// also means the used/revoked bookkeeping can never be pruned. Both the
+	// policy and the deferred sweep are recorded in docs/backlog.md.
 	RefreshTTL   time.Duration
 	MaxBodyBytes int64
 	// RateLimitWindow and the operation limits are fixed-window admission
@@ -71,6 +74,9 @@ type Config struct {
 	ClientRateLimit  int
 	PublicRateLimit  int
 	UpgradeRateLimit int
+	// HostPresenceWait bounds how long a client socket waits for an absent Host
+	// before it is told the Host is offline. Zero selects hostPresenceWait.
+	HostPresenceWait time.Duration
 	Logger           *slog.Logger
 }
 
@@ -78,6 +84,18 @@ type Config struct {
 // a Relay client stream. It is independent from BRLY/2, which remains the
 // transport framing between the Relay and an enrolled Host.
 const clientProtocolVersion = "4.0"
+
+// How long a client socket waits for an absent Host before it is told the Host
+// is offline. Long enough to cover a wake, a daemon restart, or a Relay restart
+// with the Host's own reconnect backoff; short enough that a genuinely offline
+// Mac still produces an answer the user can act on. It must stay below every
+// client's welcome deadline (Web 25s, native 30s) so a Host that returns inside
+// this window is not cut off by the client that was waiting for it.
+const hostPresenceWait = 15 * time.Second
+
+// maxHostPresenceWait keeps a configured wait below the shortest client welcome
+// deadline (Web 25s, native 30s) with room for the Host's own welcome exchange.
+const maxHostPresenceWait = 20 * time.Second
 
 type Server struct {
 	config          Config
@@ -228,6 +246,15 @@ func NewServer(config Config) (*Server, error) {
 	if config.PairingRateLimit < 0 || config.ClientRateLimit < 0 || config.PublicRateLimit < 0 || config.UpgradeRateLimit < 0 {
 		return nil, errors.New("rate limits must not be negative")
 	}
+	if config.HostPresenceWait < 0 {
+		return nil, errors.New("host presence wait must not be negative")
+	}
+	// A wait at or above a client's welcome deadline turns the courtesy wait into
+	// the very stall it exists to prevent: the client gives up and reconnects
+	// while Relay is still holding its socket.
+	if config.HostPresenceWait > maxHostPresenceWait {
+		return nil, fmt.Errorf("host presence wait must not exceed %s", maxHostPresenceWait)
+	}
 	if config.TunnelBaseDomain == "" {
 		config.TunnelBaseDomain = "tunnel.local"
 	}
@@ -290,13 +317,11 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("DELETE /v1/hosts/{hostID}", server.revokeHost)
 	server.mux.HandleFunc("GET /v1/hosts/{hostID}", server.getHost)
 	server.mux.HandleFunc("POST /v1/pair", server.pair)
-	server.mux.HandleFunc("POST /v1/session/exchange", server.exchangeSession)
 	server.mux.HandleFunc("POST /invite/{inviteID}/v1/session/exchange", server.exchangeSession)
 	server.mux.HandleFunc("POST /v1/session/refresh", server.refreshSession)
 	server.mux.HandleFunc("GET /v1/hosts/{hostID}/devices", server.listDevices)
 	server.mux.HandleFunc("DELETE /v1/hosts/{hostID}/devices/{deviceID}", server.revokeDevice)
 	server.mux.HandleFunc("POST /invite/{inviteID}/v1/session/refresh", server.refreshSession)
-	server.mux.HandleFunc("POST /h/{hostID}/v1/session/exchange", server.exchangeSession)
 	server.mux.HandleFunc("POST /h/{hostID}/v1/session/refresh", server.refreshSession)
 	server.mux.HandleFunc("GET /h/{hostID}/v1/relay/devices", server.listDevices)
 	server.mux.HandleFunc("DELETE /h/{hostID}/v1/relay/devices/{deviceID}", server.revokeDevice)
@@ -372,6 +397,8 @@ func (server *Server) connectHost(response http.ResponseWriter, request *http.Re
 		tunnel.close()
 		return
 	}
+	// Release clients that are waiting for this Host to come back.
+	server.registry.signalHostOnline(hostID)
 	server.config.Logger.Info("host connected", "host_id", hostID)
 	defer func() {
 		server.registry.disconnectHost(hostID, tunnel)
@@ -778,17 +805,11 @@ func (server *Server) pair(response http.ResponseWriter, request *http.Request) 
 	result := map[string]any{
 		"host_id":      hostID,
 		"access_token": token,
-		// The browser and native clients receive an opaque invite URL. It does
-		// not disclose the Host ID; Relay resolves the invite server-side during
-		// the exchange and returns the scoped Host identity in the response.
-		"pairing_ticket": invite,
-		"invite_id":      invite,
-		"web_url":        inviteURL,
-		"pairing_url":    inviteURL,
-		// Keep expires_in compatible with older clients that interpreted it as
-		// the access capability lifetime. New clients should use the explicit
-		// pairing_expires_in field for the QR/link lifetime.
-		"expires_in":         int(server.config.AccessTTL.Seconds()),
+		// Clients open or encode pairing_url. The invite is opaque: Relay
+		// resolves it during the exchange and returns the scoped Host identity
+		// in the response, so the link never discloses the Host ID.
+		"invite_id":          invite,
+		"pairing_url":        inviteURL,
 		"pairing_expires_in": int(server.config.PairingTicketTTL.Seconds()),
 		"pairing_expires_at": inviteExpires.UTC().Format(time.RFC3339),
 	}
@@ -800,15 +821,17 @@ func (server *Server) pair(response http.ResponseWriter, request *http.Request) 
 	writeJSON(response, http.StatusCreated, result)
 }
 
+// exchangeSession trades an opaque invite for a short-lived access capability.
+// The invite is the path segment the pairing link carried; it is the only
+// pairing credential the Relay accepts, so a QR code never has to disclose the
+// Host's record id.
 func (server *Server) exchangeSession(response http.ResponseWriter, request *http.Request) {
 	if !originAllowed(server.config.AllowedOrigin, request.Header.Get("Origin")) {
 		http.Error(response, "origin not allowed", http.StatusForbidden)
 		return
 	}
 	var body struct {
-		PairingTicket string `json:"pairing_ticket"`
-		InviteID      string `json:"invite_id"`
-		ClientID      string `json:"client_id"`
+		ClientID string `json:"client_id"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 16*1024))
 	decoder.DisallowUnknownFields()
@@ -816,27 +839,9 @@ func (server *Server) exchangeSession(response http.ResponseWriter, request *htt
 		http.Error(response, "invalid request", http.StatusBadRequest)
 		return
 	}
-	ticket := strings.TrimSpace(body.PairingTicket)
-	if inviteID := strings.TrimSpace(request.PathValue("inviteID")); inviteID != "" {
-		if ticket != "" && ticket != inviteID {
-			http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
-			return
-		}
-		ticket = inviteID
-	}
-	if inviteID := strings.TrimSpace(body.InviteID); inviteID != "" {
-		if ticket != "" && ticket != inviteID {
-			http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
-			return
-		}
-		ticket = inviteID
-	}
+	ticket := strings.TrimSpace(request.PathValue("inviteID"))
 	entry, ok := server.registry.pairingInvite(ticket)
 	if !ok || ticket == "" {
-		http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
-		return
-	}
-	if hostID := strings.TrimSpace(request.PathValue("hostID")); hostID != "" && hostID != entry.HostID {
 		http.Error(response, "invalid pairing ticket", http.StatusUnauthorized)
 		return
 	}
@@ -1162,9 +1167,9 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 		_ = client.WriteJSON(map[string]string{"t": "error", "error": "rate limit exceeded", "message": "rate limit exceeded"})
 		return
 	}
-	tunnel := server.registry.authorizedTunnel(hostID, claims.Generation)
+	tunnel := server.awaitAuthorizedTunnel(request.Context(), hostID, claims.Generation)
 	if tunnel == nil {
-		_ = client.WriteJSON(map[string]string{"t": "error", "error": "host offline", "message": "host offline"})
+		_ = client.WriteJSON(server.hostOfflinePayload(hostID))
 		return
 	}
 	_ = client.SetReadDeadline(time.Now().Add(75 * time.Second))
@@ -1221,38 +1226,125 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 			}
 		}
 	}()
-	for {
-		select {
-		case frame := <-route.frames:
-			if frame.Kind == frameClose || frame.Kind == frameError {
-				return
-			}
-			messageType := websocket.TextMessage
-			if frame.Kind == frameBinary {
-				messageType = websocket.BinaryMessage
-			}
-			_ = client.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if client.WriteMessage(messageType, frame.Payload) != nil {
-				return
-			}
-			// Return credit only when this route/frame combination consumed
-			// body-window capacity. Control text/binary frames use the reserved
-			// lane; public streams and control DATA remain flow-controlled.
-			if routeFrameNeedsCredit(route, frame.Kind) {
-				if tunnel.send(relayFrame{Kind: frameWindowUpdate, ConnectionID: connectionID, Payload: encodeWindowCredit(uint64(len(frame.Payload)))}) != nil {
+	// Host output and client input are independent directions. A phone whose
+	// socket drains slowly can hold a downstream WriteMessage for hundreds of
+	// milliseconds, and a single loop would make every keystroke wait behind that
+	// write plus its window update. Give the downstream direction its own
+	// goroutine so input keeps flowing while output is still draining.
+	downstreamDone := make(chan struct{})
+	go func() {
+		defer close(downstreamDone)
+		for {
+			select {
+			case frame := <-route.frames:
+				if frame.Kind == frameClose || frame.Kind == frameError {
 					return
 				}
+				messageType := websocket.TextMessage
+				if frame.Kind == frameBinary {
+					messageType = websocket.BinaryMessage
+				}
+				_ = client.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				// Browsers negotiate permessage-deflate, so without this every
+				// keystroke echo was deflated into something larger than the bytes
+				// it carried. Safe from this goroutine: it owns every data write to
+				// the client, and the heartbeat's WriteControl never consults the
+				// compression flag.
+				client.EnableWriteCompression(len(frame.Payload) >= compressionThreshold)
+				err := client.WriteMessage(messageType, frame.Payload)
+				route.release(frame)
+				if err != nil {
+					return
+				}
+				// Return credit only when this route/frame combination consumed
+				// body-window capacity. Control text/binary frames use the reserved
+				// lane; public streams and control DATA remain flow-controlled.
+				if routeFrameNeedsCredit(route, frame.Kind) {
+					if tunnel.send(relayFrame{Kind: frameWindowUpdate, ConnectionID: connectionID, Payload: encodeWindowCredit(uint64(len(frame.Payload)))}) != nil {
+						return
+					}
+				}
+			case <-route.done:
+				return
+			case <-clientDone:
+				return
 			}
-		case <-route.done:
-			return
+		}
+	}()
+	for {
+		select {
 		case frame := <-clientFrames:
 			if tunnel.sendStream(connectionID, frame) != nil {
 				return
 			}
+		case <-route.done:
+			return
+		case <-downstreamDone:
+			return
 		case <-clientErrors:
 			return
 		}
 	}
+}
+
+// awaitAuthorizedTunnel returns the Host tunnel, waiting briefly when the Host
+// is not connected yet. A Mac that just woke, restarted its daemon, or is
+// reconnecting after a Relay restart is usually back within seconds; making the
+// client wait here keeps that gap invisible instead of reporting the Host as
+// offline and leaving the client to rediscover it through its own backoff.
+func (server *Server) awaitAuthorizedTunnel(ctx context.Context, hostID string, generation uint64) *hostTunnel {
+	if tunnel := server.registry.authorizedTunnel(hostID, generation); tunnel != nil {
+		return tunnel
+	}
+	timer := time.NewTimer(server.hostPresenceWait())
+	defer timer.Stop()
+	for {
+		// Subscribe before the final check so a Host that connects during this
+		// call cannot be missed between the check and the wait.
+		signal := server.registry.hostOnlineSignal(hostID)
+		if tunnel := server.registry.authorizedTunnel(hostID, generation); tunnel != nil {
+			return tunnel
+		}
+		select {
+		case <-signal:
+			// A Host may connect with a different generation (re-enrollment) or
+			// drop again immediately; loop until the deadline instead of trusting
+			// the first wake-up.
+		case <-timer.C:
+			return nil
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+// hostOfflinePayload keeps the historical `error`/`message` fields and adds the
+// facts a client needs to explain the wait: a stable code, when the Host was
+// last seen, and how long to wait before trying again.
+func (server *Server) hostPresenceWait() time.Duration {
+	if server.config.HostPresenceWait > 0 {
+		return server.config.HostPresenceWait
+	}
+	return hostPresenceWait
+}
+
+func (server *Server) hostOfflinePayload(hostID string) map[string]any {
+	payload := map[string]any{
+		"t":              "error",
+		"error":          "host offline",
+		"message":        "host offline",
+		"code":           "host_offline",
+		"retry_after_ms": int64(server.hostPresenceWait() / time.Millisecond),
+	}
+	if host, ok := server.registry.host(hostID); ok {
+		if !host.LastSeenAt.IsZero() {
+			payload["last_seen_at"] = host.LastSeenAt.UTC().Format(time.RFC3339)
+		}
+		if host.Name != "" {
+			payload["host_name"] = host.Name
+		}
+	}
+	return payload
 }
 
 func originAllowed(configured, origin string) bool {

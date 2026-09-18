@@ -53,6 +53,11 @@ func (p *claudeParser) claudeUsageOnce(messageID string, raw json.RawMessage) *a
 	if messageID == "" {
 		return value
 	}
+	// The assistant message id is Claude's own identity for one API response and
+	// is globally unique, so it needs no session qualifier. Carrying it makes the
+	// call countable exactly once even when a resumed conversation copies this
+	// message into another transcript file.
+	value.CallKey = messageID
 	if _, counted := p.claudeCountedUsage[messageID]; counted {
 		return nil
 	}

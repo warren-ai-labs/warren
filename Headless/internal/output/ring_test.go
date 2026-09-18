@@ -40,43 +40,23 @@ func TestRingAppendReusesFrameStorageAfterCountEviction(t *testing.T) {
 	}
 }
 
-func TestRingRecoveryPlans(t *testing.T) {
+// Reset moves the ring to a new epoch without carrying frames across it, so a
+// stale sequence from the previous epoch can never be read as retained.
+func TestRingResetDropsThePreviousEpoch(t *testing.T) {
 	ring := NewRing(7, 256, 8*1024*1024, 0)
 	for _, payload := range []string{"hello ", "world", "\r\n"} {
-		_, _ = ring.Append("s", []byte(payload))
+		if _, err := ring.Append("s", []byte(payload)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if plan := ring.Plan(nil); plan != PlanReanchor {
-		t.Fatalf("nil anchor plan = %v, want reanchor", plan)
+	ring.Reset(8, 100)
+	if ring.Epoch != 8 {
+		t.Fatalf("epoch = %d, want 8", ring.Epoch)
 	}
-	if plan := ring.Plan(&Anchor{Epoch: 6, Sequence: 0}); plan != PlanReanchor {
-		t.Fatalf("wrong epoch plan = %v, want reanchor", plan)
+	if len(ring.Frames()) != 0 {
+		t.Fatalf("retained frames = %d, want 0 after a reset", len(ring.Frames()))
 	}
-	if plan := ring.Plan(&Anchor{Epoch: 7, Sequence: ring.Upper()}); plan != PlanExact {
-		t.Fatalf("upper anchor plan = %v, want exact", plan)
-	}
-	if plan := ring.Plan(&Anchor{Epoch: 7, Sequence: 4}); plan != PlanTail {
-		t.Fatalf("inner anchor plan = %v, want tail", plan)
-	}
-	if plan := ring.Plan(&Anchor{Epoch: 7, Sequence: 99}); plan != PlanReanchor {
-		t.Fatalf("evicted anchor plan = %v, want reanchor", plan)
-	}
-}
-
-func TestRingRecoveryTrimsTailToAnchor(t *testing.T) {
-	ring := NewRing(0, 256, 8*1024*1024, 0)
-	_, _ = ring.Append("s", []byte("abcdef"))
-	_, _ = ring.Append("s", []byte("ghij"))
-	recovery := ring.Recovery(&Anchor{Epoch: 0, Sequence: 2})
-	if recovery.Plan != PlanTail {
-		t.Fatalf("plan = %v, want tail", recovery.Plan)
-	}
-	if len(recovery.Frames) != 2 {
-		t.Fatalf("frames = %d, want 2", len(recovery.Frames))
-	}
-	if recovery.Frames[0].Sequence != 2 || string(recovery.Frames[0].Payload) != "cdef" {
-		t.Fatalf("first trimmed frame = %#v", recovery.Frames[0])
-	}
-	if recovery.Frames[1].Sequence != 6 || string(recovery.Frames[1].Payload) != "ghij" {
-		t.Fatalf("second frame = %#v", recovery.Frames[1])
+	if ring.Lower() != 100 || ring.Upper() != 100 {
+		t.Fatalf("empty ring interval = [%d,%d], want [100,100]", ring.Lower(), ring.Upper())
 	}
 }

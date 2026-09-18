@@ -90,6 +90,8 @@ struct WarrenUsageStatsResponse: Decodable {
         let calls: Int64
         let pricedCalls: Int64
         let unmeasuredProviders: [String]
+        let unpricedModels: [String]
+        let byBucket: BucketCost
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -98,6 +100,9 @@ struct WarrenUsageStatsResponse: Decodable {
             pricedCalls = try container.decodeIfPresent(Int64.self, forKey: .pricedCalls) ?? 0
             unmeasuredProviders =
                 try container.decodeIfPresent([String].self, forKey: .unmeasuredProviders) ?? []
+            unpricedModels =
+                try container.decodeIfPresent([String].self, forKey: .unpricedModels) ?? []
+            byBucket = try container.decodeIfPresent(BucketCost.self, forKey: .byBucket) ?? BucketCost()
         }
 
         init() {
@@ -105,10 +110,12 @@ struct WarrenUsageStatsResponse: Decodable {
             calls = 0
             pricedCalls = 0
             unmeasuredProviders = []
+            unpricedModels = []
+            byBucket = BucketCost()
         }
 
         private enum CodingKeys: String, CodingKey {
-            case nanoUsd, calls, pricedCalls, unmeasuredProviders
+            case nanoUsd, calls, pricedCalls, unmeasuredProviders, unpricedModels, byBucket
         }
     }
 
@@ -132,6 +139,8 @@ struct WarrenUsageStatsResponse: Decodable {
     struct Interval: Decodable {
         let day: String
         let minute: Int
+        let provider: String
+        let model: String
         let buckets: Buckets
         let cost: Cost
 
@@ -139,12 +148,40 @@ struct WarrenUsageStatsResponse: Decodable {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             day = try container.decodeIfPresent(String.self, forKey: .day) ?? ""
             minute = try container.decodeIfPresent(Int.self, forKey: .minute) ?? 0
+            provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? ""
+            model = try container.decodeIfPresent(String.self, forKey: .model) ?? ""
             buckets = try container.decodeIfPresent(Buckets.self, forKey: .buckets) ?? Buckets()
             cost = try container.decodeIfPresent(Cost.self, forKey: .cost) ?? Cost()
         }
 
         private enum CodingKeys: String, CodingKey {
-            case day, minute, buckets, cost
+            case day, minute, provider, model, buckets, cost
+        }
+    }
+
+    struct BucketCost: Decodable {
+        let freshInput: Int64
+        let cacheWrite: Int64
+        let cacheRead: Int64
+        let output: Int64
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            freshInput = try container.decodeIfPresent(Int64.self, forKey: .freshInput) ?? 0
+            cacheWrite = try container.decodeIfPresent(Int64.self, forKey: .cacheWrite) ?? 0
+            cacheRead = try container.decodeIfPresent(Int64.self, forKey: .cacheRead) ?? 0
+            output = try container.decodeIfPresent(Int64.self, forKey: .output) ?? 0
+        }
+
+        init() {
+            freshInput = 0
+            cacheWrite = 0
+            cacheRead = 0
+            output = 0
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case freshInput, cacheWrite, cacheRead, output
         }
     }
 
@@ -182,6 +219,32 @@ struct WarrenUsageStatsResponse: Decodable {
     let dayModels: [Group]
     let dayProjects: [Group]
     let pricesFetchedAt: String?
+    let lastRebuild: RebuildStamp?
+
+    struct RebuildStamp: Decodable {
+        let completedAt: String
+        let providers: [String]
+        let calls: Int64
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            completedAt = try container.decodeIfPresent(String.self, forKey: .completedAt) ?? ""
+            providers = try container.decodeIfPresent([String].self, forKey: .providers) ?? []
+            calls = try container.decodeIfPresent(Int64.self, forKey: .calls) ?? 0
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case completedAt, providers, calls
+        }
+
+        /// Nil when the Host sent a stamp whose time cannot be read: the figures
+        /// it describes are still correct, only their age is unknown.
+        var model: WarrenUsageRebuildStamp? {
+            WarrenUsageStatsResponse.parseTimestamp(completedAt).map {
+                WarrenUsageRebuildStamp(completedAt: $0, providers: providers, calls: calls)
+            }
+        }
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -201,12 +264,52 @@ struct WarrenUsageStatsResponse: Decodable {
         dayModels = try container.decodeIfPresent([Group].self, forKey: .dayModels) ?? []
         dayProjects = try container.decodeIfPresent([Group].self, forKey: .dayProjects) ?? []
         pricesFetchedAt = try container.decodeIfPresent(String.self, forKey: .pricesFetchedAt)
+        lastRebuild = try container.decodeIfPresent(RebuildStamp.self, forKey: .lastRebuild)
     }
 
     private enum CodingKeys: String, CodingKey {
         case fromDay, toDay, total, cost, days, intervals, intervalBucketMinutes
         case providers, models, projects, detailDay
-        case dayProviders, dayModels, dayProjects, pricesFetchedAt
+        case dayProviders, dayModels, dayProjects, pricesFetchedAt, lastRebuild
+    }
+}
+
+/// Wire shape of `usage.rebuild`.
+///
+/// Decoded rather than discarded so the settings surface can say what the
+/// rebuild replaced. Every field is optional for the same reason as the stats
+/// payload: Go omits zero values, so a rebuild that found nothing arrives as an
+/// almost empty object.
+struct WarrenUsageRebuildResponse: Decodable {
+    let rebuilt: Bool
+    let providers: [String]
+    let observations: Int64
+    let calls: Int64
+    let days: Int64
+    let completedAt: String?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rebuilt = try container.decodeIfPresent(Bool.self, forKey: .rebuilt) ?? false
+        providers = try container.decodeIfPresent([String].self, forKey: .providers) ?? []
+        observations = try container.decodeIfPresent(Int64.self, forKey: .observations) ?? 0
+        calls = try container.decodeIfPresent(Int64.self, forKey: .calls) ?? 0
+        days = try container.decodeIfPresent(Int64.self, forKey: .days) ?? 0
+        completedAt = try container.decodeIfPresent(String.self, forKey: .completedAt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case rebuilt, providers, observations, calls, days, completedAt
+    }
+
+    var model: WarrenUsageRebuildSummary {
+        WarrenUsageRebuildSummary(
+            providers: providers,
+            observations: observations,
+            calls: calls,
+            days: days,
+            completedAt: completedAt.flatMap(WarrenUsageStatsResponse.parseTimestamp)
+        )
     }
 }
 
@@ -228,7 +331,14 @@ extension WarrenUsageStatsResponse.Cost {
             nanoUSD: nanoUsd,
             calls: calls,
             pricedCalls: pricedCalls,
-            unmeasuredProviders: unmeasuredProviders
+            unmeasuredProviders: unmeasuredProviders,
+            unpricedModels: unpricedModels,
+            byBucket: WarrenUsageBucketCost(
+                freshInput: byBucket.freshInput,
+                cacheWrite: byBucket.cacheWrite,
+                cacheRead: byBucket.cacheRead,
+                output: byBucket.output
+            )
         )
     }
 }
@@ -253,6 +363,8 @@ extension WarrenUsageStatsResponse {
                 WarrenUsageInterval(
                     day: $0.day,
                     minute: $0.minute,
+                    provider: $0.provider,
+                    model: $0.model,
                     buckets: $0.buckets.model,
                     cost: $0.cost.model
                 )
@@ -265,7 +377,8 @@ extension WarrenUsageStatsResponse {
             dayProviders: dayProviders.map(\.model),
             dayModels: dayModels.map(\.model),
             dayProjects: dayProjects.map(\.model),
-            pricesFetchedAt: pricesFetchedAt.flatMap(Self.parseTimestamp)
+            pricesFetchedAt: pricesFetchedAt.flatMap(Self.parseTimestamp),
+            lastRebuild: lastRebuild?.model
         )
     }
 

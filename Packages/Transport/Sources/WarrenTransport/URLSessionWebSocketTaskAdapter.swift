@@ -31,15 +31,22 @@ public actor URLSessionWebSocketTaskAdapter: WarrenWebSocketTaskAdapter {
     }
 
     public func ping() async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            task.sendPing { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: ())
+        let task = self.task
+        let completion = SingleResumeContinuation()
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                completion.attach(continuation)
+                task.sendPing { error in
+                    if let error {
+                        completion.fail(error)
+                    } else {
+                        completion.succeed()
+                    }
                 }
             }
-        }
+        }, onCancel: {
+            completion.fail(CancellationError())
+        })
     }
 
     public func receive() async throws -> WarrenWebSocketMessage {

@@ -124,7 +124,7 @@ struct WarrenDesktopSessionTreeGuideShape: Shape {
 /// a scoped Host's render their leaves through here, so the two cannot drift
 /// apart.
 ///
-/// The same figure carries the emphasis: the pointer anywhere in the group
+/// The same figure carries the emphasis: a pointer that moves inside the group
 /// lights the whole rail, because the group is what is being pointed at, and so
 /// does the workspace the center is showing, because that is the row the figure
 /// hangs from. The workspace row above it does not navigate on a click, so this

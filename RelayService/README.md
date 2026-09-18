@@ -259,18 +259,35 @@ curl -sS -X POST https://relay.example.com/v1/pair \
   | jq '{pairing_url, pairing_expires_in, pairing_expires_at}'
 ```
 
-`pairing_url` (also returned as the compatibility field `web_url`) is the
-responsive Web/PWA entry point. It has the form `/invite/<opaque>/` and does
-not disclose the Host ID. The pairing link can be exchanged by multiple devices
-until it expires; each exchange returns a short-lived capability and the Host ID
-is used only in memory to open the Host-scoped WebSocket. Generating a new
-pairing code replaces the previous code; re-enrolling or revoking the Host
-invalidates existing links and access capabilities.
+`pairing_url` is the responsive Web/PWA entry point. It has the form
+`/invite/<opaque>/` and does not disclose the Host ID. The pairing link can be
+exchanged by multiple devices until it expires; each exchange returns a
+short-lived capability and the Host ID is used only in memory to open the
+Host-scoped WebSocket. Generating a new pairing code replaces the previous code;
+re-enrolling or revoking the Host invalidates existing links and access
+capabilities. Clients exchange an invite through
+`POST /invite/<opaque>/v1/session/exchange`; the retired host-scoped ticket link
+and its `/h/<host-uuid>/v1/session/exchange` route are gone.
 
 ```bash
 curl -sS -X DELETE https://relay.example.com/v1/hosts/<host-uuid> \
   -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN"
 ```
+
+## Host Presence
+
+A client that connects while its Host is not attached waits up to 15 seconds
+for the Host to appear instead of being refused immediately. A Mac waking from
+sleep, a daemon restart, and a Relay restart are all shorter than that window,
+so the client connects normally rather than reporting the Host as offline and
+rediscovering it through its own reconnect backoff. The wait is bounded and
+configurable with `WARREN_RELAY_HOST_PRESENCE_WAIT`; it must remain below every
+client's welcome deadline (Web 25s, native 30s).
+
+When the Host really is away, the client receives the historical
+`{"t":"error","error":"host offline"}` frame extended with a `host_offline`
+code, the Host name, its `last_seen_at` timestamp, and a `retry_after_ms` hint,
+so the client can say which machine is offline and for how long.
 
 ## Security Boundaries
 

@@ -704,33 +704,6 @@ func listenerPort(listener net.Listener) string {
 	return "8789"
 }
 
-// maxLogFileBytes bounds the daemon log before it rotates to headless.log.1.
-const maxLogFileBytes = 5 * 1024 * 1024
-
-// newLogger writes structured logs to stderr and, when a path is configured,
-// to a 0600 append-only file. Only high-signal events reach the file: daemon
-// start/stop, Relay route changes, and errors. The file rotates once it
-// exceeds maxLogFileBytes so a long-running daemon never grows without bound.
-func newLogger(path string) *slog.Logger {
-	writers := []io.Writer{os.Stderr}
-	if path != "" {
-		if file, err := openLogFile(path); err == nil {
-			writers = append(writers, file)
-		}
-	}
-	return slog.New(slog.NewTextHandler(io.MultiWriter(writers...), nil))
-}
-
-func openLogFile(path string) (*os.File, error) {
-	if info, err := os.Stat(path); err == nil && info.Size() > maxLogFileBytes {
-		_ = os.Rename(path, path+".1")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
-	}
-	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-}
-
 // runGhostlineServe owns PTY sessions in a child process. The daemon spawns
 // it detached with --ghostline-serve; it listens on the Unix socket until
 // terminated, so daemon upgrades and restarts never end sessions.

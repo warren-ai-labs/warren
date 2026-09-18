@@ -36,6 +36,16 @@ type codexParser struct {
 	// repeated measurement from a genuine second call that happens to consume an
 	// identical number of tokens.
 	codexLastTokenSignature string
+	// codexSessionKey identifies the conversation this rollout records, and
+	// codexTokenIndex counts the billable calls seen within it. Together they form
+	// the usage call key, because a token_count carries no id of its own.
+	//
+	// The key is the session's start timestamp and cwd rather than its
+	// session_id: local rollouts contain pairs of files describing one
+	// conversation under two different session_ids but an identical start
+	// timestamp and cwd, and counting both inflated Codex totals by 1.077x.
+	codexSessionKey string
+	codexTokenIndex int64
 }
 
 func newCodexParser(contentLimit int) *codexParser {
@@ -444,10 +454,15 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			ID        string `json:"id"`
 			SessionID string `json:"session_id"`
 			ThreadID  string `json:"thread_id"`
+			Timestamp string `json:"timestamp"`
+			Cwd       string `json:"cwd"`
 		}
 		if json.Unmarshal(record.Payload, &meta) == nil {
 			if threadID := firstNonEmpty(meta.ID, meta.SessionID, meta.ThreadID); threadID != "" {
 				p.threadID = threadID
+			}
+			if start := strings.TrimSpace(meta.Timestamp); start != "" {
+				p.codexSessionKey = start + "|" + strings.TrimSpace(meta.Cwd)
 			}
 		}
 		return nil
@@ -827,6 +842,16 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			event.Usage = parseUsage(raw)
 			if event.Usage == nil {
 				return nil
+			}
+			p.codexTokenIndex++
+			if p.codexSessionKey != "" {
+				// Position and counts both take part: two copies of one
+				// conversation agree on both, while a cumulative counter that
+				// resets mid-session still yields distinct keys, so a genuine
+				// later call is never mistaken for a repeat.
+				event.Usage.CallKey = fmt.Sprintf(
+					"%s|%d|%s", p.codexSessionKey, p.codexTokenIndex, signature,
+				)
 			}
 			event.Content = "Token usage"
 			return []api.AgentEvent{event}

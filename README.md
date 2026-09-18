@@ -436,6 +436,9 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 - [DESIGN.md](DESIGN.md) — product and system design, domain model, architecture, and acceptance criteria
 - [GLOSSARY.md](GLOSSARY.md) — shared terminology
 - [docs/headless-architecture.md](docs/headless-architecture.md) — headless and remote connection architecture
+- [docs/relay.md](docs/relay.md) — enrolling a Host, pairing a phone or browser, and revoking access through Relay
+- [docs/backlog.md](docs/backlog.md) — deferred work: what we deliberately left, why it can wait, and what would force it
+- [docs/relay-http.md](docs/relay-http.md) — Relay control-plane HTTP API and iOS transport constraints
 - [docs/runtime.md](docs/runtime.md) — Ghostline runtime boundary, environment isolation, and recovery
 - [docs/rfc/0004-headless-flow-orchestration.md](docs/rfc/0004-headless-flow-orchestration.md) — headless flow orchestration
 - [docs/rfc/0006-agent-activity-attention.md](docs/rfc/0006-agent-activity-attention.md) — provider-neutral activity and human attention

@@ -35,6 +35,7 @@ func TestRealTranscriptUsageTotals(t *testing.T) {
 	}{
 		{"claude", filepath.Join(home, ".claude", "projects")},
 		{"codex", filepath.Join(home, ".codex", "sessions")},
+		{"pi", PiSessionsRoot()},
 	} {
 		if _, err := os.Stat(source.root); err != nil {
 			t.Logf("%s: no transcripts at %s", source.kind, source.root)
@@ -53,8 +54,9 @@ func TestRealTranscriptUsageTotals(t *testing.T) {
 			files = files[len(files)-400:]
 		}
 
-		var total usage.Buckets
-		calls, withUsage := 0, 0
+		var total, deduped usage.Buckets
+		calls, withUsage, keyed := 0, 0, 0
+		seen := map[string]struct{}{}
 		for _, file := range files {
 			events, _, err := readNew(file, 0, newParser(source.kind))
 			if err != nil {
@@ -71,10 +73,40 @@ func TestRealTranscriptUsageTotals(t *testing.T) {
 				}
 				total.Add(buckets)
 				calls++
+				// What the store will actually count: the same call key across
+				// files is one call, which is how a resumed conversation stops
+				// being counted twice.
+				key := event.Usage.CallKey
+				if key == "" {
+					deduped.Add(buckets)
+					continue
+				}
+				keyed++
+				if _, repeat := seen[key]; repeat {
+					continue
+				}
+				seen[key] = struct{}{}
+				deduped.Add(buckets)
 			}
 		}
-		t.Logf("%s: files=%d eventsWithUsage=%d billableCalls=%d", source.kind, len(files), withUsage, calls)
+		t.Logf("%s: files=%d eventsWithUsage=%d billableCalls=%d withCallKey=%d",
+			source.kind, len(files), withUsage, calls, keyed)
 		t.Logf("  freshInput=%d cacheWrite=%d cacheRead=%d output=%d total=%d",
 			total.FreshInput, total.CacheWrite, total.CacheRead, total.Output, total.Total())
+		t.Logf("  after call-key dedupe: total=%d (%.4fx before)",
+			deduped.Total(), ratio(total.Total(), deduped.Total()))
+		// A counted call without a key is a call whose repeats cannot be
+		// collapsed, so every adapter has to key what it counts.
+		if calls > 0 && keyed != calls {
+			t.Errorf("%s: %d of %d counted calls carry no call key, so their repeats cannot be collapsed",
+				source.kind, calls-keyed, calls)
+		}
 	}
+}
+
+func ratio(before, after int64) float64 {
+	if after == 0 {
+		return 0
+	}
+	return float64(before) / float64(after)
 }

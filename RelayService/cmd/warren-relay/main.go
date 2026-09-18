@@ -46,6 +46,7 @@ func main() {
 		EnrollmentKeyTTL:     durationEnv("WARREN_RELAY_ENROLLMENT_KEY_TTL", 24*time.Hour),
 		EnrollmentKeyMaxUses: intEnv("WARREN_RELAY_ENROLLMENT_KEY_MAX_USES", 1),
 		AccessTTL:            durationEnv("WARREN_RELAY_ACCESS_TTL", 15*time.Minute),
+		HostPresenceWait:     durationEnv("WARREN_RELAY_HOST_PRESENCE_WAIT", 0),
 		Logger:               slog.Default(),
 	})
 	if err != nil {

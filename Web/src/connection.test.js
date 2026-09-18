@@ -4,8 +4,12 @@ import {
   WarrenConnection,
   appHeartbeatCapability,
   connectionErrorDetail,
+  hostOfflineDetail,
+  hostWaitCopyDelayMs,
   reconnectDelay,
   rejectPendingRequests,
+  relativeTimeLabel,
+  waitingForHostMessage,
 } from "./connection.js";
 
 class FakeSocket {
@@ -87,14 +91,16 @@ test("connection retries after a close and stop cancels retry", () => {
   connection.start();
   FakeSocket.instances[0].disconnect();
   assert.deepEqual(states, ["connecting", "waiting"]);
-  assert.equal(timers[0].delay, 500);
-  timers[0].callback();
+  const firstRetry = timers.at(-1);
+  assert.equal(firstRetry.delay, 500);
+  firstRetry.callback();
   assert.equal(FakeSocket.instances.length, 2);
   FakeSocket.instances[1].open();
   FakeSocket.instances[1].disconnect();
-  assert.equal(timers[1].delay, 1_000, "an unauthenticated socket must not reset backoff");
+  const secondRetry = timers.at(-1);
+  assert.equal(secondRetry.delay, 1_000, "an unauthenticated socket must not reset backoff");
   connection.stop();
-  assert.equal(timers[1].cancelled, true);
+  assert.equal(secondRetry.cancelled, true);
 });
 
 test("a stable authenticated connection resets backoff", () => {
@@ -113,11 +119,11 @@ test("a stable authenticated connection resets backoff", () => {
 
   connection.start();
   FakeSocket.instances[0].disconnect();
-  timers[0].callback();
+  timers.at(-1).callback();
   FakeSocket.instances[1].open();
   connection.markStable();
   FakeSocket.instances[1].disconnect();
-  assert.equal(timers[1].delay, 500);
+  assert.equal(timers.at(-1).delay, 500);
 });
 
 test("retry delay is bounded and jittered", () => {
@@ -193,6 +199,168 @@ test("browser heartbeat starts after negotiation and closes a half-open socket",
   assert.ok(deadline);
   deadline.callback();
   assert.equal(socket.readyState, 3);
+});
+
+test("an authenticated socket that never receives a welcome is replaced", () => {
+  FakeSocket.instances = [];
+  const timers = [];
+  const connection = new WarrenConnection({
+    url: "ws://relay/v1/client/connect",
+    token: "secret",
+    WebSocketClass: FakeSocket,
+    welcomeTimeoutMs: 2_000,
+    setTimer: (callback, delay) => {
+      timers.push({ callback, delay, cancelled: false });
+      return timers.length - 1;
+    },
+    clearTimer: id => { timers[id].cancelled = true; },
+  });
+  connection.start();
+  const socket = FakeSocket.instances[0];
+  socket.open();
+  const welcomeTimer = timers.find(item => item.delay === 2_000);
+  assert.ok(welcomeTimer, "auth starts a welcome deadline");
+  welcomeTimer.callback();
+  assert.equal(socket.readyState, 3, "a silent Host tunnel is abandoned");
+
+  socket.onclose();
+  timers.at(-1).callback();
+  const second = FakeSocket.instances[1];
+  second.open();
+  second.onmessage({ data: JSON.stringify({ t: "welcome", capabilities: [] }) });
+  const secondDeadline = timers.filter(item => item.delay === 2_000).at(-1);
+  assert.equal(secondDeadline.cancelled, true, "a welcome ends the deadline");
+});
+
+test("an error answer also ends the welcome deadline", () => {
+  FakeSocket.instances = [];
+  const timers = [];
+  const connection = new WarrenConnection({
+    url: "ws://relay/v1/client/connect",
+    token: "secret",
+    WebSocketClass: FakeSocket,
+    welcomeTimeoutMs: 2_000,
+    setTimer: (callback, delay) => {
+      timers.push({ callback, delay, cancelled: false });
+      return timers.length - 1;
+    },
+    clearTimer: id => { timers[id].cancelled = true; },
+  });
+  connection.start();
+  const socket = FakeSocket.instances[0];
+  socket.open();
+  socket.onmessage({ data: JSON.stringify({ t: "error", error: "host offline", code: "host_offline" }) });
+  assert.equal(timers.find(item => item.delay === 2_000).cancelled, true);
+});
+
+test("resume reconnects a closed socket immediately and throttles repeats", () => {
+  FakeSocket.instances = [];
+  const timers = [];
+  let now = 10_000;
+  const connection = new WarrenConnection({
+    url: "ws://relay/v1/ws",
+    token: "secret",
+    WebSocketClass: FakeSocket,
+    setTimer: (callback, delay) => {
+      timers.push({ callback, delay, cancelled: false });
+      return timers.length - 1;
+    },
+    clearTimer: id => { timers[id].cancelled = true; },
+    clock: () => now,
+    random: () => 0.5,
+  });
+
+  connection.start();
+  FakeSocket.instances[0].open();
+  FakeSocket.instances[0].disconnect();
+  FakeSocket.instances[0].disconnect();
+  const pendingRetry = timers.at(-1);
+  assert.equal(pendingRetry.delay, 500);
+  assert.equal(connection.attempt, 1);
+
+  assert.equal(connection.resume({ resetBackoff: true }), true);
+  assert.equal(pendingRetry.cancelled, true, "the pending wait is abandoned");
+  assert.equal(FakeSocket.instances.length, 2);
+  assert.equal(connection.attempt, 0, "a network transition starts a fresh sequence");
+
+  FakeSocket.instances[1].disconnect();
+  assert.equal(connection.resume(), false, "a second event within the window is ignored");
+  now += 1_000;
+  assert.equal(connection.resume(), true);
+  assert.equal(FakeSocket.instances.length, 3);
+});
+
+test("resume probes an open socket instead of replacing it", () => {
+  FakeSocket.instances = [];
+  const timers = [];
+  const connection = new WarrenConnection({
+    url: "ws://relay/v1/ws",
+    token: "secret",
+    WebSocketClass: FakeSocket,
+    capabilities: ["roster-delta", appHeartbeatCapability],
+    heartbeatIntervalMs: 10,
+    heartbeatTimeoutMs: 5,
+    setTimer: (callback, delay) => {
+      timers.push({ callback, delay, cancelled: false });
+      return timers.length - 1;
+    },
+    clearTimer: id => { timers[id].cancelled = true; },
+  });
+  connection.start();
+  const socket = FakeSocket.instances[0];
+  socket.open();
+  socket.onmessage({ data: JSON.stringify({ t: "welcome", capabilities: [appHeartbeatCapability] }) });
+  const sentBeforeResume = socket.sent.length;
+  const timersBeforeResume = timers.length;
+
+  assert.equal(connection.resume(), false);
+  assert.equal(FakeSocket.instances.length, 1, "an open socket is kept");
+  const ping = JSON.parse(socket.sent.at(-1));
+  assert.equal(ping.t, "ping");
+  assert.equal(socket.sent.length, sentBeforeResume + 1);
+
+  // The probe already outstanding is not duplicated by another lifecycle event.
+  connection.resume();
+  assert.equal(socket.sent.length, sentBeforeResume + 1);
+
+  // resume registers the probe deadline first, then re-arms the interval.
+  timers[timersBeforeResume].callback();
+  assert.equal(socket.readyState, 3, "an unanswered probe closes the stale socket");
+});
+
+test("a host offline error explains itself with the Host name and last-seen time", () => {
+  const now = Date.parse("2026-01-01T12:00:00Z");
+  assert.equal(hostOfflineDetail({ code: "other" }, now), "");
+  assert.equal(
+    hostOfflineDetail({ code: "host_offline", host_name: "Mac", last_seen_at: "2026-01-01T11:57:00Z" }, now),
+    "Mac is offline · last seen 3 minutes ago",
+  );
+  assert.equal(
+    hostOfflineDetail({ code: "host_offline", last_seen_at: "not-a-date" }, now),
+    "Host is offline",
+  );
+  assert.equal(hostOfflineDetail({ code: "host_offline", host_name: "  " }, now), "Host is offline");
+});
+
+test("the waiting notice names the Host when it is known", () => {
+  assert.equal(waitingForHostMessage("Mac"), "Waiting for Mac…");
+  assert.equal(waitingForHostMessage("  Mac mini  "), "Waiting for Mac mini…");
+  assert.equal(waitingForHostMessage(""), "Waiting for the Host…");
+  assert.equal(waitingForHostMessage("   "), "Waiting for the Host…");
+  assert.equal(waitingForHostMessage(undefined), "Waiting for the Host…");
+  // The notice replaces "Authenticating…" only after that claim stops being
+  // plausible, and must stay well inside Relay's own wait for the Host.
+  assert.ok(hostWaitCopyDelayMs >= 1_000 && hostWaitCopyDelayMs <= 5_000);
+});
+
+test("relative time labels stay short and read naturally", () => {
+  assert.equal(relativeTimeLabel(0), "just now");
+  assert.equal(relativeTimeLabel(44_000), "just now");
+  assert.equal(relativeTimeLabel(50_000), "50 seconds ago");
+  assert.equal(relativeTimeLabel(60_000), "1 minute ago");
+  assert.equal(relativeTimeLabel(3 * 60_000), "3 minutes ago");
+  assert.equal(relativeTimeLabel(2 * 3_600_000), "2 hours ago");
+  assert.equal(relativeTimeLabel(5 * 86_400_000), "5 days ago");
 });
 
 test("browser heartbeat accepts only the matching pong", () => {

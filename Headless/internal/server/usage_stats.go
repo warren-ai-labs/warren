@@ -18,10 +18,14 @@ import (
 // covers a year so the heatmap has a full grid to draw on first open.
 const usageStatsDefaultDays = 365
 
-// RebuildUsage replaces only the derived Usage projections from every retained
-// Codex/Claude transcript file. The current parser is deliberately run again
-// so historical duplicate observations are corrected without rewriting the
+// RebuildUsage replaces the derived Usage projection from every retained
+// provider transcript. The current parser is deliberately run again so
+// historical duplicate observations are corrected without rewriting the
 // canonical Agent journal or any other database.
+//
+// Only providers whose transcripts this Host can actually enumerate are
+// replaced. Anything else keeps its stored usage: a rebuild that cleared a
+// provider it cannot re-read would silently zero real spend.
 func (s *Service) RebuildUsage(ctx context.Context) (api.UsageRebuildResult, error) {
 	agentStore := s.agentStore()
 	if agentStore == nil {
@@ -40,10 +44,12 @@ func (s *Service) RebuildUsage(ctx context.Context) (api.UsageRebuildResult, err
 			return api.UsageRebuildResult{}, err
 		}
 		return api.UsageRebuildResult{
-			Rebuilt: true,
-			Events:  result.Events,
-			Calls:   result.Calls,
-			Days:    result.Days,
+			Rebuilt:      true,
+			Providers:    result.Providers,
+			Observations: result.Observations,
+			Calls:        result.Calls,
+			Days:         result.Days,
+			CompletedAt:  usageStampTime(result.CompletedAt),
 		}, nil
 	}
 	transcripts, err := finder.HistoricalUsageTranscripts(ctx)
@@ -51,7 +57,9 @@ func (s *Service) RebuildUsage(ctx context.Context) (api.UsageRebuildResult, err
 		return api.UsageRebuildResult{}, fmt.Errorf("discover historical Usage transcripts: %w", err)
 	}
 	observations := make([]store.UsageRebuildObservation, 0)
+	covered := map[string]struct{}{}
 	for _, transcript := range transcripts {
+		covered[transcript.Provider] = struct{}{}
 		events, readErr := agent.ReadTranscriptUsage(ctx, transcript.Provider, transcript.Path)
 		if readErr != nil {
 			return api.UsageRebuildResult{}, fmt.Errorf("read historical Usage transcript %q: %w", transcript.Path, readErr)
@@ -70,17 +78,36 @@ func (s *Service) RebuildUsage(ctx context.Context) (api.UsageRebuildResult, err
 			})
 		}
 	}
+	providers := make([]string, 0, len(covered))
+	for provider := range covered {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+	if len(providers) == 0 {
+		// Nothing to replace, and replacing nothing must not be reported as a
+		// successful rebuild that emptied the panel.
+		return api.UsageRebuildResult{Rebuilt: false}, nil
+	}
 
-	result, err := agentStore.RebuildUsageRollupsFromObservations(ctx, observations)
+	result, err := agentStore.RebuildUsageRollupsFromObservations(ctx, providers, observations)
 	if err != nil {
 		return api.UsageRebuildResult{}, err
 	}
 	return api.UsageRebuildResult{
-		Rebuilt: true,
-		Events:  result.Events,
-		Calls:   result.Calls,
-		Days:    result.Days,
+		Rebuilt:      true,
+		Providers:    providers,
+		Observations: result.Observations,
+		Calls:        result.Calls,
+		Days:         result.Days,
+		CompletedAt:  usageStampTime(result.CompletedAt),
 	}, nil
+}
+
+func usageStampTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 func historicalUsageFinder(value agent.Finder) (agent.DefaultFinder, bool) {
@@ -155,15 +182,29 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 		return result, nil
 	}
 
-	// Repricing before reading keeps a stored cost from lagging a price change.
-	// It is best effort: stale or absent prices must not withhold token counts.
+	// Money is derived here, from the tokens and the current price table, rather
+	// than read from a stored column. Tokens are the durable fact; a cost is a
+	// projection of them that changes whenever a unit price does, so computing it
+	// on read is what keeps every figure consistent with the prices the panel
+	// names in the same breath. Absent prices withhold cost, never tokens.
+	pricer := &usagePricer{}
 	if table, err := s.usagePrices.Table(ctx); err == nil && table != nil {
-		if _, err := agentStore.RepriceUsageDaily(ctx, table); err != nil {
-			s.logWarn("reprice usage rollup", "error", err)
-		}
+		pricer.table = table
 		result.PricesFetchedAt = table.FetchedAt.UTC().Format(time.RFC3339)
 	} else if err != nil {
 		s.logWarn("fetch model pricing", "error", err)
+	}
+
+	// A missing or unreadable stamp only costs the age line, so it is logged and
+	// dropped rather than failing the panel.
+	if stamp, found, stampErr := agentStore.LastUsageRebuild(ctx); stampErr != nil {
+		s.logWarn("read last usage rebuild", "error", stampErr)
+	} else if found {
+		result.LastRebuild = &api.UsageRebuildStamp{
+			CompletedAt: usageStampTime(stamp.CompletedAt),
+			Providers:   stamp.Providers,
+			Calls:       stamp.Calls,
+		}
 	}
 
 	rows, err := agentStore.QueryUsageDaily(ctx, fromDay, toDay)
@@ -214,11 +255,7 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 			Output:     row.Output,
 			Reasoning:  row.Reasoning,
 		}
-		cost := api.UsageCost{
-			NanoUSD:     row.CostNanoUSD,
-			Calls:       row.Calls,
-			PricedCalls: row.PricedCalls,
-		}
+		cost := pricer.cost(row.Model, row.ModelRaw, buckets, row.Calls)
 		addUsageBuckets(&result.Total, buckets)
 		addUsageCost(&result.Cost, cost)
 
@@ -261,12 +298,17 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 			Output:     row.Output,
 			Reasoning:  row.Reasoning,
 		}
-		cost := api.UsageCost{
-			NanoUSD:     row.CostNanoUSD,
-			Calls:       row.Calls,
-			PricedCalls: row.PricedCalls,
+		cost := pricer.cost(row.Model, row.ModelRaw, buckets, row.Calls)
+		// Keyed by provider and model as well as time, so the client can plot the
+		// curve for one Agent or model instead of only the day's sum. Rows that
+		// share a bucket are already distinct in the store, so this only preserves
+		// a dimension that used to be collapsed away.
+		key := usageIntervalKey{
+			day:      row.LocalDay,
+			minute:   row.BucketStartMin,
+			provider: row.Provider,
+			model:    row.Model,
 		}
-		key := usageIntervalKey{day: row.LocalDay, minute: row.BucketStartMin}
 		interval := usageIntervalEntry(intervals, key)
 		addUsageBuckets(&interval.Buckets, buckets)
 		addUsageCost(&interval.Cost, cost)
@@ -275,8 +317,11 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 	// Providers that report no token counts cannot appear in the rollup at all,
 	// so their absence is recorded explicitly. Without this the panel would show
 	// a total that silently excludes whole Agents.
-	unmeasured := s.usageUnmeasuredProviders(fromDay, toDay)
-	result.Cost.UnmeasuredProviders = unmeasured
+	result.Cost.UnmeasuredProviders = s.usageUnmeasuredProviders(fromDay, toDay)
+	// Naming the models whose price is missing turns "this total is a lower
+	// bound" into something actionable: the gap is one catalog entry away from
+	// being closed, and without the names nobody can tell which.
+	result.Cost.UnpricedModels = pricer.unpricedModels()
 
 	result.Days = sortedUsageDays(days)
 	result.Intervals = sortedUsageIntervals(intervals)
@@ -290,8 +335,80 @@ func (s *Service) UsageStats(ctx context.Context, request api.UsageStatsRequest)
 }
 
 type usageIntervalKey struct {
-	day    string
-	minute int
+	day      string
+	minute   int
+	provider string
+	model    string
+}
+
+// usagePricer turns one aggregate's tokens into money against a single price
+// table, remembering which models it could not fully price.
+//
+// One instance serves a whole request so that every figure in the response --
+// range total, day, provider, model, project, and each intraday bucket -- is
+// priced from the same table version. Fetching per figure would let a refresh
+// land mid-response and produce a breakdown that does not sum to its own total.
+type usagePricer struct {
+	// table is nil when prices could not be fetched, in which case every call is
+	// unpriced. That renders as an explicit gap; it must never render as free.
+	table    *usage.PriceTable
+	unpriced map[string]struct{}
+}
+
+func (p *usagePricer) cost(model, modelRaw string, buckets api.UsageBuckets, calls int64) api.UsageCost {
+	result := api.UsageCost{Calls: calls}
+	var price usage.ModelPrice
+	found := false
+	if p.table != nil {
+		price, found = p.table.Price(model)
+	}
+	split, status := usage.CostByBucket(usage.Buckets{
+		FreshInput: buckets.FreshInput,
+		CacheWrite: buckets.CacheWrite,
+		CacheRead:  buckets.CacheRead,
+		Output:     buckets.Output,
+	}, price, found)
+	result.NanoUSD = split.Total()
+	result.ByBucket = api.UsageBucketCost{
+		FreshInput: split.FreshInput,
+		CacheWrite: split.CacheWrite,
+		CacheRead:  split.CacheRead,
+		Output:     split.Output,
+	}
+	if status == usage.CostPriced {
+		// A row aggregates many calls that share one model, so its price is
+		// known for all of them or none.
+		result.PricedCalls = calls
+		return result
+	}
+	if buckets.Total() == 0 {
+		// Nothing was consumed, so nothing is missing.
+		return result
+	}
+	label := strings.TrimSpace(model)
+	if label == "" {
+		label = strings.TrimSpace(modelRaw)
+	}
+	if label == "" {
+		label = "unknown model"
+	}
+	if p.unpriced == nil {
+		p.unpriced = map[string]struct{}{}
+	}
+	p.unpriced[label] = struct{}{}
+	return result
+}
+
+func (p *usagePricer) unpricedModels() []string {
+	if len(p.unpriced) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(p.unpriced))
+	for model := range p.unpriced {
+		result = append(result, model)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // usageUnmeasuredProviders lists providers bound to sessions that were in use
@@ -358,7 +475,12 @@ func usageIntervalEntry(
 	if entry, ok := intervals[key]; ok {
 		return entry
 	}
-	entry := &api.UsageIntervalStats{Day: key.day, Minute: key.minute}
+	entry := &api.UsageIntervalStats{
+		Day:      key.day,
+		Minute:   key.minute,
+		Provider: key.provider,
+		Model:    key.model,
+	}
 	intervals[key] = entry
 	return entry
 }
@@ -387,6 +509,10 @@ func addUsageCost(target *api.UsageCost, source api.UsageCost) {
 	target.NanoUSD += source.NanoUSD
 	target.Calls += source.Calls
 	target.PricedCalls += source.PricedCalls
+	target.ByBucket.FreshInput += source.ByBucket.FreshInput
+	target.ByBucket.CacheWrite += source.ByBucket.CacheWrite
+	target.ByBucket.CacheRead += source.ByBucket.CacheRead
+	target.ByBucket.Output += source.ByBucket.Output
 }
 
 func sortedUsageDays(days map[string]*api.UsageDayStats) []api.UsageDayStats {
@@ -406,10 +532,17 @@ func sortedUsageIntervals(intervals map[usageIntervalKey]*api.UsageIntervalStats
 		result = append(result, *entry)
 	}
 	sort.Slice(result, func(left, right int) bool {
-		if result[left].Day != result[right].Day {
-			return result[left].Day < result[right].Day
+		first, second := result[left], result[right]
+		if first.Day != second.Day {
+			return first.Day < second.Day
 		}
-		return result[left].Minute < result[right].Minute
+		if first.Minute != second.Minute {
+			return first.Minute < second.Minute
+		}
+		if first.Provider != second.Provider {
+			return first.Provider < second.Provider
+		}
+		return first.Model < second.Model
 	})
 	return result
 }

@@ -95,6 +95,39 @@ func TestConnectorStateSnapshot(t *testing.T) {
 	}
 }
 
+// A daemon that has been connected for hours must not reconnect at the 30s
+// ceiling: a normal disconnect returns a non-nil error, so uptime is what
+// distinguishes a healthy endpoint from one that keeps failing.
+func TestConnectionUptimeMeasuresTheAuthenticatedWindow(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_700_000_000, 0)
+	connector, err := New(Config{
+		URL:    "wss://relay.invalid",
+		HostID: "h",
+		Secret: "s",
+		Now:    func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if uptime := connector.connectionUptime(); uptime != 0 {
+		t.Fatalf("attempt that never opened reports uptime %s", uptime)
+	}
+	connector.markOpen()
+	now = now.Add(5 * time.Minute)
+	if uptime := connector.connectionUptime(); uptime < relayStableConnection {
+		t.Fatalf("uptime %s did not reach the stability threshold %s", uptime, relayStableConnection)
+	}
+	connector.mu.Lock()
+	connector.openedAt = time.Time{}
+	connector.mu.Unlock()
+	connector.markOpen()
+	now = now.Add(time.Second)
+	if uptime := connector.connectionUptime(); uptime >= relayStableConnection {
+		t.Fatalf("a short-lived socket reported a stable uptime of %s", uptime)
+	}
+}
+
 func TestConnectorStateCallback(t *testing.T) {
 	t.Parallel()
 	var observed []string

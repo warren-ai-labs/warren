@@ -79,7 +79,7 @@ test("opaque Relay invite exchanges before opening a Host-scoped socket", async 
     "/relay/invite/Abc_123-def/v1/session/exchange",
   );
   const exchangeBody = JSON.parse(requests[0].options.body);
-  assert.equal(exchangeBody.invite_id, inviteID);
+  assert.deepEqual(Object.keys(exchangeBody), ["client_id"]);
   assert.equal(typeof exchangeBody.client_id, "string");
   assert.ok(exchangeBody.client_id.length > 0);
   assert.equal(runtime.runtime.relayHostID, "00000000-0000-4000-8000-000000000001");
@@ -91,6 +91,20 @@ test("opaque Relay invite exchanges before opening a Host-scoped socket", async 
     runtime.serviceWorkerURL(),
     "/relay/invite/Abc_123-def/service-worker.js",
   );
+});
+
+test("inviteIDFromInput accepts a link or a bare invite id", async () => {
+  const { inviteIDFromInput } = await import(`./runtime.js?invite-input-test=${Date.now()}`);
+
+  assert.equal(inviteIDFromInput(""), "");
+  assert.equal(inviteIDFromInput("not a safe/invite id"), "");
+  assert.equal(inviteIDFromInput("Abc_123-def"), "Abc_123-def");
+  assert.equal(
+    inviteIDFromInput("https://relay.example.test/relay/invite/Abc_123-def/"),
+    "Abc_123-def",
+  );
+  // The retired host-scoped pairing link is not an invite.
+  assert.equal(inviteIDFromInput("https://relay.example.test/h/host-123/#t=ticket"), "");
 });
 
 test("parseAuthInput handles URLs, fragments, and raw tokens", async () => {

@@ -87,12 +87,35 @@ func TestUsageStatsAggregatesEveryDimension(t *testing.T) {
 	if result.Total.FreshInput != 2_000_000 || result.Total.Output != 1_500_000 {
 		t.Fatalf("total = %+v", result.Total)
 	}
-	if result.IntervalBucketMinutes != 5 || len(result.Intervals) != 1 {
-		t.Fatalf("intervals = %#v, want one canonical 5-minute bucket", result.Intervals)
+	// Both calls fall in one 5-minute bucket but belong to different models, and
+	// the rows stay apart so the curve can be filtered. They still sum to the day.
+	if result.IntervalBucketMinutes != 5 || len(result.Intervals) != 2 {
+		t.Fatalf("intervals = %#v, want one row per model in the bucket", result.Intervals)
 	}
-	if result.Intervals[0].Cost.NanoUSD != result.Cost.NanoUSD ||
-		result.Intervals[0].Buckets.Total() != result.Total.Total() {
-		t.Fatalf("interval = %+v, total = %+v, want matching aggregate", result.Intervals[0], result.Total)
+	var intervalCost, intervalTokens int64
+	for _, interval := range result.Intervals {
+		if interval.Minute != result.Intervals[0].Minute {
+			t.Fatalf("intervals = %#v, want a single 5-minute bucket", result.Intervals)
+		}
+		if interval.Provider == "" || interval.Model == "" {
+			t.Fatalf("interval = %+v, want its provider and model so a filter can act", interval)
+		}
+		intervalCost += interval.Cost.NanoUSD
+		intervalTokens += interval.Buckets.Total()
+	}
+	if intervalCost != result.Cost.NanoUSD || intervalTokens != result.Total.Total() {
+		t.Fatalf("intervals sum to cost %d tokens %d, want %d and %d",
+			intervalCost, intervalTokens, result.Cost.NanoUSD, result.Total.Total())
+	}
+	// Money is split by the class that incurred it, and always sums to the amount.
+	if result.Cost.ByBucket.Total() != result.Cost.NanoUSD {
+		t.Fatalf("byBucket = %+v, want it to sum to %d", result.Cost.ByBucket, result.Cost.NanoUSD)
+	}
+	// 2M fresh input priced at $5 and $0.2 per million, against 1.5M output at
+	// $25 and $1.2: the same tokens, a very different money shape.
+	if result.Cost.ByBucket.FreshInput != 5_200_000_000 ||
+		result.Cost.ByBucket.Output != 25_600_000_000 {
+		t.Fatalf("byBucket = %+v", result.Cost.ByBucket)
 	}
 	if result.PricesFetchedAt == "" {
 		t.Fatal("want the price fetch time so a client can show staleness")
@@ -109,7 +132,7 @@ func TestRebuildUsageReplacesDerivedRowsWithoutTouchingJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Rebuilt || result.Events != 1 || result.Calls != 1 || result.Days != 1 {
+	if !result.Rebuilt || result.Observations != 1 || result.Calls != 1 || result.Days != 1 {
 		t.Fatalf("result = %+v", result)
 	}
 	stats, err := service.UsageStats(context.Background(), api.UsageStatsRequest{})
@@ -125,6 +148,40 @@ func TestRebuildUsageReplacesDerivedRowsWithoutTouchingJournal(t *testing.T) {
 	}
 	if len(history.Events) != 1 {
 		t.Fatalf("journal rows = %d, want one untouched source row", len(history.Events))
+	}
+	// The age of the figures travels with them: a panel cannot otherwise tell
+	// numbers a current parser produced from ones an older release left behind.
+	if result.CompletedAt == "" {
+		t.Error("rebuild result must say when it finished")
+	}
+	if stats.LastRebuild == nil {
+		t.Fatal("stats must carry the stamp of the rebuild that produced them")
+	}
+	if stats.LastRebuild.CompletedAt != result.CompletedAt {
+		t.Errorf("stats stamp = %q, want the rebuild's %q",
+			stats.LastRebuild.CompletedAt, result.CompletedAt)
+	}
+	if len(stats.LastRebuild.Providers) != 1 || stats.LastRebuild.Providers[0] != "claude" {
+		t.Errorf("stamp providers = %v, want only the replaced claude", stats.LastRebuild.Providers)
+	}
+}
+
+func TestUsageStatsOmitsTheStampBeforeAnyRebuild(t *testing.T) {
+	// Live accumulation alone leaves the projection unstamped, and reporting a
+	// time anyway would claim a correction that never ran.
+	service, agentStore := newUsageStatsService(t)
+	appendUsage(t, agentStore, "evt-live", "exec-1", "claude", "claude-opus-5",
+		time.Date(2026, time.September, 10, 10, 5, 0, 0, time.Local),
+		&api.AgentUsage{InputTokens: 100, OutputTokens: 20})
+	stats, err := service.UsageStats(context.Background(), api.UsageStatsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Total.FreshInput != 100 {
+		t.Fatalf("live accumulation lost tokens: %+v", stats.Total)
+	}
+	if stats.LastRebuild != nil {
+		t.Errorf("lastRebuild = %+v, want absent until a rebuild runs", stats.LastRebuild)
 	}
 }
 
@@ -151,7 +208,21 @@ func TestRebuildUsageReadsHistoricalTranscriptsWithCurrentParser(t *testing.T) {
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service.AgentFinder = agent.DefaultFinder{CodexRoot: codexRoot, ClaudeRoot: claudeRoot}
+	piRoot := filepath.Join(root, "pi")
+	if err := os.MkdirAll(filepath.Join(piRoot, "session"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// pi reports tokens, so leaving it out of the rebuild would keep aggregates
+	// no maintenance action could ever correct. Its usage rides on one message
+	// whose content splits into several blocks, which must count once.
+	if err := os.WriteFile(filepath.Join(piRoot, "session", "2026_pi.jsonl"), []byte(
+		`{"type":"session","id":"pi-session-1","timestamp":"2026-09-10T10:02:00Z","cwd":"/work/warren"}
+{"type":"model_change","id":"m1","timestamp":"2026-09-10T10:02:01Z","provider":"deepseek","modelId":"deepseek-v4.1-flash"}
+{"type":"message","id":"r1","timestamp":"2026-09-10T10:02:02Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"plan"},{"type":"text","text":"done"}],"usage":{"input":50,"output":6,"totalTokens":56}}}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service.AgentFinder = agent.DefaultFinder{CodexRoot: codexRoot, ClaudeRoot: claudeRoot, PiRoot: piRoot}
 	appendUsage(t, agentStore, "evt-journal-only", "exec-journal", "claude", "claude-opus-5", time.Date(2026, time.September, 10, 9, 0, 0, 0, time.UTC),
 		&api.AgentUsage{InputTokens: 999, OutputTokens: 999})
 
@@ -159,14 +230,17 @@ func TestRebuildUsageReadsHistoricalTranscriptsWithCurrentParser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Rebuilt || result.Events != 2 || result.Calls != 2 || result.Days != 1 {
+	if !result.Rebuilt || result.Observations != 3 || result.Calls != 3 || result.Days != 1 {
 		t.Fatalf("result = %+v", result)
+	}
+	if len(result.Providers) != 3 {
+		t.Fatalf("providers = %#v, want every measured provider replaced", result.Providers)
 	}
 	stats, err := service.UsageStats(context.Background(), api.UsageStatsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Cost.Calls != 2 || stats.Total.FreshInput != 300 || stats.Total.Output != 50 {
+	if stats.Cost.Calls != 3 || stats.Total.FreshInput != 350 || stats.Total.Output != 56 {
 		t.Fatalf("stats after transcript rebuild = %+v", stats)
 	}
 	history, err := agentStore.QueryCanonicalEvents(context.Background(), "exec-journal", 0, 0, 100)
@@ -195,16 +269,33 @@ func TestUsageStatsSortsAndMergesIntradayBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Intervals) != 2 {
-		t.Fatalf("intervals = %#v, want two buckets", result.Intervals)
+	// Two 5-minute buckets, with the first split by model. Ordered by time first
+	// so a client can walk the day without sorting, and by provider and model
+	// within a bucket so the order is stable across requests.
+	if len(result.Intervals) != 3 {
+		t.Fatalf("intervals = %#v, want the 10:05 bucket split by model", result.Intervals)
 	}
-	if result.Intervals[0].Minute != 605 || result.Intervals[0].Buckets.Total() != 33 ||
-		result.Intervals[0].Cost.Calls != 2 {
+	if result.Intervals[0].Minute != 605 || result.Intervals[0].Provider != "claude" ||
+		result.Intervals[0].Buckets.Total() != 11 || result.Intervals[0].Cost.Calls != 1 {
 		t.Fatalf("first interval = %+v", result.Intervals[0])
 	}
-	if result.Intervals[1].Minute != 610 || result.Intervals[1].Buckets.Total() != 33 ||
-		result.Intervals[1].Cost.Calls != 1 {
+	if result.Intervals[1].Minute != 605 || result.Intervals[1].Provider != "codex" ||
+		result.Intervals[1].Buckets.Total() != 22 {
 		t.Fatalf("second interval = %+v", result.Intervals[1])
+	}
+	if result.Intervals[2].Minute != 610 || result.Intervals[2].Buckets.Total() != 33 ||
+		result.Intervals[2].Cost.Calls != 1 {
+		t.Fatalf("third interval = %+v", result.Intervals[2])
+	}
+	// Filtering the curve to one Agent must leave the rest of the day out of it.
+	var claudeTokens int64
+	for _, interval := range result.Intervals {
+		if interval.Provider == "claude" {
+			claudeTokens += interval.Buckets.Total()
+		}
+	}
+	if claudeTokens != 44 {
+		t.Fatalf("claude intervals total %d, want 44", claudeTokens)
 	}
 }
 
@@ -224,9 +315,51 @@ func TestUsageStatsMarksIncompletePricing(t *testing.T) {
 	if result.Cost.Complete() {
 		t.Fatal("an unpriced call must not read as complete")
 	}
+	// Naming the model is what makes the gap actionable.
+	if len(result.Cost.UnpricedModels) != 1 || result.Cost.UnpricedModels[0] != "<synthetic>" {
+		t.Fatalf("unpricedModels = %#v, want the model that could not be priced", result.Cost.UnpricedModels)
+	}
 	// Tokens are still reported: the spend happened even if its price is unknown.
 	if result.Total.FreshInput != 1_000_000 {
 		t.Fatalf("total = %+v", result.Total)
+	}
+}
+
+func TestUsageStatsPricesEveryFigureFromOneTable(t *testing.T) {
+	// Cost is derived on read rather than stored, so the range total, the day, the
+	// breakdowns and the intraday buckets must all agree by construction. The
+	// stored-cost design they replaced could disagree whenever the process that
+	// owned the "needs repricing" flag restarted.
+	service, agentStore := newUsageStatsService(t)
+	base := time.Date(2026, time.September, 10, 10, 5, 0, 0, time.Local)
+	appendUsage(t, agentStore, "evt-a", "exec-1", "claude", "claude-opus-5", base,
+		&api.AgentUsage{InputTokens: 1_000_000, OutputTokens: 1_000_000})
+	appendUsage(t, agentStore, "evt-b", "exec-2", "codex", "gpt-5.6-luna", base.Add(time.Hour),
+		&api.AgentUsage{InputTokens: 1_000_000, OutputTokens: 500_000})
+
+	day := base.Format("2006-01-02")
+	result, err := service.UsageStats(context.Background(), api.UsageStatsRequest{
+		FromDay: day, ToDay: day, IntervalDay: day,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var intervalCost, providerCost, dayCost int64
+	for _, interval := range result.Intervals {
+		intervalCost += interval.Cost.NanoUSD
+	}
+	for _, provider := range result.Providers {
+		providerCost += provider.Cost.NanoUSD
+	}
+	for _, entry := range result.Days {
+		dayCost += entry.Cost.NanoUSD
+	}
+	if want := int64(30_800_000_000); result.Cost.NanoUSD != want {
+		t.Fatalf("range cost = %d, want %d", result.Cost.NanoUSD, want)
+	}
+	if intervalCost != result.Cost.NanoUSD || providerCost != result.Cost.NanoUSD || dayCost != result.Cost.NanoUSD {
+		t.Fatalf("intervals %d, providers %d, days %d must each sum to the range total %d",
+			intervalCost, providerCost, dayCost, result.Cost.NanoUSD)
 	}
 }
 

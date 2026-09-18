@@ -118,6 +118,51 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.18.0",
+        dateISO: "2026-09-18",
+        date: "September 18, 2026",
+        title: "Warren counts Usage once and pairs with opaque invites.",
+        summary:
+          "A minor release that makes Usage count each billable model call once and derive cost on read, replaces host-scoped pairing links with opaque invites, prunes the Host's canonical journal, and removes the stalls, mislabelled waits, and guessed states between a client, a Host, and a Relay; the JSON control protocol remains at 4.0.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Prune retired Agent streams from the Host's canonical journal with a bounded background sweep, so `agent-journal.db` stops growing without limit.",
+              "Bind live Codex Sessions from every profile home, so a Session running under a profile-specific `CODEX_HOME` gets a live transcript.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Pairing links are opaque invites only: the host-scoped `/h/<host>/#t=<code>` form is gone, along with the Relay's exchange route, the body ticket fields, and the Host-side acceptance.",
+              "A Relay route and a Host identity are two different ids on iOS, so LAN pairing and discovery no longer overwrite the Relay record id, and a Relay-only Host adopts the identity a verified LAN probe reports.",
+              "Usage counts Codex history from every profile home, shows where the money went beside where the tokens went, filters the intraday curve by Agent or model, and says how long ago its figures were rebuilt.",
+              "The Host rotates `headless.log` while it runs, and install detects a running app from any bundle path.",
+              "An authenticated client waiting for its Host says \"Waiting for Mac…\" and waits up to 15 seconds instead of being told the Host is offline.",
+              "Relay compresses by frame size, forwards each client stream in both directions independently, and queues up to 1024 control frames bounded by 8 MiB.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Usage counts each billable model call once, derives cost from tokens on every read, and no longer clears providers it cannot re-read.",
+              "Resume the websocket ping continuation only once, which crashed `WarrenIOSApp` with SIGTRAP during Relay reconnects.",
+              "Claim Agent control without waiting for capability negotiation, so a new Agent Session no longer reports the Host as offline.",
+              "The rich sidebar's session rail lights only for a pointer that moved onto the group, or for the workspace the center is showing.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The protocol remains at 4.0 and the state schema stays at 4 with no migration; a host-scoped pairing link is no longer accepted, so reissue an opaque invite for a client that still holds one.",
+              "The Host prunes retired Agent streams, but a deleted Session's conversation is not reconstructible; back up `~/.warren` before upgrading a Host you rely on.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is for internal or temporary testing.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.17.0",
         dateISO: "2026-09-16",
         date: "September 16, 2026",
@@ -1210,6 +1255,51 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.18.0",
+        dateISO: "2026-09-18",
+        date: "2026 年 9 月 18 日",
+        title: "Warren 让 Usage 只计一次，并改用不透明邀请配对。",
+        summary:
+          "次版本：Usage 将每次可计费模型调用只计一次并在读取时现算成本，host-scoped 配对链接改为不透明邀请，Host 会清理 journal，并移除 client、Host 与 Relay 之间的停顿、误标等待与猜测状态；JSON 控制协议仍为 4.0。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "以有界后台扫描清理 Host canonical journal 中已退役的 Agent stream，使 `agent-journal.db` 不再无限增长。",
+              "从每个 profile home 绑定在跑的 Codex Session，使使用 profile 专属 `CODEX_HOME` 的 Session 也能获得实时 transcript。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "配对链接只保留不透明邀请：host-scoped 的 `/h/<host>/#t=<code>` 形式及其 Relay exchange 路由、body ticket 字段和 Host 侧接受逻辑全部移除。",
+              "iOS 上 Relay 路由与 Host 身份是两个不同的 id，LAN 配对与发现不再覆盖 Relay record id；仅经 Relay 配对的 Host 会采纳经校验的 LAN 探测所报的身份。",
+              "Usage 从每个 profile home 统计 Codex 历史，在 token 之外同时显示花费去向，可按 Agent 或模型过滤日内曲线，并显示上次重建距今多久。",
+              "Host 在运行中轮转 `headless.log`，安装流程可从任意 bundle 路径识别正在运行的 app。",
+              "等待 Host 的已认证客户端会显示「Waiting for Mac…」并最多等待 15 秒，而不是立刻被告知 Host 离线。",
+              "Relay 按帧大小决定压缩，双向独立转发每条 client stream，控制帧队列提升至 1024 帧 / 8 MiB。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "Usage 将每次可计费模型调用只计一次，成本在读取时由 token 现算，且重建不再清空无法重读的 provider。",
+              "websocket ping 的 continuation 只 resume 一次，修复 Relay 重连时以 SIGTRAP 崩溃 `WarrenIOSApp` 的问题。",
+              "不再等待能力协商即可 claim Agent control，新建 Agent Session 不再误报 Host 离线。",
+              "富模式侧栏竖线只在指针真实移动到该 group，或该 workspace 是当前 scope 时才亮。",
+            ],
+          },
+          {
+            title: "发布说明",
+            items: [
+              "协议仍为 4.0，state schema 仍为 4，无 migration；host-scoped 配对链接不再被接受，持有此类链接的客户端需重新签发不透明邀请。",
+              "Host 会清理已退役的 Agent stream，但被删除的 Session conversation 无法重建；升级依赖的 Host 前请备份 `~/.warren`。",
+              "本地打包使用现有 Apple Development 签名且未 notarize；归档仅适合内部或临时测试。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.17.0",
         dateISO: "2026-09-16",

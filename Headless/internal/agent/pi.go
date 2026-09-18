@@ -359,6 +359,10 @@ type piParser struct {
 	piModel           string
 	piEffort          string
 	piStructuredTools map[string]string
+	// piSessionKey is the session header's id, used to qualify a record id into
+	// a usage call key. pi record ids are only eight hex characters and unique
+	// within one session, which is too narrow to identify a call on its own.
+	piSessionKey string
 }
 
 func newPiParser(contentLimit int) *piParser {
@@ -392,7 +396,11 @@ func (p *piParser) parsePi(line []byte) []api.AgentEvent {
 	}
 	switch record.Type {
 	case "session", "label", "session_info", "custom":
-		// Metadata entries do not participate in the visible conversation.
+		// Metadata entries do not participate in the visible conversation. The
+		// session header is still read for the id that qualifies usage call keys.
+		if record.Type == "session" && strings.TrimSpace(record.ID) != "" {
+			p.piSessionKey = strings.TrimSpace(record.ID)
+		}
 		return nil
 	case "model_change":
 		newModel := piDisplayModel(record.Provider, record.ModelID)
@@ -540,6 +548,12 @@ func (p *piParser) parsePi(line []byte) []api.AgentEvent {
 }
 
 func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model string, timestamp time.Time) []api.AgentEvent {
+	// One message is one billable call, so its usage is read once here and
+	// attached to exactly one emitted event below. Attaching it to every content
+	// block -- which is what a per-block read does -- counts the same call once
+	// per block: across local pi sessions 10361 messages produced 20540 such
+	// events, inflating token totals by 1.910x.
+	messageUsage := p.piUsageOnce(record.ID, message.Usage)
 	var blocks []piContentBlock
 	if json.Unmarshal(message.Content, &blocks) != nil {
 		content := p.content(message.Content)
@@ -553,7 +567,7 @@ func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model st
 			Content:    p.clip(content),
 			Model:      model,
 			StopReason: piStopReason(message.StopReason),
-			Usage:      parsePiUsage(message.Usage),
+			Usage:      messageUsage,
 			Timestamp:  timestamp,
 		}}
 	}
@@ -564,7 +578,6 @@ func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model st
 			Provider:  piProvider,
 			ID:        record.ID,
 			Model:     model,
-			Usage:     parsePiUsage(message.Usage),
 			Timestamp: timestamp,
 		}
 		switch block.Type {
@@ -648,8 +661,23 @@ func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model st
 		}
 	}
 	if len(events) == 0 {
-		return nil
+		if messageUsage == nil {
+			return nil
+		}
+		// Every block was unrenderable, but the call still consumed tokens. A
+		// bare usage event keeps that spend countable, which is the same shape
+		// Codex uses for its own token_count records.
+		return []api.AgentEvent{{
+			Provider:  piProvider,
+			ID:        record.ID,
+			Type:      "usage",
+			Content:   "Token usage",
+			Model:     model,
+			Usage:     messageUsage,
+			Timestamp: timestamp,
+		}}
 	}
+	events[0].Usage = messageUsage
 	// The stop reason belongs on the assistant text boundary. When a turn
 	// ends with tool calls only, the tracker keeps the turn open until the
 	// next assistant text or tool output resolves it.
@@ -799,6 +827,21 @@ func piStopReason(value string) string {
 	default:
 		return ""
 	}
+}
+
+// piUsageOnce reads a message's usage and stamps it with the call key that makes
+// it countable exactly once. pi writes one line per message, so unlike Claude
+// there is no cross-line claim to release: the key alone carries the identity.
+func (p *piParser) piUsageOnce(recordID string, raw json.RawMessage) *api.AgentUsage {
+	value := parsePiUsage(raw)
+	if value == nil {
+		return nil
+	}
+	recordID = strings.TrimSpace(recordID)
+	if p.piSessionKey != "" && recordID != "" {
+		value.CallKey = p.piSessionKey + "|" + recordID
+	}
+	return value
 }
 
 func parsePiUsage(raw json.RawMessage) *api.AgentUsage {

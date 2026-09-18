@@ -12,6 +12,21 @@ const (
 	tunnelControlQueueCapacity = 256
 	tunnelDataQueueCapacity    = 32
 	tunnelControlFairness      = 32
+	// A public route's body traffic is already bounded by the per-stream credit
+	// window, so a shallow queue is enough. Control routes carry terminal output
+	// that is not charged against that window, and a burst of build or log output
+	// easily exceeds a few dozen frames while a phone's socket drains; give them a
+	// deeper queue bounded by bytes so a slow client is not disconnected for a
+	// transient burst.
+	publicRouteQueueCapacity  = 64
+	controlRouteQueueCapacity = 1024
+	controlRouteQueueBytes    = 8 << 20
+	// Terminal traffic is mostly tiny frames: a keystroke echo is a few bytes,
+	// and permessage-deflate without context takeover has a per-message floor of
+	// its own, so compressing those spends CPU to make them larger. Output
+	// bursts, HTTP bodies, and terminal snapshots are where the ratio is worth
+	// having, so compression is applied by size rather than globally.
+	compressionThreshold = 1024
 )
 
 type hostTunnel struct {
@@ -133,6 +148,9 @@ func (writer *tunnelWriter) run() {
 			}
 		}
 		_ = writer.connection.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		// Safe from this goroutine: it owns every data write, and the heartbeat's
+		// WriteControl never consults the compression flag.
+		writer.connection.EnableWriteCompression(len(value.data) >= compressionThreshold)
 		err := writer.connection.WriteMessage(websocket.BinaryMessage, value.data)
 		value.done <- err
 		if err != nil {
@@ -150,14 +168,55 @@ type clientRoute struct {
 	window       uint64
 	windowChange chan struct{}
 	public       bool
+	queueMu      sync.Mutex
+	queuedBytes  int64
+	maxQueued    int64
 }
 
-func newClientRoute() *clientRoute {
+func newClientRoute() *clientRoute { return newRoute(false) }
+
+func newRoute(public bool) *clientRoute {
+	capacity, maxQueued := controlRouteQueueCapacity, int64(controlRouteQueueBytes)
+	if public {
+		capacity, maxQueued = publicRouteQueueCapacity, 0
+	}
 	return &clientRoute{
-		frames:       make(chan relayFrame, 64),
+		frames:       make(chan relayFrame, capacity),
 		done:         make(chan struct{}),
 		window:       initialStreamWindow,
 		windowChange: make(chan struct{}),
+		public:       public,
+		maxQueued:    maxQueued,
+	}
+}
+
+// reserve accounts for a frame that is about to enter the route queue. A route
+// without a byte bound relies on its credit window and frame count instead.
+func (route *clientRoute) reserve(frame relayFrame) bool {
+	if route.maxQueued <= 0 {
+		return true
+	}
+	size := int64(len(frame.Payload))
+	route.queueMu.Lock()
+	defer route.queueMu.Unlock()
+	if route.queuedBytes+size > route.maxQueued {
+		return false
+	}
+	route.queuedBytes += size
+	return true
+}
+
+// release returns the reservation once the consumer has taken the frame off the
+// queue, or when the frame never reached it.
+func (route *clientRoute) release(frame relayFrame) {
+	if route.maxQueued <= 0 {
+		return
+	}
+	route.queueMu.Lock()
+	defer route.queueMu.Unlock()
+	route.queuedBytes -= int64(len(frame.Payload))
+	if route.queuedBytes < 0 {
+		route.queuedBytes = 0
 	}
 }
 
@@ -188,10 +247,7 @@ func (tunnel *hostTunnel) openStream(metadata *streamOpen) (connectionID, *clien
 	if err != nil {
 		return connectionID{}, nil, err
 	}
-	route := newClientRoute()
-	if metadata != nil {
-		route.public = metadata.Class == "http" || metadata.Class == "upgrade"
-	}
+	route := newRoute(metadata != nil && (metadata.Class == "http" || metadata.Class == "upgrade"))
 	tunnel.clientsMu.Lock()
 	select {
 	case <-tunnel.closed:
@@ -403,10 +459,17 @@ func (tunnel *hostTunnel) readLoop(touch func()) error {
 			}
 			continue
 		}
+		if !route.reserve(frame) {
+			tunnel.removeClient(frame.ConnectionID)
+			_ = tunnel.send(relayFrame{Kind: frameClose, ConnectionID: frame.ConnectionID})
+			continue
+		}
 		select {
 		case route.frames <- frame:
 		case <-route.done:
+			route.release(frame)
 		default:
+			route.release(frame)
 			tunnel.removeClient(frame.ConnectionID)
 			_ = tunnel.send(relayFrame{Kind: frameClose, ConnectionID: frame.ConnectionID})
 		}

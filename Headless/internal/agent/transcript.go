@@ -52,6 +52,8 @@ type DefaultFinder struct {
 	// OpenCodeRoot overrides OpenCode's current data directory containing
 	// opencode.db.
 	OpenCodeRoot string
+	// PiRoot is the Pi sessions directory (default ~/.pi/agent/sessions).
+	PiRoot string
 }
 
 // HistoricalUsageTranscript identifies one provider transcript that can be
@@ -64,19 +66,29 @@ type HistoricalUsageTranscript struct {
 	WorkspacePath string
 }
 
-// HistoricalUsageTranscripts returns every Codex and Claude JSONL transcript
-// under the provider-owned history roots. Unlike Find, this deliberately has
-// no "newest" or modification-time bound: the caller uses it for a one-shot
-// historical Usage rebuild.
+// HistoricalUsageTranscripts returns every JSONL transcript under the
+// provider-owned history roots, for each provider whose transcripts carry token
+// counts. Unlike Find, this deliberately has no "newest" or modification-time
+// bound: the caller uses it for a one-shot historical Usage rebuild.
+//
+// Every provider that reports usage has to appear here. The rebuild replaces
+// exactly what this enumerates, so a measured provider left out would keep
+// stale aggregates that no maintenance action can ever correct.
 func (f DefaultFinder) HistoricalUsageTranscripts(ctx context.Context) ([]HistoricalUsageTranscript, error) {
+	codexRoot := firstNonEmptyPath(f.CodexRoot, defaultCodexSessionsRoot())
 	roots := []struct {
 		provider string
-		root     string
+		roots    []string
 		matches  func(string) bool
 	}{
 		{
 			provider: "codex",
-			root:     firstNonEmptyPath(f.CodexRoot, defaultCodexSessionsRoot()),
+			// Codex history is not confined to one home. Tools that run several
+			// accounts side by side -- codex-alias being the one in use here --
+			// give each profile its own CODEX_HOME under <home>/profiles/<name>,
+			// so a profile with an isolated sessions directory holds spend that
+			// scanning only the primary root never sees.
+			roots: append([]string{codexRoot}, codexProfileSessionRoots(codexRoot)...),
 			matches: func(path string) bool {
 				name := filepath.Base(path)
 				return strings.HasPrefix(name, "rollout-") && strings.HasSuffix(name, ".jsonl")
@@ -84,7 +96,14 @@ func (f DefaultFinder) HistoricalUsageTranscripts(ctx context.Context) ([]Histor
 		},
 		{
 			provider: "claude",
-			root:     firstNonEmptyPath(f.ClaudeRoot, defaultClaudeProjectsRoot()),
+			roots:    []string{firstNonEmptyPath(f.ClaudeRoot, defaultClaudeProjectsRoot())},
+			matches: func(path string) bool {
+				return strings.HasSuffix(filepath.Base(path), ".jsonl")
+			},
+		},
+		{
+			provider: "pi",
+			roots:    []string{firstNonEmptyPath(f.PiRoot, defaultPiSessionsRoot())},
 			matches: func(path string) bool {
 				return strings.HasSuffix(filepath.Base(path), ".jsonl")
 			},
@@ -94,20 +113,22 @@ func (f DefaultFinder) HistoricalUsageTranscripts(ctx context.Context) ([]Histor
 	seen := make(map[string]struct{})
 	var result []HistoricalUsageTranscript
 	for _, root := range roots {
-		files, err := historicalTranscriptFiles(ctx, root.root, root.matches)
-		if err != nil {
-			return nil, err
-		}
-		for _, path := range files {
-			if _, exists := seen[path]; exists {
-				continue
+		for _, dir := range root.roots {
+			files, err := historicalTranscriptFiles(ctx, dir, root.matches)
+			if err != nil {
+				return nil, err
 			}
-			seen[path] = struct{}{}
-			result = append(result, HistoricalUsageTranscript{
-				Provider:      root.provider,
-				Path:          path,
-				WorkspacePath: transcriptWorkspacePath(root.provider, path),
-			})
+			for _, path := range files {
+				if _, exists := seen[path]; exists {
+					continue
+				}
+				seen[path] = struct{}{}
+				result = append(result, HistoricalUsageTranscript{
+					Provider:      root.provider,
+					Path:          path,
+					WorkspacePath: transcriptWorkspacePath(root.provider, path),
+				})
+			}
 		}
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -117,6 +138,61 @@ func (f DefaultFinder) HistoricalUsageTranscripts(ctx context.Context) ([]Histor
 		return result[i].Path < result[j].Path
 	})
 	return result, nil
+}
+
+// codexProfileSessionRoots returns the sessions directories of every Codex
+// profile beside the given primary sessions root, resolved and deduplicated.
+//
+// Profiles routinely share one history: codex-alias links a profile's `sessions`
+// to the source home so several accounts see the same conversations. Those links
+// are dropped here rather than walked, because enumerating a directory twice
+// under two names would read every rollout twice. Deduplication is by resolved
+// path and not by file, so the cost is one Lstat per profile instead of a second
+// pass over tens of thousands of transcripts.
+//
+// A profile whose sessions directory is genuinely its own is kept: it holds
+// spend that scanning only the primary root cannot see.
+func codexProfileSessionRoots(primary string) []string {
+	primary = strings.TrimSpace(primary)
+	if primary == "" {
+		return nil
+	}
+	// The profile tree is a sibling of the sessions directory inside one
+	// CODEX_HOME, which is what makes this work for a relocated home as well.
+	entries, err := os.ReadDir(filepath.Join(filepath.Dir(primary), "profiles"))
+	if err != nil {
+		return nil
+	}
+	seen := map[string]struct{}{resolvedPath(primary): {}}
+	var roots []string
+	for _, entry := range entries {
+		// A profile directory may itself be a link, so the type is not filtered
+		// here; only the sessions path it leads to matters.
+		candidate := resolvedPath(filepath.Join(filepath.Dir(primary), "profiles", entry.Name(), "sessions"))
+		if candidate == "" {
+			continue
+		}
+		if _, exists := seen[candidate]; exists {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		roots = append(roots, candidate)
+	}
+	sort.Strings(roots)
+	return roots
+}
+
+// resolvedPath is the path with symlinks followed, or the cleaned path when it
+// cannot be resolved. A missing directory keeps its literal form so it still
+// deduplicates against an identical sibling rather than collapsing to empty.
+func resolvedPath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(path)
 }
 
 func firstNonEmptyPath(values ...string) string {
@@ -203,13 +279,30 @@ func (f DefaultFinder) findCodex(ctx context.Context, workspacePath string, afte
 	if root == "" {
 		root = defaultCodexSessionsRoot()
 	}
-	return findNewest(ctx, root, after, func(path string) bool {
+	matches := func(path string) bool {
 		name := filepath.Base(path)
 		if !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") {
 			return false
 		}
 		return transcriptCwdMatches(path, workspacePath, codexMetaCwd)
-	})
+	}
+	found, err := findNewest(ctx, root, after, matches)
+	if err != nil || found != "" {
+		return found, err
+	}
+	// Only once the primary home has nothing: a session running under a
+	// profile-specific CODEX_HOME writes its rollout outside that root, so
+	// without this it never gets a live transcript at all. Reached only on a
+	// miss, so a session whose transcript is where it usually is pays nothing --
+	// and the miss path already walks the primary tree, which is far larger than
+	// a profile's.
+	for _, profileRoot := range codexProfileSessionRoots(root) {
+		found, err = findNewest(ctx, profileRoot, after, matches)
+		if err != nil || found != "" {
+			return found, err
+		}
+	}
+	return "", nil
 }
 
 func (f DefaultFinder) findClaude(ctx context.Context, workspacePath string, after time.Time) (string, error) {
@@ -293,9 +386,28 @@ func transcriptWorkspacePath(provider, path string) string {
 		return codexMetaCwd(path)
 	case "claude":
 		return claudeTranscriptCwd(path)
+	case "pi":
+		return piTranscriptCwd(path)
 	default:
 		return ""
 	}
+}
+
+// piTranscriptCwd reads the workspace out of a pi session header, which is the
+// transcript's first line.
+func piTranscriptCwd(path string) string {
+	data, err := readFirstLine(path, 1024*1024)
+	if err != nil {
+		return ""
+	}
+	var record struct {
+		Type string `json:"type"`
+		Cwd  string `json:"cwd"`
+	}
+	if json.Unmarshal(data, &record) != nil || record.Type != "session" {
+		return ""
+	}
+	return record.Cwd
 }
 
 func codexMetaCwd(path string) string {
@@ -405,6 +517,12 @@ func samePath(left, right string) bool {
 	a, _ := filepath.Abs(left)
 	b, _ := filepath.Abs(right)
 	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+// defaultPiSessionsRoot resolves Pi's session directory through the same
+// overrides the CLI honors, so a relocated Pi home is still enumerable.
+func defaultPiSessionsRoot() string {
+	return PiSessionsRoot()
 }
 
 func defaultCodexSessionsRoot() string {

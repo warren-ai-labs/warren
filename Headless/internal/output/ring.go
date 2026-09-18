@@ -19,37 +19,15 @@ type Frame struct {
 	Payload   []byte
 }
 
-// Anchor returns the next byte position after this frame.
-func (f Frame) Anchor() Anchor {
-	return Anchor{Epoch: f.Epoch, Sequence: f.Sequence + uint64(len(f.Payload))}
-}
-
-// Plan is the recovery strategy for a reconnecting client.
-type Plan int
-
-const (
-	PlanExact    Plan = iota // anchor equals the ring upper bound
-	PlanTail                 // anchor is inside the retained interval
-	PlanReanchor             // no anchor, wrong epoch, or anchor evicted
-)
-
-// Recovery is the bounded reply Host sends on attach.
-type Recovery struct {
-	Plan     Plan
-	Epoch    uint64
-	Lower    uint64
-	Upper    uint64
-	Frames   []Frame
-	Reanchor bool
-}
-
-func (r Recovery) Anchor() Anchor {
-	return Anchor{Epoch: r.Epoch, Sequence: r.Upper}
-}
-
-// Ring is a bounded sequence interval retained by Host for reconnecting
-// clients. Sequence values are byte positions since the epoch start, matching
-// the Ghostline output stream and the Swift Host OutputRing semantics.
+// Ring is the bounded in-memory broadcast buffer for one Session's output. It
+// exists to hand live bytes to already-attached peers and to name the sequence
+// boundary an attach pairs with its terminal state; it is not the recovery
+// store. Recovery reads Ghostline's durable history from an opaque cursor, and
+// only a state capture produces that cursor, so a reconnecting client cannot be
+// served from these frames.
+//
+// Sequence values are byte positions since the epoch start, matching the
+// Ghostline output stream.
 type Ring struct {
 	Capacity     int
 	MaxBytes     int
@@ -68,6 +46,9 @@ func NewRing(epoch uint64, capacity, maxBytes int, nextSequence uint64) *Ring {
 	return &Ring{Capacity: capacity, MaxBytes: maxBytes, Epoch: epoch, nextSequence: nextSequence}
 }
 
+// Lower is the oldest retained sequence. It bounds eviction accounting and is
+// not an attach position: an anchor inside this interval still cannot be served
+// from the ring.
 func (r *Ring) Lower() uint64 {
 	if len(r.frames) == 0 {
 		return r.nextSequence
@@ -75,11 +56,8 @@ func (r *Ring) Lower() uint64 {
 	return r.frames[0].Sequence
 }
 
+// Upper is the sequence an attach pairs with its captured terminal state.
 func (r *Ring) Upper() uint64 { return r.nextSequence }
-
-func (r *Ring) Anchor() Anchor {
-	return Anchor{Epoch: r.Epoch, Sequence: r.nextSequence}
-}
 
 func (r *Ring) Frames() []Frame {
 	return append([]Frame(nil), r.frames...)
@@ -134,55 +112,6 @@ func (r *Ring) discardOldest(count int) {
 	remaining := copy(r.frames, r.frames[count:])
 	clear(r.frames[remaining:])
 	r.frames = r.frames[:remaining]
-}
-
-func (r *Ring) Plan(anchor *Anchor) Plan {
-	if anchor == nil || anchor.Epoch != r.Epoch || r.nextSequence < r.Lower() {
-		return PlanReanchor
-	}
-	if anchor.Sequence == r.nextSequence {
-		return PlanExact
-	}
-	if anchor.Sequence >= r.Lower() && anchor.Sequence < r.nextSequence {
-		return PlanTail
-	}
-	return PlanReanchor
-}
-
-// Recovery returns the frames needed by a client. For a tail the first frame
-// is trimmed so its header starts exactly at the requested byte; for reanchor
-// the entire retained interval is returned and callers decide whether to send
-// a full screen snapshot instead.
-func (r *Ring) Recovery(anchor *Anchor) Recovery {
-	plan := r.Plan(anchor)
-	recovery := Recovery{
-		Plan:     plan,
-		Epoch:    r.Epoch,
-		Lower:    r.Lower(),
-		Upper:    r.nextSequence,
-		Reanchor: plan == PlanReanchor,
-	}
-	if plan == PlanTail && anchor != nil {
-		for _, frame := range r.frames {
-			frameStart := frame.Sequence
-			frameEnd := frame.Anchor().Sequence
-			if frameEnd <= anchor.Sequence {
-				continue
-			}
-			if frameStart < anchor.Sequence {
-				offset := int(anchor.Sequence - frameStart)
-				frame.Payload = append([]byte(nil), frame.Payload[offset:]...)
-				frame.Sequence = anchor.Sequence
-			}
-			recovery.Frames = append(recovery.Frames, frame)
-		}
-		return recovery
-	}
-	if plan == PlanReanchor {
-		recovery.Frames = r.Frames()
-		return recovery
-	}
-	return recovery
 }
 
 func (r *Ring) Reset(epoch, nextSequence uint64) {

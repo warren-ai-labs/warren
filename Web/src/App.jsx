@@ -20,7 +20,10 @@ import {
   appHeartbeatCapability,
   agentCapabilities,
   connectionErrorDetail,
+  hostOfflineDetail,
+  hostWaitCopyDelayMs,
   rejectPendingRequests,
+  waitingForHostMessage,
 } from "./connection.js";
 import {
   captureNavigationPosition,
@@ -324,6 +327,10 @@ export default function App() {
   const stagedRecoveryOutputRef = useRef([]);
   const messageHandlerRef = useRef(() => {});
   const connectionStateHandlerRef = useRef(() => {});
+  // Names the machine in the waiting copy. Learned from a welcome, so it is
+  // available on every reconnect but not on a cold first load.
+  const hostNameRef = useRef("");
+  const hostWaitCopyTimerRef = useRef(null);
   const maintenanceTimeoutRef = useRef(null);
   const feedbackTimerRef = useRef(null);
   const pendingSessionRef = useRef(null);
@@ -553,6 +560,26 @@ export default function App() {
       maintenanceTimeoutRef.current = null;
     }
   }, []);
+
+  const clearHostWaitCopy = useCallback(() => {
+    if (hostWaitCopyTimerRef.current !== null) {
+      clearTimeout(hostWaitCopyTimerRef.current);
+      hostWaitCopyTimerRef.current = null;
+    }
+  }, []);
+
+  // An authenticated socket whose welcome has not arrived is usually Relay
+  // holding this client while it waits for an absent Host. Say that instead of
+  // showing "Authenticating…" for the whole wait.
+  const scheduleHostWaitCopy = useCallback(() => {
+    clearHostWaitCopy();
+    hostWaitCopyTimerRef.current = setTimeout(() => {
+      hostWaitCopyTimerRef.current = null;
+      setConnectionStatus(previous => (previous.online
+        ? previous
+        : { message: waitingForHostMessage(hostNameRef.current), online: false }));
+    }, hostWaitCopyDelayMs);
+  }, [clearHostWaitCopy]);
 
   const scheduleMaintenanceTimeout = useCallback(() => {
     clearMaintenanceTimeout();
@@ -2464,6 +2491,10 @@ export default function App() {
 
     switch (message.t) {
     case "welcome":
+      clearHostWaitCopy();
+      if (typeof message.host?.name === "string" && message.host.name.trim()) {
+        hostNameRef.current = message.host.name.trim();
+      }
       try {
         if (!message.host?.id || !message.accessScopeId) throw new Error("Host welcome is missing host.id or accessScopeId");
         const previousNamespace = agentReplicaNamespaceRef.current;
@@ -2781,7 +2812,13 @@ export default function App() {
       break;
     case "error":
       {
-        const detail = connectionErrorDetail(message);
+        clearHostWaitCopy();
+        // Relay names the Host in an offline error, which is the one case where
+        // a cold first load can still say which machine is away.
+        if (typeof message.host_name === "string" && message.host_name.trim()) {
+          hostNameRef.current = message.host_name.trim();
+        }
+        const detail = hostOfflineDetail(message) || connectionErrorDetail(message);
         setConnectionStatus({ message: detail, online: false });
         setEmptyOverride({ loading: false, message: detail });
         clearPendingSession();
@@ -2828,6 +2865,7 @@ export default function App() {
     announceFeedback,
     attachSession,
     cancelSubscription,
+    clearHostWaitCopy,
     clearMaintenanceTimeout,
     clearPendingSession,
     clearTerminalSearch,
@@ -2840,6 +2878,9 @@ export default function App() {
 
   const acceptConnectionState = useCallback(state => {
     clearMaintenanceTimeout();
+    // Every transition invalidates a pending wait notice, including one armed by
+    // a socket that has since been replaced.
+    clearHostWaitCopy();
     if (state === "connecting") {
       // A new socket cannot carry the previous peer's subscriptions. Invalidate
       // every recovery callback before the reconnect roster reattaches the
@@ -2861,6 +2902,7 @@ export default function App() {
     }
     if (state === "open") {
       setConnectionStatus({ message: "Authenticating…", online: false });
+      scheduleHostWaitCopy();
       return;
     }
     cancelSubscription(false);
@@ -2888,12 +2930,14 @@ export default function App() {
     stagedRecoveryOutputRef.current = [];
     recoveryAnchorRef.current = null;
     setConnectionStatus({ message: "Reconnecting…", online: false });
-  }, [cancelSubscription, clearMaintenanceTimeout, clearPendingSession]);
+  }, [cancelSubscription, clearHostWaitCopy, clearMaintenanceTimeout, clearPendingSession, scheduleHostWaitCopy]);
 
   messageHandlerRef.current = acceptMessage;
   connectionStateHandlerRef.current = acceptConnectionState;
 
   useEffect(() => clearMaintenanceTimeout, [clearMaintenanceTimeout]);
+
+  useEffect(() => clearHostWaitCopy, [clearHostWaitCopy]);
 
   useEffect(() => {
     const terminalHost = terminalHostRef.current;
@@ -3376,9 +3420,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const reconnect = () => connectionRef.current?.reconnectNow();
-    window.addEventListener("online", reconnect);
-    return () => window.removeEventListener("online", reconnect);
+    // A network transition invalidates whatever delay the backoff had computed,
+    // so start the next sequence from scratch.
+    const reconnectForNetwork = () => connectionRef.current?.resume({ resetBackoff: true });
+    // Returning to the foreground is the moment the user expects the terminal to
+    // be live. A backgrounded tab has its timers throttled or frozen, so the
+    // pending reconnect may be far away, and a socket frozen by the OS still
+    // reports OPEN until a write fails; resume() reconnects or probes as needed.
+    const resumeIfVisible = () => {
+      if (document.hidden) return;
+      connectionRef.current?.resume();
+    };
+    window.addEventListener("online", reconnectForNetwork);
+    document.addEventListener("visibilitychange", resumeIfVisible);
+    window.addEventListener("pageshow", resumeIfVisible);
+    window.addEventListener("focus", resumeIfVisible);
+    return () => {
+      window.removeEventListener("online", reconnectForNetwork);
+      document.removeEventListener("visibilitychange", resumeIfVisible);
+      window.removeEventListener("pageshow", resumeIfVisible);
+      window.removeEventListener("focus", resumeIfVisible);
+    };
   }, []);
 
   useEffect(() => {

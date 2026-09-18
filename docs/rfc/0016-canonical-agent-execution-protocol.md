@@ -576,9 +576,26 @@ transaction must make that duplicate a no-op.
 
 ### 8.5 Retention and lifecycle
 
-The Host journal is append-only. Client replicas may prune old events by count
-or bytes, but pruning removes the oldest retained rows and updates
-retainedFromSequence. Local pruning never changes the Host cursor.
+The Host journal is append-only per retained stream. The Host retains a
+stream while its Session exists in the roster, ended or not, because resuming
+an ended execution reuses its stream ID; plus a grace window after the Session
+is deleted. Past that window a background sweep removes the stream's events in
+bounded transactions and releases the freed pages with incremental
+auto-vacuum, so a single large delete never stalls live appends. Deleting a
+Session is what drops the reference, and an execution ID is never reused after
+its stream is released, so a freed stream can never receive new events. History
+of a deleted Session is gone: it survives only in a client replica that already
+holds it, and nothing reconstructs it from the pruned journal. Command
+admissions are pruned with their stream, except pending and unknown ones,
+which record that a provider side effect may already have happened and are
+never replayed.
+
+A Host that cannot enumerate historical transcripts rebuilds Usage from the
+journal itself, so it retains the journal in full and never runs the sweep.
+
+Client replicas may prune old events by count or bytes, but pruning removes the
+oldest retained rows and updates retainedFromSequence. Local pruning never
+changes the Host cursor.
 
 When an execution is replaced, the new execution receives a new stream ID. The
 old stream is closed but may remain locally cached for historical browsing.
