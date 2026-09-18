@@ -23,8 +23,27 @@ by hand in **Connection methods**.
 
 ## Enroll a Host
 
-An enrollment key is created by the Relay administrator and is short-lived and
-bounded-use. The Host operator consumes it once:
+### Issue keys (Relay administrator)
+
+The administrator mints enrollment keys in batches. Each key is a 16-letter
+`XXXX-XXXX-XXXX-XXXX` code with a bounded lifetime and use count. The response
+carries a `warren://settings` shortcut holding only the Relay URL and the key:
+
+```bash
+curl -fsS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/admin/enrollment-keys" \
+  -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"count":5,"ttl":"24h","max_uses":1,"label":"developer laptops"}' \
+  | jq -r '.keys[] | [.key, .settings_url] | @tsv'
+```
+
+Enrollment keys are bearer credentials. Share one only with the intended Host
+operator, and clear it from shell history, chat, and copied logs after use.
+
+### Consume a key (Host operator)
+
+An enrollment key is short-lived and bounded-use. The Host operator consumes it
+once:
 
 ```bash
 warren relay connect --url "$WARREN_RELAY_PUBLIC_URL" --key '<enrollment-key>'

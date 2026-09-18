@@ -4,7 +4,7 @@
 - Owner: Warren Headless, Desktop, Web, iOS, and Relay
 - Created: 2026-09-03
 - Scope: Always-on headless daemon architecture, webhook ingestion, scheduled cron execution, mobile attention routing, and zero-friction deployment.
-- Supersedes: [RFC 0011 (Cloud Runs)](0011-cloud-agent-runs.md)
+- Supersedes: [RFC 0011 (Cloud Runs)](../archive/rfc/0011-cloud-agent-runs.md)
 - Protocol baseline: Warren protocol 2.0 with capability negotiation
 - Depends on: [RFC 0006](0006-agent-activity-attention.md) (Agent activity and attention), [RFC 0009](0009-own-relay-and-public-tunnel.md) (Relay remote access), [RFC 0010](0010-ios-agent-view-presentation-parity.md) (Agent view presentation parity), [RFC 0014](0014-autonomous-engineering-pipeline.md) (Autonomous engineering pipeline)
 

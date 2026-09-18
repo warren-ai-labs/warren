@@ -46,6 +46,13 @@ private struct TestTerminalSurface: View {
 
     var body: some View {
         Text("surface:\(context.tab.id):\(context.workspace?.id.rawValue.uuidString ?? context.terminalGroup?.id.rawValue.uuidString ?? "none")")
+            // Named so a test can assert the Terminal is still mounted. A lone
+            // pane draws no Tab chip, so the track cannot answer that.
+            .warrenSemanticElement(
+                id: "test-terminal.\(context.tab.id)",
+                role: .group,
+                label: "Terminal \(context.tab.id)"
+            )
     }
 }
 
@@ -141,7 +148,6 @@ private func makeTabBar(
         webStatus: WarrenDesktopWebStatus(),
         externalIDEOptions: nil,
         embeddedEditorAvailable: false,
-        embeddedEditorTabVisible: false,
         embeddedEditorSelected: false,
         embeddedEditorDefault: false,
         onToggleSidebar: {},
@@ -149,7 +155,6 @@ private func makeTabBar(
         onChromePopover: { _ in },
         onOpenInExternalIDE: { _ in },
         onOpenEmbeddedEditor: {},
-        onCloseEmbeddedEditor: {},
         onSelectEndpoint: { _ in },
         onSelectTab: { _ in },
         onMoveTab: { _, _ in },
@@ -1295,7 +1300,9 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertFalse(nodeIDs.contains("workspace-ide.open"))
     }
 
-    func testEmbeddedEditorUsesAClosableLocalTabAndStaysMountedBehindSessions() throws {
+    /// RFC 0021: the editor is a region beside the Terminal, opened from the
+    /// top-right IDE control, and the Terminal never leaves the screen.
+    func testEmbeddedEditorOpensBesideTheTerminalAndClosesFromTheSameControl() throws {
         let defaults = UserDefaults.standard
         let previousDefault = defaults.object(
             forKey: WarrenPreferenceKey.embeddedEditorDefaultIDE
@@ -1337,87 +1344,112 @@ final class WarrenDesktopTests: XCTestCase {
         .environment(\.warrenSemanticRecorder, recorder)
 
         let hostingView = NSHostingView(rootView: root)
-        hostingView.frame = NSRect(x: 0, y: 0, width: 1280, height: 800)
+        // Wide enough to seat the Terminal and the editor region's floor at once.
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1600, height: 800)
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
+        // The editor is never a Tab of the track, and nothing is mounted yet.
         XCTAssertNil(
             recorder.snapshot().nodes.first { $0.id == "tab.workspace-editor" }
         )
+        XCTAssertNil(
+            recorder.snapshot().nodes.first { $0.id == "embedded-editor.surface" }
+        )
+
         try recorder.perform(.press, on: "workspace-ide.open")
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         XCTAssertNotNil(
-            recorder.snapshot().nodes.first {
-                $0.id == "workspace-editor.install"
-            }
+            recorder.snapshot().nodes.first { $0.id == "workspace-editor.install" }
         )
+
         try recorder.perform(.press, on: "workspace-editor.open")
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         hostingView.layoutSubtreeIfNeeded()
 
-        let snapshot = recorder.snapshot()
-        XCTAssertEqual(
-            snapshot.nodes.first { $0.id == "tab.workspace-editor" }?.value,
-            "Selected"
-        )
-        XCTAssertEqual(
-            snapshot.nodes.first { $0.id == "tab.tab-main" }?.value,
-            "Not selected"
-        )
-        XCTAssertNotNil(snapshot.nodes.first { $0.id == "embedded-editor.surface" })
+        let split = recorder.snapshot()
+        XCTAssertNotNil(split.nodes.first { $0.id == "embedded-editor.surface" })
+        // The Terminal is still mounted: the editor took width, not its place.
+        XCTAssertNotNil(split.nodes.first { $0.id == "test-terminal.tab-main" })
+        // The preset bar used to be dropped with the terminal-only layout.
+        XCTAssertNotNil(split.nodes.first { $0.id == "preset-bar" })
+        XCTAssertNotNil(split.nodes.first { $0.id == "central-split.resize" })
+        // Nothing about the editor is Host state.
         XCTAssertTrue(received.isEmpty)
 
-        try recorder.perform(.press, on: "tab.tab-main")
+        // The Workspace's own row says the activity is a local editor, which is
+        // what keeps it visible under `Active only` without implying a Session.
+        // Projects start collapsed, so the row has to be revealed first.
+        let projectToggle = try XCTUnwrap(
+            split.nodes.map(\.id).first { $0.hasSuffix(".toggle") && $0.hasPrefix("project.") }
+        )
+        try recorder.perform(.press, on: projectToggle)
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        hostingView.layoutSubtreeIfNeeded()
-
-        let restoredSnapshot = recorder.snapshot()
-        XCTAssertEqual(
-            restoredSnapshot.nodes.first { $0.id == "tab.tab-main" }?.value,
-            "Selected"
+        XCTAssertTrue(
+            recorder.snapshot().nodes.contains { node in
+                node.id.hasPrefix("workspace.")
+                    && (node.value?.contains("Editor open on this Mac") ?? false)
+            }
         )
-        XCTAssertEqual(received, [.selectTab("tab-main")])
-        XCTAssertNotNil(
-            restoredSnapshot.nodes.first { $0.id == "embedded-editor.surface" }
+        // The row's marker is also the entry back to the editor, so a Workspace
+        // whose editor is open is reachable from the rail rather than only from
+        // the chrome control that opened it.
+        let editorEntry = try XCTUnwrap(
+            recorder.snapshot().nodes.first {
+                $0.id.hasPrefix("workspace-editor-entry.")
+            }
         )
-
-        NotificationCenter.default.post(
-            name: WarrenDesktopCommand.selectTab,
-            object: nil,
-            userInfo: [WarrenDesktopCommand.selectTabIndexKey: 2]
-        )
+        XCTAssertEqual(editorEntry.value, "Show the editor")
+        try recorder.perform(.press, on: editorEntry.id)
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertEqual(
-            recorder.snapshot().nodes.first { $0.id == "tab.workspace-editor" }?.value,
-            "Selected"
-        )
-        XCTAssertEqual(received, [.selectTab("tab-main")])
-
-        NotificationCenter.default.post(
-            name: WarrenDesktopCommand.nextTab,
-            object: nil
-        )
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        // Navigating from the rail keeps the region and asks only for selection:
+        // the entry moves the user to the Workspace, it does not mutate a Host.
         XCTAssertNotNil(
             recorder.snapshot().nodes.first { $0.id == "embedded-editor.surface" }
         )
-        XCTAssertEqual(received, [.selectTab("tab-main"), .selectTab("tab-main")])
+        XCTAssertTrue(
+            received.allSatisfy {
+                if case .selectWorkspace = $0 { true } else { false }
+            },
+            "unexpected actions: \(received)"
+        )
+        XCTAssertFalse(received.isEmpty)
+        received.removeAll()
 
-        try recorder.perform(.press, on: "tab.workspace-editor")
+        // The control is tinted while the region is up, so it has to turn it off:
+        // the editor is not a Tab and has no close box of its own. One press,
+        // no popover in between.
+        XCTAssertEqual(
+            split.nodes.first { $0.id == "workspace-ide.open" }?.value,
+            "Editor open"
+        )
+        try recorder.perform(.press, on: "workspace-ide.open")
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        try recorder.perform(.press, on: "tab.workspace-editor.close")
         hostingView.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
-        let closedSnapshot = recorder.snapshot()
-        XCTAssertNil(closedSnapshot.nodes.first { $0.id == "tab.workspace-editor" })
-        XCTAssertNil(closedSnapshot.nodes.first { $0.id == "embedded-editor.surface" })
-        XCTAssertEqual(received, [.selectTab("tab-main"), .selectTab("tab-main")])
+        let closed = recorder.snapshot()
+        XCTAssertNil(closed.nodes.first { $0.id == "embedded-editor.surface" })
+        // Closing does not end the Terminal's Session or reach the Host.
+        XCTAssertNotNil(closed.nodes.first { $0.id == "test-terminal.tab-main" })
+        XCTAssertTrue(received.isEmpty)
+        // One close, not two: closing clears the marker, so the Workspace no
+        // longer reads as editor-marked and a relaunch will not reopen it.
+        XCTAssertFalse(
+            closed.nodes.contains { node in
+                node.id.hasPrefix("workspace.")
+                    && (node.value?.contains("Editor open on this Mac") ?? false)
+            }
+        )
+        // The rail's entry goes with the marker: nothing points at a region that
+        // is no longer there.
+        XCTAssertNil(
+            closed.nodes.first { $0.id.hasPrefix("workspace-editor-entry.") }
+        )
     }
 
     func testTabBarDragFillerSpansEmptyTrackWhenTabsFit() {
@@ -2552,37 +2584,168 @@ final class WarrenDesktopTests: XCTestCase {
         )
     }
 
-    func testWorkspaceContentModePersistenceIsScopedAndDropsStaleWorkspaces() {
-        let suiteName = "warren-workspace-content-mode-\(UUID())"
+    func testWorkspaceEditorStateIsKeyedByHostAndSurvivesRoundTrip() {
+        let suiteName = "warren-workspace-editor-\(UUID())"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        let workspaces = WarrenDesktopFixture.preview.projection.groups.flatMap(\.workspaces)
-        let editorWorkspace = workspaces[0]
-        let terminalWorkspace = workspaces[1]
+        let workspaceID = WorkspaceID()
 
-        WarrenDesktopWorkspaceContentModePersistence.save(
+        // Two Hosts can issue equal Workspace UUIDs, so the same ID under a
+        // different Endpoint must be a different record rather than the same one.
+        let local = WarrenDesktopWorkspaceEditorState(
+            hostId: "local",
+            workspaceId: workspaceID,
+            enabled: true,
+            lastRelativeFile: "Sources/App.swift",
+            lastLine: 42,
+            lastColumn: 1
+        )
+        let remote = WarrenDesktopWorkspaceEditorState(
+            hostId: "remote",
+            workspaceId: workspaceID,
+            enabled: true,
+            lastRelativeFile: "other.swift"
+        )
+        WarrenDesktopWorkspaceEditorStateStore.save(
             [
-                editorWorkspace.id: .editor,
-                terminalWorkspace.id: .terminal,
-                WorkspaceID(): .editor,
+                WarrenDesktopWorkspaceEditorStateStore.key(for: local): local,
+                WarrenDesktopWorkspaceEditorStateStore.key(for: remote): remote,
             ],
-            scope: "local",
-            validWorkspaceIDs: Set(workspaces.map(\.id)),
             defaults: defaults
         )
 
-        XCTAssertEqual(
-            WarrenDesktopWorkspaceContentModePersistence.restore(
-                scope: "local",
-                defaults: defaults
-            ),
-            [editorWorkspace.id: .editor]
+        let restored = WarrenDesktopWorkspaceEditorStateStore.restore(defaults: defaults)
+        XCTAssertEqual(restored.count, 2)
+        let localKey = WarrenDesktopWorkspaceEditorKey(
+            hostId: "local",
+            workspaceId: workspaceID
         )
+        XCTAssertEqual(restored[localKey]?.lastRelativeFile, "Sources/App.swift")
+        XCTAssertEqual(restored[localKey]?.lastLine, 42)
+        XCTAssertEqual(
+            restored[
+                WarrenDesktopWorkspaceEditorKey(hostId: "remote", workspaceId: workspaceID)
+            ]?.lastRelativeFile,
+            "other.swift"
+        )
+    }
+
+    func testWorkspaceEditorStateStoresOnlyEnabledMarkers() {
+        let suiteName = "warren-workspace-editor-enabled-\(UUID())"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var states: [WarrenDesktopWorkspaceEditorKey: WarrenDesktopWorkspaceEditorState] = [:]
+        for (host, enabled) in [("local", true), ("local", false), ("remote", true)] {
+            let state = WarrenDesktopWorkspaceEditorState(
+                hostId: host,
+                workspaceId: WorkspaceID(),
+                enabled: enabled
+            )
+            states[WarrenDesktopWorkspaceEditorStateStore.key(for: state)] = state
+        }
+
+        // A disabled marker is not a record: it is the absence of one, so
+        // forgetting a Workspace leaves nothing behind to restore.
+        WarrenDesktopWorkspaceEditorStateStore.save(states, defaults: defaults)
+        let restored = WarrenDesktopWorkspaceEditorStateStore.restore(defaults: defaults)
+        XCTAssertEqual(restored.count, 2)
+        XCTAssertTrue(restored.values.allSatisfy(\.enabled))
+
+        // Clearing every marker removes the value rather than leaving an empty
+        // one behind.
+        WarrenDesktopWorkspaceEditorStateStore.save([:], defaults: defaults)
         XCTAssertTrue(
-            WarrenDesktopWorkspaceContentModePersistence.restore(
-                scope: "remote",
-                defaults: defaults
-            ).isEmpty
+            WarrenDesktopWorkspaceEditorStateStore.restore(defaults: defaults).isEmpty
+        )
+    }
+
+    func testWorkspaceEditorStateMigratesLegacyContentModeSelection() {
+        let suiteName = "warren-workspace-editor-migration-\(UUID())"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let workspaceID = WorkspaceID()
+        let legacyKey = "warren.desktop.workspaceContentModes.local"
+        defaults.set([workspaceID.description], forKey: legacyKey)
+
+        let migrated = WarrenDesktopWorkspaceEditorStateStore
+            .restoreMigratingLegacyContentModes(scope: "local", defaults: defaults)
+
+        let key = WarrenDesktopWorkspaceEditorKey(
+            hostId: "local",
+            workspaceId: workspaceID
+        )
+        XCTAssertEqual(migrated[key]?.enabled, true)
+        // The legacy key is retired, so the migration does not repeat and cannot
+        // resurrect a marker the user later forgot.
+        XCTAssertNil(defaults.stringArray(forKey: legacyKey))
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceEditorStateStore.restore(defaults: defaults)[key]?.enabled,
+            true
+        )
+    }
+
+    func testEditorActivityOverlayWidensOnlyItsOwnHost() {
+        let sessionActive = WorkspaceID()
+        let editorOnly = WorkspaceID()
+        let otherHostEditor = WorkspaceID()
+        var states: [WarrenDesktopWorkspaceEditorKey: WarrenDesktopWorkspaceEditorState] = [:]
+        for (host, workspace) in [("local", editorOnly), ("remote", otherHostEditor)] {
+            let state = WarrenDesktopWorkspaceEditorState(
+                hostId: host,
+                workspaceId: workspace,
+                enabled: true
+            )
+            states[WarrenDesktopWorkspaceEditorStateStore.key(for: state)] = state
+        }
+        let overlay = WarrenDesktopEditorActivityOverlay(states: states)
+
+        XCTAssertEqual(
+            overlay.activeWorkspaceIDs([sessionActive], hostId: "local"),
+            [sessionActive, editorOnly]
+        )
+        // A Workspace marked on another Endpoint must not read as active here.
+        XCTAssertFalse(
+            overlay.activeWorkspaceIDs([sessionActive], hostId: "local")
+                .contains(otherHostEditor)
+        )
+        XCTAssertTrue(overlay.isEditorMarked(otherHostEditor, hostId: "remote"))
+        XCTAssertFalse(overlay.isEditorMarked(otherHostEditor, hostId: "local"))
+        // An unmarked Workspace with no Session stays filtered.
+        XCTAssertEqual(
+            WarrenDesktopEditorActivityOverlay().activeWorkspaceIDs([], hostId: "local"),
+            []
+        )
+    }
+
+    func testEditorSplitHonorsTheRegionFloorBeforeTheTerminal() {
+        let wide: CGFloat = 1400
+        let usable = wide - WarrenLayoutMetrics.editorSplitDividerWidth
+
+        // A drag that would starve the editor region stops at its floor rather
+        // than clipping code-server's Explorer.
+        XCTAssertEqual(
+            WarrenLayoutMetrics.editorSplitTerminalWidth(
+                proposedTerminalWidth: usable,
+                availableWidth: wide
+            ),
+            usable - WarrenLayoutMetrics.editorRegionMinimumWidth
+        )
+        // A drag toward zero stops at the Terminal's own pane minimum.
+        XCTAssertEqual(
+            WarrenLayoutMetrics.editorSplitTerminalWidth(
+                proposedTerminalWidth: 0,
+                availableWidth: wide
+            ),
+            WarrenLayoutMetrics.paneMinimumWidth
+        )
+        // Too narrow to seat both: the caller is told, rather than handed a
+        // width that silently breaks one side.
+        XCTAssertNil(
+            WarrenLayoutMetrics.editorSplitTerminalWidth(
+                proposedTerminalWidth: 400,
+                availableWidth: WarrenLayoutMetrics.editorRegionMinimumWidth
+            )
         )
     }
 
@@ -2909,22 +3072,35 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertNil(WarrenDesktopTabSelector.tabID(in: [], number: 1))
     }
 
-    func testTabNumberSelectorAppendsTheLocalEditorTab() {
+    /// ⌘N addresses Sessions only.
+    ///
+    /// The editor used to occupy the position after the last Session, which made
+    /// the same keystroke mean different things depending on whether a Workspace
+    /// had ever opened it. It is a region beside the track now, reached from the
+    /// rail instead.
+    func testTabNumberSelectorAddressesSessionsOnly() {
         let tabs = WarrenDesktopFixture.preview.projection.tabs
+        XCTAssertNil(WarrenDesktopTabSelector.tabID(in: tabs, number: tabs.count + 1))
+    }
 
+    /// A lit control closes the region, whatever the default checkbox says. The
+    /// tint is the only signal that the editor is open, so it has to be the way
+    /// back out.
+    func testIDEPrimaryActionClosesWhenTheEditorIsOpen() {
         XCTAssertEqual(
-            WarrenDesktopTabSelector.selection(
-                in: tabs,
-                includesEditor: true,
-                number: tabs.count + 1
+            WarrenDesktopIDEPrimaryAction.resolve(
+                embeddedEditorDefault: false,
+                embeddedEditorSelected: true
             ),
-            .editor
+            .closeEmbeddedEditor
         )
-        XCTAssertNil(WarrenDesktopTabSelector.selection(
-            in: tabs,
-            includesEditor: false,
-            number: tabs.count + 1
-        ))
+        XCTAssertEqual(
+            WarrenDesktopIDEPrimaryAction.resolve(
+                embeddedEditorDefault: true,
+                embeddedEditorSelected: true
+            ),
+            .closeEmbeddedEditor
+        )
     }
 
     func testIDEPrimaryActionRequiresTheDefaultCheck() {
@@ -2941,13 +3117,6 @@ final class WarrenDesktopTests: XCTestCase {
                 embeddedEditorSelected: false
             ),
             .openEmbeddedEditor
-        )
-        XCTAssertEqual(
-            WarrenDesktopIDEPrimaryAction.resolve(
-                embeddedEditorDefault: true,
-                embeddedEditorSelected: true
-            ),
-            .presentChoices
         )
     }
 
@@ -4263,34 +4432,20 @@ final class WarrenDesktopTests: XCTestCase {
     /// Chips are earned by having a second pane to choose.
     func testPaneBarShowsItsTrackOnlyWhenThereIsAPaneToChoose() {
         XCTAssertFalse(
-            WarrenDesktopPaneBar.showsTrack(
-                entryCount: 1,
-                embeddedEditorTabVisible: false,
-                mode: .rich
-            )
+            WarrenDesktopPaneBar.showsTrack(entryCount: 1, mode: .rich)
         )
         XCTAssertTrue(
-            WarrenDesktopPaneBar.showsTrack(
-                entryCount: 2,
-                embeddedEditorTabVisible: false,
-                mode: .rich
-            )
+            WarrenDesktopPaneBar.showsTrack(entryCount: 2, mode: .rich)
         )
-        // The editor is a second surface to switch to, so it brings the track
-        // back even with one terminal pane on screen.
-        XCTAssertTrue(
-            WarrenDesktopPaneBar.showsTrack(
-                entryCount: 1,
-                embeddedEditorTabVisible: true,
-                mode: .rich
-            )
-        )
+        // The editor no longer earns the track a stop. It is a region beside the
+        // whole track, so a lone pane is still a lone pane while it is open.
         XCTAssertFalse(
-            WarrenDesktopPaneBar.showsTrack(
-                entryCount: 0,
-                embeddedEditorTabVisible: true,
-                mode: .rich
-            )
+            WarrenDesktopPaneBar.showsTrack(entryCount: 0, mode: .rich)
+        )
+        // Compact mode's tree does not list Sessions, so one entry is still the
+        // only way back to it.
+        XCTAssertTrue(
+            WarrenDesktopPaneBar.showsTrack(entryCount: 1, mode: .compact)
         )
     }
 
@@ -4365,7 +4520,6 @@ final class WarrenDesktopTests: XCTestCase {
             XCTAssertTrue(
                 WarrenDesktopPaneBar.showsTrack(
                     entryCount: barEntries.count,
-                    embeddedEditorTabVisible: false,
                     mode: mode
                 ) || mode.sidebarListsSessions,
                 "\(mode.rawValue) hid the bar that owns its Session list"

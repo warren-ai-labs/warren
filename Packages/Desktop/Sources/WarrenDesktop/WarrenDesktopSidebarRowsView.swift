@@ -17,6 +17,9 @@ struct WarrenDesktopSidebarRows: View {
     let terminalGroups: [WarrenDesktopTerminalGroup]
     let workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary]
     let activeWorkspaceIDs: Set<WorkspaceID>
+    /// Workspaces whose activity comes from a local editor marker rather than a
+    /// running Session, so the row can say which it is (RFC 0021 §7).
+    let editorMarkedWorkspaceIDs: Set<WorkspaceID>
     /// Live Sessions per Workspace, used as the tree's leaves in rich mode.
     let activeSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]]
     let workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode
@@ -41,6 +44,9 @@ struct WarrenDesktopSidebarRows: View {
     let onAction: (WarrenDesktopAction) -> Void
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
+    /// Reveals a marked Workspace's editor. Supplied only by the current Host's
+    /// tree, because the marker is stored per Endpoint.
+    let onOpenEditor: (WorkspaceID) -> Void
 
     init(
         taskGroups: [WarrenDesktopTaskGroup],
@@ -48,6 +54,7 @@ struct WarrenDesktopSidebarRows: View {
         terminalGroups: [WarrenDesktopTerminalGroup],
         workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary],
         activeWorkspaceIDs: Set<WorkspaceID> = [],
+        editorMarkedWorkspaceIDs: Set<WorkspaceID> = [],
         activeSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] = [:],
         workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode = .compact,
         showsTasks: Bool = true,
@@ -67,13 +74,15 @@ struct WarrenDesktopSidebarRows: View {
         onRequestTerminalGroupEdit: @escaping (TerminalGroup) -> Void,
         onAction: @escaping (WarrenDesktopAction) -> Void,
         onRequestRename: @escaping (WarrenDesktopRenameRequest) -> Void,
-        onRequestDeletion: @escaping (WarrenDesktopDeletionRequest) -> Void
+        onRequestDeletion: @escaping (WarrenDesktopDeletionRequest) -> Void,
+        onOpenEditor: @escaping (WorkspaceID) -> Void = { _ in }
     ) {
         self.taskGroups = taskGroups
         self.groups = groups
         self.terminalGroups = terminalGroups
         self.workspaceActivitySummaries = workspaceActivitySummaries
         self.activeWorkspaceIDs = activeWorkspaceIDs
+        self.editorMarkedWorkspaceIDs = editorMarkedWorkspaceIDs
         self.activeSessionsByWorkspaceID = activeSessionsByWorkspaceID
         self.workspaceDisplayMode = workspaceDisplayMode
         self.showsTasks = showsTasks
@@ -92,6 +101,7 @@ struct WarrenDesktopSidebarRows: View {
         self.onRequestTerminalGroupCreate = onRequestTerminalGroupCreate
         self.onRequestTerminalGroupEdit = onRequestTerminalGroupEdit
         self.onAction = onAction
+        self.onOpenEditor = onOpenEditor
         self.onRequestRename = onRequestRename
         self.onRequestDeletion = onRequestDeletion
     }
@@ -866,6 +876,8 @@ struct WarrenDesktopSidebarRows: View {
                     ownsSessionLeaves: ownsLeaves
                 ) && !isSelectionDisabled,
                 isPinned: workspace.pinned,
+                isEditorMarked: editorMarkedWorkspaceIDs.contains(workspace.id),
+                onOpenEditor: { onOpenEditor(workspace.id) },
                 isDeleting: isDeleting,
                 isInteractionDisabled: isInteractionDisabled || isProjectDeleting || isDeleting,
                 isMutationDisabled: false,

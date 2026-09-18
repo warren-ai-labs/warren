@@ -46,6 +46,20 @@ struct WarrenDesktopWorkspaceRow: View {
     /// both rows put the louder answer on the row the user did not click.
     var containsSelection: Bool = false
     let isPinned: Bool
+    /// Whether this Workspace carries a Desktop-local Embedded Editor marker.
+    ///
+    /// Drawn because the marker widens the `Active only` filter (RFC 0021 §7):
+    /// without a glyph an editor-only Workspace would appear among the active
+    /// ones with nothing to say why, and the marker is local to this Mac rather
+    /// than Workspace-wide activity every client can see.
+    var isEditorMarked: Bool = false
+    /// Reveals the marked Workspace's editor, or `nil` when this row cannot
+    /// reach it.
+    ///
+    /// The marker is stored per Endpoint, so only the current Host's tree can
+    /// act on it; a background Host's row keeps the glyph as a plain readout
+    /// rather than offering an entry that would land on the wrong Host.
+    var onOpenEditor: (() -> Void)? = nil
     let isDeleting: Bool
     let isInteractionDisabled: Bool
     /// Disables Host mutations while retaining selection and double-click
@@ -251,9 +265,15 @@ struct WarrenDesktopWorkspaceRow: View {
         .padding(.trailing, WarrenSpacing.compact)
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
         .contentShape(.rect)
+        // Both accessories sit outside the row's Button rather than inside its
+        // label: a Button nested in another Button's label never receives the
+        // click on macOS, the outer one swallows it.
         .overlay(alignment: .trailing) {
-            taskLinkButton
-                .padding(.trailing, WarrenSpacing.compact)
+            HStack(spacing: WarrenSpacing.xs) {
+                editorEntry
+                taskLinkButton
+            }
+            .padding(.trailing, WarrenSpacing.compact)
         }
         .contextMenu {
             if !isInteractionDisabled && !isMutationDisabled {
@@ -284,6 +304,54 @@ struct WarrenDesktopWorkspaceRow: View {
             .button(title: "Delete Workspace…", destructive: true, action: onDelete),
         ])
         return actions
+    }
+
+    /// The marked Workspace's editor entry.
+    ///
+    /// `chevron.left.forwardslash.chevron.right` is the mark: it reads as code
+    /// without enclosing itself in a square, which at this size would look like
+    /// the control border this row does not have. The affordance is hover alone,
+    /// as it is on the Task link beside it, so a row with an editor open is no
+    /// louder at rest than one without.
+    @ViewBuilder
+    private var editorEntry: some View {
+        if isEditorMarked {
+            let tokens = WarrenColorTokens.resolved(for: colorScheme)
+            let label = "Editor open on this Mac"
+            let glyph = Image(systemName: "chevron.left.forwardslash.chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(tokens.info)
+            if let onOpenEditor {
+                Button {
+                    guard !isInteractionDisabled else { return }
+                    onOpenEditor()
+                } label: {
+                    glyph
+                        .frame(width: 20, height: 18)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(WarrenChromeButtonStyle())
+                .disabled(isInteractionDisabled)
+                .accessibilityLabel(label)
+                .accessibilityValue("Show the editor")
+                .help("Show the editor")
+                .warrenSemanticElement(
+                    id: "workspace-editor-entry.\(semanticScope).\(workspace.id.description)",
+                    role: .button,
+                    label: label,
+                    value: "Show the editor",
+                    isEnabled: !isInteractionDisabled,
+                    action: {
+                        if !isInteractionDisabled { onOpenEditor() }
+                    }
+                )
+            } else {
+                glyph
+                    .frame(width: 20, height: 18)
+                    .accessibilityHidden(true)
+                    .help(label)
+            }
+        }
     }
 
     @ViewBuilder
@@ -332,6 +400,9 @@ struct WarrenDesktopWorkspaceRow: View {
         }
         if workspace.branch != nil, let mergeState = workspace.mergeState {
             values.append(mergeState.accessibilityLabel)
+        }
+        if isEditorMarked {
+            values.append("Editor open on this Mac")
         }
         if isDeleting {
             values.append("Deleting")

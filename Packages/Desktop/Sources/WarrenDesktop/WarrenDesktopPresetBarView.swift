@@ -2,11 +2,7 @@ import AppKit
 import SwiftUI
 import WarrenDesignSystem
 import WarrenDomain
-
-public enum WarrenDesktopWorkspaceContentMode: String, Hashable, Sendable {
-    case terminal
-    case editor
-}
+import WarrenObservation
 
 enum WarrenDesktopPresetLaunchFeedback {
     static func isDisabled(
@@ -146,6 +142,14 @@ struct WarrenDesktopPresetBar: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Command presets")
+        // Named so a test can assert the bar survives opening the editor. It
+        // used to be removed with the terminal layout, which is the regression
+        // RFC 0021 §8-3 is about.
+        .warrenSemanticElement(
+            id: "preset-bar",
+            role: .group,
+            label: "Command presets"
+        )
     }
 
     private func command(for presetID: String) -> String {

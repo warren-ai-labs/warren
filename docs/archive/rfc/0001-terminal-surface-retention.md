@@ -1,6 +1,6 @@
 # RFC 0001: Retain terminal surfaces across tab switches
 
-- Status: Superseded by [RFC 0002](0002-one-way-desktop-rendering.md)
+- Status: Superseded by [RFC 0002](../../rfc/0002-one-way-desktop-rendering.md)
 - Owner: Warren desktop client
 - Created: 2026-08-15
 
