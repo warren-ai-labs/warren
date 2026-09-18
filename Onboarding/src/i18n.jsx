@@ -118,6 +118,46 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.19.0",
+        dateISO: "2026-09-18",
+        date: "September 18, 2026",
+        title: "Warren puts the embedded editor beside the Terminal.",
+        summary:
+          "A minor release that mounts the embedded editor as a region beside the Terminal instead of a page that replaces it, and gives iOS taps a visible acknowledgement with bubbles sized to the screen; the JSON control protocol remains at 4.0.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Mount the embedded editor as a region beside the Terminal (RFC 0021): one code-server surface split from the Terminal by a single divider, with the Terminal left mounted and subscribed instead of parked by a whole-page content mode.",
+              "Open the editor per Workspace and durably on this Mac: a marker keyed by Endpoint and Workspace records that it is open and which document was left, so an editor-only Workspace survives `Active only`; the retired content mode's set migrates into markers.",
+              "Acknowledge taps on iOS: `IOSPressableStyle` dims rows and transcript blocks under the finger, and additionally settles floating chrome toward it; the scale is dropped under reduce motion.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Size iOS transcript bubbles as a fraction of the column (0.89) instead of a fixed 345pt, measured once at the transcript and handed down, so bubbles no longer re-measure every scroll frame.",
+              "Open the Terminal and the editor on even halves, reserving 180pt for the Explorer beside code-server's 220pt editor floor.",
+              "Give the 22 RFCs an index, archive the three that describe no current behaviour, and correct the README (duplicate entry, abandoned RFC, stale 0.12.0 migration section).",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Register a semantic node's action as a stable trampoline, so a state-dependent control stops performing the direction it was born with.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The protocol remains at 4.0 and the state schema stays at 4 with no migration; an editor opened in the retired content mode is migrated into a marker and opens as a region.",
+              "The editor region is not a Host pane leaf — it has no PTY, lifecycle, input lease, or Host ownership — so it follows the Desktop's layout rather than a Host-owned arrangement.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is for internal or temporary testing.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.18.0",
         dateISO: "2026-09-18",
         date: "September 18, 2026",
@@ -1255,6 +1295,46 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.19.0",
+        dateISO: "2026-09-18",
+        date: "2026 年 9 月 18 日",
+        title: "Warren 把内嵌编辑器放到 Terminal 旁边。",
+        summary:
+          "次版本：内嵌编辑器不再替换 Terminal，而是作为 Terminal 旁的独立区域；iOS 点击有了可见反馈，气泡宽度改为随屏幕。JSON 控制协议仍为 4.0。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "内嵌编辑器改为 Terminal 旁的独立区域（RFC 0021）：一个 code-server surface 与 Terminal 由一个分隔条分开，Terminal 保持挂载与订阅，不再被整页 content mode 停放。",
+              "编辑器按 Workspace 打开并在本机持久：以 (Endpoint, Workspace) 为键的记录保存打开状态与最后文档，仅剩编辑器的 Workspace 也能在 `Active only` 下保留；旧 content mode 的集合会迁移为标记。",
+              "iOS 点击有了可见反馈：`IOSPressableStyle` 让行与 transcript 块在手指下变暗，浮动控件另向手指收缩；reduce motion 下取消缩放。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "iOS transcript 气泡宽度改为列宽的 0.89 倍，不再固定 345pt，且在 transcript 处只量一次并向下传递，不再每帧重测。",
+              "Terminal 与编辑器各占一半，在 code-server 220pt 编辑器下限旁为 Explorer 保留 180pt。",
+              "为 22 个 RFC 建立索引，归档不再描述现行行为的三个，并修正 README（重复条目、推荐已废弃 RFC、过期的 0.12.0 迁移说明）。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "语义节点的 action 改为稳定的 trampoline，使依赖状态的控件不再重复执行它诞生时的方向。",
+            ],
+          },
+          {
+            title: "发布说明",
+            items: [
+              "协议仍为 4.0，state schema 仍为 4，无 migration；旧 content mode 中打开的编辑器会迁移为标记并以区域形式打开。",
+              "编辑器区域不是 Host pane leaf（无 PTY、lifecycle、input lease 与 Host 所有权），因此它跟随 Desktop 布局，而非 Host 托管的布局。",
+              "本地打包使用现有 Apple Development 签名且未 notarize；归档仅适合内部或临时测试。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.18.0",
         dateISO: "2026-09-18",
