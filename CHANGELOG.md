@@ -6,6 +6,81 @@ All notable changes to Warren are documented here.
 
 _No changes yet._
 
+## [0.19.0] - 2026-09-18
+
+> Minor release: mounts the embedded editor as a region beside the Terminal
+> instead of a page that replaces it, and gives iOS taps a visible
+> acknowledgement with bubbles sized to the screen. The JSON control protocol
+> remains at 4.0.
+
+### Added
+
+- Mount the embedded editor as a region beside the Terminal (RFC 0021). The
+  editor used to be a whole-page content mode: opening it parked every terminal
+  surface, reported an empty screen set, and took the preset bar down with the
+  layout. It is now one code-server surface in a region beside the Terminal,
+  split by a single Warren divider, and the Terminal stays mounted and
+  subscribed.
+- Open the editor per Workspace, durably on this Mac: a marker keyed by Endpoint
+  and Workspace records that the editor is open and which document was left, and
+  is folded into each Host's active set so an editor-only Workspace survives the
+  `Active only` filter without inventing a Session or a Tab. Closing clears the
+  marker, so one close is enough, and the superseded content mode's persisted set
+  migrates into markers. The IDE control is both the entry and, while lit, the
+  exit; a marked Workspace also grows a rail entry, offered only by the current
+  Host's tree because the marker is per Endpoint.
+- Acknowledge taps on iOS. Every tappable surface used `.buttonStyle(.plain)`,
+  which draws no pressed state, so a tap changed nothing on screen while the
+  client waited on a Host round trip; `IOSPressableStyle` now dims under the
+  finger in two registers: rows and transcript blocks dim only, while floating
+  chrome circles and capsules also settle toward the finger. The scale is
+  dropped under reduce motion and the dim stays.
+
+### Changed
+
+- Size iOS transcript bubbles to the screen. The measure was a fixed 345pt,
+  which wasted about 60pt per line on a Pro Max, narrowed iPad text to a band
+  inside a 720pt container, and on a 375pt phone filled the column exactly,
+  erasing the trailing gap that tells sender from receiver. It is now a fraction
+  of the column, calibrated at 0.89, and the viewport is measured once at the
+  transcript's own `GeometryReader` and handed down through the environment, so
+  bubbles no longer re-measure every scroll frame.
+- Open the Terminal and the editor on even halves. code-server's editor part
+  reports a hard 220pt floor, and Warren reserves 180pt beside it for the
+  Explorer rather than the ~300pt code-server opens at; code-server keeps its
+  sidebar width in its own workbench state, so the user's own drag is what
+  persists.
+- The 22 RFCs now have an index with a status vocabulary, an active table, an
+  archived table, and the metadata block a new RFC starts from. Three RFCs that
+  describe no current behaviour moved to `docs/archive/rfc/`, which frees 0011
+  for the active per-session process inventory, and the six links pointing at
+  them are repaired in both directions. The README no longer lists
+  `docs/relay-http.md` twice, no longer recommends the abandoned RFC, no longer
+  explains the 0.12.0 protocol migration, and keeps its build path contiguous by
+  moving the Raycast and Relay walkthroughs to the documents that own them.
+
+### Fixed
+
+- Register a semantic node's action as a stable trampoline. The recorder
+  registered the action on appear, so a control whose behaviour depends on state
+  kept performing the direction it was born with; re-registering from `onChange`
+  is not enough, because it delivers the closure from the update that observed
+  the change.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and the Host state schema stays at 4;
+  this release migrates no state. An editor that was open in the retired content
+  mode is migrated into a marker and opens as a region.
+- The editor region is deliberately not a Host pane leaf. RFC 0020 requires every
+  Host pane leaf to name a running Warren Session, and the region has no PTY,
+  lifecycle, input lease, or Host ownership, so the Desktop composes the terminal
+  tree and this region at the content boundary. Expect the region to follow the
+  Desktop's layout rather than a Host-owned arrangement.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.18.0] - 2026-09-18
 
 > Minor release: makes Usage count each billable model call once and derive
