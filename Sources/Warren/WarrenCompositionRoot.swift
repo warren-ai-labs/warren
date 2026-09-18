@@ -125,9 +125,24 @@ struct WarrenCompositionRoot: View {
                 return false
             }
 
+            // The request carries the document so the Workspace's marker records
+            // the file the link opened. That recorded path is what reopening the
+            // editor for this Workspace lands on.
             NotificationCenter.default.post(
                 name: WarrenDesktopCommand.openEmbeddedEditor,
-                object: workspace.id
+                object: WarrenDesktopEmbeddedEditorRequest(
+                    workspaceID: workspace.id,
+                    document: WarrenTerminalLinkParser.relativePath(
+                        of: target.path,
+                        in: workspace.path
+                    ).map { relativeFile in
+                        WarrenDesktopEditorDocument(
+                            relativeFile: relativeFile,
+                            line: target.line,
+                            column: target.column
+                        )
+                    }
+                )
             )
             embeddedEditorModel.openFile(
                 workspacePath: workspace.path,
@@ -291,6 +306,15 @@ struct WarrenCompositionRoot: View {
                     workspace: workspace,
                     model: embeddedEditorModel
                 ))
+            },
+            onOpenEditorDocument: { workspace, document in
+                embeddedEditorModel.openFile(
+                    workspacePath: workspace.path,
+                    filePath: URL(fileURLWithPath: workspace.path)
+                        .appendingPathComponent(document.relativeFile).path,
+                    line: document.line,
+                    column: document.column
+                )
             }
         ) { context in
             WarrenTerminalSurfaceView(

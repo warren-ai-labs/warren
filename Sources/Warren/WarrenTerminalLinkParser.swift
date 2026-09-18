@@ -13,6 +13,27 @@ public struct WarrenTerminalLinkTarget: Equatable, Sendable {
 }
 
 public enum WarrenTerminalLinkParser {
+    /// A resolved target's path relative to a Workspace root, or `nil` when it
+    /// lies outside that Workspace.
+    ///
+    /// The Desktop's editor marker stores relative paths: an absolute one would
+    /// put the location of a user's tree into defaults, and would stop matching
+    /// as soon as a worktree is re-created somewhere else. A file outside the
+    /// Workspace has no relative form, and recording it would make the marker
+    /// reopen something the Workspace does not contain.
+    public static func relativePath(
+        of path: String,
+        in workspacePath: String
+    ) -> String? {
+        let file = URL(fileURLWithPath: path).standardizedFileURL.path
+        let root = URL(fileURLWithPath: workspacePath).standardizedFileURL.path
+        guard root != "/" else { return nil }
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        guard file.hasPrefix(prefix) else { return nil }
+        let relative = String(file.dropFirst(prefix.count))
+        return relative.isEmpty ? nil : relative
+    }
+
     /// Parses a raw clicked terminal link/path into a valid local file target with optional line and column.
     /// Returns `nil` if the target is a web/external URL, if it points to a directory, or if the file does not exist.
     public static func parse(

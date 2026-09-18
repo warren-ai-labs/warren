@@ -420,7 +420,9 @@ struct WarrenDesktopExternalIDEPopover: View {
     let options: [WarrenDesktopExternalIDEOption]
     let embeddedEditorAvailable: Bool
     let embeddedEditorDefault: Bool
+    var isEditorOpen: Bool = false
     let onOpenEmbeddedEditor: () -> Void
+    var onCloseEmbeddedEditor: () -> Void = {}
     let onSetEmbeddedEditorDefault: (Bool) -> Void
     let onOpen: (WarrenDesktopExternalIDEOption) -> Void
     let onDismiss: () -> Void
@@ -435,7 +437,9 @@ struct WarrenDesktopExternalIDEPopover: View {
                 options: options,
                 embeddedEditorAvailable: embeddedEditorAvailable,
                 embeddedEditorDefault: embeddedEditorDefault,
+                isEditorOpen: isEditorOpen,
                 onOpenEmbeddedEditor: onOpenEmbeddedEditor,
+                onCloseEmbeddedEditor: onCloseEmbeddedEditor,
                 onSetEmbeddedEditorDefault: onSetEmbeddedEditorDefault,
                 onOpen: onOpen,
                 onDismiss: onDismiss
@@ -452,7 +456,12 @@ struct WarrenDesktopExternalIDEPopoverContent: View {
     let options: [WarrenDesktopExternalIDEOption]
     let embeddedEditorAvailable: Bool
     let embeddedEditorDefault: Bool
+    /// Whether the editor region is currently beside the Terminal. This popover
+    /// owns both directions: the editor is not a Tab, so there is no close
+    /// control on the track for it.
+    var isEditorOpen: Bool = false
     let onOpenEmbeddedEditor: () -> Void
+    var onCloseEmbeddedEditor: () -> Void = {}
     let onSetEmbeddedEditorDefault: (Bool) -> Void
     let onOpen: (WarrenDesktopExternalIDEOption) -> Void
     let onDismiss: () -> Void
@@ -466,33 +475,27 @@ struct WarrenDesktopExternalIDEPopoverContent: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         VStack(alignment: .leading, spacing: 0) {
             if embeddedEditorAvailable {
-                Button(action: openEmbeddedEditor) {
-                    HStack(spacing: WarrenSpacing.compact) {
-                        Image(systemName: "doc.text")
-                            .font(.system(size: 14, weight: .light))
-                            .foregroundStyle(tokens.mutedForeground)
-                            .frame(
-                                width: WarrenLayoutMetrics.externalIDEIconSize,
-                                height: WarrenLayoutMetrics.externalIDEIconSize
-                            )
-                            .accessibilityHidden(true)
-                        Text("Embedded Editor")
-                            .font(WarrenTypography.popoverItem)
-                            .foregroundStyle(tokens.foreground)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, WarrenSpacing.standard)
-                    .padding(.vertical, WarrenSpacing.compact)
-                    .contentShape(.rect)
+                // Open and close are separate rows rather than one row that
+                // flips. The recorder registers a node's action when it appears,
+                // so a row that kept its identity across the state change would
+                // keep the action it was born with.
+                if isEditorOpen {
+                    editorActionRow(
+                        id: "workspace-editor.close",
+                        systemImage: "rectangle.righthalf.inset.filled",
+                        title: "Close Embedded Editor",
+                        tokens: tokens,
+                        action: closeEmbeddedEditor
+                    )
+                } else {
+                    editorActionRow(
+                        id: "workspace-editor.open",
+                        systemImage: "doc.text",
+                        title: "Embedded Editor",
+                        tokens: tokens,
+                        action: openEmbeddedEditor
+                    )
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open Embedded Editor")
-                .warrenSemanticElement(
-                    id: "workspace-editor.open",
-                    role: .button,
-                    label: "Open Embedded Editor",
-                    action: openEmbeddedEditor
-                )
 
                 Toggle(
                     "Open embedded editor by default",
@@ -608,8 +611,51 @@ struct WarrenDesktopExternalIDEPopoverContent: View {
         }
     }
 
+    /// One row of the embedded-editor section.
+    @ViewBuilder
+    private func editorActionRow(
+        id: String,
+        systemImage: String,
+        title: String,
+        tokens: WarrenColorTokens,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: WarrenSpacing.compact) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14, weight: .light))
+                    .foregroundStyle(tokens.mutedForeground)
+                    .frame(
+                        width: WarrenLayoutMetrics.externalIDEIconSize,
+                        height: WarrenLayoutMetrics.externalIDEIconSize
+                    )
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(WarrenTypography.popoverItem)
+                    .foregroundStyle(tokens.foreground)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, WarrenSpacing.standard)
+            .padding(.vertical, WarrenSpacing.compact)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .warrenSemanticElement(
+            id: id,
+            role: .button,
+            label: title,
+            action: action
+        )
+    }
+
     private func openEmbeddedEditor() {
         onOpenEmbeddedEditor()
+        onDismiss()
+    }
+
+    private func closeEmbeddedEditor() {
+        onCloseEmbeddedEditor()
         onDismiss()
     }
 

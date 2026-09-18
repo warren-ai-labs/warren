@@ -4,7 +4,7 @@
 - Owner: Warren desktop client
 - Created: 2026-08-17
 - Implemented: 2026-08-17
-- Supersedes: [RFC 0001](0001-terminal-surface-retention.md) view-layer
+- Supersedes: [RFC 0001](../archive/rfc/0001-terminal-surface-retention.md) view-layer
   retention design
 
 ## Summary

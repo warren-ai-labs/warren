@@ -11,6 +11,32 @@ Workspace; linked Git worktrees are additional Workspaces. A Workspace has a
 stable identity, an editable display name, a filesystem path, and a checked-out
 Git branch. The display name and branch name are independent fields.
 
+**Embedded Editor**:
+A code-server-backed editing surface scoped to one Workspace and hosted by a
+Warren Client. It is a client integration, not a Warren Terminal Session or a
+Host-owned execution resource.
+_Avoid_: Editor Session, IDE Session
+
+**Editor Sidebar**:
+A client-local trailing rail that exposes the Embedded Editor's Explorer for the
+selected Workspace. It is distinct from Warren's resource sidebar and does not
+own files.
+
+**Editor Document Pane**:
+A client-local surface that displays a file selected from the Editor Sidebar and
+can appear beside terminal content. It is not a Warren Terminal Session or a
+Host pane.
+
+**Workspace Editor State**:
+The client-local durable fact that a Workspace has been opened in the Embedded
+Editor, together with optional last-document context. It can make a Workspace
+active even when no Warren Terminal Session is running.
+
+**Active Workspace**:
+A Workspace with at least one running Warren Terminal Session or retained
+Workspace Editor State. Active status is a presentation fact used by the
+Workspace list and does not create a new Host resource.
+
 **Project**:
 The identity of one Git repository rooted at its main checkout. A Project owns
 the repository identity and the set of Git Workspaces derived from that

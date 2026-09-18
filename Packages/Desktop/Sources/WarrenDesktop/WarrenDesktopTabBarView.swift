@@ -31,7 +31,9 @@ struct WarrenDesktopTabBar: View {
     let webStatus: WarrenDesktopWebStatus
     let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
     let embeddedEditorAvailable: Bool
-    let embeddedEditorTabVisible: Bool
+    /// Whether the editor region is up beside the Terminal. The IDE control
+    /// reports this rather than a content mode: there is no longer a mode to be
+    /// in.
     let embeddedEditorSelected: Bool
     let embeddedEditorDefault: Bool
     let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
@@ -83,7 +85,6 @@ struct WarrenDesktopTabBar: View {
         webStatus: WarrenDesktopWebStatus,
         externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
         embeddedEditorAvailable: Bool,
-        embeddedEditorTabVisible: Bool,
         embeddedEditorSelected: Bool,
         embeddedEditorDefault: Bool,
         externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl] = WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
@@ -93,7 +94,7 @@ struct WarrenDesktopTabBar: View {
         onChromePopover: @escaping (WarrenDesktopChromePopover) -> Void,
         onOpenInExternalIDE: @escaping (WarrenDesktopExternalIDEOption) -> Void,
         onOpenEmbeddedEditor: @escaping () -> Void,
-        onCloseEmbeddedEditor: @escaping () -> Void,
+        onCloseEmbeddedEditor: @escaping () -> Void = {},
         onSelectEndpoint: @escaping (String) -> Void,
         onRetryConnection: @escaping () -> Void = {},
         onStopConnection: @escaping () -> Void = {},
@@ -128,7 +129,6 @@ struct WarrenDesktopTabBar: View {
         self.webStatus = webStatus
         self.externalIDEOptions = externalIDEOptions
         self.embeddedEditorAvailable = embeddedEditorAvailable
-        self.embeddedEditorTabVisible = embeddedEditorTabVisible
         self.embeddedEditorSelected = embeddedEditorSelected
         self.embeddedEditorDefault = embeddedEditorDefault
         self.externallyVisibleControls = WarrenDesktopWorkspaceTabTrailingControl.controlsForEndpointCount(
@@ -222,22 +222,11 @@ struct WarrenDesktopTabBar: View {
                                 )
                             }
                         }
-
-                        if embeddedEditorTabVisible {
-                            WarrenDesktopEditorTabItem(
-                                isSelected: embeddedEditorSelected,
-                                onSelect: onOpenEmbeddedEditor,
-                                onClose: onCloseEmbeddedEditor
-                            )
-                        }
                     }
                     .background {
                         WarrenDesktopTabScrollFollower(
-                            selectedTabID: embeddedEditorSelected
-                                ? Self.editorTabID
-                                : selectedTabID,
-                            tabIDs: rowElements.drawnTabIDs
-                                + (embeddedEditorTabVisible ? [Self.editorTabID] : []),
+                            selectedTabID: selectedTabID,
+                            tabIDs: rowElements.drawnTabIDs,
                             groupMarkSlotWidth: rowElements.groupMarkSlotWidth,
                             groupMarkAnchorIndex: rowElements.groupMarkAnchorIndex,
                             reduceMotion: reduceMotion
@@ -247,7 +236,7 @@ struct WarrenDesktopTabBar: View {
                 }
                 .frame(
                     maxWidth: Self.tabTrackWidth(
-                        tabCount: tabs.count + (embeddedEditorTabVisible ? 1 : 0),
+                        tabCount: tabs.count,
                         groupMarkSlotWidth: rowElements.groupMarkSlotWidth
                     ),
                     alignment: .leading
@@ -289,6 +278,7 @@ struct WarrenDesktopTabBar: View {
                         onChromePopover: onChromePopover,
                         onOpenInExternalIDE: onOpenInExternalIDE,
                         onOpenEmbeddedEditor: onOpenEmbeddedEditor,
+                        onCloseEmbeddedEditor: onCloseEmbeddedEditor,
                         onSelectEndpoint: onSelectEndpoint,
                         onRetryConnection: onRetryConnection,
                         onStopConnection: onStopConnection
@@ -319,8 +309,6 @@ struct WarrenDesktopTabBar: View {
         .accessibilityLabel("Workspace tab bar")
     }
 
-    private static let editorTabID = "warren.workspace.editor"
-
     /// One Tab of the track, with the pending feedback the bar owns.
     ///
     /// `dropBeforeTabID` is the Tab a drop on this one moves its source in
@@ -339,7 +327,7 @@ struct WarrenDesktopTabBar: View {
             tab: tab,
             displayTitle: tabTitles[tab.id] ?? tab.title,
             activity: activity,
-            isSelected: !embeddedEditorSelected && selectedTabID == tab.id,
+            isSelected: selectedTabID == tab.id,
             showsTrailingSeparator: showsTrailingSeparator,
             canStartDrag: canStartDrag,
             isPinned: tab.sessionID.map(pinnedSessionIDs.contains) ?? false,
@@ -719,11 +707,9 @@ extension WarrenDesktopPaneBar {
     /// Session that is not currently in a pane.
     static func showsTrack(
         entryCount: Int,
-        embeddedEditorTabVisible: Bool,
         mode: WarrenDesktopWorkspaceDisplayMode
     ) -> Bool {
-        let total = entryCount + (embeddedEditorTabVisible ? 1 : 0)
-        return mode.paneBarListsEverySession ? total > 0 : total > 1
+        mode.paneBarListsEverySession ? entryCount > 0 : entryCount > 1
     }
 
     /// Resolves the mode's one decision into everything the bar renders.
@@ -735,7 +721,6 @@ extension WarrenDesktopPaneBar {
         from tabs: [ClientTab],
         selected: ClientTab?,
         mode: WarrenDesktopWorkspaceDisplayMode,
-        includesEditorTab: Bool,
         solo: ([ClientTab]) -> WarrenDesktopSoloPaneIdentity.Model?
     ) -> WarrenDesktopPaneBarPresentation {
         let listings = self.tabs(
@@ -746,7 +731,6 @@ extension WarrenDesktopPaneBar {
         )
         let drawsTrack = Self.showsTrack(
             entryCount: listings.count,
-            embeddedEditorTabVisible: includesEditorTab,
             mode: mode
         )
         return WarrenDesktopPaneBarPresentation(
@@ -1096,6 +1080,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let onChromePopover: (WarrenDesktopChromePopover) -> Void
     let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
     let onOpenEmbeddedEditor: () -> Void
+    let onCloseEmbeddedEditor: () -> Void
     let onSelectEndpoint: (String) -> Void
     let onRetryConnection: () -> Void
     let onStopConnection: () -> Void
@@ -1144,15 +1129,21 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                     embeddedEditorSelected: embeddedEditorSelected,
                     embeddedEditorDefault: embeddedEditorDefault,
                     onOpenEmbeddedEditor: onOpenEmbeddedEditor,
+                    onCloseEmbeddedEditor: onCloseEmbeddedEditor,
                     onPresentChoices: { onChromePopover(.externalIDE) }
                 )
                 .warrenSemanticElement(
                     id: "workspace-ide.open",
                     role: .button,
-                    label: "Open in IDE",
-                    value: embeddedEditorDefault
-                        ? "Embedded editor default"
-                        : "Choose an IDE",
+                    label: embeddedEditorSelected
+                        ? "Close Embedded Editor"
+                        : "Open in IDE",
+                    value: embeddedEditorSelected
+                        ? "Editor open"
+                        : (embeddedEditorDefault
+                            ? "Embedded editor default"
+                            : "Choose an IDE"),
+                    isSelected: embeddedEditorSelected,
                     action: idePrimaryAction
                 )
             } else if let externalIDEOptions, !externalIDEOptions.isEmpty {
@@ -1201,6 +1192,8 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
         ) {
         case .openEmbeddedEditor:
             onOpenEmbeddedEditor()
+        case .closeEmbeddedEditor:
+            onCloseEmbeddedEditor()
         case .presentChoices:
             onChromePopover(.externalIDE)
         }
@@ -1209,15 +1202,21 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
 
 enum WarrenDesktopIDEPrimaryAction: Equatable {
     case openEmbeddedEditor
+    case closeEmbeddedEditor
     case presentChoices
 
+    /// The control is tinted while the editor region is up, so a lit control has
+    /// to turn it off: that used to be the editor Tab's close box, and the Tab is
+    /// gone. Without this the lit control only reopened the picker, leaving the
+    /// region with no visible way to close it.
     static func resolve(
         embeddedEditorDefault: Bool,
         embeddedEditorSelected: Bool
     ) -> Self {
-        embeddedEditorDefault && !embeddedEditorSelected
-            ? .openEmbeddedEditor
-            : .presentChoices
+        if embeddedEditorSelected {
+            return .closeEmbeddedEditor
+        }
+        return embeddedEditorDefault ? .openEmbeddedEditor : .presentChoices
     }
 }
 
@@ -1225,6 +1224,7 @@ private struct WarrenDesktopIDEControl: View {
     let embeddedEditorSelected: Bool
     let embeddedEditorDefault: Bool
     let onOpenEmbeddedEditor: () -> Void
+    let onCloseEmbeddedEditor: () -> Void
     let onPresentChoices: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -1233,14 +1233,23 @@ private struct WarrenDesktopIDEControl: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         WarrenDesktopChromeButton(
             systemImage: "macwindow",
-            label: "Open in IDE",
-            hint: embeddedEditorDefault && !embeddedEditorSelected
-                ? "Open the embedded editor"
-                : "Choose an IDE",
+            label: embeddedEditorSelected ? "Close Embedded Editor" : "Open in IDE",
+            hint: hint,
             action: primaryAction,
             tint: embeddedEditorSelected ? tokens.info : nil,
             edgeSpaced: true
         )
+    }
+
+    private var hint: String {
+        switch WarrenDesktopIDEPrimaryAction.resolve(
+            embeddedEditorDefault: embeddedEditorDefault,
+            embeddedEditorSelected: embeddedEditorSelected
+        ) {
+        case .openEmbeddedEditor: "Open the embedded editor"
+        case .closeEmbeddedEditor: "Close the embedded editor"
+        case .presentChoices: "Choose an IDE"
+        }
     }
 
     private func primaryAction() {
@@ -1250,6 +1259,8 @@ private struct WarrenDesktopIDEControl: View {
         ) {
         case .openEmbeddedEditor:
             onOpenEmbeddedEditor()
+        case .closeEmbeddedEditor:
+            onCloseEmbeddedEditor()
         case .presentChoices:
             onPresentChoices()
         }

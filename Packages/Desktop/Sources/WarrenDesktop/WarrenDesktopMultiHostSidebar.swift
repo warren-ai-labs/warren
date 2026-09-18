@@ -96,6 +96,33 @@ public struct WarrenDesktopSidebarHostProjection: Identifiable, Hashable, Sendab
         self.lastError = lastError
     }
 
+    /// The same section with this Endpoint's editor markers folded into its
+    /// active set (RFC 0021 §7).
+    ///
+    /// The overlay is keyed by Endpoint, so a section only ever picks up the
+    /// markers written against its own Host.
+    public func widenedActivity(
+        with overlay: WarrenDesktopEditorActivityOverlay
+    ) -> Self {
+        let widened = overlay.activeWorkspaceIDs(
+            activeWorkspaceIDs,
+            hostId: endpointID
+        )
+        guard widened != activeWorkspaceIDs else { return self }
+        return WarrenDesktopSidebarHostProjection(
+            endpointID: endpointID,
+            endpointLabel: endpointLabel,
+            host: host,
+            connectionState: connectionState,
+            projectGroups: projectGroups,
+            tasks: tasks,
+            workspaceActivitySummaries: workspaceActivitySummaries,
+            activeSessionsByWorkspaceID: activeSessionsByWorkspaceID,
+            activeWorkspaceIDs: widened,
+            lastError: lastError
+        )
+    }
+
     public func projectReference(_ projectID: ProjectID) -> WarrenDesktopHostResourceRef<ProjectID> {
         WarrenDesktopHostResourceRef(endpointID: endpointID, id: projectID)
     }

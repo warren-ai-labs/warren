@@ -226,7 +226,8 @@ The open-source repository code is licensed under [Apache-2.0](LICENSE). This co
 | `Web/` | React + Vite Web/PWA client |
 | `Onboarding/` | Cloudflare Worker onboarding site (React + Vite + Ghostty WASM) |
 | `Assets/Brand/` | App icon, menubar templates, and brand assets |
-| `docs/` | Architecture, RFCs, decisions, runbooks, and screenshot assets |
+| `docs/` | Architecture, [RFCs](docs/rfc/), decisions, runbooks, and screenshot assets |
+| `Support/Raycast/` | Raycast extension and Script Command launcher |
 
 ## Getting Started
 
@@ -250,17 +251,37 @@ daemon and CLI can still be built for non-macOS hosts. Ghostline v1 statically
 links its terminal core, so the app has one runtime and no bundled v0 bridge,
 legacy daemon, or separate Ghostty checkout to maintain.
 
-The 0.12.0 release is a coordinated protocol boundary with selective
-persistence migration. Pre-4.0 clients are rejected during authentication.
-Host state schemas 1 and 2 migrate in place to schema 3, while unknown or
-future schemas fail closed. Compatible Ghostline v1 sessions use the rolling
-handoff journal; Ghostline v0 sockets, legacy PTY aliases, and pre-canonical
-Agent projections require recreation or a fresh client cache. Back up
-`~/.warren` before upgrading an existing Host.
-
 The app bundle includes the `warren` CLI. On its first launch Warren installs
 it to `~/.local/bin` and adds that directory to the active shell profile when
 needed. Use `Tools > Install CLI` to reinstall it manually.
+
+Build the headless daemon and CLI on their own:
+
+```sh
+mise run build:headless
+```
+
+Run the Web client in development:
+
+```sh
+mise run web:dev
+```
+
+Try the one-command local Relay experience:
+
+```sh
+mise run relay:dev
+```
+
+Back up `~/.warren` before upgrading an existing Host. Warren fails closed on
+state it cannot migrate rather than guessing, and a release that moves the
+protocol or a persistence schema says so in
+[CHANGELOG.md](CHANGELOG.md). After installation, Warren checks GitHub Releases
+in the background at launch no more than once every three hours; when a newer
+macOS app is available a banner below the workspace tabs offers to download and
+install it, and the Warren application menu always performs a fresh check.
+
+## Optional integrations
 
 ### Embedded editor
 
@@ -294,117 +315,33 @@ The MVP is available for the Local execution endpoint only. Set
 on the app's `PATH`. Remote Host integration requires a Host-owned editor
 service and is not part of this version.
 
-### Raycast integration
+### Raycast
 
 The repository includes a Raycast extension whose command is named **Terminal**.
-Search for `terminal` in Raycast to open a new Warren shell; the command
-defaults to the `Inbox` terminal group and can be changed in its preferences.
-For local development or installation from this checkout:
+Search for `terminal` in Raycast to open a new Warren shell; it defaults to the
+`Inbox` terminal group and can be pointed at another group in its preferences.
+The extension is kept as a separate package so future Warren actions can be
+added as additional Raycast commands without changing the desktop app.
 
-```sh
-cd Support/Raycast
-npm install
-npm run dev
-```
+Installation, preferences, and the `warren-terminal.sh` Script Command fallback
+are documented in [Support/Raycast/README.md](Support/Raycast/README.md).
 
-The extension is intentionally kept as a separate package so future Warren
-actions can be added as additional Raycast commands without changing the
-desktop app.
+### Deep links
 
-#### Script Command fallback
-
-Warren registers the `warren://terminal?group=Inbox` URL for external
-launchers. Release app bundles include an optional Raycast Script Command and
-its Warren icon, but Warren does not install either file or modify Raycast
-settings automatically.
-
-After installing Warren at `/Applications/Warren.app`, install the launcher
-for the current user:
-
-```sh
-mkdir -p "$HOME/.warren"
-install -m 755 \
-  "/Applications/Warren.app/Contents/Resources/warren-terminal.sh" \
-  "$HOME/.warren/warren-terminal.sh"
-install -m 644 \
-  "/Applications/Warren.app/Contents/Resources/warren-terminal.png" \
-  "$HOME/.warren/warren-terminal.png"
-```
-
-Then open Raycast **Settings → Script Commands → Add Script Directory**, add
-`~/.warren`, and search for **Terminal**. The command can be given the
-alias `terminal` or a global hotkey from Raycast's **Configure Command** menu.
-
-When working from a source checkout, use the same commands with
-`Support/Raycast/warren-terminal.sh` and `Assets/Brand/warren-app-icon.png` as
-the two source paths.
-
-### Settings links
-
-Warren also accepts `warren://settings` links. Each Settings section has a
-stable `section` value, for example:
+Warren registers two URL schemes for external launchers. `warren://terminal`
+opens a shell in a named terminal group, and `warren://settings` opens a
+Settings section by its stable `section` value:
 
 ```text
+warren://terminal?group=Inbox
 warren://settings?section=public-access
 ```
 
-The Relay administrator creates short-lived enrollment keys in batches. Each
-key is a 16-letter code in `XXXX-XXXX-XXXX-XXXX` form and has a bounded lifetime
-and use count. The response includes a `warren://settings` shortcut containing
-only the Relay URL and key:
-
-```sh
-curl -fsS -X POST "$WARREN_RELAY_PUBLIC_URL/v1/admin/enrollment-keys" \
-  -H "Authorization: Bearer $WARREN_RELAY_ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"count":5,"ttl":"24h","max_uses":1,"label":"developer laptops"}' \
-  | jq -r '.keys[] | [.key, .settings_url] | @tsv'
-```
-
-Open the settings URL in Warren Desktop. It only prefills the Relay URL and
-enrollment key; the key is consumed when the operator presses **Connect Relay**. Headless
-then calls `POST /v1/hosts/claim`, creates the Host identity on the Relay, and
-stores the resulting Host ID and signing-key pin locally. A headless install can
-perform the same active step without Desktop:
-
-```sh
-WARREN_RELAY_URL="$WARREN_RELAY_PUBLIC_URL" \
-WARREN_RELAY_ENROLLMENT_KEY='<enrollment-key>' \
-warren-headless
-```
-
-The CLI accepts either the two values or the same settings shortcut:
-
-```sh
-warren relay connect --url "$WARREN_RELAY_PUBLIC_URL" --key '<enrollment-key>'
-warren relay connect '<settings-url>'
-```
-
-Enrollment keys are bearer credentials. Share them only with the intended Host
-operator and remove them from shell history, chat, and copied logs after use.
-
-Warren checks GitHub Releases in the background at launch, no more than once
-every three hours. When a newer
-macOS app is available, a banner below the workspace tabs offers to download
-and install it; the Warren application menu always performs a fresh check.
-
-Build the headless daemon and CLI:
-
-```sh
-mise run build:headless
-```
-
-Run the Web client in development:
-
-```sh
-mise run web:dev
-```
-
-Try the one-command local Relay experience:
-
-```sh
-mise run relay:dev
-```
+A Relay enrollment shortcut is a `warren://settings` link carrying only a Relay
+URL and an enrollment key. Opening it in Desktop prefills both fields; the key
+is consumed when the operator presses **Connect Relay**. Enrolling a Host,
+issuing keys, pairing a device, and revoking access are covered in
+[docs/relay.md](docs/relay.md).
 
 ## Common Tasks
 
@@ -433,32 +370,48 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 
 ## Documentation
 
+**Start here**
+
 - [DESIGN.md](DESIGN.md) — product and system design, domain model, architecture, and acceptance criteria
 - [GLOSSARY.md](GLOSSARY.md) — shared terminology
-- [docs/headless-architecture.md](docs/headless-architecture.md) — headless and remote connection architecture
-- [docs/relay.md](docs/relay.md) — enrolling a Host, pairing a phone or browser, and revoking access through Relay
-- [docs/backlog.md](docs/backlog.md) — deferred work: what we deliberately left, why it can wait, and what would force it
-- [docs/relay-http.md](docs/relay-http.md) — Relay control-plane HTTP API and iOS transport constraints
-- [docs/runtime.md](docs/runtime.md) — Ghostline runtime boundary, environment isolation, and recovery
-- [docs/rfc/0004-headless-flow-orchestration.md](docs/rfc/0004-headless-flow-orchestration.md) — headless flow orchestration
-- [docs/rfc/0006-agent-activity-attention.md](docs/rfc/0006-agent-activity-attention.md) — provider-neutral activity and human attention
-- [docs/rfc/0013-agent-interaction-architecture-and-pty-guarding.md](docs/rfc/0013-agent-interaction-architecture-and-pty-guarding.md) — PTY interaction and input guarding
-- [docs/rfc/0014-autonomous-engineering-pipeline.md](docs/rfc/0014-autonomous-engineering-pipeline.md) — multi-agent engineering pipeline
-- [docs/rfc/0016-canonical-agent-execution-protocol.md](docs/rfc/0016-canonical-agent-execution-protocol.md) — canonical Agent events and typed commands
-- [docs/rfc/0017-agent-task-handoff.md](docs/rfc/0017-agent-task-handoff.md) — structured context handoff between Agent sessions
-- [docs/herdr-agent-pty-interaction.md](docs/herdr-agent-pty-interaction.md) — provider-safe PTY Agent interaction contract
-- [docs/terminal-rendering-runbook.md](docs/terminal-rendering-runbook.md) — terminal black screen and missing text troubleshooting
-- [docs/lessons.md](docs/lessons.md) — engineering lessons from runtime and lifecycle incidents
 - [docs/project-architecture-and-customization-guide.md](docs/project-architecture-and-customization-guide.md) — source-audited architecture tutorial and customization guide
-- [docs/startup-performance-governance.md](docs/startup-performance-governance.md) — cold-start critical path, deferral rules, and review checklist
+
+**Architecture and design records**
+
+- [docs/headless-architecture.md](docs/headless-architecture.md) — headless and remote connection architecture
+- [docs/runtime.md](docs/runtime.md) — Ghostline runtime boundary, environment isolation, and recovery
+- [docs/herdr-agent-pty-interaction.md](docs/herdr-agent-pty-interaction.md) — provider-safe PTY Agent interaction contract
+- [docs/rfc/](docs/rfc/) — RFC index: every design proposal with its current status
+- [docs/adr/](docs/adr/) and [docs/decisions/](docs/decisions/) — architecture and narrower decision records
+- [docs/backlog.md](docs/backlog.md) — deferred work: what we deliberately left, why it can wait, and what would force it
+
+**Operating a Host**
+
+- [docs/relay.md](docs/relay.md) — enrolling a Host, pairing a phone or browser, and revoking access through Relay
+- [docs/relay-http.md](docs/relay-http.md) — Relay control-plane HTTP API, trusted-network setup, and iOS transport constraints
 - [docs/update-service.md](docs/update-service.md) — Cloudflare release proxy, caching, and updater endpoint contract
 - [docs/onboarding-download-analytics.md](docs/onboarding-download-analytics.md) — Workers Analytics Engine download events and private metrics queries
-- [docs/relay-http.md](docs/relay-http.md) — trusted-network HTTP Relay setup and iOS development notes
+
+**Troubleshooting and engineering practice**
+
+- [docs/terminal-rendering-runbook.md](docs/terminal-rendering-runbook.md) — terminal black screen and missing text troubleshooting
+- [docs/desktop-freeze-runbook.md](docs/desktop-freeze-runbook.md) — capturing and diagnosing a frozen desktop client
+- [docs/lessons.md](docs/lessons.md) — engineering lessons from runtime and lifecycle incidents
+- [docs/startup-performance-governance.md](docs/startup-performance-governance.md) — cold-start critical path, deferral rules, and review checklist
+
+**Per-component**
+
 - [Headless/README.md](Headless/README.md) — headless daemon and CLI
 - [RelayService/README.md](RelayService/README.md) — Relay control plane
 - [Web/README.md](Web/README.md) — Web/PWA client
+- [Support/Raycast/README.md](Support/Raycast/README.md) — Raycast extension and Script Command
 - [Assets/Brand/README.md](Assets/Brand/README.md) — brand and icon assets
+
+**Contributing**
+
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development setup and contribution expectations
+- [REVIEW.md](REVIEW.md) — the five review dimensions a change is checked against
+- [RELEASE.md](RELEASE.md) — release process
 - [SECURITY.md](SECURITY.md) — vulnerability reporting and deployment boundaries
 - [LICENSE](LICENSE) — Apache-2.0 license terms
 

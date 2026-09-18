@@ -1,6 +1,6 @@
 # RFC 0011: Cloud Agent runs and runner control plane
 
-- Status: Abandoned (Superseded by [RFC 0015](0015-cloud-agent-daemon-and-scheduled-bots.md))
+- Status: Abandoned (Superseded by [RFC 0015](../../rfc/0015-cloud-agent-daemon-and-scheduled-bots.md))
 - Owner: Warren Headless, clients, and Runner
 - Created: 2026-09-01
 - Scope: asynchronous Agent execution across local, remote, and cloud targets
@@ -531,9 +531,9 @@ and a hosted provider without changing its identity, UI, or artifact contract.
 ## References
 
 - [RFC 0004: Headless flow orchestration and optional extensions](0004-headless-flow-orchestration.md)
-- [RFC 0006: Agent activity and attention](0006-agent-activity-attention.md)
-- [Headless architecture](../headless-architecture.md)
-- [Warren product and system design](../../DESIGN.md)
+- [RFC 0006: Agent activity and attention](../../rfc/0006-agent-activity-attention.md)
+- [Headless architecture](../../headless-architecture.md)
+- [Warren product and system design](../../../DESIGN.md)
 - [OpenAI Codex Cloud](https://developers.openai.com/codex/cloud)
 - [OpenAI Cloud environments](https://developers.openai.com/codex/environments/cloud-environment)
 - [GitHub Copilot coding agent](https://docs.github.com/en/copilot/concepts/agents/coding-agent/about-coding-agent)

@@ -96,6 +96,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onRebuildUsage: ((@escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void) -> Void)?
     private let embeddedEditorAvailable: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
+    /// Asks the runtime to open one document. Warren drives this exactly once
+    /// per editor entry, to restore the Workspace's last document; every other
+    /// file selection happens inside code-server and never reaches Warren.
+    private let onOpenEditorDocument: @MainActor (Workspace, WarrenDesktopEditorDocument) -> Void
     private let persistenceEnabled: Bool
     private let externalIDEService = WarrenDesktopExternalIDEService.live
     @State private var sidebarState: WarrenDesktopSidebarState
@@ -123,7 +127,16 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var pendingDeletion: WarrenDesktopDeletionRequest?
     @State private var pendingDeletionEndpointID: String?
     @State private var deleteWorkspaceRemoveWorktree = false
-    @State private var workspaceContentModes: [WorkspaceID: WarrenDesktopWorkspaceContentMode]
+    /// The durable per-Workspace editor markers (RFC 0021 §6.1).
+    @State private var workspaceEditorStates: [WarrenDesktopWorkspaceEditorKey: WarrenDesktopWorkspaceEditorState]
+    /// Which Workspaces currently show the editor region in this window.
+    ///
+    /// Tracks the same intent as the durable marker but is not derived from it:
+    /// the marker is what a relaunch reads, while this is what the window draws,
+    /// and a Workspace on another Endpoint keeps its marker without being here.
+    @State private var editorRegionWorkspaceIDs: Set<WorkspaceID>
+    /// The Terminal's share of the central width while the editor region is up.
+    @State private var terminalRatio = WarrenLayoutMetrics.editorSplitDefaultRatio
     @State private var splitTrees: [String: SplitLayoutTree]
     @State private var activePaneIDs: [String: String]
     /// Which arrangement this window renders for a scope. It is per viewer and
@@ -275,6 +288,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onRebuildUsage: ((@escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void) -> Void)? = nil,
         embeddedEditorAvailable: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
+        onOpenEditorDocument: @escaping @MainActor (Workspace, WarrenDesktopEditorDocument) -> Void = { _, _ in },
         persistenceEnabled: Bool = true,
         @ViewBuilder terminalSurface: @escaping @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     ) {
@@ -361,6 +375,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.embeddedEditorAvailable = embeddedEditorAvailable
             && resolvedEndpointCapabilities.canUseEmbeddedEditor
         self.editorSurface = editorSurface
+        self.onOpenEditorDocument = onOpenEditorDocument
         self.persistenceEnabled = persistenceEnabled
         _sidebarState = State(
             initialValue: persistenceEnabled
@@ -372,13 +387,21 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 ? Self.restoredSidebarTree(scope: selectedEndpointID)
                 : WarrenDesktopSidebarTreeState()
         )
-        _workspaceContentModes = State(
-            initialValue: persistenceEnabled
-                ? WarrenDesktopWorkspaceContentModePersistence.restore(
-                    scope: selectedEndpointID
-                )
-                : [:]
+        // A marker restored here is what brings the editor region back after a
+        // relaunch. Region membership is seeded from the markers rather than
+        // persisted separately, so there is one durable answer to "did this
+        // Workspace use the editor" and the window state follows from it.
+        let restoredEditorStates = persistenceEnabled
+            ? WarrenDesktopWorkspaceEditorStateStore.restoreMigratingLegacyContentModes(
+                scope: selectedEndpointID
+            )
+            : [:]
+        _workspaceEditorStates = State(initialValue: restoredEditorStates)
+        let markedWorkspaceIDs = Self.enabledWorkspaceIDs(
+            in: restoredEditorStates,
+            hostId: selectedEndpointID
         )
+        _editorRegionWorkspaceIDs = State(initialValue: markedWorkspaceIDs)
         // The arrangement is Host state, so there is nothing device-local to
         // restore. A scope with no Host group renders its selected Tab alone.
         _splitTrees = State(initialValue: [:])
@@ -391,10 +414,13 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let presentation = makePresentation()
         let currentTree = currentSplitTree(presentation: presentation)
         let currentPaneID = currentActivePaneID(presentation: presentation, tree: currentTree)
-        let contentMode = workspaceContentMode(for: presentation.workspace)
-        let activeVisibleSessions = contentMode == .terminal
-            ? visibleScreenSessionIDs(for: presentation, in: currentTree)
-            : []
+        // The Terminal is mounted and subscribed whether or not the editor is
+        // up, so its visible screens no longer depend on the editor at all.
+        let activeVisibleSessions = visibleScreenSessionIDs(
+            for: presentation,
+            in: currentTree
+        )
+        let showsEditorRegion = showsEditorRegion(for: presentation.workspace)
         let tabTitles = Dictionary(uniqueKeysWithValues: presentation.tabs.map { tab in
             let session = tab.sessionID.flatMap { projection.session(id: $0) }
             let workspace = tab.sessionID.flatMap { projection.workspace(for: $0) }
@@ -430,7 +456,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         )
         let tabBarView = makeTabBarView(
             presentation: presentation,
-            contentMode: contentMode,
             tabTitles: tabTitles,
             tabActivities: tabActivities,
             pinnedSessionIDs: pinnedSessionIDs,
@@ -475,13 +500,23 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             onSelectSidebarResource: onSelectSidebarResource,
             onOpenSidebarWorkspace: onOpenSidebarWorkspace,
             onOpenSidebarSession: onOpenSidebarSession,
-            onRetrySidebarHost: onRetrySidebarHost
+            onRetrySidebarHost: onRetrySidebarHost,
+            editorActivity: WarrenDesktopEditorActivityOverlay(
+                states: workspaceEditorStates
+            ),
+            // The marker already put the Workspace in the region set, so this is
+            // navigation: it brings up the column that draws the editor. The
+            // insert keeps the entry honest if the two ever diverge.
+            onOpenEditor: { workspaceID in
+                editorRegionWorkspaceIDs.insert(workspaceID)
+                dispatch(.selectWorkspace(workspaceID))
+            }
         )
         .frame(width: sidebarState.renderedWidth)
         let workspaceColumn = makeWorkspaceColumn(
             presentation: presentation,
             tabBarView: tabBarView,
-            contentMode: contentMode,
+            showsEditorRegion: showsEditorRegion,
             isAddingSession: isAddingSession,
             currentTree: currentTree,
             currentPaneID: currentPaneID
@@ -514,8 +549,17 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             }
         }
         .frame(
+            // The editor region widens the window's floor while it is up.
+            // Otherwise the region's own floor — code-server's 220pt editor part
+            // plus its Explorer — would be met by squeezing the Terminal to
+            // nothing, and RFC 0021's open question about narrow windows would
+            // become a state users could sit in.
             minWidth: WarrenLayoutMetrics.sidebarExpandedWidth
-                + currentTree.windowMinimumPaneWidth,
+                + currentTree.windowMinimumPaneWidth
+                + (showsEditorRegion
+                    ? WarrenLayoutMetrics.editorRegionMinimumWidth
+                        + WarrenLayoutMetrics.editorSplitDividerWidth
+                    : 0),
             minHeight: (chromeMode.showsIndependentTopBar ? WarrenLayoutMetrics.topBarHeight : 0)
                 + WarrenLayoutMetrics.tabBarHeight
                 + WarrenLayoutMetrics.presetBarHeight
@@ -531,23 +575,27 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         .onChange(of: sidebarTree) { newState in
             if persistenceEnabled { Self.persist(newState, scope: selectedEndpointID) }
         }
-        .onChange(of: workspaceContentModes) { newModes in
+        .onChange(of: workspaceEditorStates) { newStates in
             guard persistenceEnabled else { return }
-            WarrenDesktopWorkspaceContentModePersistence.save(
-                newModes,
-                scope: selectedEndpointID,
-                validWorkspaceIDs: Set(projection.groups.flatMap(\.workspaces).map(\.id))
-            )
+            WarrenDesktopWorkspaceEditorStateStore.save(newStates)
         }
         .onChange(of: selectedEndpointID) { newEndpointID in
             sidebarTree = persistenceEnabled
                 ? Self.restoredSidebarTree(scope: newEndpointID)
                 : WarrenDesktopSidebarTreeState()
-            workspaceContentModes = persistenceEnabled
-                ? WarrenDesktopWorkspaceContentModePersistence.restore(
-                    scope: newEndpointID
-                )
+            // The markers are per Endpoint, so a Host change re-derives which
+            // Workspaces have one. Nothing carries over: a path that exists on
+            // both Hosts must not inherit the other's editor state.
+            let restoredEditorStates = persistenceEnabled
+                ? WarrenDesktopWorkspaceEditorStateStore
+                    .restoreMigratingLegacyContentModes(scope: newEndpointID)
                 : [:]
+            let markedWorkspaceIDs = Self.enabledWorkspaceIDs(
+                in: restoredEditorStates,
+                hostId: newEndpointID
+            )
+            workspaceEditorStates = restoredEditorStates
+            editorRegionWorkspaceIDs = markedWorkspaceIDs
             if !endpointCapabilities.canOpenExternalIDE {
                 chromePopover = nil
             }
@@ -584,13 +632,22 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             openSettings(request)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.openEmbeddedEditor)) { note in
-            let targetWorkspace = (note.object as? WorkspaceID).flatMap { id in
-                projection.groups.flatMap(\.workspaces).first { $0.id == id }
+            let request = note.object as? WarrenDesktopEmbeddedEditorRequest
+            let targetWorkspace = request.flatMap { request in
+                projection.groups.flatMap(\.workspaces).first {
+                    $0.id == request.workspaceID
+                }
             } ?? presentation.workspace
             if let targetWorkspace, presentation.workspace?.id != targetWorkspace.id {
                 actions(.selectWorkspace(targetWorkspace.id))
             }
-            setWorkspaceContentMode(.editor, for: targetWorkspace)
+            // The runtime has already been asked to open the document, so the
+            // marker records what is on screen rather than driving it.
+            openEditorRegion(
+                for: targetWorkspace,
+                restoringLastDocument: false,
+                recording: request?.document
+            )
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.splitBelow)) { _ in
             handleSplitBelow(in: presentation)
@@ -876,11 +933,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             options: options,
                             embeddedEditorAvailable: embeddedEditorChromeAvailable,
                             embeddedEditorDefault: embeddedEditorDefaultIDE,
+                            isEditorOpen: showsEditorRegion(
+                                for: presentation.workspace
+                            ),
                             onOpenEmbeddedEditor: {
-                                setWorkspaceContentMode(
-                                    .editor,
-                                    for: presentation.workspace
+                                openEditorRegion(
+                                    for: presentation.workspace,
+                                    restoringLastDocument: true
                                 )
+                            },
+                            onCloseEmbeddedEditor: {
+                                guard let workspace = presentation.workspace else { return }
+                                closeEditorRegion(for: workspace)
                             },
                             onSetEmbeddedEditorDefault: {
                                 embeddedEditorDefaultIDE = $0
@@ -895,6 +959,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         detail: { control in
                             overflowControlDetail(
                                 control,
+                                workspace: presentation.workspace,
                                 externalIDEOptions: externalIDEOptions,
                                 embeddedEditorChromeAvailable: embeddedEditorChromeAvailable
                             )
@@ -959,7 +1024,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// preserving the navigation ownership rules.
     private func makeTabBarView(
         presentation: Presentation,
-        contentMode: WarrenDesktopWorkspaceContentMode,
         tabTitles: [String: String],
         tabActivities: [TerminalSessionID: AgentActivityState],
         pinnedSessionIDs: Set<TerminalSessionID>,
@@ -984,7 +1048,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             from: presentation.tabs,
             selected: presentation.tab,
             mode: workspaceDisplayMode,
-            includesEditorTab: hasEmbeddedEditorTab(for: presentation.workspace),
             solo: { entries in
                 soloPaneIdentity(
                     entries: entries,
@@ -1013,8 +1076,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             externalIDEOptions: externalIDEOptions,
             embeddedEditorAvailable: embeddedEditorChromeAvailable
                 && presentation.workspace != nil,
-            embeddedEditorTabVisible: hasEmbeddedEditorTab(for: presentation.workspace),
-            embeddedEditorSelected: contentMode == .editor,
+            // The control's checked state is "the editor region is up", not
+            // "the editor replaced the terminal". There is no longer a mode for
+            // it to report.
+            embeddedEditorSelected: showsEditorRegion(for: presentation.workspace),
             embeddedEditorDefault: embeddedEditorDefaultIDE,
             externallyVisibleControls: externallyVisibleControls,
             isOverflowPresented: chromePopover == .overflow,
@@ -1025,10 +1090,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             },
             onOpenInExternalIDE: openInExternalIDE,
             onOpenEmbeddedEditor: {
-                setWorkspaceContentMode(.editor, for: presentation.workspace)
+                openEditorRegion(
+                    for: presentation.workspace,
+                    restoringLastDocument: true
+                )
             },
             onCloseEmbeddedEditor: {
-                closeEmbeddedEditor(for: presentation.workspace)
+                guard let workspace = presentation.workspace else { return }
+                closeEditorRegion(for: workspace)
             },
             onSelectEndpoint: onSelectEndpoint,
             onRetryConnection: onRetryConnection,
@@ -1077,7 +1146,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private func makeWorkspaceColumn(
         presentation: Presentation,
         tabBarView: AnyView,
-        contentMode: WarrenDesktopWorkspaceContentMode,
+        showsEditorRegion: Bool,
         isAddingSession: Bool,
         currentTree: SplitLayoutTree,
         currentPaneID: String
@@ -1092,139 +1161,196 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     )
                 }
                 tabBarView
-                if contentMode == .terminal {
-                    WarrenDesktopPresetBar(
-                        workspace: presentation.workspace,
-                        terminalGroup: presentation.terminalGroup,
-                        isBusy: isAddingSession,
-                        onLaunch: { request in
-                            launchSession(request, in: presentation)
-                        }
-                    )
-                }
-                ZStack {
-                    WarrenDesktopWorkspaceContent(
-                        workspace: presentation.contentWorkspace,
-                        terminalGroup: presentation.contentTerminalGroup,
-                        tab: presentation.tab,
-                        hasProjects: !projection.groups.isEmpty,
-                        connectionState: projection.connectionState,
-                        isMigratingRuntimeSessions: isMigratingRuntimeSessions,
-                        endpointCapabilities: endpointCapabilities,
-                        // The lone pane's identity is drawn exactly once. A
-                        // split needs a header per pane to answer "which of
-                        // these"; with one pane the top chrome row carries it
-                        // instead — unless compact mode handed that row to the
-                        // Session list, which leaves the header as the only
-                        // place the title can live.
-                        showsPaneHeader: currentTree.count > 1
-                            || workspaceDisplayMode.paneBarListsEverySession,
-                        session: presentation.session,
-                        hostName: projection.host.name,
-                        titleTemplate: TerminalDisplayTitleTemplate(rawValue: terminalTitleTemplate),
-                        terminalFont: TerminalFontPreference(
-                            family: terminalFontFamily,
-                            size: terminalFontSize
+                // The preset bar used to be gated on the terminal-only content
+                // mode, so opening the editor removed it. The Terminal is now
+                // always on screen, so its launchers stay with it.
+                WarrenDesktopPresetBar(
+                    workspace: presentation.workspace,
+                    terminalGroup: presentation.terminalGroup,
+                    isBusy: isAddingSession,
+                    onLaunch: { request in
+                        launchSession(request, in: presentation)
+                    }
+                )
+                if showsEditorRegion, let workspace = presentation.workspace {
+                    WarrenDesktopCentralSplit(
+                        terminalRatio: $terminalRatio,
+                        terminal: terminalRegion(
+                            presentation: presentation,
+                            currentTree: currentTree,
+                            currentPaneID: currentPaneID
                         ),
-                        wantsTerminalFocus: contentMode == .terminal
-                            && !commandPalettePresented
-                            && !settingsPresented,
-                        splitTree: currentTree,
-                        activePaneID: currentPaneID,
-                        allTabs: presentation.tabs,
-                        sessionLookup: { sessionID in
-                            projection.session(id: sessionID)
-                        },
-                        onSelectPane: { paneID in
-                            handleSelectPane(paneID, in: presentation, tree: currentTree)
-                        },
-                        onClosePane: { paneID in
-                            handleClosePane(paneID: paneID, in: presentation)
-                        },
-                        onMaximizePane: { paneID in
-                            handleMaximizePane(paneID: paneID, in: presentation)
-                        },
-                        onResizeSplit: { splitPath, ratio in
-                            handleResizeSplit(splitPath: splitPath, ratio: ratio, in: presentation)
-                        },
-                        onAddProject: { dispatch(.addProject) },
-                        onImportSuperset: { dispatch(.importSuperset) },
-                        terminalSurface: terminalSurface
-                    )
-                    .opacity(contentMode == .terminal ? 1 : 0)
-                    .allowsHitTesting(contentMode == .terminal)
-                    .accessibilityHidden(contentMode != .terminal)
-
-                    if let workspace = presentation.workspace,
-                       workspaceContentModes[workspace.id] != nil,
-                       embeddedEditorAvailable {
-                        WarrenDesktopEmbeddedEditorPane(
+                        editor: WarrenDesktopEmbeddedEditorPane(
                             workspace: workspace,
                             surface: editorSurface(workspace)
                         )
-                        .opacity(contentMode == .editor ? 1 : 0)
-                        .allowsHitTesting(contentMode == .editor)
-                        .accessibilityHidden(contentMode != .editor)
-                    }
+                    )
+                } else {
+                    terminalRegion(
+                        presentation: presentation,
+                        currentTree: currentTree,
+                        currentPaneID: currentPaneID
+                    )
                 }
             }
         )
     }
 
-    private func workspaceContentMode(
-        for workspace: Workspace?
-    ) -> WarrenDesktopWorkspaceContentMode {
-        guard embeddedEditorAvailable,
-              let workspace else {
-            return .terminal
-        }
-        return workspaceContentModes[workspace.id] ?? .terminal
-    }
-
-    /// Parks or primes terminal surfaces before the corresponding SwiftUI
-    /// mode mutation changes the content area's layout. The committed
-    /// `activeVisibleSessions` callback still performs the final screen report
-    /// after SwiftUI has settled.
-    private func prepareTerminalVisibility(
-        for mode: WarrenDesktopWorkspaceContentMode,
-        workspace: Workspace
-    ) {
-        if mode == .editor {
-            onActiveScreenSessionsWillChange([])
-            return
-        }
-
-        let presentation = makePresentation()
-        guard presentation.workspace?.id == workspace.id else { return }
-        let tree = currentSplitTree(presentation: presentation)
-        onActiveScreenSessionsWillChange(
-            visibleScreenSessionIDs(for: presentation, in: tree)
+    /// The Terminal half of the central area.
+    ///
+    /// Identical whether or not the editor region is beside it. The old exclusive
+    /// mode cross-faded two stacked views and reported an empty screen set on the
+    /// way in; the terminal tree is now simply narrower, so nothing about it is
+    /// re-created when the editor opens.
+    private func terminalRegion(
+        presentation: Presentation,
+        currentTree: SplitLayoutTree,
+        currentPaneID: String
+    ) -> AnyView {
+        AnyView(
+            WarrenDesktopWorkspaceContent(
+                workspace: presentation.contentWorkspace,
+                terminalGroup: presentation.contentTerminalGroup,
+                tab: presentation.tab,
+                hasProjects: !projection.groups.isEmpty,
+                connectionState: projection.connectionState,
+                isMigratingRuntimeSessions: isMigratingRuntimeSessions,
+                endpointCapabilities: endpointCapabilities,
+                // The lone pane's identity is drawn exactly once. A
+                // split needs a header per pane to answer "which of
+                // these"; with one pane the top chrome row carries it
+                // instead — unless compact mode handed that row to the
+                // Session list, which leaves the header as the only
+                // place the title can live.
+                showsPaneHeader: currentTree.count > 1
+                    || workspaceDisplayMode.paneBarListsEverySession,
+                session: presentation.session,
+                hostName: projection.host.name,
+                titleTemplate: TerminalDisplayTitleTemplate(rawValue: terminalTitleTemplate),
+                terminalFont: TerminalFontPreference(
+                    family: terminalFontFamily,
+                    size: terminalFontSize
+                ),
+                // Opening the editor region no longer takes focus from
+                // the Terminal on every layout pass. Focus follows the
+                // click that moved it, which is what returns the control
+                // lease when the user clicks back into the Terminal.
+                wantsTerminalFocus: !commandPalettePresented
+                    && !settingsPresented,
+                splitTree: currentTree,
+                activePaneID: currentPaneID,
+                allTabs: presentation.tabs,
+                sessionLookup: { sessionID in
+                    projection.session(id: sessionID)
+                },
+                onSelectPane: { paneID in
+                    handleSelectPane(paneID, in: presentation, tree: currentTree)
+                },
+                onClosePane: { paneID in
+                    handleClosePane(paneID: paneID, in: presentation)
+                },
+                onMaximizePane: { paneID in
+                    handleMaximizePane(paneID: paneID, in: presentation)
+                },
+                onResizeSplit: { splitPath, ratio in
+                    handleResizeSplit(splitPath: splitPath, ratio: ratio, in: presentation)
+                },
+                onAddProject: { dispatch(.addProject) },
+                onImportSuperset: { dispatch(.importSuperset) },
+                terminalSurface: terminalSurface
+            )
         )
     }
 
-    private func setWorkspaceContentMode(
-        _ mode: WarrenDesktopWorkspaceContentMode,
-        for workspace: Workspace?
+    // MARK: - Embedded editor rail and region (RFC 0021)
+
+    private func editorKey(for workspace: Workspace) -> WarrenDesktopWorkspaceEditorKey {
+        WarrenDesktopWorkspaceEditorKey(
+            hostId: selectedEndpointID,
+            workspaceId: workspace.id
+        )
+    }
+
+    private static func enabledWorkspaceIDs(
+        in states: [WarrenDesktopWorkspaceEditorKey: WarrenDesktopWorkspaceEditorState],
+        hostId: String
+    ) -> Set<WorkspaceID> {
+        Set(
+            states
+                .filter { $0.key.hostId == hostId && $0.value.enabled }
+                .map(\.key.workspaceId)
+        )
+    }
+
+    /// Whether the code-server region is beside the Terminal for this Workspace.
+    private func showsEditorRegion(for workspace: Workspace?) -> Bool {
+        guard embeddedEditorAvailable, let workspace else { return false }
+        return editorRegionWorkspaceIDs.contains(workspace.id)
+    }
+
+    /// Opens the region for a Workspace and marks it.
+    ///
+    /// `restoringLastDocument` asks the runtime to reopen the stored document, so
+    /// re-entering a Workspace lands on the file the user left rather than on
+    /// code-server's empty editor area — which cannot be collapsed below its
+    /// 220pt floor, so an empty area would otherwise occupy real width. The
+    /// terminal-link path passes `false`: that request already carries a document
+    /// of its own and is opening it directly.
+    private func openEditorRegion(
+        for workspace: Workspace?,
+        restoringLastDocument: Bool,
+        recording document: WarrenDesktopEditorDocument? = nil
     ) {
         guard embeddedEditorAvailable, let workspace else { return }
-        guard workspaceContentMode(for: workspace) != mode else { return }
-        prepareTerminalVisibility(for: mode, workspace: workspace)
-        NSApp.keyWindow?.makeFirstResponder(nil)
-        workspaceContentModes[workspace.id] = mode
+        let key = editorKey(for: workspace)
+        var state = workspaceEditorStates[key] ?? WarrenDesktopWorkspaceEditorState(
+            hostId: key.hostId,
+            workspaceId: key.workspaceId,
+            enabled: true
+        )
+        state.enabled = true
+        if let document {
+            state.lastRelativeFile = document.relativeFile
+            state.lastLine = document.line
+            state.lastColumn = document.column
+        }
+        state.updatedAt = Date()
+        workspaceEditorStates[key] = state
+
+        editorRegionWorkspaceIDs.insert(workspace.id)
+
+        if restoringLastDocument, let relativeFile = state.lastRelativeFile {
+            onOpenEditorDocument(
+                workspace,
+                WarrenDesktopEditorDocument(
+                    relativeFile: relativeFile,
+                    line: state.lastLine,
+                    column: state.lastColumn
+                )
+            )
+        }
     }
 
-    private func hasEmbeddedEditorTab(for workspace: Workspace?) -> Bool {
-        guard embeddedEditorAvailable, let workspace else { return false }
-        return workspaceContentModes[workspace.id] != nil
-    }
-
-    private func closeEmbeddedEditor(for workspace: Workspace?) {
-        guard embeddedEditorAvailable,
-              let workspace,
-              workspaceContentModes[workspace.id] != nil else { return }
-        prepareTerminalVisibility(for: .terminal, workspace: workspace)
-        NSApp.keyWindow?.makeFirstResponder(nil)
-        workspaceContentModes.removeValue(forKey: workspace.id)
+    /// Closes the region and clears the Workspace's marker.
+    ///
+    /// One close, not two. RFC 0021 §6.1 originally kept the marker through a
+    /// close and asked for a separate `Forget Editor for Workspace`, so closing
+    /// the editor and relaunching brought it back — which reads as a bug rather
+    /// than as preserved state. Closing now means the user is done with it.
+    ///
+    /// `hostId` names the Endpoint that owned the row rather than whichever is
+    /// selected when the call happens, because a Workspace UUID alone does not
+    /// identify a marker. A deletion confirmation is already gated on the two
+    /// agreeing; passing the captured Endpoint keeps that from being the only
+    /// thing standing between this and another Host's record.
+    private func closeEditorRegion(for workspace: Workspace, hostId: String? = nil) {
+        editorRegionWorkspaceIDs.remove(workspace.id)
+        workspaceEditorStates.removeValue(
+            forKey: WarrenDesktopWorkspaceEditorKey(
+                hostId: hostId ?? selectedEndpointID,
+                workspaceId: workspace.id
+            )
+        )
     }
 
     private var settingsOverlay: AnyView {
@@ -1439,16 +1565,19 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func overflowControlDetail(
         _ control: WarrenDesktopWorkspaceTabTrailingControl,
+        workspace: Workspace?,
         externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
         embeddedEditorChromeAvailable: Bool
     ) -> String? {
         switch control {
         case .externalIDE:
-            if embeddedEditorChromeAvailable, embeddedEditorDefaultIDE {
-                return "Embedded editor default"
-            }
             if embeddedEditorChromeAvailable {
-                return "Choose an IDE"
+                if showsEditorRegion(for: workspace) {
+                    return "Editor open"
+                }
+                return embeddedEditorDefaultIDE
+                    ? "Embedded editor default"
+                    : "Choose an IDE"
             }
             return externalIDEOptions?.first?.name
         case .endpoint:
@@ -1497,11 +1626,16 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     options: options,
                     embeddedEditorAvailable: embeddedEditorChromeAvailable,
                     embeddedEditorDefault: embeddedEditorDefaultIDE,
+                    isEditorOpen: showsEditorRegion(for: presentation.workspace),
                     onOpenEmbeddedEditor: {
-                        setWorkspaceContentMode(
-                            .editor,
-                            for: presentation.workspace
+                        openEditorRegion(
+                            for: presentation.workspace,
+                            restoringLastDocument: true
                         )
+                    },
+                    onCloseEmbeddedEditor: {
+                        guard let workspace = presentation.workspace else { return }
+                        closeEditorRegion(for: workspace)
                     },
                     onSetEmbeddedEditorDefault: {
                         embeddedEditorDefaultIDE = $0
@@ -1586,13 +1720,28 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     ) {
         switch control {
         case .externalIDE:
-            if embeddedEditorChromeAvailable, embeddedEditorDefaultIDE {
-                setWorkspaceContentMode(.editor, for: presentation.workspace)
+            // Same resolution as the direct control, so the overflow copy cannot
+            // disagree with it about what one click does.
+            switch WarrenDesktopIDEPrimaryAction.resolve(
+                embeddedEditorDefault: embeddedEditorChromeAvailable
+                    && embeddedEditorDefaultIDE,
+                embeddedEditorSelected: embeddedEditorChromeAvailable
+                    && showsEditorRegion(for: presentation.workspace)
+            ) {
+            case .openEmbeddedEditor:
+                openEditorRegion(
+                    for: presentation.workspace,
+                    restoringLastDocument: true
+                )
                 setChromePopover(nil)
-                return
+            case .closeEmbeddedEditor:
+                guard let workspace = presentation.workspace else { return }
+                closeEditorRegion(for: workspace)
+                setChromePopover(nil)
+            case .presentChoices:
+                guard externalIDEOptions != nil else { return }
+                setChromePopover(.externalIDE)
             }
-            guard externalIDEOptions != nil else { return }
-            setChromePopover(.externalIDE)
         case .endpoint:
             setChromePopover(.endpoint)
         case .web:
@@ -1640,33 +1789,16 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     private func handleNewSession(in presentation: Presentation) {
-        setWorkspaceContentMode(.terminal, for: presentation.workspace)
         addSession(in: presentation)
     }
 
+    /// Cycles Sessions only.
+    ///
+    /// The editor used to be the track's last stop, so cycling past the final
+    /// Session opened it and cycling out of it returned to a Session. It is no
+    /// longer a Tab — it is a region beside the whole track — so the cycle is
+    /// once again exactly the Sessions.
     private func handleTabMove(forward: Bool, in presentation: Presentation) {
-        if hasEmbeddedEditorTab(for: presentation.workspace) {
-            let mode = workspaceContentMode(for: presentation.workspace)
-            if mode == .editor {
-                guard let tabID = forward
-                    ? presentation.tabs.first?.id
-                    : presentation.tabs.last?.id else { return }
-                selectTab(tabID, in: presentation)
-                return
-            }
-            if let selectedTabID = navigation.selectedTabID,
-               let selectedIndex = presentation.tabs.firstIndex(where: {
-                   $0.id == selectedTabID
-               }) {
-                let isBoundary = forward
-                    ? selectedIndex == presentation.tabs.indices.last
-                    : selectedIndex == presentation.tabs.indices.first
-                if isBoundary {
-                    setWorkspaceContentMode(.editor, for: presentation.workspace)
-                    return
-                }
-            }
-        }
         guard let tabID = WarrenDesktopTabCycler.tabID(
             forward: forward,
             in: presentation.tabs,
@@ -1681,17 +1813,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     ) {
         let rawIndex = note.userInfo?[WarrenDesktopCommand.selectTabIndexKey]
         guard let index = tabIndex(from: rawIndex),
-              let selection = WarrenDesktopTabSelector.selection(
+              let tabID = WarrenDesktopTabSelector.tabID(
                 in: presentation.tabs,
-                includesEditor: hasEmbeddedEditorTab(for: presentation.workspace),
                 number: index
               ) else { return }
-        switch selection {
-        case .tab(let tabID):
-            selectTab(tabID, in: presentation)
-        case .editor:
-            setWorkspaceContentMode(.editor, for: presentation.workspace)
-        }
+        selectTab(tabID, in: presentation)
     }
 
     private func currentScopeKey(presentation: Presentation) -> String? {
@@ -2196,10 +2322,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// `tabID` of nil means the selected Tab, which is what the keyboard
     /// shortcut asks for.
     private func handleCloseTab(_ tabID: String?, in presentation: Presentation) {
-        if workspaceContentMode(for: presentation.workspace) == .editor {
-            closeEmbeddedEditor(for: presentation.workspace)
-            return
-        }
         guard let scope = currentScopeKey(presentation: presentation),
               let targetTabID = tabID ?? navigation.selectedTabID else { return }
         if let item = scopeSplitTree(presentation: presentation).item(forTabID: targetTabID) {
@@ -2245,10 +2367,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// for the Host to confirm it, so a failed delete cannot hide a running
     /// process.
     private func handleClosePane(paneID: String? = nil, in presentation: Presentation) {
-        if workspaceContentMode(for: presentation.workspace) == .editor {
-            closeEmbeddedEditor(for: presentation.workspace)
-            return
-        }
         guard let scope = currentScopeKey(presentation: presentation) else { return }
         // A close names the pane it applies to. The scope's layout owns the
         // panes, so the named pane decides which tree is being closed — and a
@@ -2464,7 +2582,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         setSplitTree(newTree, for: scope)
     }
 
-    /// Selects a Tab and makes sure the panel is showing terminals.
+    /// Selects a Tab.
     ///
     /// Re-selecting what is already selected is not navigation: the dispatch
     /// reaches the model as a selection, which re-presents the Session and
@@ -2472,12 +2590,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// click that changed nothing. A click inside a pane — the whole pane carries
     /// the tap gesture, the terminal body included — and a click on the already
     /// selected chip both arrive here, which is why that repaint was easy to
-    /// trigger without doing anything. Coming back from the embedded editor still
-    /// dispatches, because the mode changed even though the Tab did not.
+    /// trigger without doing anything. Selecting a Tab no longer has to leave an
+    /// editor mode on the way, so a click on the selected Tab now dispatches
+    /// nothing at all.
     private func selectTab(_ tabID: String, in presentation: Presentation) {
-        let wasTerminal = workspaceContentMode(for: presentation.workspace) == .terminal
-        setWorkspaceContentMode(.terminal, for: presentation.workspace)
-        guard navigation.selectedTabID != tabID || !wasTerminal else { return }
+        guard navigation.selectedTabID != tabID else { return }
         dispatch(.selectTab(tabID))
     }
 
@@ -2832,6 +2949,13 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                                 workspace.id,
                                 removeLocalWorktree: deleteWorkspaceRemoveWorktree
                             ))
+                            // A confirmed deletion prunes the marker. A Host
+                            // outage must not, which is why this is done here
+                            // rather than by reconciling against the roster.
+                            closeEditorRegion(
+                                for: workspace,
+                                hostId: pendingDeletionEndpointID
+                            )
                             dismissDeletion()
                         },
                         isConfirmEnabled: validation.isEnabled,
@@ -2911,24 +3035,11 @@ enum WarrenDesktopTabCycler {
 
 /// Pure rule for the ⌘1…⌘9 menu shortcuts: the number is a 1-based position
 /// inside the active workspace's tab track.
+///
+/// The track holds Sessions and nothing else. The embedded editor used to
+/// occupy the position after the last Session, which made ⌘N's meaning depend on
+/// whether a Workspace had ever opened it.
 enum WarrenDesktopTabSelector {
-    enum Selection: Equatable {
-        case tab(String)
-        case editor
-    }
-
-    static func selection(
-        in tabs: [ClientTab],
-        includesEditor: Bool,
-        number: Int
-    ) -> Selection? {
-        if let tabID = tabID(in: tabs, number: number) {
-            return .tab(tabID)
-        }
-        guard includesEditor, number == tabs.count + 1 else { return nil }
-        return .editor
-    }
-
     static func tabID(in tabs: [ClientTab], number: Int) -> String? {
         guard number >= 1, tabs.indices.contains(number - 1) else { return nil }
         return tabs[number - 1].id

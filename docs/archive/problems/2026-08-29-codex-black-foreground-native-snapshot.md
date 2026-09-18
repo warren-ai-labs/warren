@@ -60,8 +60,6 @@ native snapshot restore`). It keeps the desktop's `ghostty-vt-snapshot-v1`
 fast path, does not switch to ANSI replay, and does not add an unconditional
 high-frequency draw loop.
 
-The goal that constrained the work is recorded in [GOAL.md](../../GOAL.md).
-
 ## The investigation in chronological order
 
 The order matters because several changes made the symptom look better without
@@ -941,10 +939,10 @@ answer different questions.
 
 ## Related references
 
-- [Terminal rendering runbook](../terminal-rendering-runbook.md)
-- [Minimum-contrast experiments](../decisions/2026-08-28-minimum-contrast-experiments.md)
-- [Terminal runtime](../runtime.md)
-- [Headless and remote connection architecture](../headless-architecture.md)
+- [Terminal rendering runbook](../../terminal-rendering-runbook.md)
+- [Minimum-contrast experiments](../../decisions/2026-08-28-minimum-contrast-experiments.md)
+- [Terminal runtime](../../runtime.md)
+- [Headless and remote connection architecture](../../headless-architecture.md)
 - [Terminal experience progress](../terminal-experience-progress.md)
 - `Packages/GhosttyAdapter/Sources/GhosttyAdapter/GhosttySurface.swift`
 - `Packages/GhosttyAdapter/Sources/GhosttyAdapter/WarrenGhosttyOutputWriter.swift`

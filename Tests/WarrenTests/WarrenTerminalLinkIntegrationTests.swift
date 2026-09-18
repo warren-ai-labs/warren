@@ -75,7 +75,19 @@ final class WarrenTerminalLinkIntegrationTests: XCTestCase {
             }
             NotificationCenter.default.post(
                 name: WarrenDesktopCommand.openEmbeddedEditor,
-                object: targetWorkspace.id
+                object: WarrenDesktopEmbeddedEditorRequest(
+                    workspaceID: targetWorkspace.id,
+                    document: WarrenTerminalLinkParser.relativePath(
+                        of: target.path,
+                        in: targetWorkspace.path
+                    ).map {
+                        WarrenDesktopEditorDocument(
+                            relativeFile: $0,
+                            line: target.line,
+                            column: target.column
+                        )
+                    }
+                )
             )
             editorModel.openFile(
                 workspacePath: targetWorkspace.path,
@@ -124,7 +136,10 @@ final class WarrenTerminalLinkIntegrationTests: XCTestCase {
 
         var receivedWorkspaceID: WorkspaceID?
         NotificationCenter.default.publisher(for: WarrenDesktopCommand.openEmbeddedEditor)
-            .sink { note in receivedWorkspaceID = note.object as? WorkspaceID }
+            .sink { note in
+                receivedWorkspaceID = (note.object as? WarrenDesktopEmbeddedEditorRequest)?
+                    .workspaceID
+            }
             .store(in: &cancellables)
 
         remoteModel.onOpenTerminalURL = { [weak remoteModel, weak editorModel] targetSessionID, urlString, kind, workingDirectory in
@@ -145,7 +160,19 @@ final class WarrenTerminalLinkIntegrationTests: XCTestCase {
             }
             NotificationCenter.default.post(
                 name: WarrenDesktopCommand.openEmbeddedEditor,
-                object: targetWorkspace.id
+                object: WarrenDesktopEmbeddedEditorRequest(
+                    workspaceID: targetWorkspace.id,
+                    document: WarrenTerminalLinkParser.relativePath(
+                        of: target.path,
+                        in: targetWorkspace.path
+                    ).map {
+                        WarrenDesktopEditorDocument(
+                            relativeFile: $0,
+                            line: target.line,
+                            column: target.column
+                        )
+                    }
+                )
             )
             editorModel.openFile(
                 workspacePath: targetWorkspace.path,
@@ -203,7 +230,10 @@ final class WarrenTerminalLinkIntegrationTests: XCTestCase {
 
         var receivedWorkspaceID: WorkspaceID?
         NotificationCenter.default.publisher(for: WarrenDesktopCommand.openEmbeddedEditor)
-            .sink { note in receivedWorkspaceID = note.object as? WorkspaceID }
+            .sink { note in
+                receivedWorkspaceID = (note.object as? WarrenDesktopEmbeddedEditorRequest)?
+                    .workspaceID
+            }
             .store(in: &cancellables)
 
         remoteModel.onOpenTerminalURL = { [weak remoteModel, weak editorModel] targetSessionID, urlString, kind, workingDirectory in
@@ -224,7 +254,19 @@ final class WarrenTerminalLinkIntegrationTests: XCTestCase {
             }
             NotificationCenter.default.post(
                 name: WarrenDesktopCommand.openEmbeddedEditor,
-                object: targetWorkspace.id
+                object: WarrenDesktopEmbeddedEditorRequest(
+                    workspaceID: targetWorkspace.id,
+                    document: WarrenTerminalLinkParser.relativePath(
+                        of: target.path,
+                        in: targetWorkspace.path
+                    ).map {
+                        WarrenDesktopEditorDocument(
+                            relativeFile: $0,
+                            line: target.line,
+                            column: target.column
+                        )
+                    }
+                )
             )
             editorModel.openFile(
                 workspacePath: targetWorkspace.path,

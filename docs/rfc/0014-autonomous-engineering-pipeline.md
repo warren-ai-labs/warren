@@ -4,7 +4,7 @@
 - Owner: Warren Headless, Desktop, Web, and iOS
 - Created: 2026-09-03
 - Scope: Autonomous task and workflow execution, Git worktree isolation, declarative pipeline primitives, explicit context injection, self-repair loops, human gates, and data-driven UI/UX.
-- Supersedes: [RFC 0004](0004-headless-flow-orchestration.md)
+- Supersedes: [RFC 0004](../archive/rfc/0004-headless-flow-orchestration.md)
 - Protocol baseline: Warren protocol 2.0 with capability negotiation
 - Depends on: [RFC 0006](0006-agent-activity-attention.md) (Agent activity and attention), [RFC 0010](0010-ios-agent-view-presentation-parity.md) (Agent view presentation parity), [RFC 0013](0013-agent-interaction-architecture-and-pty-guarding.md) (Dual-track agent architecture)
 
@@ -446,7 +446,7 @@ Broadcast to clients to power the dynamic stepper:
 
 ## 9. References
 
-- [RFC 0004: Headless Flow Orchestration (Abandoned)](0004-headless-flow-orchestration.md)
+- [RFC 0004: Headless Flow Orchestration (Abandoned)](../archive/rfc/0004-headless-flow-orchestration.md)
 - [RFC 0006: Agent Activity and Attention](0006-agent-activity-attention.md)
 - [RFC 0010: Agent View Presentation Parity in iOS/Web](0010-ios-agent-view-presentation-parity.md)
 - [RFC 0013: Dual-track Agent Architecture and PTY Guarding](0013-agent-interaction-architecture-and-pty-guarding.md)

@@ -142,14 +142,12 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
         XCTAssertTrue(
             WarrenDesktopPaneBar.showsTrack(
                 entryCount: 1,
-                embeddedEditorTabVisible: false,
                 mode: .compact
             )
         )
         XCTAssertFalse(
             WarrenDesktopPaneBar.showsTrack(
                 entryCount: 0,
-                embeddedEditorTabVisible: false,
                 mode: .compact
             )
         )
@@ -244,7 +242,6 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
             from: tabs,
             selected: tabs[0],
             mode: .rich,
-            includesEditorTab: false,
             solo: solo
         )
         XCTAssertFalse(richSolo.showsTrack)
@@ -256,7 +253,6 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
             from: tabs,
             selected: tabs[0],
             mode: .rich,
-            includesEditorTab: false,
             solo: solo
         )
         XCTAssertTrue(richSplit.showsTrack)
@@ -270,7 +266,6 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
             from: tabs,
             selected: tabs[0],
             mode: .compact,
-            includesEditorTab: false,
             solo: solo
         )
         XCTAssertTrue(compact.showsTrack)

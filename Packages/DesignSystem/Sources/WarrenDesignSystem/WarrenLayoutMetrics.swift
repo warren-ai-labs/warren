@@ -11,6 +11,55 @@ public enum WarrenLayoutMetrics {
     public static let sidebarMaximumWidth: CGFloat = 400
     public static let sidebarSnapThreshold: CGFloat = 120
 
+    // Central split between the Terminal and the embedded editor region.
+    //
+    // The region carries a whole code-server surface, whose editor part reports
+    // a hard 220pt floor and whose Explorer defaults to about 300pt. Anything
+    // narrower than their sum clips the file tree instead of compressing it, so
+    // the region is not allowed below it and the Terminal keeps the remainder.
+    public static let editorRegionEditorMinimumWidth: CGFloat = 220
+    /// The narrowest Explorer Warren will reserve room for.
+    ///
+    /// This is a floor, not the width the file tree opens at: code-server keeps
+    /// its sidebar width in its own workbench state, which `settings.json` has no
+    /// key for, so Warren cannot set the initial tree width declaratively. What
+    /// it can do is stop reserving a comfortable 300pt for a column the user is
+    /// free to drag: 180pt still shows ordinary file names, and the space it
+    /// gives back goes to the document.
+    public static let editorRegionExplorerWidth: CGFloat = 180
+    public static let editorRegionMinimumWidth: CGFloat = editorRegionEditorMinimumWidth
+        + editorRegionExplorerWidth
+    /// The two regions open on even halves.
+    ///
+    /// The editor region has two columns of its own inside its share, so it used
+    /// to open wider than the Terminal. That made the Terminal — the surface the
+    /// user was already working in when they opened a file — the smaller one.
+    /// Half and half favors neither, and the divider settles the rest.
+    public static let editorSplitDefaultRatio: Double = 0.5
+    public static let editorSplitDividerWidth: CGFloat = 6
+
+    /// Returns the Terminal's width for a proposed central split, or `nil` when
+    /// the available width cannot seat both regions at their minimums.
+    ///
+    /// The editor region's floor wins ties. A code-server surface below its
+    /// floor clips its Explorer, while a narrow Terminal is merely cramped.
+    public static func editorSplitTerminalWidth(
+        proposedTerminalWidth: CGFloat,
+        availableWidth: CGFloat
+    ) -> CGFloat? {
+        let usableWidth = availableWidth - editorSplitDividerWidth
+        guard usableWidth >= paneMinimumWidth + editorRegionMinimumWidth else {
+            return nil
+        }
+        guard proposedTerminalWidth.isFinite else {
+            return usableWidth * editorSplitDefaultRatio
+        }
+        return min(
+            max(proposedTerminalWidth, paneMinimumWidth),
+            usableWidth - editorRegionMinimumWidth
+        )
+    }
+
     // Superset chrome and pane measurements.
     /// The desktop workspace chrome is a 48pt row above the session tabs.
     public static let workspaceBarHeight: CGFloat = 48

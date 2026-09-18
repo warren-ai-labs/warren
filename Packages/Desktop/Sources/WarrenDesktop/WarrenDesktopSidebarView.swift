@@ -90,6 +90,16 @@ struct WarrenDesktopSidebar: View {
     let onOpenSidebarWorkspace: (WarrenDesktopHostResourceRef<WorkspaceID>) -> Void
     let onOpenSidebarSession: (WarrenDesktopHostResourceRef<TerminalSessionID>) -> Void
     let onRetrySidebarHost: (String) -> Void
+    /// The Desktop-local editor markers, folded into each Host's active set so
+    /// an editor-only Workspace survives the `Active only` filter (RFC 0021 §7).
+    let editorActivity: WarrenDesktopEditorActivityOverlay
+    /// Reveals a marked Workspace's editor from its sidebar row.
+    var onOpenEditor: (WorkspaceID) -> Void = { _ in }
+
+    /// The current Host's marked Workspaces, for the current-Host tree.
+    private var editorMarkedWorkspaceIDs: Set<WorkspaceID> {
+        editorActivity.activeWorkspaceIDs([], hostId: activeEndpointID)
+    }
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -140,7 +150,11 @@ struct WarrenDesktopSidebar: View {
                                         )
                                     },
                                     workspaceActivitySummaries: projection.workspaceActivitySummaries,
-                                    activeWorkspaceIDs: projection.activeWorkspaceIDs,
+                                    activeWorkspaceIDs: editorActivity.activeWorkspaceIDs(
+                                        projection.activeWorkspaceIDs,
+                                        hostId: activeEndpointID
+                                    ),
+                                    editorMarkedWorkspaceIDs: editorMarkedWorkspaceIDs,
                                     activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
                                     workspaceDisplayMode: workspaceDisplayMode,
                                     showsTasks: showsTasks,
@@ -170,10 +184,13 @@ struct WarrenDesktopSidebar: View {
                                     onRequestTerminalGroupEdit: onRequestTerminalGroupEdit,
                                     onAction: onAction,
                                     onRequestRename: onRequestRename,
-                                    onRequestDeletion: onRequestDeletion
+                                    onRequestDeletion: onRequestDeletion,
+                                    onOpenEditor: onOpenEditor
                                 )
                                 WarrenDesktopSidebarHostRows(
-                                    hosts: sidebarHostProjections,
+                                    hosts: sidebarHostProjections.map {
+                                        $0.widenedActivity(with: editorActivity)
+                                    },
                                     showsActiveOnly: sidebarTree.showsActiveOnly,
                                     workspaceDisplayMode: workspaceDisplayMode,
                                     isCollapsed: sidebarState.isCollapsed,
@@ -182,6 +199,7 @@ struct WarrenDesktopSidebar: View {
                                     selectedTabID: selectedTabID,
                                     deletingProjectIDs: deletingProjectIDs,
                                     deletingWorkspaceIDs: deletingWorkspaceIDs,
+                                    editorActivity: editorActivity,
                                     onAction: onAction,
                                     onRequestRename: onRequestRename,
                                     onRequestDeletion: onRequestDeletion,
@@ -214,7 +232,11 @@ struct WarrenDesktopSidebar: View {
                                 )
                             },
                             workspaceActivitySummaries: projection.workspaceActivitySummaries,
-                            activeWorkspaceIDs: projection.activeWorkspaceIDs,
+                            activeWorkspaceIDs: editorActivity.activeWorkspaceIDs(
+                                projection.activeWorkspaceIDs,
+                                hostId: activeEndpointID
+                            ),
+                            editorMarkedWorkspaceIDs: editorMarkedWorkspaceIDs,
                             activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
                             workspaceDisplayMode: workspaceDisplayMode,
                             showsTasks: showsTasks,
@@ -245,7 +267,8 @@ struct WarrenDesktopSidebar: View {
                             onRequestTerminalGroupEdit: onRequestTerminalGroupEdit,
                             onAction: onAction,
                             onRequestRename: onRequestRename,
-                            onRequestDeletion: onRequestDeletion
+                            onRequestDeletion: onRequestDeletion,
+                            onOpenEditor: onOpenEditor
                             )
                         }
                     }

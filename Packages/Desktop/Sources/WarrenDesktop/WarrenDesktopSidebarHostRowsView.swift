@@ -20,6 +20,10 @@ struct WarrenDesktopSidebarHostRows: View {
     var selectedTabID: String? = nil
     let deletingProjectIDs: Set<ProjectID>
     let deletingWorkspaceIDs: Set<WorkspaceID>
+    /// The Desktop-local editor markers, so a Workspace that survives the
+    /// `Active only` filter on a marker alone says so (RFC 0021 §7). Applied per
+    /// Host section, because a marker names the Endpoint it was written for.
+    let editorActivity: WarrenDesktopEditorActivityOverlay
     let onAction: (WarrenDesktopAction) -> Void
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
@@ -47,6 +51,7 @@ struct WarrenDesktopSidebarHostRows: View {
         selectedTabID: String? = nil,
         deletingProjectIDs: Set<ProjectID>,
         deletingWorkspaceIDs: Set<WorkspaceID>,
+        editorActivity: WarrenDesktopEditorActivityOverlay = .init(),
         onAction: @escaping (WarrenDesktopAction) -> Void,
         onRequestRename: @escaping (WarrenDesktopRenameRequest) -> Void,
         onRequestDeletion: @escaping (WarrenDesktopDeletionRequest) -> Void,
@@ -66,6 +71,7 @@ struct WarrenDesktopSidebarHostRows: View {
         self.selectedTabID = selectedTabID
         self.deletingProjectIDs = deletingProjectIDs
         self.deletingWorkspaceIDs = deletingWorkspaceIDs
+        self.editorActivity = editorActivity
         self.onAction = onAction
         self.onRequestRename = onRequestRename
         self.onRequestDeletion = onRequestDeletion
@@ -439,6 +445,10 @@ struct WarrenDesktopSidebarHostRows: View {
             containsSelection: workspaceRowContainsSelection(workspace.id, in: host)
                 && !isSelectionDisabled,
             isPinned: workspace.pinned,
+            isEditorMarked: editorActivity.isEditorMarked(
+                workspace.id,
+                hostId: host.endpointID
+            ),
             isDeleting: isDeleting,
             isInteractionDisabled: !enabled || isProjectDeleting || isDeleting,
             isMutationDisabled: !canWrite,
