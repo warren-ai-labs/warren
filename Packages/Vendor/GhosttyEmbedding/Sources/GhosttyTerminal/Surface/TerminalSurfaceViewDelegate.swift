@@ -111,6 +111,100 @@ public protocol TerminalSurfaceHoverLinkDelegate: TerminalSurfaceViewDelegate {
     func terminalDidUpdateHoverLink(_ url: String?)
 }
 
+/// Pointer shape the terminal wants while the mouse is over its grid.
+///
+/// Ghostty raises `GHOSTTY_ACTION_MOUSE_SHAPE` whenever the shape changes: it
+/// asks for `.text` over ordinary cells, `.pointer` over a hyperlink, and
+/// whatever a mouse-mode program requests. Dropping the action leaves the
+/// pointer as the window's plain arrow everywhere inside the terminal.
+///
+/// The set mirrors the CSS cursor keywords Ghostty models. Several have no
+/// public AppKit equivalent on the platforms Warren supports; a host maps those
+/// to its closest available cursor rather than this layer guessing for it.
+public enum TerminalMouseShape: Sendable {
+    case `default`
+    case contextMenu
+    case help
+    case pointer
+    case progress
+    case wait
+    case cell
+    case crosshair
+    case text
+    case verticalText
+    case alias
+    case copy
+    case move
+    case noDrop
+    case notAllowed
+    case grab
+    case grabbing
+    case allScroll
+    case colResize
+    case rowResize
+    case nResize
+    case eResize
+    case sResize
+    case wResize
+    case neResize
+    case nwResize
+    case seResize
+    case swResize
+    case ewResize
+    case nsResize
+    case neswResize
+    case nwseResize
+    case zoomIn
+    case zoomOut
+
+    init?(_ raw: ghostty_action_mouse_shape_e) {
+        switch raw {
+        case GHOSTTY_MOUSE_SHAPE_DEFAULT: self = .default
+        case GHOSTTY_MOUSE_SHAPE_CONTEXT_MENU: self = .contextMenu
+        case GHOSTTY_MOUSE_SHAPE_HELP: self = .help
+        case GHOSTTY_MOUSE_SHAPE_POINTER: self = .pointer
+        case GHOSTTY_MOUSE_SHAPE_PROGRESS: self = .progress
+        case GHOSTTY_MOUSE_SHAPE_WAIT: self = .wait
+        case GHOSTTY_MOUSE_SHAPE_CELL: self = .cell
+        case GHOSTTY_MOUSE_SHAPE_CROSSHAIR: self = .crosshair
+        case GHOSTTY_MOUSE_SHAPE_TEXT: self = .text
+        case GHOSTTY_MOUSE_SHAPE_VERTICAL_TEXT: self = .verticalText
+        case GHOSTTY_MOUSE_SHAPE_ALIAS: self = .alias
+        case GHOSTTY_MOUSE_SHAPE_COPY: self = .copy
+        case GHOSTTY_MOUSE_SHAPE_MOVE: self = .move
+        case GHOSTTY_MOUSE_SHAPE_NO_DROP: self = .noDrop
+        case GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED: self = .notAllowed
+        case GHOSTTY_MOUSE_SHAPE_GRAB: self = .grab
+        case GHOSTTY_MOUSE_SHAPE_GRABBING: self = .grabbing
+        case GHOSTTY_MOUSE_SHAPE_ALL_SCROLL: self = .allScroll
+        case GHOSTTY_MOUSE_SHAPE_COL_RESIZE: self = .colResize
+        case GHOSTTY_MOUSE_SHAPE_ROW_RESIZE: self = .rowResize
+        case GHOSTTY_MOUSE_SHAPE_N_RESIZE: self = .nResize
+        case GHOSTTY_MOUSE_SHAPE_E_RESIZE: self = .eResize
+        case GHOSTTY_MOUSE_SHAPE_S_RESIZE: self = .sResize
+        case GHOSTTY_MOUSE_SHAPE_W_RESIZE: self = .wResize
+        case GHOSTTY_MOUSE_SHAPE_NE_RESIZE: self = .neResize
+        case GHOSTTY_MOUSE_SHAPE_NW_RESIZE: self = .nwResize
+        case GHOSTTY_MOUSE_SHAPE_SE_RESIZE: self = .seResize
+        case GHOSTTY_MOUSE_SHAPE_SW_RESIZE: self = .swResize
+        case GHOSTTY_MOUSE_SHAPE_EW_RESIZE: self = .ewResize
+        case GHOSTTY_MOUSE_SHAPE_NS_RESIZE: self = .nsResize
+        case GHOSTTY_MOUSE_SHAPE_NESW_RESIZE: self = .neswResize
+        case GHOSTTY_MOUSE_SHAPE_NWSE_RESIZE: self = .nwseResize
+        case GHOSTTY_MOUSE_SHAPE_ZOOM_IN: self = .zoomIn
+        case GHOSTTY_MOUSE_SHAPE_ZOOM_OUT: self = .zoomOut
+        default: return nil
+        }
+    }
+}
+
+/// Both the shape above and pointer visibility reach the platform view through
+/// coordinator callbacks rather than a delegate protocol. They describe how the
+/// view should draw the pointer, not state a host acts on, which is the same
+/// reason `onCellSizeChange` is a callback: the delegate carries terminal state
+/// outward, and `TerminalViewState` has no reference to the view that would
+/// have to apply a cursor.
+
 /// OSC 7 working-directory update.
 @MainActor
 public protocol TerminalSurfacePwdDelegate: TerminalSurfaceViewDelegate {

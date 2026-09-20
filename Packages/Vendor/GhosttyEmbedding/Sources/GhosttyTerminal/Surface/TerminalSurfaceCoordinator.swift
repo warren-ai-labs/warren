@@ -47,6 +47,10 @@ final class TerminalSurfaceCoordinator {
     var platformSetup: ((inout ghostty_surface_config_s) -> Void)?
     var onMetricsUpdate: (() -> Void)?
     var onCellSizeDidChange: (() -> Void)?
+    /// The pointer shape Ghostty wants over the grid, and whether the pointer
+    /// should be visible at all. Both are applied by the platform view.
+    var onMouseShapeChange: ((TerminalMouseShape) -> Void)?
+    var onMouseVisibilityChange: ((Bool) -> Void)?
 
     /// Called during every teardown path (in-place rebuild, explicit free,
     /// deinit) while the detached surface's orphaned render layer is still
@@ -121,11 +125,26 @@ final class TerminalSurfaceCoordinator {
 
     init() {
         bridge = TerminalCallbackBridge()
+        installBridgeCallbacks()
+    }
+
+    /// Routes the fresh bridge's callbacks back into this coordinator.
+    ///
+    /// A surface rebuild replaces the bridge, so this is shared with that path:
+    /// a callback wired in only one of the two places works until the first
+    /// rebuild and then silently stops.
+    private func installBridgeCallbacks() {
         bridge.onCellSizeChange = { [weak self] width, height in
             self?.handleCellSizeChange(width: width, height: height)
         }
         bridge.onRenderRequest = { [weak self] in
             self?.requestImmediateTick()
+        }
+        bridge.onMouseShapeChange = { [weak self] shape in
+            self?.onMouseShapeChange?(shape)
+        }
+        bridge.onMouseVisibilityChange = { [weak self] visible in
+            self?.onMouseVisibilityChange?(visible)
         }
     }
 
@@ -414,6 +433,8 @@ final class TerminalSurfaceCoordinator {
         detachingBridge.delegate = nil
         detachingBridge.onCellSizeChange = nil
         detachingBridge.onRenderRequest = nil
+        detachingBridge.onMouseShapeChange = nil
+        detachingBridge.onMouseVisibilityChange = nil
 
         // The native surface stores the host-managed callbacks as unretained
         // pointers. Keep the session alive until `ghostty_surface_free` has
@@ -498,12 +519,7 @@ final class TerminalSurfaceCoordinator {
 
         if hadSurface {
             bridge = TerminalCallbackBridge()
-            bridge.onCellSizeChange = { [weak self] width, height in
-                self?.handleCellSizeChange(width: width, height: height)
-            }
-            bridge.onRenderRequest = { [weak self] in
-                self?.requestImmediateTick()
-            }
+            installBridgeCallbacks()
             bridge.delegate = delegate
             bridge.openURLHandler = (delegate as? TerminalViewState)?.openURLHandler
         }

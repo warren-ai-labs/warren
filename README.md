@@ -4,7 +4,7 @@
 
 <h1 align="center">Warren</h1>
 
-Warren is a local-first, **headless-first workspace for durable AI workflows**. It keeps the Host, not the client window, in charge of Tasks, Projects, Workspaces, Sessions, and Runtimes. Run Codex, Claude Code, OpenCode, a shell, or another interactive program on a Mac or remote VPS, then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, network change, or closed laptop. Every client talks to the same Host through one versioned protocol.
+Warren is a **headless-first workbench that stays running on your machine**. Terminals, Agent views, and an embedded editor sit on one Host — your own Mac or VPS, not a vendor cloud — and that Host, not the client window, stays in charge of Tasks, Projects, Workspaces, Sessions, and Runtimes. Run Codex, Claude Code, OpenCode, a shell, or another interactive program, then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, network change, or closed laptop. Every client talks to the same Host through one versioned protocol.
 
 ## Screenshots
 
@@ -26,13 +26,14 @@ Warren is a local-first, **headless-first workspace for durable AI workflows**. 
 
 ## Why Warren
 
-AI workflows are rarely finished in one sitting or on one screen. Warren keeps the
-Task, Project, Workspace, Session, and Runtime together on a durable Host, so a workflow
-can move from a Mac to the Web or a phone without losing its terminal state or agent
+Real work is rarely finished in one sitting or on one screen. Warren keeps the
+Task, Project, Workspace, Session, and Runtime together on a durable Host, so a piece
+of work can move from a Mac to the Web without losing its terminal state or agent
 conversation. The client is a replaceable control surface: the Host owns execution,
 durability, recovery, and the canonical resource graph. Use the Terminal view when you
-need raw control and the Agent view when you want a structured conversation around the
-same Session.
+need raw control, the Agent view when you want a structured conversation around the
+same Session, and the embedded editor when you want to read or change the files beside
+them.
 
 ## Highlights
 
@@ -41,28 +42,33 @@ same Session.
 - **Local and remote** — The desktop connects to the local `warren-headless` daemon by default, or to a VPS through an embedded SSH client. Choose an alias from `~/.ssh/config` in the execution-server menu; Warren bootstraps the remote daemon and forwards a loopback port while using the same versioned WebSocket API everywhere.
 - **Real terminal fidelity** — Ghostty on macOS and xterm.js on the Web preserve ANSI, OSC, Unicode, and colors from shells, Codex, Claude, and TUIs.
 - **Structured agent views** — Codex, Claude, and OpenCode activity is projected as normalized events on the Web, so agent sessions can render as a conversation without losing the terminal fallback.
+- **An editor beside the terminal** — The macOS client can mount a workspace-scoped, VS Code-compatible editor as a region next to the Terminal rather than a page that replaces it, so reading code does not cost you the session you were watching.
 - **Workspace-first Git support** — Projects, main checkouts, and Git worktrees are first-class resources; one-time onboarding can import your existing Superset metadata.
 - **Cross-repository tasks** — A Host-owned Task can group Workspaces from several Git repositories and optionally retain a provider-neutral external work-item identity such as TAPD or GitHub.
 - **Optional central control plane** — The Relay Service provides Host registration, pairing, revocation, and outbound WSS forwarding without storing terminal output or user input.
 - **Observability-first acceptance** — Tests use semantic UI snapshots and typed intents: no screenshots, no mouse movement, no focus stealing.
 
-## The Warren workflow
+## How Warren works
 
-### Boost: the activity lens
+### Active only: the activity filter
 
-The lightning control in the desktop chrome is called **Boost**. Clicking Boost
-switches the navigation into an activity-only view: the Project, Workspace, and
-Terminal navigation keeps only contexts with running or attached Sessions, and
-expands the relevant project paths so active work is immediately visible. Task
-headings remain available as cross-repository context. Agent sessions contribute
-provider-neutral activity and attention signals such as Working, Blocked, Stalled,
-Failed, Ready, input required, or approval required. Boost is a presentation
-filter only; it never moves, stops, or mutates a Session.
+Git worktrees are cheap, so a sidebar fills up with dozens of Workspaces that are
+not doing anything. The lightning toggle beside the sidebar collapse control
+filters the tree down to **active only**: the Project, Task, and Terminal
+navigation keeps just the contexts with a running or attached Session, and
+expands the relevant paths so work in progress is immediately visible. A
+Workspace whose embedded editor is open stays visible too, because an
+editor-only Workspace is still work in progress (RFC 0021 §7). Agent sessions
+contribute provider-neutral activity — `ready`, `working`, `blocked`, `failed`,
+`exited` — and attention, which is `input` or `approval` and only ever comes from
+an explicit provider observation. When nothing is running, the sidebar says
+`No active workspaces` and offers one control back to **Show all workspaces**.
 
-The separate **Active Sessions** switcher is a flat, searchable view of every live
-Session. It opens a Session directly, keeps workspace context in each row, and
-promotes recently-ready Agent sessions so a completed turn is easy to find. This
-keeps triage fast even when a Host has many Projects and Workspaces.
+The filter is a presentation filter only; it never moves, stops, or mutates a
+Session. Its state is device-local and scoped per endpoint, so a Local Host and a
+remote Server remember their own view. The sidebar tree is the only Session
+switcher: renaming, pinning, and opening a Session all happen on its row, in the
+Workspace context it belongs to.
 
 ### Tasks that span repositories
 
@@ -209,11 +215,11 @@ Warren is an early, open-source phase-one project. The desktop client targets ma
 Warren's product design and interactive capabilities follow a clear surface hierarchy:
 - **macOS Desktop (Primary First-Class Surface)**: Primary design, native AppKit/SwiftUI components, keyboard-driven navigation, Ghostty terminal rendering, and native agent interaction reside here. All interaction paradigms, session controls, and structured views are designed and verified for Desktop first.
 - **Web / PWA (Remote & Fallback Surface)**: Lightweight remote viewer and execution control under Public Access or Relay pairing.
-- **iOS Mobile (Native Companion — Coming Soon)**: Companion mobile client currently in active development.
+- **iOS Mobile (Native Companion — Coming Soon)**: Companion mobile client in active development. Its sources live in `Packages/WarrenIOS/` and are built and tested with the rest of the repository; there is no installable release yet.
 
 Public Access is an explicit way for the Host owner to reach an existing Web interface from outside the local network. It is not a multi-user Workspace sharing or collaboration feature. Read [SECURITY.md](SECURITY.md) before exposing any Host or Relay to a network.
 
-The open-source repository code is licensed under [Apache-2.0](LICENSE). This covers the macOS Desktop app, Headless daemon, CLI, Relay Service, and Web client. The upcoming iOS companion client is distributed separately.
+The open-source repository code is licensed under [Apache-2.0](LICENSE). This covers the macOS Desktop app, Headless daemon, CLI, Relay Service, Web client, and the in-development iOS sources. The iOS companion app itself will be distributed separately, and is not part of a Warren release yet.
 
 ## Repository Layout
 
@@ -221,6 +227,7 @@ The open-source repository code is licensed under [Apache-2.0](LICENSE). This co
 | --- | --- |
 | `Sources/Warren/` | macOS desktop app (SwiftUI + Ghostty) |
 | `Packages/` | Domain, client core, desktop, ghostty adapter, protocol, terminal renderer, transport, state store, design-system, and observation packages |
+| `Packages/WarrenIOS/` | iOS companion client sources (coming soon; built and tested here, distributed separately) |
 | `Headless/` | Go headless daemon (`warren-headless`) and CLI (`warren`) |
 | `RelayService/` | Go Relay control plane |
 | `Web/` | React + Vite Web/PWA client |

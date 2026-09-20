@@ -18,6 +18,17 @@
         var pointerSelectionStartPoint: CGPoint?
         var lastPointerSelectionRect: CGRect?
         var pendingSelectionMenuPoint: CGPoint?
+        /// The pointer shape currently published through this view's cursor
+        /// rect. Seeded with `.text` because that is what Ghostty asks for over
+        /// ordinary cells: a surface that is torn down before it raises its
+        /// first shape action still reads as text rather than as plain chrome.
+        var terminalMouseShape: TerminalMouseShape = .text
+        /// Drives selection autoscroll while a drag is held outside the view.
+        var selectionAutoscrollTimer: Timer?
+        /// The last drag point, in Ghostty's top-left coordinate space. The
+        /// autoscroll timer re-sends it because AppKit delivers no further
+        /// `mouseDragged` once the pointer stops moving.
+        var lastDragPoint: CGPoint?
         var onFocusChange: ((Bool) -> Void)?
         /// The current SwiftUI focus intent. AppKit focus synchronization reads this
         /// again when deferred work executes so stale render passes cannot move focus.
@@ -125,6 +136,12 @@
             }
             core.onSurfaceLayersOrphaned = { [weak self] in
                 self?.detachOrphanedSurfaceLayers()
+            }
+            core.onMouseShapeChange = { [weak self] shape in
+                self?.applyMouseShape(shape)
+            }
+            core.onMouseVisibilityChange = { [weak self] visible in
+                self?.applyMouseVisibility(visible)
             }
         }
 

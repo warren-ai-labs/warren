@@ -1531,6 +1531,21 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
 
     @Published private(set) var activeWorkspacePath: String?
     @Published private(set) var phase: Phase = .idle
+    /// True once the user has clicked into the editor region, until they click
+    /// back out of it.
+    ///
+    /// RFC 0021 §3.2 leaves focus routing to Warren, and until this existed only
+    /// the terminal-to-editor direction was routed: the editor took AppKit's
+    /// first responder, while every consumer that asks "where is the keyboard"
+    /// — the pane's own focus mark, the terminal's focus intent, and the PTY
+    /// focus report — still answered "the terminal".
+    ///
+    /// Derived from the pointer boundary below rather than from
+    /// `becomeFirstResponder`: a click lands on a WKWebView's internal content
+    /// view, so the WKWebView subclass is never asked to become first responder
+    /// and cannot report it. This therefore tracks the pointer specifically, and
+    /// a Tab into the region from the keyboard is not observed.
+    @Published private(set) var hasKeyboardFocus = false
 
     // Keep the current and two most recently used workspaces warm without
     // letting workspace switching grow WebKit memory usage without a bound.
@@ -1999,6 +2014,7 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         webViews = [:]
         webViewOrder = []
         webViewStorage.removeAll()
+        setKeyboardFocus(false)
         if let mouseEventMonitor {
             NSEvent.removeMonitor(mouseEventMonitor)
             self.mouseEventMonitor = nil
@@ -2028,8 +2044,21 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         let interactiveWebViews = webViews.values.filter {
             $0.window != nil && !$0.isHidden
         }
-        guard !interactiveWebViews.isEmpty else { return }
+        guard !interactiveWebViews.isEmpty else {
+            // With no region on screen there is nothing to hold focus. A region
+            // that closes while focused would otherwise leave the flag set and
+            // the terminal permanently treated as unfocused.
+            setKeyboardFocus(false)
+            return
+        }
         let hitWebView = embeddedEditor(at: event, in: interactiveWebViews)
+        // The press is the decision: a click inside the region hands AppKit's
+        // first responder to the web content, and a click anywhere else takes
+        // it away again. The release carries the same location, so acting on it
+        // as well would only repeat the answer.
+        if event.type == .leftMouseDown {
+            setKeyboardFocus(hitWebView != nil)
+        }
         switch WarrenEmbeddedEditorPointerBoundary.action(for: event.type) {
         case .cancelInactiveEditors:
             for webView in interactiveWebViews where webView !== hitWebView {
@@ -2045,6 +2074,11 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         case .none:
             break
         }
+    }
+
+    private func setKeyboardFocus(_ focused: Bool) {
+        guard hasKeyboardFocus != focused else { return }
+        hasKeyboardFocus = focused
     }
 
     private func embeddedEditor(

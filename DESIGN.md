@@ -6,7 +6,7 @@ Update rules: when implementation conflicts with this document, this document wi
 
 ## 1. Product Goals
 
-Warren is a local-first development workbench organized around Workspaces, with durable terminal sessions and AI agent workflows at its core.
+Warren is a development workbench that stays running on the user's own machine, organized around Workspaces, with durable terminal sessions, AI agent views, and a workspace-scoped editor at its core. The Host runs on hardware the user controls — a Mac or their own VPS — not in a vendor cloud; it is not offline-first, because the Host, not the client, is the authority.
 
 The macOS Desktop connects to a local `warren-headless` daemon by default, and can also connect to `warren-headless` running on a VPS or remote server. Users can switch between Local and Server to manage Tasks, Projects, Workspaces, Git worktrees, and Terminal Sessions on the target Host, with persistent terminal interaction through Ghostty. The CLI uses the same remote API and provides SSH bootstrap and port-forwarding entry points.
 

@@ -4189,6 +4189,22 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         )
     }
 
+    /// Reports that the keyboard moved to a surface in this window that is not a
+    /// terminal — today the embedded editor region.
+    ///
+    /// The surface manager reports blur when a pane is parked or its host goes
+    /// away, neither of which happens here: the pane stays mounted and attached,
+    /// only the keyboard left. Without this the Session is still told it has
+    /// focus, so a program that tracks focus keeps drawing an active cursor
+    /// while the user types into a document.
+    ///
+    /// Focus returns on its own. Clicking back into the terminal makes it first
+    /// responder, and the manager reports that as a focus claim.
+    func relinquishTerminalFocus() {
+        guard let sessionID = selectedSessionID else { return }
+        blur(sessionID: sessionID)
+    }
+
     func blur(sessionID: TerminalSessionID) {
         // TerminalSurfaceManager reports blur for every pane that is parked
         // or whose host disappears. In a split window a passive sibling must
