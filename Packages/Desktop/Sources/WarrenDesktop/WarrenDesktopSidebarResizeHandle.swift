@@ -29,17 +29,6 @@ struct WarrenDesktopSidebarResizeHandle: View {
 
     private var isActive: Bool { isHovered || dragStartWidth != nil || forceHover }
 
-    /// The cursor is the affordance: there is no room for a visible grip at 6pt,
-    /// so the pointer has to say the edge is draggable.
-    ///
-    /// `set` rather than `push`/`pop`. The handle tracks the pointer through a
-    /// drag, so hover can re-enter more than once before the drag ends; a
-    /// cursor stack would push once per re-entry and leave a resize cursor
-    /// current after the pointer had already left the edge.
-    private func updateCursor(onEdge: Bool) {
-        (onEdge ? NSCursor.resizeLeftRight : NSCursor.arrow).set()
-    }
-
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         Rectangle()
@@ -53,12 +42,12 @@ struct WarrenDesktopSidebarResizeHandle: View {
                     .frame(width: 2)
             }
             .contentShape(.rect)
-            .onHover { hovering in
-                isHovered = hovering
-                // Keep the resize cursor while a drag owns the pointer even if
-                // hover has already dropped.
-                updateCursor(onEdge: hovering || dragStartWidth != nil)
-            }
+            .onHover { isHovered = $0 }
+            // The cursor is the affordance: there is no room for a visible grip
+            // at 6pt, so the pointer has to say the edge is draggable. A cursor
+            // rect also holds through the drag on its own, where the previous
+            // `set` had to be re-applied as hover came and went.
+            .warrenCursor(.resizeLeftRight)
             .gesture(
                 // Translation is measured against the window, not the handle.
                 // The handle tracks the rail's trailing edge, so a local
@@ -73,7 +62,6 @@ struct WarrenDesktopSidebarResizeHandle: View {
                     }
                     .onEnded { _ in
                         dragStartWidth = nil
-                        updateCursor(onEdge: isHovered)
                     }
             )
             .onTapGesture(count: 2, perform: onReset)

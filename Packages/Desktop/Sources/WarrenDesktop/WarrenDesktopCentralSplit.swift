@@ -90,11 +90,7 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
                     .frame(width: 2)
             }
             .contentShape(.rect)
-            .onHover { hovering in
-                (hovering || dragStartWidth != nil
-                    ? NSCursor.resizeLeftRight
-                    : NSCursor.arrow).set()
-            }
+            .warrenCursor(.resizeLeftRight)
             .gesture(
                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
@@ -119,7 +115,6 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
                     }
                     .onEnded { _ in
                         dragStartWidth = nil
-                        NSCursor.arrow.set()
                     }
             )
             .onTapGesture(count: 2) {

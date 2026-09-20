@@ -80,14 +80,30 @@ optional and does not represent terminal lifecycle or client connectivity.
 
 **Tab**:
 A device-local window entry that references one Warren Terminal Session within a
-Workspace View or Terminal Group View. It does not own Host state. Its entry in
-the pane bar is a handle on a visible Pane, so closing it takes the Pane off
-screen and leaves the referenced Session running.
+Workspace View or Terminal Group View. Tab projection and tab order are client
+model, not Host state. A Tab whose Session is rendered is a handle on that Pane,
+so closing it removes the Pane from the arrangement and leaves the referenced
+Session running and reachable as an ordinary Tab.
+
+**Pane Group**:
+A Host-owned whole-screen arrangement of running Warren Terminal Sessions,
+belonging to exactly one Workspace or Terminal Group. The Host stores its owner,
+name, order, pane tree, and revision, and projects it through the roster, so
+several arrangements may coexist in one scope and any client can render them.
+Editing an arrangement never creates, moves, or ends a Session.
+_Avoid_: split layout, device-local layout
 
 **Pane**:
-A device-local region of a Workspace View or Terminal Group View that renders one
-Tab. Panes are arranged by a local split layout and are never Host state; closing
-the last one leaves the view with no live Pane rather than ending any Session.
+A Host-owned leaf of a Pane Group's tree, carrying one stable Pane ID and the ID
+of the one Session it renders. A Session occupies at most one Pane on a Host
+across all Pane Groups. Removing a Pane edits the arrangement only and leaves
+the referenced Session running.
+
+**Active Pane Group**:
+The single Pane Group a client window is currently rendering. It is per-viewer
+state and is never written to the Host; background groups hold no surface, no
+output subscription, and no resize authority.
+_Avoid_: current pane group
 
 **Attachment**:
 A temporary client connection to a Warren Terminal Session. Disconnecting an

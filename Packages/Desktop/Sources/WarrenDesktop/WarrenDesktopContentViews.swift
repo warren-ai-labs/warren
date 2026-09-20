@@ -302,6 +302,14 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
     /// these panes am I typing into", so they only belong in a split. A lone
     /// pane still offers close, which is why this is separate from `canClose`.
     var isSplit: Bool = false
+    /// True when this pane is the one actually receiving keystrokes.
+    ///
+    /// Separate from `isActive`, which says this is the selected pane. The two
+    /// part company whenever the keyboard is somewhere else in the window — the
+    /// embedded editor, the command palette, Settings — and the focus mark has
+    /// to follow the keys rather than the selection, or it claims the terminal
+    /// is taking input that is going into a document.
+    var isKeyboardFocused: Bool = true
     var onFocus: () -> Void = {}
     var onClose: () -> Void = {}
     var onMaximize: () -> Void = {}
@@ -321,10 +329,11 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
             if showsPaneHeader {
                 HStack(spacing: WarrenSpacing.xs) {
                     // The focus dot answers "which of these panes takes my
-                    // keys", so it only appears once there is more than one.
+                    // keys", so it only appears once there is more than one —
+                    // and goes dark when the keys are not going to a pane.
                     if isSplit {
                         Circle()
-                            .fill(isActive ? tokens.info : Color.clear)
+                            .fill(isActive && isKeyboardFocused ? tokens.info : Color.clear)
                             .frame(width: 6, height: 6)
                             .padding(.trailing, 2)
                     }
@@ -425,7 +434,12 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
             .overlay {
                 if isSplit {
                     Rectangle()
-                        .stroke(isActive ? tokens.info.opacity(0.4) : tokens.border.opacity(0.3), lineWidth: 1)
+                        .stroke(
+                            isActive && isKeyboardFocused
+                                ? tokens.info.opacity(0.4)
+                                : tokens.border.opacity(0.3),
+                            lineWidth: 1
+                        )
                 }
             }
         }
@@ -653,6 +667,7 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
             canClose: chrome?.canClose ?? (paneCount > 1),
             canMaximize: chrome == nil && paneCount > 1,
             isSplit: chrome == nil && paneCount > 1,
+            isKeyboardFocused: wantsTerminalFocus,
             onFocus: { onSelectPane(pane.id) },
             onClose: { onClosePane(pane.id) },
             onMaximize: { onMaximizePane(pane.id) },
@@ -708,6 +723,10 @@ struct WarrenDesktopSplitDivider: View {
             .padding(axis == .horizontal ? .horizontal : .vertical, 2)
             .contentShape(Rectangle())
             .onHover { isHovered = $0 }
+            // The pointer says the divider is draggable, the same as the
+            // editor split and the sidebar edge. A horizontal axis splits
+            // left/right, so the edge moves sideways.
+            .warrenCursor(axis == .horizontal ? .resizeLeftRight : .resizeUpDown)
             .accessibilityElement()
             .accessibilityLabel(
                 axis == .horizontal

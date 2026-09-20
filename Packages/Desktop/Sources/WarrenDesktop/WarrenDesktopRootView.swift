@@ -95,6 +95,13 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onLoadUsage: ((Int, String?, Bool) -> Void)?
     private let onRebuildUsage: ((@escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void) -> Void)?
     private let embeddedEditorAvailable: Bool
+    /// True while the editor region holds the keyboard.
+    ///
+    /// The region is not a pane and owns no Session (RFC 0020), so nothing in
+    /// the arrangement tree can answer this. It arrives from the host because
+    /// the region's own surface is the only thing that observes the pointer
+    /// crossing into it.
+    private let editorHasKeyboardFocus: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
     /// Asks the runtime to open one document. Warren drives this exactly once
     /// per editor entry, to restore the Workspace's last document; every other
@@ -287,6 +294,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onLoadUsage: ((Int, String?, Bool) -> Void)? = nil,
         onRebuildUsage: ((@escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void) -> Void)? = nil,
         embeddedEditorAvailable: Bool = false,
+        editorHasKeyboardFocus: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
         onOpenEditorDocument: @escaping @MainActor (Workspace, WarrenDesktopEditorDocument) -> Void = { _, _ in },
         persistenceEnabled: Bool = true,
@@ -374,6 +382,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onRebuildUsage = onRebuildUsage
         self.embeddedEditorAvailable = embeddedEditorAvailable
             && resolvedEndpointCapabilities.canUseEmbeddedEditor
+        self.editorHasKeyboardFocus = editorHasKeyboardFocus
         self.editorSurface = editorSurface
         self.onOpenEditorDocument = onOpenEditorDocument
         self.persistenceEnabled = persistenceEnabled
@@ -1235,8 +1244,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 // the Terminal on every layout pass. Focus follows the
                 // click that moved it, which is what returns the control
                 // lease when the user clicks back into the Terminal.
+                //
+                // While the editor holds the keyboard the intent has to say so
+                // too. Reconciliation claims focus for the selected pane
+                // whenever this is true, so leaving it set let a later layout
+                // pass pull the keyboard back out of the editor mid-edit.
                 wantsTerminalFocus: !commandPalettePresented
-                    && !settingsPresented,
+                    && !settingsPresented
+                    && !editorHasKeyboardFocus,
                 splitTree: currentTree,
                 activePaneID: currentPaneID,
                 allTabs: presentation.tabs,

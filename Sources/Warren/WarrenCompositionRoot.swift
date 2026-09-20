@@ -301,6 +301,7 @@ struct WarrenCompositionRoot: View {
                 remoteModel.rebuildUsageData(completion: completion)
             },
             embeddedEditorAvailable: selectedEndpointCapabilities.canUseEmbeddedEditor,
+            editorHasKeyboardFocus: embeddedEditorModel.hasKeyboardFocus,
             editorSurface: { workspace in
                 AnyView(WarrenEmbeddedEditorSurface(
                     workspace: workspace,
@@ -458,6 +459,12 @@ struct WarrenCompositionRoot: View {
         .task {
             TerminalDiagnostics.configure(environment: ProcessInfo.processInfo.environment, arguments: CommandLine.arguments)
             WarrenHangDiagnostics.start()
+            // The chord monitor sees every key in the app but only owns the
+            // terminal's. It cannot name the terminal view class from its own
+            // package, so the answer is supplied here.
+            EmacsSplitChordMonitor.shared.isTerminalFocused = { [surfaceManager] in
+                surfaceManager.terminalOwnsKeyboardFocus
+            }
             presetOrder = WarrenDesktopSessionPreset.normalizedOrderRawValue(presetOrder)
             hiddenPresets = WarrenDesktopSessionPreset.normalizedHiddenRawValue(hiddenPresets)
             updateTerminalFont()
@@ -472,6 +479,13 @@ struct WarrenCompositionRoot: View {
             // workbench cold starts.
             guard let workspacePath = selectedWorkspacePath else { return }
             embeddedEditorModel.prewarm(workspacePath: workspacePath)
+        }
+        .onChange(of: embeddedEditorModel.hasKeyboardFocus) { hasFocus in
+            // Only the departure needs reporting. The return is reported by the
+            // surface manager when the click makes a terminal first responder
+            // again, which also carries the size the Session needs.
+            guard hasFocus else { return }
+            remoteModel.relinquishTerminalFocus()
         }
         .onChange(of: selectedEndpointID) { _ in
             embeddedEditorModel.stop()

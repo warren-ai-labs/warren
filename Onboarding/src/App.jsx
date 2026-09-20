@@ -211,7 +211,12 @@ function ProductShot() {
                   <img src={shot.src} alt={copy.alt} loading="lazy" />
                 </div>
                 <figcaption>
-                  <strong>{copy.label}</strong>
+                  <span className="product-label">
+                    <strong>{copy.label}</strong>
+                    {copy.badge ? (
+                      <span className="product-badge">{copy.badge}</span>
+                    ) : null}
+                  </span>
                   <span>{copy.caption}</span>
                 </figcaption>
               </figure>

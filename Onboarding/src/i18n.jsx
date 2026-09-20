@@ -7,11 +7,11 @@ const messages = {
     "nav.why": "Why",
     "nav.changelog": "Changelog",
     "nav.source": "Source",
-    "hero.kicker": "Local-first AI workflow workspace",
-    "hero.titleA": "Your AI workflow,",
-    "hero.titleB": "kept alive.",
+    "hero.kicker": "A workbench that stays running on your machine",
+    "hero.titleA": "Your work",
+    "hero.titleB": "keeps running.",
     "hero.lede":
-      "Run an agent-driven workflow on your Mac or VPS. Close Warren, lose Wi-Fi, or switch clients; the host keeps the workflow ready to resume from the desktop, web, or CLI.",
+      "Warren is a workbench for terminals, agents, and code, running on your own Mac or VPS instead of someone else's cloud. Quit the app, lose Wi-Fi, or move to a browser; the Host keeps the work running and you walk straight back into it.",
     "hero.ctaTerminal": "Try the terminal",
     "hero.ctaDocs": "Read the source",
     "hero.ctaDownload": "Download",
@@ -20,11 +20,11 @@ const messages = {
     "hero.downloadFallback": "Open releases",
     "hero.status": "Open source · phase one",
     "hero.platform": "macOS · Web · CLI",
-    "ticker.items": ["Run", "Detach", "Reconnect", "Resume", "Workspaces", "Agent views"],
+    "ticker.items": ["Terminals", "Agents", "Editor", "Detach", "Reconnect", "Resume"],
     "product.kicker": "Across every screen",
-    "product.title": "One workspace, every screen.",
+    "product.title": "One workspace: terminal, agent, editor.",
     "product.lede":
-      "Start on the desktop, pick up in a browser, or check in from your phone. The same host keeps every workflow ready.",
+      "Start on the desktop, pick up in a browser, drop to the CLI. The same Host keeps every workspace running, whichever screen you open it on.",
     "product.devices": [
       {
         label: "macOS desktop",
@@ -43,13 +43,15 @@ const messages = {
       },
       {
         label: "Mobile · agent view",
+        badge: "Coming soon",
         alt: "Warren mobile client showing an agent conversation",
         caption: "Check progress and respond from your phone.",
       },
       {
         label: "Mobile · terminal",
+        badge: "Coming soon",
         alt: "Warren mobile client showing a terminal session",
-        caption: "Reconnect to the host wherever you are.",
+        caption: "Reconnect to the Host wherever you are.",
       },
     ],
     "terminal.kicker": "Interactive demo",
@@ -60,12 +62,16 @@ const messages = {
     "terminal.hint": "Click inside and type help",
     "terminal.engineNote": "Demo engine: Ghostty WASM · Warren Web client: xterm.js",
     "features.kicker": "Why Warren",
-    "features.title": "Sessions belong to the host.",
-    "features.lede": "That is how a workflow survives the client.",
+    "features.title": "The work belongs to the Host.",
+    "features.lede": "Not to the window you happened to close.",
     "features.items": [
       {
         title: "Durable sessions",
-        body: "Quit the app, switch networks, close the laptop. Your session stays on the host and is still there when you come back.",
+        body: "Quit the app, switch networks, close the laptop. Your session stays on the Host and is still there when you come back.",
+      },
+      {
+        title: "Terminal, agent, editor",
+        body: "One workspace carries a real terminal, a structured agent view, and an embedded VS Code-compatible editor beside it — not three disconnected tools.",
       },
       {
         title: "One resource model",
@@ -73,19 +79,15 @@ const messages = {
       },
       {
         title: "Local and remote",
-        body: "SSH just gets you to the host. After that, all clients speak the same WebSocket protocol to the same daemon.",
+        body: "SSH just gets you to the Host. After that, all clients speak the same WebSocket protocol to the same daemon.",
       },
       {
         title: "Real terminal fidelity",
         body: "The desktop uses Ghostty, the web uses xterm.js. ANSI, OSC, Unicode and TUI colors keep working.",
       },
       {
-        title: "Agent views",
-        body: "Codex and Claude transcripts become readable conversations, while the raw terminal remains one tab away for full control.",
-      },
-      {
-        title: "Workspace-first Git",
-        body: "Projects, main checkouts, and worktrees stay attached to the same context as your sessions and agents.",
+        title: "Workspaces and cross-repo tasks",
+        body: "Main checkouts and Git worktrees are first-class, and a Task can group workspaces from several repositories into one piece of work.",
       },
     ],
     "architecture.kicker": "How it fits together",
@@ -102,7 +104,7 @@ const messages = {
     "principle.quote":
       "Closing a tab is the only way to end a session. Quitting, switching workspaces, losing Wi-Fi — that's just walking away.",
     "principle.cite": "Warren product design, §5",
-    "footer.line": "Sessions belong to the host.",
+    "footer.line": "The work belongs to the Host.",
     "footer.servedBy": "Served by a Cloudflare Worker",
     "footer.source": "Source",
     "footer.license": "Apache-2.0",
@@ -1186,11 +1188,11 @@ const messages = {
     "nav.why": "为什么",
     "nav.changelog": "更新日志",
     "nav.source": "源码",
-    "hero.kicker": "本地优先的开发工作台",
-    "hero.titleA": "你的终端，",
-    "hero.titleB": "一直在。",
+    "hero.kicker": "常驻在你机器上的开发工作台",
+    "hero.titleA": "你的活儿，",
+    "hero.titleB": "一直在跑。",
     "hero.lede":
-      "Warren 是一个本地优先的开发工作台，给那些住在终端里的人。会话跑在 Host 上——你的 Mac 或一台 VPS——退出应用、网络断开、合上电脑，它都还在。",
+      "Warren 把终端、Agent 和代码放进同一个工作台，跑在你自己的 Mac 或 VPS 上，而不是别人的云里。退出应用、网络断开、换成浏览器打开——活儿在 Host 上继续跑，你随时走回去接手。",
     "hero.ctaTerminal": "试试终端",
     "hero.ctaDocs": "查看源码",
     "hero.ctaDownload": "下载",
@@ -1199,11 +1201,11 @@ const messages = {
     "hero.downloadFallback": "打开 Releases",
     "hero.status": "Phase one · 开源",
     "hero.platform": "macOS · Web · CLI",
-    "ticker.items": ["断开", "重连", "恢复", "工作区", "会话", "Agent 视图"],
+    "ticker.items": ["终端", "Agent", "编辑器", "断开", "重连", "接着做"],
     "product.kicker": "每一块屏幕",
-    "product.title": "一个 Workspace，随时随地接着做。",
+    "product.title": "一个 Workspace，装下终端、Agent 和编辑器。",
     "product.lede":
-      "从桌面端开始，在浏览器里接着做，也能用手机查看进度。所有客户端共享同一个 Host。",
+      "从桌面端开始，在浏览器里接着做，也可以退回 CLI。同一个 Host 让每个 Workspace 一直跑着，你从哪块屏幕打开都一样。",
     "product.devices": [
       {
         label: "macOS 桌面端",
@@ -1222,11 +1224,13 @@ const messages = {
       },
       {
         label: "移动端 · Agent 视图",
+        badge: "即将推出",
         alt: "Warren 移动端中的 Agent 对话",
         caption: "用手机查看进度、继续回复。",
       },
       {
         label: "移动端 · 终端",
+        badge: "即将推出",
         alt: "Warren 移动端中的终端会话",
         caption: "无论在哪里，都能重新连回 Host。",
       },
@@ -1239,12 +1243,16 @@ const messages = {
     "terminal.hint": "点击终端，输入 help",
     "terminal.engineNote": "演示引擎：Ghostty WASM · Warren Web 客户端：xterm.js",
     "features.kicker": "为什么是 Warren",
-    "features.title": "会话属于 Host。",
-    "features.lede": "Warren 里的一切都围绕这句话展开。",
+    "features.title": "活儿属于 Host。",
+    "features.lede": "不属于你刚关掉的那扇窗口。",
     "features.items": [
       {
         title: "持久会话",
         body: "退出应用、切换网络、合上电脑。会话留在 Host 上，你回来时它还在。",
+      },
+      {
+        title: "终端、Agent、编辑器",
+        body: "同一个 Workspace 里有真实终端、结构化的 Agent 视图，和一个并排的 VS Code 兼容编辑器——不是三个各自为政的工具。",
       },
       {
         title: "统一的资源模型",
@@ -1259,12 +1267,8 @@ const messages = {
         body: "桌面端用 Ghostty，Web 用 xterm.js。ANSI、OSC、Unicode、TUI 颜色都照常工作。",
       },
       {
-        title: "Agent 会话视图",
-        body: "Codex 和 Claude 的转写会变成可读的对话，原始终端也还在旁边。",
-      },
-      {
-        title: "以 Workspace 为先的 Git",
-        body: "Project、主检出、worktree 都是真实资源。已有的 Superset 项目导一次就行。",
+        title: "Workspace 与跨仓库 Task",
+        body: "主检出和 Git worktree 都是一等资源；一个 Task 可以把多个仓库的 Workspace 聚成同一件活。",
       },
     ],
     "architecture.kicker": "它如何拼起来",
@@ -1281,7 +1285,7 @@ const messages = {
     "principle.quote":
       "关闭 Tab 是结束会话的唯一方式。退出、切换工作区、Wi-Fi 断了——那只是离开而已。",
     "principle.cite": "Warren 产品设计，§5",
-    "footer.line": "会话属于 Host。",
+    "footer.line": "活儿属于 Host。",
     "footer.servedBy": "由 Cloudflare Worker 托管",
     "footer.source": "源码",
     "footer.domain": "warrenai.xyz",

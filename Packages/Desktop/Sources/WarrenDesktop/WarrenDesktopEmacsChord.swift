@@ -20,6 +20,13 @@ public final class EmacsSplitChordMonitor {
     public var onAction: ((EmacsSplitAction) -> Bool)?
     public private(set) var inChord = false
     public var onChordStateChanged: ((Bool) -> Void)?
+    /// Whether a terminal surface currently owns keyboard focus.
+    ///
+    /// Injected because the terminal view class lives below this package. When
+    /// no answer is supplied the monitor falls back to the responder inspection
+    /// in `shouldHandle`, which keeps the chord working in fixtures and tests
+    /// that drive it without a live surface.
+    public var isTerminalFocused: (() -> Bool)?
 
     private var chordTimer: Timer?
     private var localMonitor: Any?
@@ -96,7 +103,19 @@ public final class EmacsSplitChordMonitor {
         return event
     }
 
+    /// C-x is a terminal command, so the chord belongs to the terminal only.
+    ///
+    /// This used to name the controls that had to keep their own C-x editing
+    /// command — text views and text fields — and let everything else through.
+    /// That list cannot be complete: the embedded editor is a WKWebView, so
+    /// code-server's own Cut was swallowed here and the keystroke started a
+    /// chord instead. Asking whether the terminal has focus inverts the test, so
+    /// a surface that is not a terminal keeps its keys without having to be
+    /// enumerated first.
     private func shouldHandle(event: NSEvent) -> Bool {
+        if let isTerminalFocused {
+            return isTerminalFocused()
+        }
         guard let responder = NSApp.keyWindow?.firstResponder else { return true }
         if responder is NSTextView || responder is NSTextField {
             return false

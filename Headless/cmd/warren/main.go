@@ -5402,7 +5402,7 @@ Commands:
   workspace list|create|remove|rename|pin|move  (alias: worktree)
   terminal-group list|create|remove|rename|home|move  (alias: group)
   pane list|create|split|close|rename|move|remove
-  session list|current|create|delete|rename|pin|move|send|read|undo
+  session list|current|panes|create|remove|rename|pin|move|send|read|undo
   ssh list|TARGET                   list SSH aliases or start a tunnel
   headless [FLAGS]                  run the installed daemon
 
@@ -5482,11 +5482,11 @@ use --quiet to print one endpoint alias per line.
 
 func agentUsageText() string {
 	return `Usage:
-  warren agent create [WORKSPACE_ID] --provider codex|claude|opencode|pi|qoder [--command CMD] [--prompt TEXT | --no-prompt]
+  warren agent create [WORKSPACE_ID] --provider codex|claude|opencode|pi|qoder|antigravity [--agent-handler tui|cli|acp] [--command CMD] [--prompt TEXT | --no-prompt]
   warren agent list [--all | --ended] [WORKSPACE_ID] [--workspace ID] [--project ID] [--provider PROVIDER] [--status STATUS] [--activity ACTIVITY] [--search TEXT] [--current] [--pinned] [--limit N] [-q]
   warren agent current
   warren agent send AGENT_ID [TEXT...] [--current] [--wait] [--timeout DURATION]
-  warren agent read AGENT_ID [--current] [--recent N | --all] [--tools] [--tool-output] [--include TYPE,...] [--filter TYPE,...] [--text-only] [--full]
+  warren agent read AGENT_ID [--current] [--recent N | --all] [--tools] [--tool-output] [--include TYPE,...] [--filter TYPE,...] [--chars N | --full] [--text-only]
   warren agent wait AGENT_ID [--timeout DURATION] [--current]
   warren agent attach AGENT_ID [--current]
   warren agent remove AGENT_ID [--force] [--current] [--dry-run]
@@ -5656,8 +5656,9 @@ func resourceUsageText(commandName string) string {
   warren session read SESSION_ID [--timeout DURATION] [--contains TEXT] [--current]
   warren session undo OPERATION_ID
 
-Session is a generic PTY resource. Use agent create for Codex, Claude, OpenCode, or Pi;
-Trae is only a shell preset and has no Agent transcript/activity semantics.
+Session is a generic PTY resource. Use agent create for Codex, Claude, OpenCode,
+Pi, Qoder, or Antigravity; Trae is only a shell preset and has no Agent
+transcript/activity semantics.
 `
 	case "pane":
 		return `Usage:

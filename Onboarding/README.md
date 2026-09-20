@@ -22,6 +22,10 @@ for the schema and example queries.
 The desktop updater uses the same Worker snapshot through
 `/api/update/latest`.
 
+`/api/model-pricing` projects the models.dev catalog down to the four unit prices
+per model that a Host needs, so Warren's Usage panel derives cost from one stable
+shape instead of the whole upstream schema. See [`src/pricing.js`](src/pricing.js).
+
 The standalone `/changelog` page presents the release history in the same
 English / Simplified Chinese interface as the landing page. The Worker reads
 released entries from the repository root `CHANGELOG.md` at runtime, caches the
@@ -57,8 +61,8 @@ npx wrangler secret put GITHUB_TOKEN  # optional; run once per environment
 npm run deploy
 ```
 
-The worker name is `warren-onboarding`. Once `warrenai.xyz` is ready on
-Cloudflare, uncomment the `routes` block in `wrangler.toml` and deploy again.
+The worker name is `warren-onboarding` and it serves `warrenai.xyz/*` through the
+`routes` block in `wrangler.toml`.
 
 Release resolution never sends an unauthenticated GitHub Releases API request.
 With `GITHUB_TOKEN`, the Worker uses the authenticated API; otherwise it reads

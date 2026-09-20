@@ -71,6 +71,12 @@
             super.viewDidMoveToWindow()
             removeWindowObservers()
             guard let window else {
+                // The run loop owns a scheduled timer, so an autoscroll left
+                // running would keep firing after this view is gone. A view is
+                // always unparented before it is released, which makes this the
+                // last point that can still reach it.
+                stopSelectionAutoscroll()
+                lastDragPoint = nil
                 // Also invoked from _setWindow: while AppKit holds the
                 // view-tree lock; keep Ghostty calls off this path.
                 DispatchQueue.main.async { [weak self] in

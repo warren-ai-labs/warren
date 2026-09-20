@@ -4,7 +4,19 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Fixed
+
+- Describe the current CLI surface in its own help. The top-level list omitted
+  `session panes` and spelled the removal action `delete` while every other
+  resource and the `session` help spelled it `remove`; the `agent` help offered
+  five providers where `agent create` accepts six, and named neither
+  `--agent-handler` nor `--chars`; and the `session` help credited Agent support
+  to four providers. Both removal spellings still work.
+- Define a Pane as Host state in the glossary. RFC 0020 moved the split
+  arrangement onto the Host, but the glossary still called a Pane a device-local
+  region that is "never Host state", so it contradicted `warren pane` and the
+  roster it reads. Pane Group and Active Pane Group now carry the ownership
+  split, and Tab points at the client-model side of it.
 
 ## [0.19.0] - 2026-09-18
 

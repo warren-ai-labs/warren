@@ -7,9 +7,9 @@
 ## 1. What Warren Is
 
 Warren is not a terminal UI that happens to remember its tabs. It is a
-local-first development workbench whose durable resources and terminal
-processes belong to a Host. The macOS app, Web/PWA, and CLI are clients of
-that Host.
+development workbench, running on the user's own machine, whose durable
+resources and terminal processes belong to a Host. The macOS app, Web/PWA, and
+CLI are clients of that Host.
 
 The central design decision is ownership:
 

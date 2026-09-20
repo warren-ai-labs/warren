@@ -543,6 +543,31 @@ public final class TerminalSurfaceManager {
         return window.firstResponder === entry.view
     }
 
+    /// True when a terminal surface — any of them — owns the key window's
+    /// keyboard focus.
+    ///
+    /// The session-scoped check above answers "may this Session claim the
+    /// control lease". This one answers "is the user typing into a terminal at
+    /// all", which is what an app-level key monitor needs before it treats a
+    /// keystroke as a terminal command. It walks the responder's ancestors
+    /// because a surface's real first responder may be a descendant, and it asks
+    /// about the view class rather than the entry map so that a surface mid-
+    /// transition still counts.
+    public var terminalOwnsKeyboardFocus: Bool {
+        Self.isTerminalResponder(NSApp.keyWindow?.firstResponder)
+    }
+
+    /// Whether `responder` is a terminal surface or lives inside one.
+    static func isTerminalResponder(_ responder: NSResponder?) -> Bool {
+        guard let responder = responder as? NSView else { return false }
+        var candidate: NSView? = responder
+        while let current = candidate {
+            if current is AppTerminalView { return true }
+            candidate = current.superview
+        }
+        return false
+    }
+
     public func isDisplayVisible(_ sessionID: TerminalSessionID) -> Bool {
         entries[sessionID]?.displayVisible == true
     }
