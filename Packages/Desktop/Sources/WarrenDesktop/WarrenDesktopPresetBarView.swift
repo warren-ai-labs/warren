@@ -178,12 +178,24 @@ struct WarrenDesktopPresetIcon: View {
 
     var body: some View {
         if let image = image {
-            Image(nsImage: image)
+            let artwork = Image(nsImage: image)
                 .resizable()
                 .scaledToFit()
-                .opacity(0.9)
                 .scaleEffect(preset.id == "codex" ? 1.35 : 1)
                 .accessibilityHidden(true)
+            if preset.presetBarIconIsTintable {
+                // A template image takes the foreground style, so the glyph is
+                // painted from the resolved token instead of from the grey the
+                // asset was authored with. The tint already carries the right
+                // weight for the appearance, so it does not also need the 0.9
+                // that softens the brand marks against Ember.
+                artwork
+                    .foregroundStyle(
+                        WarrenColorTokens.resolved(for: colorScheme).mutedForeground
+                    )
+            } else {
+                artwork.opacity(0.9)
+            }
         } else {
             Image(systemName: preset.symbolName)
                 .font(.system(size: 13, weight: .medium))
@@ -193,10 +205,15 @@ struct WarrenDesktopPresetIcon: View {
 
     private var image: NSImage? {
         guard var name = preset.presetBarIconName else { return nil }
+        // Codex's mark is two-tone, so it swaps artwork rather than being
+        // tinted: a template image would flatten its inner counter-shape.
         if name == "preset-codex", colorScheme == .dark {
             name = "preset-codex-white"
         }
-        return WarrenPresetIconCache.shared.image(named: name)
+        return WarrenPresetIconCache.shared.image(
+            named: name,
+            template: preset.presetBarIconIsTintable
+        )
     }
 }
 
@@ -222,13 +239,17 @@ final class WarrenPresetIconCache {
         self.loader = loader
     }
 
-    func image(named name: String) -> NSImage? {
+    /// - Parameter template: Marks the image as a tintable mask. Set once, when
+    ///   the image is first loaded, because the cache hands the same instance to
+    ///   every call site and `isTemplate` is a property of that instance.
+    func image(named name: String, template: Bool = false) -> NSImage? {
         if let image = images[name] { return image }
         guard !missing.contains(name) else { return nil }
         guard let image = loader(name) else {
             missing.insert(name)
             return nil
         }
+        image.isTemplate = template
         images[name] = image
         return image
     }

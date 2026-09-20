@@ -14,6 +14,73 @@ final class WarrenTerminalRendererTests: XCTestCase {
         XCTAssertEqual(TerminalPalette.ember[15], TerminalPaletteColor(red: 0xff, green: 0xff, blue: 0xff))
     }
 
+    func testEmberPaperPaletteMatchesSupersetDefaultLightTheme() {
+        XCTAssertEqual(TerminalPalette.emberPaper.count, 16)
+        XCTAssertEqual(TerminalPalette.emberPaper[0], TerminalPaletteColor(red: 0x2e, green: 0x34, blue: 0x36))
+        XCTAssertEqual(TerminalPalette.emberPaper[1], TerminalPaletteColor(red: 0xcc, green: 0x00, blue: 0x00))
+        XCTAssertEqual(TerminalPalette.emberPaper[2], TerminalPaletteColor(red: 0x4e, green: 0x9a, blue: 0x06))
+        XCTAssertEqual(TerminalPalette.emberPaper[3], TerminalPaletteColor(red: 0xc4, green: 0xa0, blue: 0x00))
+        XCTAssertEqual(TerminalPalette.emberPaper[4], TerminalPaletteColor(red: 0x34, green: 0x65, blue: 0xa4))
+        XCTAssertEqual(TerminalPalette.emberPaper[5], TerminalPaletteColor(red: 0x75, green: 0x50, blue: 0x7b))
+        XCTAssertEqual(TerminalPalette.emberPaper[6], TerminalPaletteColor(red: 0x06, green: 0x98, blue: 0x9a))
+        XCTAssertEqual(TerminalPalette.emberPaper[7], TerminalPaletteColor(red: 0xd3, green: 0xd7, blue: 0xcf))
+        XCTAssertEqual(TerminalPalette.emberPaper[8], TerminalPaletteColor(red: 0x55, green: 0x57, blue: 0x53))
+        XCTAssertEqual(TerminalPalette.emberPaper[9], TerminalPaletteColor(red: 0xef, green: 0x29, blue: 0x29))
+        XCTAssertEqual(TerminalPalette.emberPaper[10], TerminalPaletteColor(red: 0x8a, green: 0xe2, blue: 0x34))
+        XCTAssertEqual(TerminalPalette.emberPaper[11], TerminalPaletteColor(red: 0xfc, green: 0xe9, blue: 0x4f))
+        XCTAssertEqual(TerminalPalette.emberPaper[12], TerminalPaletteColor(red: 0x72, green: 0x9f, blue: 0xcf))
+        XCTAssertEqual(TerminalPalette.emberPaper[13], TerminalPaletteColor(red: 0xad, green: 0x7f, blue: 0xa8))
+        XCTAssertEqual(TerminalPalette.emberPaper[14], TerminalPaletteColor(red: 0x34, green: 0xe2, blue: 0xe2))
+        XCTAssertEqual(TerminalPalette.emberPaper[15], TerminalPaletteColor(red: 0xee, green: 0xee, blue: 0xec))
+
+        let white = TerminalPaletteColor(red: 0xff, green: 0xff, blue: 0xff)
+
+        // Slot 8 carries TUI secondary text and stays legible on paper (> 4.5:1)
+        // while remaining quieter than slot 0.
+        XCTAssertGreaterThan(
+            Self.contrastRatio(TerminalPalette.emberPaper[8], white), 4.5,
+            "slot 8 carries TUI secondary text and must stay legible on paper"
+        )
+        XCTAssertGreaterThan(
+            Self.luminance(TerminalPalette.emberPaper[8]),
+            Self.luminance(TerminalPalette.emberPaper[0])
+        )
+
+        // Bright stays the lighter half
+        for (normal, bright) in [(1, 9), (2, 10), (3, 11), (4, 12), (5, 13), (6, 14)] {
+            let normalLuminance = Self.luminance(TerminalPalette.emberPaper[normal])
+            let brightLuminance = Self.luminance(TerminalPalette.emberPaper[bright])
+            XCTAssertGreaterThan(
+                brightLuminance, normalLuminance,
+                "Ember Paper slot \(bright) must stay lighter than \(normal)"
+            )
+            XCTAssertNotEqual(
+                TerminalPalette.emberPaper[bright],
+                TerminalPalette.emberPaper[normal],
+                "a program using both halves needs two distinguishable colors"
+            )
+        }
+    }
+
+    private static func luminance(_ color: TerminalPaletteColor) -> Double {
+        func linear(_ channel: UInt8) -> Double {
+            let value = Double(channel) / 255
+            return value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(color.red)
+            + 0.7152 * linear(color.green)
+            + 0.0722 * linear(color.blue)
+    }
+
+    private static func contrastRatio(
+        _ first: TerminalPaletteColor,
+        _ second: TerminalPaletteColor
+    ) -> Double {
+        let lighter = max(luminance(first), luminance(second))
+        let darker = min(luminance(first), luminance(second))
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+
     func testOutputMustBeStrictlyOrdered() async throws {
         let sessionID = TerminalSessionID()
         let attachment = TerminalAttachment(

@@ -71,10 +71,13 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
     }
 
     func testManagedProfileMovesFileTreeRightAndPreservesUnownedSettings() {
-        let settings = WarrenEmbeddedEditorProfile.mergingManagedSettings(into: [
-            "editor.wordWrap": "off",
-            "workbench.sideBar.location": "left",
-        ])
+        let settings = WarrenEmbeddedEditorProfile.mergingManagedSettings(
+            into: [
+                "editor.wordWrap": "off",
+                "workbench.sideBar.location": "left",
+            ],
+            appearance: .dark
+        )
 
         XCTAssertEqual(settings["editor.wordWrap"] as? String, "off")
         XCTAssertEqual(
@@ -114,6 +117,82 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertEqual(colors?["editor.background"], "#151110")
         XCTAssertEqual(colors?["sideBar.background"], "#1c1918")
         XCTAssertEqual(colors?["editorCursor.foreground"], "#e07850")
+    }
+
+    /// The customizations do not cover syntax token colors, so the base theme
+    /// has to move with the appearance too — otherwise a light workbench renders
+    /// dark-theme syntax colors on paper.
+    func testLightAppearanceSwitchesTheBaseThemeAndTheWorkbenchColors() {
+        let settings = WarrenEmbeddedEditorProfile.mergingManagedSettings(
+            into: [:],
+            appearance: .light
+        )
+
+        XCTAssertEqual(settings["workbench.colorTheme"] as? String, "Default Light Modern")
+        let colors = settings["workbench.colorCustomizations"] as? [String: String]
+        XCTAssertEqual(colors?["editor.background"], "#ffffff")
+        XCTAssertEqual(colors?["sideBar.background"], "#f2efec")
+        XCTAssertEqual(colors?["editorCursor.foreground"], "#b7522c")
+
+        // Settings the appearance has no business touching stay put.
+        XCTAssertEqual(settings["workbench.sideBar.location"] as? String, "right")
+        XCTAssertEqual(settings["editor.fontSize"] as? Int, 13)
+    }
+
+    /// Both palettes have to fill the same key map. A missing key does not fail
+    /// loudly in VS Code: it silently falls back to the base theme's value,
+    /// which is how one stale entry becomes an Ember-dark strip in a light
+    /// workbench.
+    func testBothEditorPalettesCoverTheSameWorkbenchKeys() {
+        let light = WarrenEmbeddedEditorPalette.light.colorCustomizations
+        let dark = WarrenEmbeddedEditorPalette.dark.colorCustomizations
+
+        XCTAssertEqual(Set(light.keys), Set(dark.keys))
+        XCTAssertFalse(light.isEmpty)
+        for (key, value) in light {
+            XCTAssertNotEqual(
+                value,
+                dark[key],
+                "\(key) is the same in both appearances, so one of them is wrong"
+            )
+        }
+        for (key, value) in light.merging(dark, uniquingKeysWith: { first, _ in first }) {
+            XCTAssertTrue(value.hasPrefix("#"), "\(key) must be a CSS hex color")
+            XCTAssertTrue([7, 9].contains(value.count), "\(key) has \(value.count) characters")
+        }
+    }
+
+    func testEditorPaletteResolvesTheRequestedAppearance() {
+        XCTAssertEqual(WarrenEmbeddedEditorPalette.resolved(for: .light), .light)
+        XCTAssertEqual(WarrenEmbeddedEditorPalette.resolved(for: .dark), .dark)
+        XCTAssertEqual(WarrenEmbeddedEditorAppearance(.light), .light)
+        XCTAssertEqual(WarrenEmbeddedEditorAppearance(.dark), .dark)
+    }
+
+    /// The injected scripts paint the page before the workbench theme loads. If
+    /// they carried the wrong appearance the editor would flash the other
+    /// appearance on every navigation.
+    func testInjectedAppearanceScriptsCarryTheRequestedAppearance() {
+        let light = WarrenEmbeddedEditorChrome.appearanceSource(appearance: .light)
+        XCTAssertTrue(light.contains("#ffffff"))
+        XCTAssertTrue(light.contains(#"const scheme = "light""#))
+        XCTAssertFalse(light.contains("dark"))
+
+        let dark = WarrenEmbeddedEditorChrome.appearanceSource(appearance: .dark)
+        XCTAssertTrue(dark.contains("#151110"))
+        XCTAssertTrue(dark.contains(#"const scheme = "dark""#))
+
+        // Both install and replace the same node, so a mid-session change
+        // cannot leave two style nodes fighting over the ground.
+        for source in [light, dark] {
+            XCTAssertTrue(source.contains(WarrenEmbeddedEditorChrome.backgroundStyleElementID))
+            XCTAssertTrue(source.contains("existing.remove()"))
+        }
+
+        let preview = WarrenEmbeddedEditorPreviewTheme.source(appearance: .light)
+        XCTAssertTrue(preview.contains("color-scheme: light"))
+        XCTAssertTrue(preview.contains("#ffffff"))
+        XCTAssertTrue(preview.contains(WarrenEmbeddedEditorPreviewTheme.styleElementID))
     }
 
     func testExtensionRegistryReadsInstalledIDsWithoutStartingCodeServer() throws {
@@ -321,6 +400,148 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             WarrenEmbeddedEditorPointerBoundary.action(for: .mouseMoved),
             .none
         )
+    }
+
+    /// The keyboard moves into the region on a press inside it, and out on a
+    /// press anywhere else. Warren routes focus for the region (RFC 0021 §3.2),
+    /// and this is the signal it routes on: the region is a WKWebView, whose
+    /// internal content view takes the click, so the subclass is never asked to
+    /// become first responder and cannot report it.
+    func testPressIntoTheEditorRegionTakesTheKeyboard() {
+        XCTAssertEqual(
+            WarrenEmbeddedEditorPointerBoundary.keyboardFocusChange(
+                for: .leftMouseDown,
+                hitEditor: true
+            ),
+            true
+        )
+        XCTAssertEqual(
+            WarrenEmbeddedEditorPointerBoundary.keyboardFocusChange(
+                for: .leftMouseDown,
+                hitEditor: false
+            ),
+            false
+        )
+    }
+
+    /// Only the press decides. A release outside the region routinely ends a
+    /// drag that began inside it — a selection pulled past the edge — and acting
+    /// on it would read as the keyboard leaving while the user is still editing.
+    func testReleaseAndMovementDoNotChangeEditorKeyboardFocus() {
+        XCTAssertNil(
+            WarrenEmbeddedEditorPointerBoundary.keyboardFocusChange(
+                for: .leftMouseUp,
+                hitEditor: false
+            )
+        )
+        XCTAssertNil(
+            WarrenEmbeddedEditorPointerBoundary.keyboardFocusChange(
+                for: .leftMouseUp,
+                hitEditor: true
+            )
+        )
+        XCTAssertNil(
+            WarrenEmbeddedEditorPointerBoundary.keyboardFocusChange(
+                for: .mouseMoved,
+                hitEditor: true
+            )
+        )
+    }
+
+    /// Switching Workspace has to switch the web view on screen.
+    ///
+    /// The editor region has one view identity for every Workspace: it sits at
+    /// the same place in the same split, so SwiftUI reuses it across a Workspace
+    /// change and only calls `updateNSView`. A host that returned the web view as
+    /// its own view therefore kept showing whichever Workspace created it first,
+    /// and a Workspace whose web view was already cached never re-rendered the
+    /// branch that would have rebuilt the host — so with the editor open in two
+    /// Workspaces of one Project, the region showed the wrong files and branch.
+    @MainActor
+    func testEditorHostSwapsTheWebViewWhenTheWorkspaceChanges() {
+        let container = WarrenEmbeddedEditorWebViewHost.ContainerView(
+            frame: NSRect(x: 0, y: 0, width: 400, height: 300)
+        )
+        let first = WKWebView(frame: .zero)
+        let second = WKWebView(frame: .zero)
+
+        container.mount(first)
+        XCTAssertEqual(container.subviews, [first])
+
+        container.mount(second)
+        XCTAssertEqual(
+            container.subviews,
+            [second],
+            "The region must show the Workspace it was last given, and only that one."
+        )
+    }
+
+    /// Re-mounting the same web view is what every layout pass does. It must not
+    /// detach and re-attach, which would reload the workbench.
+    @MainActor
+    func testEditorHostKeepsAnAlreadyMountedWebView() {
+        let container = WarrenEmbeddedEditorWebViewHost.ContainerView(
+            frame: NSRect(x: 0, y: 0, width: 400, height: 300)
+        )
+        let webView = WKWebView(frame: .zero)
+        container.mount(webView)
+        let originalSuperview = webView.superview
+
+        container.mount(webView)
+
+        XCTAssertIdentical(webView.superview, originalSuperview)
+        XCTAssertEqual(container.subviews, [webView])
+    }
+
+    /// The web view fills the region, and keeps filling it as the split divider
+    /// moves.
+    @MainActor
+    func testEditorHostResizesTheWebViewWithTheRegion() {
+        let container = WarrenEmbeddedEditorWebViewHost.ContainerView(
+            frame: NSRect(x: 0, y: 0, width: 400, height: 300)
+        )
+        let webView = WKWebView(frame: .zero)
+        container.mount(webView)
+
+        XCTAssertEqual(webView.frame, container.bounds)
+        XCTAssertEqual(webView.autoresizingMask, [.width, .height])
+    }
+
+    /// Handing a web view to a second container must not leave it parented to the
+    /// first. A Workspace revisited after eviction takes this path.
+    @MainActor
+    func testEditorHostMovesAWebViewBetweenContainers() {
+        let first = WarrenEmbeddedEditorWebViewHost.ContainerView(
+            frame: NSRect(x: 0, y: 0, width: 400, height: 300)
+        )
+        let second = WarrenEmbeddedEditorWebViewHost.ContainerView(
+            frame: NSRect(x: 0, y: 0, width: 400, height: 300)
+        )
+        let webView = WKWebView(frame: .zero)
+
+        first.mount(webView)
+        second.mount(webView)
+
+        XCTAssertEqual(first.subviews, [])
+        XCTAssertEqual(second.subviews, [webView])
+    }
+
+    /// A region that is torn down while it holds the keyboard has to give it
+    /// back, or the Terminal is left permanently treated as unfocused.
+    @MainActor
+    func testStoppingTheEditorReleasesTheKeyboard() async {
+        let model = WarrenEmbeddedEditorModel(
+            environment: [:],
+            supportDirectory: FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true),
+            executableResolver: { _ in nil }
+        )
+        model.setKeyboardFocusForTesting(true)
+        XCTAssertTrue(model.hasKeyboardFocus)
+
+        model.stop()
+
+        XCTAssertFalse(model.hasKeyboardFocus)
     }
 
     @MainActor
@@ -590,12 +811,18 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
     func testEditorChromeKeepsOnlyCoreStatusBarItems() {
         let configuration = WKWebViewConfiguration()
 
-        WarrenEmbeddedEditorChrome.install(in: configuration)
+        WarrenEmbeddedEditorChrome.install(in: configuration, appearance: .dark)
 
         let scripts = configuration.userContentController.userScripts
-        let script = scripts.first
+        // The appearance script paints the ground and leads, so it is in place
+        // before the chrome script starts rearranging the workbench.
+        XCTAssertEqual(scripts.count, 3)
+        let ground = scripts.first?.source ?? ""
+        XCTAssertTrue(ground.contains(WarrenEmbeddedEditorChrome.backgroundStyleElementID))
+        XCTAssertTrue(ground.contains("#workbench-container"))
+
+        let script = scripts.dropFirst().first
         let source = script?.source ?? ""
-        XCTAssertEqual(scripts.count, 2)
         XCTAssertEqual(script?.injectionTime, .atDocumentStart)
         XCTAssertEqual(script?.isForMainFrameOnly, true)
         XCTAssertTrue(source.contains("status.scm.0"))
@@ -604,8 +831,6 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertTrue(source.contains("status.editor.mode"))
         XCTAssertTrue(source.contains("status.notifications"))
         XCTAssertTrue(source.contains("MutationObserver"))
-        XCTAssertTrue(source.contains("warren-editor-background-style"))
-        XCTAssertTrue(source.contains("#workbench-container"))
         XCTAssertTrue(source.contains(".monaco-workbench .part.editor"))
         XCTAssertTrue(source.contains(".monaco-progress-container"))
         XCTAssertTrue(source.contains("document.fonts"))
@@ -647,7 +872,9 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         let previewScript = scripts.first { !$0.isForMainFrameOnly }
         XCTAssertEqual(previewScript?.injectionTime, .atDocumentStart)
         XCTAssertTrue(previewScript?.source.contains("/vs/workbench/contrib/webview/browser/pre/") == true)
-        XCTAssertTrue(previewScript?.source.contains("warren-markdown-preview-dark-style") == true)
+        XCTAssertTrue(
+            previewScript?.source.contains(WarrenEmbeddedEditorPreviewTheme.styleElementID) == true
+        )
         XCTAssertTrue(previewScript?.source.contains("color-scheme: dark") == true)
         XCTAssertTrue(previewScript?.source.contains("--vscode-editor-background") == true)
     }
@@ -655,7 +882,7 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
     @MainActor
     func testEditorChromeReclaimsTheHiddenTitlebarRow() async throws {
         let configuration = WKWebViewConfiguration()
-        WarrenEmbeddedEditorChrome.install(in: configuration)
+        WarrenEmbeddedEditorChrome.install(in: configuration, appearance: .dark)
         let webView = WKWebView(
             frame: CGRect(x: 0, y: 0, width: 320, height: 200),
             configuration: configuration
@@ -784,7 +1011,7 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
             messageHandler,
             name: WarrenEmbeddedEditorChrome.reloadMessageHandlerName
         )
-        WarrenEmbeddedEditorChrome.install(in: configuration)
+        WarrenEmbeddedEditorChrome.install(in: configuration, appearance: .dark)
         let webView = WKWebView(
             frame: CGRect(x: 0, y: 0, width: 320, height: 200),
             configuration: configuration
@@ -961,7 +1188,7 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
     @MainActor
     func testEditorChromeGitButtonUsesNativeSourceControlAction() async throws {
         let configuration = WKWebViewConfiguration()
-        WarrenEmbeddedEditorChrome.install(in: configuration)
+        WarrenEmbeddedEditorChrome.install(in: configuration, appearance: .dark)
         let webView = WKWebView(
             frame: CGRect(x: 0, y: 0, width: 320, height: 200),
             configuration: configuration
@@ -1050,7 +1277,7 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
     @MainActor
     func testEditorChromeShowsMarkdownPreviewOnlyForMarkdownAndUsesEditorContext() async throws {
         let configuration = WKWebViewConfiguration()
-        WarrenEmbeddedEditorChrome.install(in: configuration)
+        WarrenEmbeddedEditorChrome.install(in: configuration, appearance: .dark)
         let webView = WKWebView(
             frame: CGRect(x: 0, y: 0, width: 320, height: 200),
             configuration: configuration
@@ -1132,7 +1359,7 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
     @MainActor
     func testEditorChromeSupportsCurrentVSCodeMarkdownEditorDOM() async throws {
         let configuration = WKWebViewConfiguration()
-        WarrenEmbeddedEditorChrome.install(in: configuration)
+        WarrenEmbeddedEditorChrome.install(in: configuration, appearance: .dark)
         let webView = WKWebView(
             frame: CGRect(x: 0, y: 0, width: 320, height: 200),
             configuration: configuration
@@ -1205,7 +1432,7 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
     @MainActor
     func testEditorChromeOpensHistoryChangesAsFilesInsteadOfDiffs() async throws {
         let configuration = WKWebViewConfiguration()
-        WarrenEmbeddedEditorChrome.install(in: configuration)
+        WarrenEmbeddedEditorChrome.install(in: configuration, appearance: .dark)
         let webView = WKWebView(
             frame: CGRect(x: 0, y: 0, width: 320, height: 200),
             configuration: configuration

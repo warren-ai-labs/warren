@@ -410,32 +410,48 @@ final class GhosttyAdapterTests: XCTestCase {
         let (surface, view, window) = try await makeMountedTerminal(recorder: recorder)
         defer { window.orderOut(nil) }
 
-        // AppKit can report a light appearance for this host-managed view even
-        // though Warren's product theme is dark-only. Pin that lifecycle input
-        // so the regression test does not depend on the test runner's theme.
-        view.appearance = NSAppearance(named: .aqua)
-        view.viewDidChangeEffectiveAppearance()
-        try await Task.sleep(for: .milliseconds(50))
+        // This reply is how a TUI learns what it is drawing on: Codex batches
+        // OSC 10/11 during its startup probe and paints itself to match the
+        // answer. So the answer has to track Warren's appearance, or the program
+        // picks ink for a ground it does not have. Pin the lifecycle input per
+        // appearance rather than depending on the test runner's own.
+        //
+        // The writes go through the production output writer so the assertion
+        // covers the host-managed PTY path, not only the synchronous helper.
+        for (appearanceName, appearance, expectedReply) in [
+            (
+                "light",
+                NSAppearance(named: .aqua),
+                "\u{1b}]10;rgb:1c1c/1919/1717\u{1b}\\\u{1b}]11;rgb:ffff/ffff/ffff\u{1b}\\"
+            ),
+            (
+                "dark",
+                NSAppearance(named: .darkAqua),
+                "\u{1b}]10;rgb:eaea/e8e8/e6e6\u{1b}\\\u{1b}]11;rgb:1515/1111/1010\u{1b}\\"
+            ),
+        ] {
+            let alreadyRecorded = recorder.allBytes().count
+            view.appearance = appearance
+            view.viewDidChangeEffectiveAppearance()
+            try await Task.sleep(for: .milliseconds(50))
 
-        // Codex batches OSC 10/11 during its startup probe. Exercise the
-        // production output writer so the assertion covers the host-managed
-        // PTY path rather than only the synchronous test helper.
-        surface.outputWriter.enqueueRaw(
-            Data("\u{1b}]10;?\u{1b}\\\u{1b}]11;?\u{1b}\\".utf8)
-        )
+            surface.outputWriter.enqueueRaw(
+                Data("\u{1b}]10;?\u{1b}\\\u{1b}]11;?\u{1b}\\".utf8)
+            )
 
-        let expected = Data(
-            "\u{1b}]10;rgb:eaea/e8e8/e6e6\u{1b}\\\u{1b}]11;rgb:1515/1111/1010\u{1b}\\".utf8
-        )
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-        while recorder.allBytes().count < expected.count, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+            let expected = Data(expectedReply.utf8)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while recorder.allBytes().count < alreadyRecorded + expected.count,
+                  ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(
+                Array(recorder.allBytes().dropFirst(alreadyRecorded)),
+                Array(expected),
+                "the \(appearanceName) appearance should answer Codex's OSC 10/11 probe "
+                    + "with the ground it actually renders"
+            )
         }
-        XCTAssertEqual(
-            Array(recorder.allBytes()),
-            Array(expected),
-            "the Warren Ghostty surface should answer Codex's OSC 10/11 startup probe"
-        )
     }
 
     @MainActor
@@ -774,8 +790,16 @@ final class GhosttyAdapterTests: XCTestCase {
     @MainActor
     func testNativeSnapshotRestoreReplacesViewportAndContinuesAtCursor() async throws {
         let recorder = LockedInputRecorder()
-        let (surface, _, window) = try await makeMountedTerminal(recorder: recorder)
+        let (surface, view, window) = try await makeMountedTerminal(recorder: recorder)
         defer { window.orderOut(nil) }
+
+        // What is under test is that a restore reapplies the configured colors,
+        // not which appearance configured them. Pin the appearance so the
+        // expectation below is a constant rather than a reflection of whichever
+        // appearance the test runner happens to be in.
+        view.appearance = NSAppearance(named: .darkAqua)
+        view.viewDidChangeEffectiveAppearance()
+        try await Task.sleep(for: .milliseconds(50))
 
         surface.receive(Data("old-content".utf8))
         let snapshot = try XCTUnwrap(Data(base64Encoded: Self.atomicSnapshotFixture))

@@ -237,6 +237,26 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         }
     }
 
+    /// Whether this preset's artwork is a single-color glyph that Warren tints
+    /// rather than a logo it reproduces.
+    ///
+    /// These three ship as one flat grey picked against the Ember bar, which is
+    /// the same grey as `mutedForeground` — so they are really the row's text
+    /// color drawn as a shape, and on paper that grey goes muddy. Tinting them
+    /// from the resolved token keeps one asset answering both appearances; a
+    /// second set of files would be two greys to keep in step instead of none.
+    ///
+    /// The rest are brand marks. Their color is the identity, so they are
+    /// reproduced as authored in both appearances. `codex` is a brand mark too,
+    /// but a two-tone one, which is why it carries a separate light artwork
+    /// instead of a tint.
+    var presetBarIconIsTintable: Bool {
+        switch id {
+        case "shell", "opencode", "pi": true
+        default: false
+        }
+    }
+
     public var isAI: Bool {
         switch request.kind {
         case .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae: true

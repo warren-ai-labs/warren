@@ -107,6 +107,9 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private weak var copyLocalWebURLSeparator: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before the first window is built, so the initial paint is already in
+        // the chosen appearance rather than flashing the default one.
+        WarrenDesktopAppearance.applyStoredMode()
         launchDaemonMenuBar()
         presentMainWindowIfNeeded()
         NSApp.mainMenu = buildMainMenu(target: self)
@@ -308,8 +311,11 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
     private func makeMainWindow() -> NSWindow {
+        // No `preferredColorScheme` here: the appearance preference drives
+        // `NSApp.appearance`, which SwiftUI reads. Pinning a scheme on the root
+        // view would override the user's choice for the SwiftUI subtree only,
+        // leaving AppKit chrome on the other appearance.
         let root = WarrenCompositionRoot()
-            .preferredColorScheme(.dark)
             .ignoresSafeArea()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         let hosting = NSHostingView(rootView: root)

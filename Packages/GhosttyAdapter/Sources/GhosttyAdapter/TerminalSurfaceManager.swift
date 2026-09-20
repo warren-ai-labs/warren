@@ -582,8 +582,17 @@ public final class TerminalSurfaceManager {
         // otherwise typing into a freshly clicked pane is silently dropped.
         view.onDidBecomeFirstResponder = { [weak self] in
             guard let self else { return }
-            guard self.isActive(sessionID),
-                  self.latestIntent.activeSessionID != sessionID else { return }
+            guard self.isActive(sessionID) else { return }
+            guard self.latestIntent.activeSessionID != sessionID else {
+                // The keyboard came back to the pane that was already selected,
+                // which is what a click into the Terminal after a trip through
+                // the editor region looks like. There is no Session to select,
+                // but the daemon still has to be told: nothing else reports
+                // this, because no Session or pane changed and so no
+                // reconciliation runs.
+                self.reportFocusReturn(sessionID)
+                return
+            }
             self.onFocusRequested?(sessionID)
         }
         view.delegate = surface.state
@@ -804,6 +813,57 @@ public final class TerminalSurfaceManager {
             guard !Task.isCancelled, let self else { return }
             self.resizeDebounceTask = nil
             self.scheduleReconciliation(.geometry)
+        }
+    }
+
+    /// Re-reports focus for a surface that AppKit just handed the keyboard back
+    /// to without any Session or pane having changed.
+    ///
+    /// Only reports when this really is the selected surface in a key window, so
+    /// a background pane that becomes first responder during a transition cannot
+    /// claim the lease.
+    /// Records that the keyboard went to a surface in this window that is not a
+    /// Terminal, so the daemon's view of focus is now stale.
+    ///
+    /// `focusReported` is the existing "the daemon needs telling again" signal,
+    /// reset by recovery, demote, and window blur. A trip into the editor region
+    /// is a fourth way for the report to go stale while the pane itself stays
+    /// selected and attached, and it is the only one Warren cannot observe from
+    /// AppKit alone: the region is not a pane and owns no Session, so the host
+    /// has to say so.
+    public func noteTerminalFocusSurrendered() {
+        guard let sessionID = latestIntent.activeSessionID,
+              let entry = entries[sessionID] else { return }
+        entry.focusReported = false
+    }
+
+    /// Deferred by one hop because AppKit has not yet installed this view as the
+    /// window's first responder while `becomeFirstResponder` is still running,
+    /// so the ownership check would read the outgoing responder.
+    ///
+    /// Reports only when the daemon's view of focus is stale. `focus` claims the
+    /// responder itself, so an ordinary promotion enters this path on the very
+    /// claim it is already about to report; by the time this hop runs that claim
+    /// has set `focusReported`, which is what keeps a tab switch to one report
+    /// instead of two.
+    ///
+    /// Deliberately does not consult `wantsTerminalFocus`. AppKit handing over
+    /// the keyboard is a fact, where the intent is Warren's description of what
+    /// it wants, and the failure being fixed here comes from letting the
+    /// description outrank the fact. `ownsTerminalFocus` carries the checks that
+    /// matter: active surface, key window, real first responder.
+    private func reportFocusReturn(_ sessionID: TerminalSessionID) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  let entry = self.entries[sessionID],
+                  !entry.focusReported,
+                  self.ownsTerminalFocus(sessionID) else { return }
+            self.focus(
+                sessionID,
+                generation: self.transitionGeneration,
+                forceReport: true,
+                trigger: "focusReturn"
+            )
         }
     }
 

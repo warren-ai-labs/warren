@@ -426,8 +426,7 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                 // split renderer: inactive surfaces remain live and readable,
                 // but a subtle wash makes the keyboard target unambiguous.
                 if !isActive, isSplit {
-                    Color.black
-                        .opacity(0.08)
+                    tokens.terminalInactiveWash
                         .allowsHitTesting(false)
                 }
             }

@@ -231,6 +231,11 @@ struct WarrenDesktopWorkspaceRow: View {
             // The indent lives inside the button, as it does on a project row,
             // so nesting a workspace deeper never shrinks the row's hit area.
             .padding(.leading, WarrenDesktopSidebarIndent.workspace)
+            // Leave the trailing accessories their own room. The name truncates
+            // against this inset instead of running under them, and the row
+            // itself still fills the rail: the frame below is unchanged, so the
+            // whole width stays clickable.
+            .padding(.trailing, trailingAccessoryInset)
             .frame(minHeight: rowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
@@ -306,6 +311,13 @@ struct WarrenDesktopWorkspaceRow: View {
         return actions
     }
 
+    private var trailingAccessoryInset: CGFloat {
+        WarrenDesktopWorkspaceRowAccessories.inset(
+            isEditorMarked: isEditorMarked,
+            showsTaskLink: taskID != nil && taskName != nil
+        )
+    }
+
     /// The marked Workspace's editor entry.
     ///
     /// `chevron.left.forwardslash.chevron.right` is the mark: it reads as code
@@ -327,7 +339,7 @@ struct WarrenDesktopWorkspaceRow: View {
                     onOpenEditor()
                 } label: {
                     glyph
-                        .frame(width: 20, height: 18)
+                        .frame(width: WarrenDesktopWorkspaceRowAccessories.editorEntryWidth, height: 18)
                         .contentShape(.rect)
                 }
                 .buttonStyle(WarrenChromeButtonStyle())
@@ -347,7 +359,7 @@ struct WarrenDesktopWorkspaceRow: View {
                 )
             } else {
                 glyph
-                    .frame(width: 20, height: 18)
+                    .frame(width: WarrenDesktopWorkspaceRowAccessories.editorEntryWidth, height: 18)
                     .accessibilityHidden(true)
                     .help(label)
             }
@@ -365,7 +377,7 @@ struct WarrenDesktopWorkspaceRow: View {
                 Text("Task")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(tokens.highlight)
-                    .frame(width: 32, height: 18)
+                    .frame(width: WarrenDesktopWorkspaceRowAccessories.taskLinkWidth, height: 18)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)

@@ -104,14 +104,14 @@ public struct WarrenPanelSurfaceModifier: ViewModifier {
                 }
             }
             .shadow(
-                color: .black.opacity(elevation.opacity),
+                color: .black.opacity(colorScheme == .light ? min(elevation.opacity * 0.25, 0.14) : elevation.opacity),
                 radius: elevation.radius,
                 y: elevation.y
             )
             .shadow(
-                color: isElevatedModal ? .white.opacity(0.04) : .clear,
-                radius: isElevatedModal ? 1 : 0,
-                y: isElevatedModal ? 1 : 0
+                color: (isElevatedModal && colorScheme == .dark) ? .white.opacity(0.04) : .clear,
+                radius: (isElevatedModal && colorScheme == .dark) ? 1 : 0,
+                y: (isElevatedModal && colorScheme == .dark) ? 1 : 0
             )
     }
 }
@@ -144,11 +144,12 @@ public extension View {
     }
 }
 
-/// Full-window modal scrim shared by every custom dialog. The backdrop uses
-/// the same 50% black scrim as the command palette so modal and palette
+/// Full-window modal scrim shared by every custom dialog. The backdrop draws
+/// `modalScrim`, the same token the command palette uses, so modal and palette
 /// never disagree about how much of the app should recede.
 public struct WarrenModalBackdrop<Content: View>: View {
     private let content: Content
+    @Environment(\.colorScheme) private var colorScheme
 
     public init(@ViewBuilder content: () -> Content) {
         self.content = content()
@@ -156,7 +157,7 @@ public struct WarrenModalBackdrop<Content: View>: View {
 
     public var body: some View {
         ZStack {
-            Color.black.opacity(0.5)
+            WarrenColorTokens.resolved(for: colorScheme).modalScrim
                 .ignoresSafeArea()
                 .accessibilityHidden(true)
             content
@@ -325,10 +326,11 @@ public struct WarrenSecondaryButtonStyle: ButtonStyle {
         let font: Font
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @Environment(\.colorScheme) private var colorScheme
         @State private var hovered = false
 
         var body: some View {
-            let tokens = WarrenColorTokens.dark
+            let tokens = WarrenColorTokens.resolved(for: colorScheme)
             let state = WarrenInteractionState.resolve(
                 disabled: !isEnabled,
                 pressed: configuration.isPressed,
@@ -381,10 +383,11 @@ public struct WarrenDestructiveButtonStyle: ButtonStyle {
         let font: Font
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @Environment(\.colorScheme) private var colorScheme
         @State private var hovered = false
 
         var body: some View {
-            let tokens = WarrenColorTokens.dark
+            let tokens = WarrenColorTokens.resolved(for: colorScheme)
             let state = WarrenInteractionState.resolve(
                 disabled: !isEnabled,
                 pressed: configuration.isPressed,

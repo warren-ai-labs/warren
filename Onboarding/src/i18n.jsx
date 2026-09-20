@@ -120,6 +120,44 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.20.0",
+        dateISO: "2026-09-20",
+        date: "September 20, 2026",
+        title: "Warren brings a complete light appearance to Desktop and Terminal.",
+        summary:
+          "A minor release that adds a client-local System, Light, and Dark appearance across Desktop, Terminal, TUIs, and the embedded editor, and tightens terminal focus and pointer delivery; the JSON control protocol remains at 4.0.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add a client-local appearance setting with System, Light, and Dark choices. The new Ember Paper palette covers Desktop chrome, terminal ANSI colors, TUIs, and the embedded editor, and switches live with the selected appearance.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Make the terminal and its TUIs follow Warren's selected appearance, including Ghostty's bold and contrast behavior, OSC color answers, and the editor's embedded workbench theme.",
+              "Refresh the CLI help and glossary to match the shipped surface: document `session panes`, the accepted Agent providers and options, both removal spellings, and the Host-owned Pane model.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Deliver terminal pointer, resize, and text callbacks through the live surface path, so focus answers where the keyboard actually is and returns to a Terminal that kept its pane.",
+              "Recover an embedded editor region after its model stops, keep its workspace and cursor registrations current, and prevent its row badges from overlapping.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0 and the Host state schema stays at 4; this release migrates no state.",
+              "Appearance is client-local and existing installations remain Dark by default; System and Light are opt-in from Desktop settings.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.19.0",
         dateISO: "2026-09-18",
         date: "September 18, 2026",
@@ -1299,6 +1337,44 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.20.0",
+        dateISO: "2026-09-20",
+        date: "2026 年 9 月 20 日",
+        title: "Warren 为 Desktop 与 Terminal 带来完整的浅色外观。",
+        summary:
+          "次版本：新增本机可选的 System、Light 与 Dark 外观，让 Desktop、Terminal、TUI 和内嵌编辑器同步，并收紧终端焦点与指针投递；JSON 控制协议仍为 4.0。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "新增本机外观设置，可选择 System、Light 或 Dark。新的 Ember Paper 调色板覆盖 Desktop chrome、终端 ANSI 颜色、TUI 与内嵌编辑器，并会随所选外观即时切换。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "终端及其 TUI 跟随 Warren 所选外观，包括 Ghostty 的粗体与对比度行为、OSC 颜色响应，以及编辑器内嵌工作台主题。",
+              "让 CLI 帮助与术语表和实际界面一致：补充 `session panes`、可用 Agent provider 与选项、两种移除写法，以及由 Host 所有的 Pane 模型。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "通过实际运行的 surface 路径投递终端指针、resize 与文本回调，使焦点回答当前键盘所在位置，并能回到仍保留 pane 的 Terminal。",
+              "编辑器模型停止后可恢复其区域，保持 Workspace 与 cursor 注册最新，并防止行徽章互相遮挡。",
+            ],
+          },
+          {
+            title: "发布说明",
+            items: [
+              "JSON 控制协议仍为 4.0，Host state schema 仍为 4；本版本不迁移状态。",
+              "外观设置仅属于客户端，已有安装仍默认 Dark；System 与 Light 需在 Desktop 设置中主动选择。",
+              "本地打包使用现有 Apple Development 签名且未 notarize；归档仅适合内部或临时测试，不适合一般公开分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.19.0",
         dateISO: "2026-09-18",

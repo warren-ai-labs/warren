@@ -311,16 +311,19 @@ The Web client mirrors the Desktop resource model:
 
 ## 12. Appearance
 
-Appearance is per-surface, not global. The three clients do not share one palette:
+Appearance is per-surface, not global, and it is always client-local: it describes the screen in front of you, never the Host or the Sessions running on it.
 
-- **macOS Desktop**: dark only. It uses the shared `WarrenColorTokens`, whose `resolved(for:)` returns the Ember dark values for every color scheme.
+- **macOS Desktop**: ships both appearances. `WarrenColorTokens.resolved(for:)` answers the ambient color scheme with Ember (dark) or Ember Paper (light). Settings offers System, Light, and Dark; the default is Dark, because Warren shipped dark-only and a new preference should be discoverable rather than retroactive. The authority is `NSApplication.appearance`, not SwiftUI's `preferredColorScheme`: menus, scrollers, selection highlights, and the open/save panels read the AppKit appearance and never see a SwiftUI environment value, and only a `nil` override keeps following macOS through a mid-session change or its Auto schedule.
 - **Web/PWA**: dark only. `color-scheme: dark` is declared at `:root`, and there is no light branch.
-- **iOS**: follows the system appearance by default, with a first-class light palette (Ember Paper) beside the Ember dark one. Settings also offers explicit Light and Dark overrides for users who want the client independent of the device setting. iOS therefore owns its design semantics in `IOSDesignTokens.swift` and does not consume the shared color tokens.
+- **iOS**: follows the system appearance by default, with the same two palettes and the same three explicit modes. iOS owns its own design semantics in `IOSDesignTokens.swift` and does not consume the shared color tokens; the two files agree on the palette values, not on the code.
 
-Two invariants follow:
+Five invariants follow:
 
-1. **The terminal canvas is dark in every appearance, on every client.** ANSI palettes — and the TUIs that assume them — are calibrated against a dark ground, so inverting the canvas would misrender the bright color series rather than merely restyle it. Under a light appearance the canvas is inset and bordered so it reads as a deliberate dark surface.
-2. **Elevation is expressed with opaque per-appearance surfaces, not with alpha.** A translucent light wash lifts a surface off a dark ground but is invisible over a light one, where elevation has to darken instead. Any surface that must read in both appearances resolves an explicit value per appearance.
+1. **What the terminal reports and what it renders are one decision.** A TUI does not infer the terminal's appearance; it asks over OSC 10/11 and is told over the renderer's color-scheme report. Claude Code and Codex both do this, so the canvas colors, the ANSI palette, and the reported scheme are a single unit that moves together. Reporting one appearance while painting the other is not a cosmetic mismatch — the program picks ink for the ground it was told about, and dark ink on a dark canvas is unreadable output.
+2. **An ANSI palette belongs to a ground, so there are two.** The sixteen slots are a vocabulary addressed by index, and the index carries a positional expectation: slot 0 recedes into the ground, slot 15 stands furthest out, and the bright half is the lighter half. On paper those expectations change which end of the value scale they sit at, which is why `TerminalPalette` holds `ember` and `emberPaper` rather than one palette and a brightness transform. Desktop ships both; iOS still pins its canvas dark, because SwiftTerm there has neither the OSC plumbing nor the contrast floor this relies on.
+3. **Elevation is expressed with opaque per-appearance surfaces, not with alpha.** A translucent light wash lifts a surface off a dark ground but is invisible over a light one, where elevation has to darken instead. Any surface that must read in both appearances resolves an explicit value per appearance.
+4. **A color that ignores the appearance preference needs a stated reason.** Scrims darken their ground and stay black in both. Transient HUD chips stay dark because that is the platform's own answer for something that must be legible over arbitrary content. The wash over an inactive pane darkens in both, because it sits on a canvas carrying whatever the running program painted, and a foreground-derived wash would invert the signal on paper and make the inactive pane the brighter one. Everything else resolves.
+5. **The embedded editor moves with the appearance.** Its workbench keys are derived from one named palette per appearance rather than held as two editable copies, and its base VS Code theme switches too — the customizations do not cover syntax token colors, so a light workbench on a dark base theme would render dark-theme syntax on paper.
 
 Colors in each client resolve through that client's semantic token tier. A component never hardcodes a literal color; a missing token should surface as a visible defect rather than silently resolve to a stale fallback.
 

@@ -46,6 +46,7 @@ private enum WarrenSetupScriptContract {
 private extension WarrenDesktopSettingsSection {
     var iconName: String {
         switch self {
+        case .appearance: "circle.lefthalf.filled"
         case .terminalFont: "terminal"
         case .terminalTitle: "textformat"
         case .terminalRuntime: "cpu"
@@ -65,6 +66,7 @@ private extension WarrenDesktopSettingsSection {
 
     var detail: String {
         switch self {
+        case .appearance: "Light, dark, or follow macOS."
         case .terminalFont: "Applied to every terminal surface."
         case .terminalTitle: "Auxiliary context below the preset bar."
         case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
@@ -84,6 +86,8 @@ private extension WarrenDesktopSettingsSection {
 
     var searchTerms: [String] {
         switch self {
+        case .appearance:
+            [rawValue, detail, "appearance", "theme", "light", "dark", "system", "color", "colour", "palette", "contrast"]
         case .terminalFont: [rawValue, detail, "font", "family", "size", "typography"]
         case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
         case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
@@ -102,8 +106,8 @@ private extension WarrenDesktopSettingsSection {
     }
 
     var isTerminalSection: Bool {
-        self != .notifications && self != .usageOverview && self != .usage && self != .relay
-            && self != .lanPairing && self != .publicAccess
+        self != .appearance && self != .notifications && self != .usageOverview && self != .usage
+            && self != .relay && self != .lanPairing && self != .publicAccess
     }
 }
 
@@ -188,6 +192,8 @@ struct WarrenDesktopSettingsView: View {
     private var showsTasks = true
     @AppStorage(WarrenPreferenceKey.terminalSplitChordsEnabled)
     private var splitChordsEnabled = false
+    @AppStorage(WarrenPreferenceKey.appearanceMode)
+    private var appearanceModeRawValue = WarrenAppearanceMode.defaultValue.rawValue
     @State private var openAIBaseURLDraft = ""
     @State private var openAIModelDraft = ""
     @State private var openAIKeyDraft = ""
@@ -386,7 +392,8 @@ struct WarrenDesktopSettingsView: View {
 
     private func navigationPanel(tokens: WarrenColorTokens) -> some View {
         let appearanceGroup = visibleSections.filter {
-            $0 == .terminalFont || $0 == .terminalTitle || $0 == .terminalRuntime || $0 == .splits
+            $0 == .appearance || $0 == .terminalFont || $0 == .terminalTitle
+                || $0 == .terminalRuntime || $0 == .splits
         }
         let workflowGroup = visibleSections.filter {
             $0 == .presets || $0 == .workspaces || $0 == .externalIDEs
@@ -712,6 +719,8 @@ struct WarrenDesktopSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 switch selectedSection {
+                case .appearance:
+                    appearanceSection(tokens: tokens)
                 case .terminalFont:
                     terminalFontSection(tokens: tokens)
                 case .terminalTitle:
@@ -2610,6 +2619,61 @@ struct WarrenDesktopSettingsView: View {
             get: { defaultRuntime ?? "ghostline" },
             set: { onSetRuntime($0) }
         )
+    }
+
+    /// Writes through to `NSApp.appearance` as well as to the preference.
+    ///
+    /// `@AppStorage` alone would repaint the SwiftUI tree but leave menus,
+    /// scrollers and panels on the old appearance until the next launch.
+    private var appearanceSelection: Binding<WarrenAppearanceMode> {
+        Binding(
+            get: { WarrenAppearanceMode(storedValue: appearanceModeRawValue) },
+            set: { mode in
+                appearanceModeRawValue = mode.rawValue
+                WarrenDesktopAppearance.apply(mode)
+            }
+        )
+    }
+
+    private func appearanceSection(tokens: WarrenColorTokens) -> some View {
+        settingsSection("Appearance", section: .appearance, tokens: tokens) {
+            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+                WarrenSettingsSectionHeader(
+                    "Color Scheme",
+                    description: "Applies to this Mac only. Other clients keep their own appearance.",
+                    tokens: tokens
+                )
+
+                WarrenSettingsCard(tokens: tokens) {
+                    WarrenSettingsRow(
+                        title: "Appearance",
+                        subtitle: "System follows the macOS setting, including its Auto schedule.",
+                        tokens: tokens
+                    ) {
+                        Picker("Appearance", selection: appearanceSelection) {
+                            ForEach(WarrenAppearanceMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .font(WarrenTypography.settingsControl)
+                        .frame(width: 240)
+                        .accessibilityIdentifier("settings.appearance.picker")
+                    }
+                }
+            }
+
+            Text(
+                "Warren uses the Ember Paper theme for light mode across both the "
+                    + "desktop and terminal, with an ANSI palette calibrated for "
+                    + "high contrast and legibility on light backgrounds."
+            )
+            .font(WarrenTypography.settingsSupporting)
+            .foregroundStyle(tokens.mutedForeground)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, WarrenSpacing.xxs)
+        }
     }
 
     private func terminalRuntimeSection(tokens: WarrenColorTokens) -> some View {

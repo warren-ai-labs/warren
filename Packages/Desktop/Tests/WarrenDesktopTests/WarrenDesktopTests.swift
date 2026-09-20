@@ -3504,6 +3504,32 @@ final class WarrenDesktopTests: XCTestCase {
         }
     }
 
+    /// The cache marks an image as a template on first load and then hands that
+    /// same instance to everyone, so a tintable icon must not be reachable under
+    /// a name that also serves an untinted one.
+    func testPresetIconCacheAppliesTemplateFlagOnFirstLoad() {
+        let cache = WarrenPresetIconCache { _ in NSImage(size: NSSize(width: 12, height: 12)) }
+
+        XCTAssertEqual(cache.image(named: "tinted", template: true)?.isTemplate, true)
+        XCTAssertEqual(cache.image(named: "brand")?.isTemplate, false)
+    }
+
+    /// Only the single-color glyphs are tinted. A brand mark's color is its
+    /// identity, so tinting one would erase it — and Codex's mark is two-tone,
+    /// which a template mask would flatten into a solid blob.
+    func testOnlySingleColorPresetGlyphsAreTinted() {
+        let tintable = Set(
+            WarrenDesktopSessionPreset.pinned
+                .filter(\.presetBarIconIsTintable)
+                .map(\.id)
+        )
+
+        XCTAssertEqual(tintable, ["shell", "opencode", "pi"])
+        for brand in ["claude", "codex", "qoder", "antigravity", "trae"] {
+            XCTAssertFalse(tintable.contains(brand), "\(brand) is a brand mark")
+        }
+    }
+
     func testSelectionReconcilesEmptyToLoadedProjection() {
         let fixture = WarrenDesktopFixture.preview
         let empty = WarrenDesktopProjection.empty(host: fixture.host)

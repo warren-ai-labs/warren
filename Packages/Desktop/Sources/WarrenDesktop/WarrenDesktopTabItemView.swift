@@ -254,29 +254,33 @@ struct WarrenDesktopTabItem: View {
             WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
             value: isSelected
         )
-        .overlay {
-            Rectangle()
-                .stroke(isSelected ? tokens.border : .clear, lineWidth: isSelected ? 1 : 0)
+        .overlay(alignment: .top) {
+            if isSelected {
+                Rectangle()
+                    .fill(tokens.border)
+                    .frame(height: WarrenSpacing.hairline)
+            }
+        }
+        .overlay(alignment: .leading) {
+            if isSelected {
+                Rectangle()
+                    .fill(tokens.border)
+                    .frame(width: WarrenSpacing.hairline)
+            }
         }
         .overlay(alignment: .trailing) {
-            // Tabs separate with a hairline. The active tab keeps its own
-            // stroke instead, so the boundary never doubles.
+            // Active tab outlines trailing edge; inactive tabs draw hairline separator.
             Rectangle()
-                .fill(isSelected || !showsTrailingSeparator ? .clear : tokens.border)
+                .fill((isSelected || showsTrailingSeparator) ? tokens.border : .clear)
                 .frame(width: WarrenSpacing.hairline)
         }
         .overlay(alignment: .bottom) {
-            // The active tab carries a neutral selection rule. Its background
-            // differs from the chrome surface by only a few units of 255, which
-            // is too little to answer "which tab is live" at a glance. Inactive
-            // tabs keep the unbroken 1px separator.
+            // Superset-aligned tab flow: active tab has a transparent bottom so its
+            // background flows seamlessly into the content canvas below. Inactive tabs
+            // keep the continuous baseline separator.
             Rectangle()
-                .fill(isSelected ? tokens.activeTabIndicator : tokens.border)
-                .frame(
-                    height: isSelected
-                        ? WarrenLayoutMetrics.activeTabIndicatorHeight
-                        : WarrenSpacing.hairline
-                )
+                .fill(isSelected ? .clear : tokens.border)
+                .frame(height: WarrenSpacing.hairline)
         }
         .contentShape(.rect)
         .dropDestination(for: String.self) { tabIDs, _ in

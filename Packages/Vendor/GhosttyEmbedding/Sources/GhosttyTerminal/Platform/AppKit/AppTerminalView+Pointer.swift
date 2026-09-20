@@ -19,7 +19,12 @@
         func applyMouseShape(_ shape: TerminalMouseShape) {
             guard terminalMouseShape != shape else { return }
             terminalMouseShape = shape
-            window?.invalidateCursorRects(for: self)
+            // Apply it now if the pointer is already inside. AppKit asks for the
+            // shape through `cursorUpdate` when the pointer crosses the
+            // boundary, which has already happened by the time a program asks
+            // for a different one.
+            guard pointerIsInside else { return }
+            Self.cursor(for: shape).set()
         }
 
         /// Hides the pointer while the user types, and restores it on the next
@@ -46,9 +51,14 @@
             NSCursor.setHiddenUntilMouseMoves(false)
         }
 
-        override open func resetCursorRects() {
-            super.resetCursorRects()
-            addCursorRect(bounds, cursor: Self.cursor(for: terminalMouseShape))
+        /// AppKit's own hook for "the pointer is over you, set your cursor".
+        ///
+        /// Preferred over a cursor rect: the tracking area this view already
+        /// keeps delivers it, so there is no rect to re-register as the pane is
+        /// resized or reparented, and nothing to lose when SwiftUI reframes the
+        /// view after creating it.
+        override open func cursorUpdate(with event: NSEvent) {
+            Self.cursor(for: terminalMouseShape).set()
         }
 
         /// Maps Ghostty's CSS-derived shapes onto AppKit's cursors.
