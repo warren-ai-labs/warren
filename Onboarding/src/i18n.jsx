@@ -120,6 +120,30 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.21.0",
+        dateISO: "2026-09-20",
+        date: "September 20, 2026",
+        title: "Warren keeps Agent hooks and the embedded editor in sync.",
+        summary:
+          "A maintenance release that repairs stale Warren-owned Agent hooks so provider arguments survive, and reloads live embedded editor web views when appearance changes; the JSON control protocol remains at 4.0.",
+        sections: [
+          {
+            title: "Fixed",
+            items: [
+              "Normalize every Warren-owned Agent hook entry for an event and keep exactly one, removing stale comment-form duplicates while preserving user entries and the first owned entry's matcher. Manual Claude overlays no longer lose their provider argument or get mislabeled as Codex after a restart.",
+              "Reload live embedded editor web views after an appearance change so code-server picks up the selected theme without losing open tabs or edits; settings, injected scripts, and page chrome now move together.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0 and the Host state schema stays at 4; this release migrates no state.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.20.0",
         dateISO: "2026-09-20",
         date: "September 20, 2026",
@@ -1337,6 +1361,30 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.21.0",
+        dateISO: "2026-09-20",
+        date: "2026 年 9 月 20 日",
+        title: "Warren 修复 Agent hook，并让内嵌编辑器保持同步。",
+        summary:
+          "维护版本：修复过时的 Warren Agent hook，确保 provider 参数不丢失；外观变化时刷新活动中的内嵌编辑器 WebView。JSON 控制协议仍为 4.0。",
+        sections: [
+          {
+            title: "修复",
+            items: [
+              "按事件规范化所有 Warren 自有的 Agent hook，并只保留一个；清理旧的注释形式重复项，同时保留用户项顺序和第一个自有项的 matcher。手动 Claude overlay 不再丢失 provider 参数，也不会在重启后被误标为 Codex。",
+              "外观变化后重新加载活动中的内嵌编辑器 WebView，使 code-server 采用所选主题，同时保留打开的 tab 与编辑内容；settings、注入脚本和页面 chrome 一起更新。",
+            ],
+          },
+          {
+            title: "发布说明",
+            items: [
+              "JSON 控制协议仍为 4.0，Host state schema 仍为 4；本版本不迁移状态。",
+              "本地打包使用现有 Apple Development 签名且未 notarize；归档仅适合内部或临时测试，不适合一般公开分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.20.0",
         dateISO: "2026-09-20",

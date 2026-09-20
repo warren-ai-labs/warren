@@ -399,34 +399,86 @@ func ensureAgentHooks(hooksPath, provider string) (changed bool, err error) {
 	return true, writeHooksJSON(hooksPath, document)
 }
 
+// ensureHookEvent normalizes every Warren-owned entry for one event to the
+// current command and keeps exactly one of them. Matching only the first
+// marked entry is not enough: a later stale entry still runs, and the `#`
+// comment form of an older install swallows the provider argument, which
+// mislabels a manual Claude overlay as Codex. User entries are preserved in
+// order, as is the matcher of the first Warren-owned entry.
 func ensureHookEvent(hooks map[string]any, event, command string) bool {
 	entries, _ := hooks[event].([]any)
+	changed := false
+	kept := false
+	result := make([]any, 0, len(entries)+1)
 	for _, entry := range entries {
 		item, ok := entry.(map[string]any)
 		if !ok {
+			result = append(result, entry)
 			continue
 		}
 		inner, _ := item["hooks"].([]any)
+		if !hookEntryHasMarker(inner) {
+			result = append(result, entry)
+			continue
+		}
+		remaining := make([]any, 0, len(inner))
+		marked := 0
+		stale := false
 		for _, hook := range inner {
 			config, ok := hook.(map[string]any)
 			if !ok {
+				remaining = append(remaining, hook)
 				continue
 			}
 			if text, _ := config["command"].(string); strings.Contains(text, hookCommandMarker) {
-				if text == command {
-					return false
+				marked++
+				if text != command {
+					stale = true
 				}
-				config["command"] = command
-				return true
+				continue
 			}
+			remaining = append(remaining, hook)
+		}
+		if !kept {
+			kept = true
+			if stale || marked != 1 {
+				changed = true
+			}
+			item["hooks"] = append(remaining, map[string]any{"type": "command", "command": command})
+			result = append(result, item)
+			continue
+		}
+		// A second Warren-owned entry is always redundant, so dropping it is
+		// the repair rather than a normalization.
+		changed = true
+		if len(remaining) > 0 {
+			item["hooks"] = remaining
+			result = append(result, item)
 		}
 	}
-	hooks[event] = append(entries, map[string]any{
-		"hooks": []any{
-			map[string]any{"type": "command", "command": command},
-		},
-	})
-	return true
+	if !kept {
+		result = append(result, map[string]any{
+			"hooks": []any{
+				map[string]any{"type": "command", "command": command},
+			},
+		})
+		changed = true
+	}
+	hooks[event] = result
+	return changed
+}
+
+func hookEntryHasMarker(inner []any) bool {
+	for _, hook := range inner {
+		config, ok := hook.(map[string]any)
+		if !ok {
+			continue
+		}
+		if text, _ := config["command"].(string); strings.Contains(text, hookCommandMarker) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeHooksJSON(path string, document map[string]any) error {

@@ -262,6 +262,61 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
     }
 
     @MainActor
+    func testApplyAppearanceWritesSettingsForNewAppearance() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let model = WarrenEmbeddedEditorModel(
+            environment: [:],
+            supportDirectory: tempDir,
+            executableResolver: { _ in nil }
+        )
+
+        let initialAppearance = model.currentAppearance
+        let targetAppearance: WarrenEmbeddedEditorAppearance =
+            initialAppearance == .light ? .dark : .light
+
+        model.applyAppearance(targetAppearance)
+        XCTAssertEqual(model.currentAppearance, targetAppearance)
+
+        let settingsURL = tempDir
+            .appendingPathComponent("user-data/User/settings.json")
+        let expectedTheme = WarrenEmbeddedEditorPalette.resolved(for: targetAppearance).baseThemeName
+        var found = false
+        for _ in 0..<30 {
+            if FileManager.default.fileExists(atPath: settingsURL.path) {
+                if let data = try? Data(contentsOf: settingsURL),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   json["workbench.colorTheme"] as? String == expectedTheme {
+                    found = true
+                    break
+                }
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertTrue(found, "settings.json should contain the target theme")
+
+        // Switch back
+        model.applyAppearance(initialAppearance)
+        XCTAssertEqual(model.currentAppearance, initialAppearance)
+
+        let originalTheme = WarrenEmbeddedEditorPalette.resolved(for: initialAppearance).baseThemeName
+        var switchedBack = false
+        for _ in 0..<30 {
+            if let data = try? Data(contentsOf: settingsURL),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               json["workbench.colorTheme"] as? String == originalTheme {
+                switchedBack = true
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertTrue(switchedBack, "settings.json should update when switching appearance back")
+    }
+
+    @MainActor
     func testStandardEditMenuRoutesPasteThroughTheResponderChain() {
         let menu = WarrenStandardEditMenu.make()
         let paste = menu.items.first { $0.title == "Paste" }

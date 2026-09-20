@@ -6,6 +6,30 @@ All notable changes to Warren are documented here.
 
 _No changes yet._
 
+## [0.21.0] - 2026-09-20
+
+> Maintenance release: repairs stale Agent hook entries and keeps the embedded
+> editor's live web views in sync with appearance changes. The JSON control
+> protocol remains at 4.0.
+
+### Fixed
+
+- Normalize every Warren-owned Agent hook entry for an event and keep exactly
+  one, removing stale comment-form duplicates while preserving user entries and
+  the first owned entry's matcher. Manual Claude overlays no longer lose their
+  provider argument or get mislabeled as Codex after a restart.
+- Reload live embedded editor web views after an appearance change so code-server
+  picks up the selected theme without losing open tabs or edits; settings,
+  injected scripts, and page chrome now move together.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and the Host state schema stays at 4;
+  this release migrates no state.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.20.0] - 2026-09-20
 
 > Minor release: adds a complete light appearance to the Desktop, Terminal,
