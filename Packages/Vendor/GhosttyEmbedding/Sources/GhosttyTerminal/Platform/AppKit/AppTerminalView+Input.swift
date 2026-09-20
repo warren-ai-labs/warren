@@ -162,21 +162,44 @@
             return (point.x, bounds.height - point.y)
         }
 
-        /// Let the click that activates the window also reach the grid.
+        /// Take the click that activates the window, so it can move focus.
         ///
         /// Warren derives terminal focus from SwiftUI intent, and the surface
         /// manager's focus path refuses to act on a window that is not yet key.
         /// Without this the first click on an inactive window is consumed by
-        /// activation alone: it neither selects the pane it landed in nor
-        /// reaches the program running there, so the user has to click twice.
-        override open func acceptsFirstMouse(for _: NSEvent?) -> Bool {
-            true
+        /// activation alone and never selects the pane it landed in, so the user
+        /// has to click twice to type anywhere.
+        ///
+        /// The click moves focus but is not forwarded to the program. Ghostty
+        /// declines first mouse outright for this reason (its issue 2595): a
+        /// window-activating click that reaches a mouse-mode program moves the
+        /// cursor in an editor or presses a button in a TUI, which is not what
+        /// the user was asking for. Upstream then restores the focus transfer
+        /// with an app-level event monitor; recording the event here reaches the
+        /// same place without a second monitor per surface.
+        override open func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+            // AppKit asks exactly once per activating click, so this identifies
+            // the `mouseDown` that follows.
+            firstMouseEventNumber = event?.eventNumber
+            return true
         }
 
         override open func mouseDown(with event: NSEvent) {
             window?.makeFirstResponder(self)
             let (x, y) = mousePoint(from: event)
             let mods = TerminalInputModifiers(from: event.modifierFlags)
+            // The window-activating click has now done its job of moving focus.
+            // Forwarding it as a press would also click inside the program; see
+            // `acceptsFirstMouse`. The release is suppressed with it, so the
+            // program cannot see a release with no matching press.
+            if let firstMouseEventNumber, firstMouseEventNumber == event.eventNumber {
+                self.firstMouseEventNumber = nil
+                suppressesNextLeftMouseUp = true
+                // Ghostty still needs the position: hover, and the cell a later
+                // real click lands on, are both read from it.
+                surface?.sendMousePos(x: x, y: y, mods: mods.ghosttyMods)
+                return
+            }
             pointerSelectionStartPoint = CGPoint(x: x, y: y)
             pendingSelectionMenuPoint = nil
             surface?.sendMousePos(x: x, y: y, mods: mods.ghosttyMods)
@@ -188,8 +211,13 @@
         }
 
         override open func mouseUp(with event: NSEvent) {
-            stopSelectionAutoscroll()
-            lastDragPoint = nil
+            if suppressesNextLeftMouseUp {
+                suppressesNextLeftMouseUp = false
+                let (x, y) = mousePoint(from: event)
+                let mods = TerminalInputModifiers(from: event.modifierFlags)
+                surface?.sendMousePos(x: x, y: y, mods: mods.ghosttyMods)
+                return
+            }
             let (x, y) = mousePoint(from: event)
             let mods = TerminalInputModifiers(from: event.modifierFlags)
             surface?.sendMousePos(x: x, y: y, mods: mods.ghosttyMods)
@@ -275,6 +303,7 @@
         /// wherever the pointer last was, which after a pane switch is a cell
         /// in a different surface.
         override open func mouseEntered(with event: NSEvent) {
+            pointerIsInside = true
             mouseMoved(with: event)
         }
 
@@ -283,19 +312,30 @@
         /// pointer has moved to another pane: a hyperlink under it keeps its
         /// underline, and a mouse-mode program keeps its highlight.
         ///
-        /// A negative position is how "outside the grid" is expressed; there is
-        /// no separate exit entry point in the surface API.
+        /// A negative position is how "outside the grid" is expressed —
+        /// `cursorPosCallback` clears the hover state and the link shape for it.
         override open func mouseExited(with event: NSEvent) {
+            pointerIsInside = false
+            // Not while a button is held. Drag events keep arriving after the
+            // pointer leaves, and their out-of-bounds position is what drives
+            // Ghostty's selection autoscroll; collapsing it to a fixed -1/-1
+            // here would take the direction away and stop the scroll.
+            guard NSEvent.pressedMouseButtons == 0 else { return }
             let mods = TerminalInputModifiers(from: event.modifierFlags)
             surface?.sendMousePos(x: -1, y: -1, mods: mods.ghosttyMods)
         }
 
+        /// A drag reports position and nothing else.
+        ///
+        /// Selection autoscroll is Ghostty's own: `cursorPosCallback` derives the
+        /// drag direction from a position outside the grid and runs the scroll on
+        /// its IO thread. A scroll event synthesized here would be read as a user
+        /// scroll, which Ghostty treats as a reason to cancel that autoscroll —
+        /// the two would take turns stopping each other. Out-of-bounds positions
+        /// are passed through unclamped, which is all it needs.
         override open func mouseDragged(with event: NSEvent) {
             let (x, y) = mousePoint(from: event)
-            let point = CGPoint(x: x, y: y)
-            updatePointerSelectionRect(to: point)
-            lastDragPoint = point
-            updateSelectionAutoscroll(for: point, mods: event.modifierFlags)
+            updatePointerSelectionRect(to: CGPoint(x: x, y: y))
             mouseMoved(with: event)
         }
 
@@ -307,15 +347,10 @@
             mouseMoved(with: event)
         }
 
+        /// Scrolling carries no position of its own: Ghostty reads the scroll
+        /// against the cell it already believes the pointer is over, which the
+        /// tracking area keeps current through `mouseEntered` and `mouseMoved`.
         override open func scrollWheel(with event: NSEvent) {
-            // Position first: a mouse-mode program reads the scroll against the
-            // cell the pointer is over, and scrolling does not require the
-            // pointer to have moved within this view beforehand. Without this
-            // the first scroll after the pointer arrives by any path other than
-            // a tracked move is attributed to a stale cell.
-            let (x, y) = mousePoint(from: event)
-            let mods = TerminalInputModifiers(from: event.modifierFlags)
-            surface?.sendMousePos(x: x, y: y, mods: mods.ghosttyMods)
             let scrollMods = TerminalScrollModifiers(
                 precision: event.hasPreciseScrollingDeltas,
                 momentum: TerminalScrollModifiers.momentumFrom(phase: event.momentumPhase)
@@ -325,87 +360,6 @@
                 y: event.scrollingDeltaY,
                 mods: scrollMods.rawValue
             )
-        }
-
-        /// Scrolls the viewport while a selection drag is held past the top or
-        /// bottom edge, so a selection can reach beyond one screen of output.
-        ///
-        /// AppKit stops delivering `mouseDragged` as soon as the pointer stops
-        /// moving, and a drag held just outside the view is exactly that: the
-        /// pointer is stationary and the selection would sit still at the edge.
-        /// The timer re-sends the held position on each tick and asks Ghostty to
-        /// scroll, which extends the selection in the direction of the drag.
-        private func updateSelectionAutoscroll(
-            for point: CGPoint,
-            mods: NSEvent.ModifierFlags
-        ) {
-            // Only a selection drag autoscrolls. A drag reported while no
-            // selection is in flight belongs to a mouse-mode program, which
-            // does its own scrolling.
-            guard pointerSelectionStartPoint != nil else {
-                stopSelectionAutoscroll()
-                return
-            }
-            let overshoot = Self.autoscrollOvershoot(for: point, in: bounds)
-            guard overshoot != 0 else {
-                stopSelectionAutoscroll()
-                return
-            }
-            guard selectionAutoscrollTimer == nil else { return }
-            let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.performSelectionAutoscrollTick(mods: mods)
-                }
-            }
-            // The tracking loop AppKit runs during a drag uses its own mode, so
-            // a timer added to the default mode alone would never fire until
-            // the drag ended.
-            RunLoop.main.add(timer, forMode: .common)
-            selectionAutoscrollTimer = timer
-        }
-
-        private func performSelectionAutoscrollTick(mods: NSEvent.ModifierFlags) {
-            guard let point = lastDragPoint,
-                  pointerSelectionStartPoint != nil else {
-                stopSelectionAutoscroll()
-                return
-            }
-            let overshoot = Self.autoscrollOvershoot(for: point, in: bounds)
-            guard overshoot != 0 else {
-                stopSelectionAutoscroll()
-                return
-            }
-            let inputMods = TerminalInputModifiers(from: mods)
-            // Re-send the held position so the selection's far end tracks the
-            // rows that scrolling brings into view.
-            surface?.sendMousePos(x: point.x, y: point.y, mods: inputMods.ghosttyMods)
-            surface?.sendMouseScroll(
-                x: 0,
-                y: overshoot,
-                mods: TerminalScrollModifiers(precision: false).rawValue
-            )
-        }
-
-        func stopSelectionAutoscroll() {
-            selectionAutoscrollTimer?.invalidate()
-            selectionAutoscrollTimer = nil
-        }
-
-        /// Rows to scroll per tick for a drag point, signed so that a drag above
-        /// the view scrolls toward earlier output. Zero while the point is
-        /// inside. Capped so a drag far past the edge stays controllable rather
-        /// than flinging through the scrollback.
-        static func autoscrollOvershoot(for point: CGPoint, in bounds: CGRect) -> Double {
-            let maximumRows = 5.0
-            // Ghostty's y axis grows downward from the top of the view, so a
-            // negative y is above it.
-            if point.y < 0 {
-                return min(ceil(-point.y / 10), maximumRows)
-            }
-            if point.y > bounds.height {
-                return -min(ceil((point.y - bounds.height) / 10), maximumRows)
-            }
-            return 0
         }
 
         private func updatePointerSelectionRect(to point: CGPoint) {

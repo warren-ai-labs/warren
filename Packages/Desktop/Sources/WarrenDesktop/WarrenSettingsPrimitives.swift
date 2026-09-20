@@ -4,6 +4,7 @@ import WarrenDesignSystem
 /// A grouped settings card container with smooth continuous corners (12pt), subtle soft
 /// surface fill lifted off the page, and delicate hairline border matching Synara & Superset.
 public struct WarrenSettingsCard<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
     private let tokens: WarrenColorTokens
     private let content: Content
 
@@ -25,7 +26,7 @@ public struct WarrenSettingsCard<Content: View>: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
+                .strokeBorder(tokens.border.opacity(colorScheme == .light ? 0.85 : 0.40), lineWidth: WarrenSpacing.hairline)
         )
         .clipShape(RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous))
     }
@@ -33,6 +34,7 @@ public struct WarrenSettingsCard<Content: View>: View {
 
 /// Thin divider line between stacked rows inside a `WarrenSettingsCard`.
 public struct WarrenSettingsCardDivider: View {
+    @Environment(\.colorScheme) private var colorScheme
     private let tokens: WarrenColorTokens
 
     public init(tokens: WarrenColorTokens = .dark) {
@@ -41,7 +43,7 @@ public struct WarrenSettingsCardDivider: View {
 
     public var body: some View {
         Rectangle()
-            .fill(tokens.border.opacity(0.30))
+            .fill(tokens.border.opacity(colorScheme == .light ? 0.65 : 0.30))
             .frame(height: WarrenSpacing.hairline)
             .padding(.horizontal, WarrenSpacing.standard)
     }

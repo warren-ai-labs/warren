@@ -174,10 +174,11 @@ public struct WarrenPrimaryButtonStyle: ButtonStyle {
         let font: Font
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @Environment(\.colorScheme) private var colorScheme
         @State private var hovered = false
 
         var body: some View {
-            let tokens = WarrenColorTokens.dark
+            let tokens = WarrenColorTokens.resolved(for: colorScheme)
             let state = WarrenInteractionState.resolve(
                 disabled: !isEnabled,
                 pressed: configuration.isPressed,

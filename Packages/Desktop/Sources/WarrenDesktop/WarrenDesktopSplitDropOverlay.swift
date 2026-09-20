@@ -131,7 +131,7 @@ struct WarrenDesktopSplitDropOverlay: View {
             .padding(.vertical, 6)
             .background(tokens.background.opacity(0.85))
             .clipShape(Capsule())
-            .shadow(color: Color.black.opacity(0.15), radius: 3, y: 1)
+            .shadow(color: tokens.elevationShadow, radius: 3, y: 1)
         }
         .frame(width: previewFrame.width, height: previewFrame.height)
         .position(previewFrame.center)

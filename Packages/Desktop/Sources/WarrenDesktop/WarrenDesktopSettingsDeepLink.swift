@@ -5,6 +5,7 @@ import Foundation
 /// The display labels remain a UI concern; these values are intentionally
 /// lowercase and stable so links can survive copy changes and localization.
 public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Sendable {
+    case appearance = "Appearance"
     case terminalFont = "Font"
     case terminalTitle = "Title"
     case terminalRuntime = "Terminal runtime"
@@ -24,6 +25,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
 
     public var deepLinkValue: String {
         switch self {
+        case .appearance: "appearance"
         case .terminalFont: "terminal-font"
         case .terminalTitle: "terminal-title"
         case .terminalRuntime: "terminal-runtime"
@@ -43,6 +45,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
 
     public init?(deepLinkValue: String) {
         switch deepLinkValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "appearance", "theme", "light", "dark": self = .appearance
         case "terminal-font", "font": self = .terminalFont
         case "terminal-title", "title": self = .terminalTitle
         case "terminal-runtime", "runtime": self = .terminalRuntime

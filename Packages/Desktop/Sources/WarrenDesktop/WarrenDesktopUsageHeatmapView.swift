@@ -151,6 +151,7 @@ private struct WarrenDesktopUsageHeatmapCellView: View {
     let isSelected: Bool
     let onSelect: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isHovered = false
 
     var body: some View {
@@ -172,7 +173,7 @@ private struct WarrenDesktopUsageHeatmapCellView: View {
 
     private var fill: Color {
         guard let intensity = cell.intensity else {
-            return tokens.muted.opacity(0.5)
+            return colorScheme == .light ? tokens.muted : tokens.muted.opacity(0.5)
         }
         return tokens.highlight.opacity(0.25 + 0.75 * intensity)
     }

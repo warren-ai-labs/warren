@@ -347,13 +347,12 @@ struct WarrenCompositionRoot: View {
                 )
             )
         }
-        .preferredColorScheme(.dark)
         .disabled(isSupersetImporting)
         .overlay {
             if isSupersetImporting {
                 let tokens = WarrenColorTokens.resolved(for: colorScheme)
                 ZStack {
-                    Color.black.opacity(0.5)
+                    tokens.modalScrim
                         .ignoresSafeArea()
                     VStack(spacing: WarrenSpacing.compact) {
                         WarrenBrailleSpinner(
@@ -485,6 +484,10 @@ struct WarrenCompositionRoot: View {
             // surface manager when the click makes a terminal first responder
             // again, which also carries the size the Session needs.
             guard hasFocus else { return }
+            // Mark the daemon's view of focus stale before reporting the
+            // departure, so the click that brings the keyboard back is reported
+            // rather than being read as already-current.
+            surfaceManager.noteTerminalFocusSurrendered()
             remoteModel.relinquishTerminalFocus()
         }
         .onChange(of: selectedEndpointID) { _ in
@@ -1563,13 +1566,15 @@ private struct WarrenTerminalSurfaceView: View {
     @Binding var searchPresented: Bool
     @State private var searchQuery = ""
     @FocusState private var searchFieldFocused: Bool
+    @Environment(\.colorScheme) private var colorScheme
 
     private var activeSurface: GhosttySurface? {
         context.tab.sessionID.flatMap(surfaceManager.surface(for:))
     }
 
     var body: some View {
-        ZStack {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        return ZStack {
             TerminalHostRepresentable(
                 manager: surfaceManager,
                 activeSessionID: context.tab.sessionID,
@@ -1618,7 +1623,13 @@ private struct WarrenTerminalSurfaceView: View {
                 }
                 .padding(.horizontal, WarrenSpacing.standard)
                 .padding(.vertical, WarrenSpacing.small)
-                .background(Color.black.opacity(0.55), in: Capsule())
+                // A status capsule floating over the terminal. It reads as
+                // raised from the popover surface plus a rule, which is what
+                // survives both appearances; a translucent black pill would
+                // only read on Ember.
+                .background(tokens.popoverSurface, in: Capsule())
+                .overlay(Capsule().strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
+                .shadow(color: tokens.elevationShadow, radius: 6, y: 2)
                 .padding(.top, WarrenSpacing.small)
                 .help(maintenanceMessage)
             }

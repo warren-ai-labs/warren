@@ -17,6 +17,7 @@ public struct WarrenDesktopUsageCurveView: View {
     /// Keeps the rows the active filter selects.
     let include: ((WarrenUsageInterval) -> Bool)?
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var hoveredMinute: Int? = nil
 
     public init(
@@ -155,7 +156,7 @@ public struct WarrenDesktopUsageCurveView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
+                .strokeBorder(tokens.border.opacity(colorScheme == .light ? 0.85 : 0.40), lineWidth: WarrenSpacing.hairline)
         )
         .accessibilityIdentifier("usage.curve")
     }
@@ -308,7 +309,7 @@ public struct WarrenDesktopUsageCurveView: View {
 
         return ZStack(alignment: .topLeading) {
             gridPath(width: width, height: height, window: window)
-                .stroke(tokens.muted.opacity(0.35), lineWidth: 0.5)
+                .stroke(tokens.border.opacity(colorScheme == .light ? 0.70 : 0.35), lineWidth: 0.5)
 
             area.fill(
                 LinearGradient(

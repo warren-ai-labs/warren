@@ -193,6 +193,39 @@ public enum WarrenPreferenceKey {
     /// Emacs `C-x` prefix for split commands. Off by default: while it is on,
     /// the chord is consumed by Warren and `C-x` never reaches the terminal.
     public static let terminalSplitChordsEnabled = "terminal.splitChordsEnabled"
+    /// Which appearance the desktop client paints. Client-local, like every
+    /// other key here: appearance is a property of the screen in front of you,
+    /// not of the Host or the Sessions running on it.
+    public static let appearanceMode = "appearance.mode"
+}
+
+/// Which appearance the desktop client paints.
+///
+/// The default is `dark` rather than `system`. Warren has shipped dark-only, so
+/// making `system` the default would repaint every existing install the first
+/// time it launched on a machine set to light — a change of appearance nobody
+/// asked for. A new preference should be discoverable, not retroactive.
+public enum WarrenAppearanceMode: String, CaseIterable, Sendable {
+    /// Follow the macOS appearance, including mid-session changes and the
+    /// Auto schedule.
+    case system
+    case light
+    case dark
+
+    public static let defaultValue = Self.dark
+
+    /// Tolerates an unwritten or hand-edited preference rather than trapping.
+    public init(storedValue: String?) {
+        self = storedValue.flatMap(Self.init(rawValue:)) ?? .defaultValue
+    }
+
+    public var displayName: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
 }
 
 /// User-facing terminal typography shared by renderer adapters.

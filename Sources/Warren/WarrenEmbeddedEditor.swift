@@ -146,92 +146,222 @@ enum WarrenEmbeddedEditorExecutableResolver {
     }
 }
 
-enum WarrenEmbeddedEditorProfile {
-    /// Keep these values aligned with WarrenColorTokens.dark. VS Code accepts
-    /// CSS color strings at its settings boundary, while the native design
-    /// system owns SwiftUI Color values.
-    static let colorCustomizations: [String: String] = [
-        "activityBar.background": "#1c1918",
-        "activityBar.foreground": "#eae8e6",
-        "activityBar.inactiveForeground": "#a8a5a3",
-        "badge.background": "#e07850",
-        "badge.foreground": "#151110",
-        "breadcrumb.background": "#151110",
-        "breadcrumb.foreground": "#a8a5a3",
-        "breadcrumb.focusForeground": "#eae8e6",
-        "breadcrumb.activeSelectionForeground": "#e07850",
-        "button.background": "#eae8e6",
-        "button.foreground": "#151110",
-        "button.hoverBackground": "#d1cfcd",
-        "button.secondaryBackground": "#2a2827",
-        "button.secondaryForeground": "#eae8e6",
-        "dropdown.background": "#201e1c",
-        "dropdown.border": "#2a2827",
-        "dropdown.foreground": "#eae8e6",
-        "editor.background": "#151110",
-        "editor.foreground": "#eae8e6",
-        "editor.lineHighlightBackground": "#1c1918",
-        "editor.selectionBackground": "#e0785040",
-        "editorCursor.foreground": "#e07850",
-        "editorError.foreground": "#cc4444",
-        "editorGroup.border": "#2a2827",
-        "editorGroupHeader.tabsBackground": "#1c1918",
-        "editorIndentGuide.activeBackground1": "#3a3837",
-        "editorIndentGuide.background1": "#2a2827",
-        "editorInfo.foreground": "#61afef",
-        "editorWarning.foreground": "#e5c07b",
-        "focusBorder": "#3a3837",
-        "input.background": "#181615",
-        "input.border": "#2a2827",
-        "input.foreground": "#eae8e6",
-        "input.placeholderForeground": "#a8a5a3",
-        "list.activeSelectionBackground": "#302e2c",
-        "list.activeSelectionForeground": "#eae8e6",
-        "list.focusBackground": "#302e2c",
-        "list.highlightForeground": "#e07850",
-        "list.hoverBackground": "#24201f",
-        "list.inactiveSelectionBackground": "#2a2827",
-        "menu.background": "#201e1c",
-        "menu.border": "#2a2827",
-        "menu.foreground": "#eae8e6",
-        "menu.selectionBackground": "#2a2827",
-        "menu.selectionForeground": "#eae8e6",
-        "notificationCenterHeader.background": "#1c1918",
-        "notifications.background": "#201e1c",
-        "notifications.border": "#2a2827",
-        "panel.background": "#151110",
-        "panel.border": "#2a2827",
-        "panelTitle.activeBorder": "#e07850",
-        "panelTitle.activeForeground": "#eae8e6",
-        "panelTitle.inactiveForeground": "#a8a5a3",
-        "quickInput.background": "#201e1c",
-        "quickInput.foreground": "#eae8e6",
-        "quickInputList.focusBackground": "#2a2827",
-        "scrollbarSlider.activeBackground": "#a8a5a366",
-        "scrollbarSlider.background": "#a8a5a333",
-        "scrollbarSlider.hoverBackground": "#a8a5a34d",
-        "sideBar.background": "#1c1918",
-        "sideBar.border": "#2a2827",
-        "sideBar.foreground": "#a8a5a3",
-        "sideBarSectionHeader.background": "#1c1918",
-        "sideBarSectionHeader.foreground": "#eae8e6",
-        "sideBarTitle.foreground": "#eae8e6",
-        "statusBar.background": "#1c1918",
-        "statusBar.border": "#2a2827",
-        "statusBar.foreground": "#a8a5a3",
-        "statusBar.noFolderBackground": "#1c1918",
-        "tab.activeBackground": "#151110",
-        "tab.activeForeground": "#eae8e6",
-        "tab.border": "#2a2827",
-        "tab.inactiveBackground": "#1c1918",
-        "tab.inactiveForeground": "#a8a5a3",
-        "titleBar.activeBackground": "#1c1918",
-        "titleBar.activeForeground": "#eae8e6",
-        "titleBar.border": "#2a2827",
-    ]
+/// The embedded editor's palette, per appearance.
+///
+/// VS Code accepts CSS color strings at its settings boundary, so the hex
+/// values live here rather than in `WarrenColorTokens`, which owns SwiftUI
+/// `Color`s. What is deliberately *not* duplicated is the ~80-entry workbench
+/// key map: it is derived once, from these named roles. An earlier revision
+/// held the keys as a flat literal dictionary, which was fine while there was
+/// one appearance and would have meant two independently editable copies of the
+/// same map as soon as there were two.
+struct WarrenEmbeddedEditorPalette {
+    let background: String
+    let chrome: String
+    /// Menus, notifications, and the quick-input palette.
+    let raised: String
+    let input: String
+    let muted: String
+    let border: String
+    let ring: String
+    let foreground: String
+    let mutedForeground: String
+    let accent: String
+    /// Content drawn on top of `accent`.
+    let onAccent: String
+    /// `accent` with an alpha suffix, for the editor's selection wash.
+    let accentWash: String
+    let primaryButton: String
+    let primaryButtonHover: String
+    let onPrimaryButton: String
+    let destructive: String
+    let warning: String
+    let info: String
+    let listSelected: String
+    let listHover: String
+    /// Base hex for the scrollbar slider, which VS Code wants with alpha.
+    let scrollbar: String
 
-    static var managedSettings: [String: Any] {
+    /// Ember. Matches `WarrenColorTokens.dark`.
+    static let dark = Self(
+        background: "#151110",
+        chrome: "#1c1918",
+        raised: "#201e1c",
+        input: "#181615",
+        muted: "#2a2827",
+        border: "#2a2827",
+        ring: "#3a3837",
+        foreground: "#eae8e6",
+        mutedForeground: "#a8a5a3",
+        accent: "#e07850",
+        onAccent: "#151110",
+        accentWash: "#e0785040",
+        primaryButton: "#eae8e6",
+        primaryButtonHover: "#d1cfcd",
+        onPrimaryButton: "#151110",
+        destructive: "#cc4444",
+        warning: "#e5c07b",
+        info: "#61afef",
+        listSelected: "#302e2c",
+        listHover: "#24201f",
+        scrollbar: "#a8a5a3"
+    )
+
+    /// Ember Paper. Matches `WarrenColorTokens.light`.
+    static let light = Self(
+        background: "#ffffff",
+        chrome: "#f2efec",
+        raised: "#ffffff",
+        input: "#fcfbfa",
+        muted: "#ebe7e3",
+        border: "#e0dbd6",
+        ring: "#d2ccc6",
+        foreground: "#1c1917",
+        mutedForeground: "#6b6560",
+        accent: "#b7522c",
+        onAccent: "#ffffff",
+        accentWash: "#b7522c2e",
+        primaryButton: "#1c1917",
+        primaryButtonHover: "#33302c",
+        onPrimaryButton: "#ffffff",
+        destructive: "#b3261e",
+        warning: "#8a5a00",
+        info: "#1c6fb8",
+        listSelected: "#e3ded8",
+        listHover: "#eeeae6",
+        scrollbar: "#6b6560"
+    )
+
+    static func resolved(for appearance: WarrenEmbeddedEditorAppearance) -> Self {
+        switch appearance {
+        case .light: light
+        case .dark: dark
+        }
+    }
+
+    /// VS Code's built-in theme this palette customizes.
+    ///
+    /// The customizations below do not cover syntax token colors, so the base
+    /// theme still has to be on the right side of the appearance or code would
+    /// render dark-theme syntax colors on paper.
+    var baseThemeName: String {
+        self == Self.light ? "Default Light Modern" : "Default Dark Modern"
+    }
+
+    var colorCustomizations: [String: String] {
         [
+            "activityBar.background": chrome,
+            "activityBar.foreground": foreground,
+            "activityBar.inactiveForeground": mutedForeground,
+            "badge.background": accent,
+            "badge.foreground": onAccent,
+            "breadcrumb.background": background,
+            "breadcrumb.foreground": mutedForeground,
+            "breadcrumb.focusForeground": foreground,
+            "breadcrumb.activeSelectionForeground": accent,
+            "button.background": primaryButton,
+            "button.foreground": onPrimaryButton,
+            "button.hoverBackground": primaryButtonHover,
+            "button.secondaryBackground": muted,
+            "button.secondaryForeground": foreground,
+            "dropdown.background": raised,
+            "dropdown.border": border,
+            "dropdown.foreground": foreground,
+            "editor.background": background,
+            "editor.foreground": foreground,
+            "editor.lineHighlightBackground": chrome,
+            "editor.selectionBackground": accentWash,
+            "editorCursor.foreground": accent,
+            "editorError.foreground": destructive,
+            "editorGroup.border": border,
+            "editorGroupHeader.tabsBackground": chrome,
+            "editorIndentGuide.activeBackground1": ring,
+            "editorIndentGuide.background1": muted,
+            "editorInfo.foreground": info,
+            "editorWarning.foreground": warning,
+            "focusBorder": ring,
+            "input.background": input,
+            "input.border": border,
+            "input.foreground": foreground,
+            "input.placeholderForeground": mutedForeground,
+            "list.activeSelectionBackground": listSelected,
+            "list.activeSelectionForeground": foreground,
+            "list.focusBackground": listSelected,
+            "list.highlightForeground": accent,
+            "list.hoverBackground": listHover,
+            "list.inactiveSelectionBackground": muted,
+            "menu.background": raised,
+            "menu.border": border,
+            "menu.foreground": foreground,
+            "menu.selectionBackground": muted,
+            "menu.selectionForeground": foreground,
+            "notificationCenterHeader.background": chrome,
+            "notifications.background": raised,
+            "notifications.border": border,
+            "panel.background": background,
+            "panel.border": border,
+            "panelTitle.activeBorder": accent,
+            "panelTitle.activeForeground": foreground,
+            "panelTitle.inactiveForeground": mutedForeground,
+            "quickInput.background": raised,
+            "quickInput.foreground": foreground,
+            "quickInputList.focusBackground": muted,
+            "scrollbarSlider.activeBackground": scrollbar + "66",
+            "scrollbarSlider.background": scrollbar + "33",
+            "scrollbarSlider.hoverBackground": scrollbar + "4d",
+            "sideBar.background": chrome,
+            "sideBar.border": border,
+            "sideBar.foreground": mutedForeground,
+            "sideBarSectionHeader.background": chrome,
+            "sideBarSectionHeader.foreground": foreground,
+            "sideBarTitle.foreground": foreground,
+            "statusBar.background": chrome,
+            "statusBar.border": border,
+            "statusBar.foreground": mutedForeground,
+            "statusBar.noFolderBackground": chrome,
+            "tab.activeBackground": background,
+            "tab.activeForeground": foreground,
+            "tab.border": border,
+            "tab.inactiveBackground": chrome,
+            "tab.inactiveForeground": mutedForeground,
+            "titleBar.activeBackground": chrome,
+            "titleBar.activeForeground": foreground,
+            "titleBar.border": border,
+        ]
+    }
+}
+
+extension WarrenEmbeddedEditorPalette: Equatable, Sendable {}
+
+/// Which appearance the embedded editor paints.
+///
+/// A separate two-case type rather than `ColorScheme`: this value crosses into
+/// a `nonisolated` settings writer and a JavaScript string, neither of which
+/// should have to reason about SwiftUI's `@unknown default`.
+enum WarrenEmbeddedEditorAppearance: Sendable {
+    case light
+    case dark
+
+    init(_ colorScheme: ColorScheme) {
+        self = colorScheme == .light ? .light : .dark
+    }
+
+    /// The application's current appearance, for use before a SwiftUI
+    /// `colorScheme` is available.
+    @MainActor
+    static func resolvedFromApplication() -> Self {
+        let appearance = NSApp?.effectiveAppearance ?? .currentDrawing()
+        return appearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua ? .light : .dark
+    }
+}
+
+enum WarrenEmbeddedEditorProfile {
+
+    static func managedSettings(
+        appearance: WarrenEmbeddedEditorAppearance
+    ) -> [String: Any] {
+        let palette = WarrenEmbeddedEditorPalette.resolved(for: appearance)
+        return [
             "breadcrumbs.enabled": true,
             "chat.disableAIFeatures": true,
             // Keep the embedded Monaco surface aligned with the native Warren
@@ -271,8 +401,8 @@ enum WarrenEmbeddedEditorProfile {
             "window.density.editorTabHeight": "compact",
             "window.menuBarVisibility": "hidden",
             "workbench.activityBar.location": "top",
-            "workbench.colorTheme": "Default Dark Modern",
-            "workbench.colorCustomizations": colorCustomizations,
+            "workbench.colorTheme": palette.baseThemeName,
+            "workbench.colorCustomizations": palette.colorCustomizations,
             "workbench.commandPalette.showAskInChat": false,
             "workbench.editor.editorActionsLocation": "hidden",
             "workbench.editor.empty.hint": "hidden",
@@ -297,9 +427,10 @@ enum WarrenEmbeddedEditorProfile {
     }
 
     static func mergingManagedSettings(
-        into existing: [String: Any]
+        into existing: [String: Any],
+        appearance: WarrenEmbeddedEditorAppearance
     ) -> [String: Any] {
-        existing.merging(managedSettings) { _, managed in managed }
+        existing.merging(managedSettings(appearance: appearance)) { _, managed in managed }
     }
 }
 
@@ -551,24 +682,46 @@ enum WarrenEmbeddedEditorChrome {
     static let reloadMessageHandlerName = "warrenEmbeddedEditor"
     static let readyMessage = "ready"
 
-    static let statusBarSource = #"""
-    (() => {
-        const background = "#151110";
-        const install = () => {
-            if (!document.documentElement) {
-                return false;
-            }
-            document.documentElement.style.setProperty(
-                "background-color",
-                background,
-                "important"
-            );
-            document.documentElement.style.colorScheme = "dark";
-            if (!document.getElementById("warren-editor-background-style")) {
+    /// The style node that paints the page ground.
+    ///
+    /// `appearanceSource` installs it and `appearanceRefreshSource` replaces it,
+    /// so the id has to be one value rather than two matching literals.
+    static let backgroundStyleElementID = "warren-editor-background-style"
+
+    /// Paints the page ground and declares `color-scheme` before the workbench
+    /// has loaded its own theme, so the editor does not flash an unstyled frame
+    /// of the wrong appearance on every navigation.
+    ///
+    /// This is separate from `statusBarSource` because it is the only injected
+    /// script whose content depends on the appearance preference: keeping the
+    /// several hundred lines of layout observers appearance-independent means
+    /// they stay a plain constant.
+    static func appearanceSource(appearance: WarrenEmbeddedEditorAppearance) -> String {
+        let palette = WarrenEmbeddedEditorPalette.resolved(for: appearance)
+        let scheme = appearance == .light ? "light" : "dark"
+        return #"""
+        (() => {
+            const background = "\#(palette.background)";
+            const scheme = "\#(scheme)";
+            const styleID = "\#(backgroundStyleElementID)";
+            const install = () => {
+                if (!document.documentElement) {
+                    return false;
+                }
+                document.documentElement.style.setProperty(
+                    "background-color",
+                    background,
+                    "important"
+                );
+                document.documentElement.style.colorScheme = scheme;
+                const existing = document.getElementById(styleID);
+                if (existing) {
+                    existing.remove();
+                }
                 const style = document.createElement("style");
-                style.id = "warren-editor-background-style";
+                style.id = styleID;
                 style.textContent = `:root {
-                    color-scheme: dark !important;
+                    color-scheme: ${scheme} !important;
                 }
                 html,
                 body,
@@ -577,15 +730,17 @@ enum WarrenEmbeddedEditorChrome {
                     background-color: ${background} !important;
                 }`;
                 document.documentElement.appendChild(style);
+                return true;
+            };
+
+            if (!install()) {
+                window.addEventListener("DOMContentLoaded", install, { once: true });
             }
-            return true;
-        };
+        })();
+        """#
+    }
 
-        if (!install()) {
-            window.addEventListener("DOMContentLoaded", install, { once: true });
-        }
-    })();
-
+    static let statusBarSource = #"""
     (() => {
         let layoutObserver;
         let resizeObserver;
@@ -1279,14 +1434,22 @@ enum WarrenEmbeddedEditorChrome {
     """#
 
     @MainActor
-    static func install(in configuration: WKWebViewConfiguration) {
+    static func install(
+        in configuration: WKWebViewConfiguration,
+        appearance: WarrenEmbeddedEditorAppearance
+    ) {
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: appearanceSource(appearance: appearance),
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
         configuration.userContentController.addUserScript(WKUserScript(
             source: statusBarSource,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
         configuration.userContentController.addUserScript(WKUserScript(
-            source: WarrenEmbeddedEditorPreviewTheme.source,
+            source: WarrenEmbeddedEditorPreviewTheme.source(appearance: appearance),
             injectionTime: .atDocumentStart,
             forMainFrameOnly: false
         ))
@@ -1294,43 +1457,55 @@ enum WarrenEmbeddedEditorChrome {
 }
 
 enum WarrenEmbeddedEditorPreviewTheme {
-    static let source = #"""
-    (() => {
-        const previewPath = "/vs/workbench/contrib/webview/browser/pre/";
-        if (!window.location.href.includes(previewPath)) {
-            return;
-        }
+    static let styleElementID = "warren-markdown-preview-style"
 
-        const install = () => {
-            if (!document.documentElement) {
-                return false;
+    /// Markdown previews render in their own webview frame, which does not
+    /// inherit the workbench's `color-scheme`. The `var(...)` fallbacks only
+    /// apply before the workbench has published its theme variables, so they
+    /// have to be on the right side of the appearance too.
+    static func source(appearance: WarrenEmbeddedEditorAppearance) -> String {
+        let palette = WarrenEmbeddedEditorPalette.resolved(for: appearance)
+        let scheme = appearance == .light ? "light" : "dark"
+        return #"""
+        (() => {
+            const previewPath = "/vs/workbench/contrib/webview/browser/pre/";
+            if (!window.location.href.includes(previewPath)) {
+                return;
             }
-            if (document.getElementById("warren-markdown-preview-dark-style")) {
+
+            const styleID = "\#(styleElementID)";
+            const install = () => {
+                if (!document.documentElement) {
+                    return false;
+                }
+                const existing = document.getElementById(styleID);
+                if (existing) {
+                    existing.remove();
+                }
+                const style = document.createElement("style");
+                style.id = styleID;
+                style.textContent = `
+                    :root,
+                    html,
+                    body {
+                        color-scheme: \#(scheme) !important;
+                    }
+                    html,
+                    body {
+                        background-color: var(--vscode-editor-background, \#(palette.background)) !important;
+                        color: var(--vscode-editor-foreground, \#(palette.foreground)) !important;
+                    }
+                `;
+                document.documentElement.appendChild(style);
                 return true;
-            }
-            const style = document.createElement("style");
-            style.id = "warren-markdown-preview-dark-style";
-            style.textContent = `
-                :root,
-                html,
-                body {
-                    color-scheme: dark !important;
-                }
-                html,
-                body {
-                    background-color: var(--vscode-editor-background, #151110) !important;
-                    color: var(--vscode-editor-foreground, #eae8e6) !important;
-                }
-            `;
-            document.documentElement.appendChild(style);
-            return true;
-        };
+            };
 
-        if (!install()) {
-            window.addEventListener("DOMContentLoaded", install, { once: true });
-        }
-    })();
-    """#
+            if (!install()) {
+                window.addEventListener("DOMContentLoaded", install, { once: true });
+            }
+        })();
+        """#
+    }
 }
 
 enum WarrenEmbeddedEditorNavigationDecision: Equatable {
@@ -1371,6 +1546,22 @@ enum WarrenEmbeddedEditorPointerBoundary {
         default:
             .none
         }
+    }
+
+    /// Whether a pointer event moves the keyboard into or out of the editor
+    /// region, or says nothing about it.
+    ///
+    /// The press is the decision: it is what hands AppKit's first responder to
+    /// the web content, or takes it away. The release carries the same location,
+    /// so acting on it too would only repeat the answer — and a release outside
+    /// the region that ends a drag started inside it would wrongly read as
+    /// leaving. `nil` means this event decides nothing.
+    static func keyboardFocusChange(
+        for eventType: NSEvent.EventType,
+        hitEditor: Bool
+    ) -> Bool? {
+        guard eventType == .leftMouseDown else { return nil }
+        return hitEditor
     }
 }
 
@@ -1488,6 +1679,30 @@ private final class WarrenEmbeddedEditorWKWebView: WKWebView {
         }
         super.viewWillMove(toWindow: newWindow)
     }
+
+    /// The color behind the page, shown during load and when the page is
+    /// rubber-banded past its own edge.
+    ///
+    /// A `CGColor` on a layer cannot be appearance-dynamic the way an `NSColor`
+    /// can, so the view repaints it itself rather than relying on AppKit to
+    /// re-resolve it. Without this, switching appearance leaves an Ember-dark
+    /// band around a light workbench until the editor is relaunched.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyPageGround()
+    }
+
+    func applyPageGround() {
+        // Read the native token rather than parsing the palette's CSS string:
+        // the ground behind the page has to be the same value the surrounding
+        // SwiftUI pane paints, or the seam shows during load.
+        let scheme: ColorScheme =
+            effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+        let ground = NSColor(WarrenColorTokens.resolved(for: scheme).background)
+        wantsLayer = true
+        layer?.backgroundColor = ground.cgColor
+        underPageBackgroundColor = ground
+    }
 }
 
 @MainActor
@@ -1573,6 +1788,14 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     private let supportDirectory: URL
     private let executableResolver: ExecutableResolver
     private let navigationDelegate = WarrenEmbeddedEditorNavigationDelegate()
+    /// The appearance the editor is currently painted in.
+    ///
+    /// Held rather than read on demand because `writeManagedSettings` runs
+    /// `nonisolated`, off the main actor, and cannot touch `NSApp`. The surface
+    /// feeds this from SwiftUI's `colorScheme`, which is the only observer that
+    /// sees both the preference and a system appearance change. The initial
+    /// value covers the window between `init` and that first update.
+    private var currentAppearance: WarrenEmbeddedEditorAppearance = .resolvedFromApplication()
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -1742,7 +1965,10 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
             )
             launchedSessionSocketURL = configuration.sessionSocket
             sessionSocketURL = configuration.sessionSocket
-            try await Self.prepare(configuration: configuration)
+            try await Self.prepare(
+                configuration: configuration,
+                appearance: currentAppearance
+            )
             guard isCurrent(generation), !Task.isCancelled else {
                 if isCurrent(generation) {
                     let sessionSocketToRemove = sessionSocketURL
@@ -1974,13 +2200,60 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         }
     }
 
+    /// Repaints the editor for a new appearance without restarting it.
+    ///
+    /// Three things have to move together, because each covers a surface the
+    /// others do not:
+    ///
+    /// - `settings.json`, which the editor server watches and hot-applies. This
+    ///   is what actually restyles the workbench and its syntax colors.
+    /// - The injected style node in each live page. The user scripts only run at
+    ///   document start, so an already-loaded page keeps the ground it was
+    ///   created with until told otherwise.
+    /// - The user scripts themselves, so the *next* navigation starts on the new
+    ///   appearance rather than flashing the old one.
+    func applyAppearance(_ appearance: WarrenEmbeddedEditorAppearance) {
+        guard appearance != currentAppearance else { return }
+        currentAppearance = appearance
+
+        let settingsDirectory = supportDirectory
+            .appendingPathComponent("user-data", isDirectory: true)
+        Task.detached(priority: .utility) {
+            // Best effort: the editor may not have been launched yet, in which
+            // case the next launch writes these settings anyway.
+            try? Self.writeManagedSettings(
+                settingsDirectory: settingsDirectory,
+                appearance: appearance
+            )
+        }
+
+        let refresh = WarrenEmbeddedEditorChrome.appearanceSource(appearance: appearance)
+        let preview = WarrenEmbeddedEditorPreviewTheme.source(appearance: appearance)
+        for webView in webViews.values {
+            webView.evaluateJavaScript(refresh)
+            webView.evaluateJavaScript(preview)
+            (webView as? WarrenEmbeddedEditorWKWebView)?.applyPageGround()
+            let controller = webView.configuration.userContentController
+            controller.removeAllUserScripts()
+            WarrenEmbeddedEditorPointerBridge.install(in: webView.configuration)
+            WarrenEmbeddedEditorNativeSelectionBridge.install(in: webView.configuration)
+            WarrenEmbeddedEditorChrome.install(
+                in: webView.configuration,
+                appearance: appearance
+            )
+        }
+    }
+
     private func makeWebView(workspacePath: String, url: URL) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore =
             webViewStorage.dataStore(for: workspacePath)
         WarrenEmbeddedEditorPointerBridge.install(in: configuration)
         WarrenEmbeddedEditorNativeSelectionBridge.install(in: configuration)
-        WarrenEmbeddedEditorChrome.install(in: configuration)
+        WarrenEmbeddedEditorChrome.install(
+            in: configuration,
+            appearance: currentAppearance
+        )
         configuration.userContentController.add(
             navigationDelegate,
             name: WarrenEmbeddedEditorChrome.reloadMessageHandlerName
@@ -1991,15 +2264,7 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
             configuration: configuration
         )
         webView.navigationDelegate = navigationDelegate
-        let backgroundColor = NSColor(
-            red: 21 / 255,
-            green: 17 / 255,
-            blue: 16 / 255,
-            alpha: 1
-        )
-        webView.wantsLayer = true
-        webView.layer?.backgroundColor = backgroundColor.cgColor
-        webView.underPageBackgroundColor = backgroundColor
+        webView.applyPageGround()
         WarrenEmbeddedEditorPageVisibility.conceal(webView)
         webView.allowsMagnification = false
         webView.allowsBackForwardNavigationGestures = false
@@ -2052,12 +2317,11 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
             return
         }
         let hitWebView = embeddedEditor(at: event, in: interactiveWebViews)
-        // The press is the decision: a click inside the region hands AppKit's
-        // first responder to the web content, and a click anywhere else takes
-        // it away again. The release carries the same location, so acting on it
-        // as well would only repeat the answer.
-        if event.type == .leftMouseDown {
-            setKeyboardFocus(hitWebView != nil)
+        if let focused = WarrenEmbeddedEditorPointerBoundary.keyboardFocusChange(
+            for: event.type,
+            hitEditor: hitWebView != nil
+        ) {
+            setKeyboardFocus(focused)
         }
         switch WarrenEmbeddedEditorPointerBoundary.action(for: event.type) {
         case .cancelInactiveEditors:
@@ -2079,6 +2343,40 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     private func setKeyboardFocus(_ focused: Bool) {
         guard hasKeyboardFocus != focused else { return }
         hasKeyboardFocus = focused
+    }
+
+    /// Seeds the focus flag so a test can assert it is released on teardown.
+    /// The real signal comes from the pointer boundary, which needs a window, a
+    /// loaded workbench, and a live code-server.
+    func setKeyboardFocusForTesting(_ focused: Bool) {
+        setKeyboardFocus(focused)
+    }
+
+    /// True when an open region has to ask for activation again.
+    ///
+    /// The region activates from a task keyed on its Workspace path, which fires
+    /// once. That is not enough, because the model can be stopped from outside
+    /// while the region stays on screen and the path never changes: an Endpoint
+    /// change does exactly that, and at launch the restored Endpoint selection
+    /// counts as a change. The region was then left on its spinner with nothing
+    /// able to start the editor again.
+    ///
+    /// `unavailable` and `failed` are deliberately excluded. Both already show
+    /// their own retry affordance, and a launch that fails leaves the phase
+    /// unchanged — so treating them as "ask again" would retry from a view
+    /// update, forever.
+    func needsActivation(workspacePath: String) -> Bool {
+        switch phase {
+        case .idle:
+            // Never started, or stopped out from under the region.
+            return true
+        case .ready:
+            // Running, but this Workspace's view is gone: evicted by the cache
+            // bound, or cleared by a stop that kept the phase.
+            return webViews[workspacePath] == nil
+        case .preparing, .starting, .unavailable, .failed:
+            return false
+        }
     }
 
     private func embeddedEditor(
@@ -2118,7 +2416,8 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     }
 
     nonisolated private static func prepare(
-        configuration: WarrenEmbeddedEditorConfiguration
+        configuration: WarrenEmbeddedEditorConfiguration,
+        appearance: WarrenEmbeddedEditorAppearance
     ) async throws {
         try await Task.detached(priority: .utility) {
             let fileManager = FileManager.default
@@ -2136,7 +2435,10 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
                     withIntermediateDirectories: true
                 )
             }
-            try writeManagedSettings(configuration: configuration)
+            try writeManagedSettings(
+                configuration: configuration,
+                appearance: appearance
+            )
         }.value
     }
 
@@ -2163,9 +2465,24 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     }
 
     nonisolated private static func writeManagedSettings(
-        configuration: WarrenEmbeddedEditorConfiguration
+        configuration: WarrenEmbeddedEditorConfiguration,
+        appearance: WarrenEmbeddedEditorAppearance
     ) throws {
-        let settingsDirectory = configuration.userDataDirectory
+        try writeManagedSettings(
+            settingsDirectory: configuration.userDataDirectory,
+            appearance: appearance
+        )
+    }
+
+    /// Takes the user-data directory rather than a full configuration: an
+    /// appearance change has to rewrite these settings while the editor is
+    /// already running, and at that point the port and session socket of the
+    /// live server are not the caller's business.
+    nonisolated private static func writeManagedSettings(
+        settingsDirectory userDataDirectory: URL,
+        appearance: WarrenEmbeddedEditorAppearance
+    ) throws {
+        let settingsDirectory = userDataDirectory
             .appendingPathComponent("User", isDirectory: true)
         let settingsURL = settingsDirectory.appendingPathComponent("settings.json")
         try FileManager.default.createDirectory(
@@ -2184,7 +2501,8 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
             existingSettings = [:]
         }
         let settings = WarrenEmbeddedEditorProfile.mergingManagedSettings(
-            into: existingSettings
+            into: existingSettings,
+            appearance: appearance
         )
         let data = try JSONSerialization.data(
             withJSONObject: settings,
@@ -2365,6 +2683,22 @@ struct WarrenEmbeddedEditorSurface: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
+    /// What the region is asking the model for.
+    ///
+    /// Carries the activation need alongside the path so the task re-fires when
+    /// the model loses the editor without the Workspace changing.
+    private struct ActivationRequest: Equatable {
+        let workspacePath: String
+        let needsActivation: Bool
+    }
+
+    private var activationRequest: ActivationRequest {
+        ActivationRequest(
+            workspacePath: workspace.path,
+            needsActivation: model.needsActivation(workspacePath: workspace.path)
+        )
+    }
+
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         Group {
@@ -2372,8 +2706,17 @@ struct WarrenEmbeddedEditorSurface: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(tokens.background)
-        .task(id: workspace.path) {
+        // Keyed on what the region needs, not only on which Workspace it shows.
+        // A task keyed on the path alone fires once, and the model can lose the
+        // editor while the path stays put — see `needsActivation`.
+        .task(id: activationRequest) {
             model.activate(workspacePath: workspace.path)
+        }
+        // SwiftUI is the one place that observes both sources of an appearance
+        // change: the preference writing `NSApp.appearance`, and macOS changing
+        // its own appearance while the preference is System.
+        .task(id: colorScheme) {
+            model.applyAppearance(WarrenEmbeddedEditorAppearance(colorScheme))
         }
     }
 
@@ -2460,12 +2803,47 @@ struct WarrenEmbeddedEditorSurface: View {
     }
 }
 
-private struct WarrenEmbeddedEditorWebViewHost: NSViewRepresentable {
+/// Hosts whichever cached web view belongs to the Workspace on screen.
+///
+/// The web view is mounted into a container rather than being returned as the
+/// representable's own view. `makeNSView` runs once per view identity, and the
+/// editor region has one identity for every Workspace: it sits at the same place
+/// in the same `WarrenDesktopCentralSplit`, so SwiftUI reuses it across a
+/// Workspace change and only calls `updateNSView`. Returning the web view
+/// directly therefore pinned the region to whichever Workspace happened to
+/// create the host first, and a Workspace whose web view was already cached
+/// never even re-rendered the branch that would have rebuilt it — the region
+/// kept showing another Workspace's files and Git branch.
+struct WarrenEmbeddedEditorWebViewHost: NSViewRepresentable {
     let webView: WKWebView
 
-    func makeNSView(context: Context) -> WKWebView {
-        webView
+    func makeNSView(context: Context) -> ContainerView {
+        let container = ContainerView()
+        container.mount(webView)
+        return container
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {}
+    func updateNSView(_ container: ContainerView, context: Context) {
+        container.mount(webView)
+    }
+
+    final class ContainerView: NSView {
+        /// Weak: the model owns the cached web views and evicts them on its own
+        /// schedule, so the container must not be what keeps one alive.
+        private weak var mounted: WKWebView?
+
+        func mount(_ webView: WKWebView) {
+            guard mounted !== webView else { return }
+            // Only detach the view this container put on screen. `addSubview`
+            // moves a view that still has another parent, which is what makes
+            // handing the same web view to a new container safe.
+            if let mounted, mounted.superview === self {
+                mounted.removeFromSuperview()
+            }
+            mounted = webView
+            webView.frame = bounds
+            webView.autoresizingMask = [.width, .height]
+            addSubview(webView)
+        }
+    }
 }

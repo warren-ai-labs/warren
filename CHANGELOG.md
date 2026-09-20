@@ -4,8 +4,25 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
-### Fixed
+_No changes yet._
 
+## [0.20.0] - 2026-09-20
+
+> Minor release: adds a complete light appearance to the Desktop, Terminal,
+> TUIs, and embedded editor, and tightens terminal focus and pointer delivery.
+> The JSON control protocol remains at 4.0.
+
+### Added
+
+- Add a client-local appearance setting with System, Light, and Dark choices.
+  The new Ember Paper palette covers the Desktop chrome, terminal ANSI colors,
+  TUIs, and the embedded editor, and switches live with the selected appearance.
+
+### Changed
+
+- Make the terminal and its TUIs follow Warren's selected appearance, including
+  Ghostty's bold and contrast behavior, OSC color answers, and the editor's
+  embedded workbench theme.
 - Describe the current CLI surface in its own help. The top-level list omitted
   `session panes` and spelled the removal action `delete` while every other
   resource and the `session` help spelled it `remove`; the `agent` help offered
@@ -17,6 +34,24 @@ All notable changes to Warren are documented here.
   region that is "never Host state", so it contradicted `warren pane` and the
   roster it reads. Pane Group and Active Pane Group now carry the ownership
   split, and Tab points at the client-model side of it.
+
+### Fixed
+
+- Deliver terminal pointer, resize, and text callbacks through the live surface
+  path, so focus answers where the keyboard actually is and returns to a
+  Terminal that kept its pane.
+- Recover an embedded editor region after its model stops, keep its workspace
+  and cursor registrations current, and prevent its row badges from overlapping.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and the Host state schema stays at 4;
+  this release migrates no state.
+- Appearance is client-local and existing installations remain Dark by default;
+  System and Light are opt-in from Desktop settings.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
 
 ## [0.19.0] - 2026-09-18
 

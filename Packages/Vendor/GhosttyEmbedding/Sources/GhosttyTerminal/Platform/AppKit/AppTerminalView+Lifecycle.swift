@@ -13,6 +13,9 @@
             let options: NSTrackingArea.Options = [
                 .mouseEnteredAndExited,
                 .mouseMoved,
+                // Asks AppKit to call `cursorUpdate` as the pointer crosses into
+                // this view, which is how the grid publishes its I-beam.
+                .cursorUpdate,
                 .inVisibleRect,
                 .activeAlways,
             ]
@@ -71,12 +74,11 @@
             super.viewDidMoveToWindow()
             removeWindowObservers()
             guard let window else {
-                // The run loop owns a scheduled timer, so an autoscroll left
-                // running would keep firing after this view is gone. A view is
-                // always unparented before it is released, which makes this the
-                // last point that can still reach it.
-                stopSelectionAutoscroll()
-                lastDragPoint = nil
+                // A withheld release has no meaning once the view is unparented,
+                // and leaving it armed would swallow the first real click after
+                // the view comes back.
+                suppressesNextLeftMouseUp = false
+                firstMouseEventNumber = nil
                 // Also invoked from _setWindow: while AppKit holds the
                 // view-tree lock; keep Ghostty calls off this path.
                 DispatchQueue.main.async { [weak self] in

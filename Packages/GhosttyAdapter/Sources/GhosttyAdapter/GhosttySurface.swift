@@ -70,43 +70,30 @@ public final class GhosttySurface: Identifiable {
         self.inMemory = inMemory
         self.outputWriter = outputWriter
 
-        let themeConfiguration = TerminalConfiguration { builder in
-            builder.withBackground("#151110")
-            builder.withForeground("#eae8e6")
-            builder.withCursorColor("#e07850")
-            builder.withCursorText("#151110")
-            // Ghostty colors carry no alpha; blend Superset's 25% orange
-            // selection over #151110 instead of using its rgba() value.
-            builder.withSelectionBackground("#482b20")
-            builder.withCursorStyle(.block)
-            builder.withCursorStyleBlink(true)
-            // Match xterm.js drawBoldTextInBrightColors: bold uses bright palette.
-            builder.withBoldColor("bright")
-            builder.withCustom("bold-is-bright", "true")
-            // Make Codex's pure-black Working label visible without flattening
-            // its shimmer: Ghostty's binary contrast shader promotes black at
-            // 1.2, while the shimmer's darkest emitted grey remains above it.
-            builder.withMinimumContrast(1.2)
-            for (index, color) in TerminalPalette.ember.enumerated() {
-                builder.withPalette(index, color: Self.hex(color))
-            }
-        }
-        // Warren is dark-only, but AppTerminalView can briefly report the
-        // system's light appearance because it is mounted outside SwiftUI's
-        // preferredColorScheme environment. Keep both variants identical so
-        // that transient scheme updates cannot drop the colors Codex queries.
+        // Both appearances are real themes, and that is load-bearing for more
+        // than looks. A TUI does not guess the terminal's appearance: it asks,
+        // over OSC 10/11 for the actual ground and foreground, and it is told
+        // over Ghostty's color-scheme report when they change. Claude Code and
+        // Codex both do this, so whatever these configurations say is what the
+        // program paints itself to match.
+        //
+        // That is also why the theme and the reported scheme cannot be split.
+        // Reporting Ember under a light appearance would have every TUI draw a
+        // dark panel inside a paper-white app; reporting a light scheme over an
+        // Ember ground would be worse, because the program would then pick dark
+        // ink for a dark canvas and render itself illegible.
         let theme = TerminalTheme(
-            light: themeConfiguration,
-            dark: themeConfiguration
+            light: Self.makeThemeConfiguration(appearance: .light),
+            dark: Self.makeThemeConfiguration(appearance: .dark)
         )
         let controller = TerminalController(theme: theme) { _ in }
         controller.setTerminalConfiguration(Self.makeConfiguration(font: font))
-        // Warren's desktop is intentionally dark and the terminal host is
-        // mounted through a custom AppKit container rather than
-        // TerminalSurfaceView. Apply the dark scheme here so Ghostty's own
-        // OSC 10/11 replies use Warren's configured foreground/background
-        // even before AppKit has propagated its appearance to the surface.
-        controller.setColorScheme(.dark)
+        // Seed the scheme from the application's appearance, which the
+        // appearance preference drives. `AppTerminalView` keeps it current from
+        // `viewDidChangeEffectiveAppearance` afterwards; this only covers the
+        // window before that view is mounted, so a surface created while the app
+        // is light never has to repaint from Ember on its first frame.
+        controller.setColorScheme(Self.currentColorScheme())
         let state = TerminalViewState(controller: controller)
         state.configuration = TerminalSurfaceOptions(
             backend: .inMemory(inMemory),
@@ -391,6 +378,67 @@ public final class GhosttySurface: Identifiable {
             color.green,
             color.blue
         )
+    }
+
+    /// The colors and palette for one appearance.
+    ///
+    /// Everything appearance-dependent lives here, and `makeConfiguration` keeps
+    /// the appearance-independent half — font, cell metrics, find highlighting —
+    /// so the two cannot drift into disagreeing about which is which.
+    private static func makeThemeConfiguration(
+        appearance: TerminalColorScheme
+    ) -> TerminalConfiguration {
+        TerminalConfiguration { builder in
+            switch appearance {
+            case .dark:
+                builder.withBackground("#151110")
+                builder.withForeground("#eae8e6")
+                builder.withCursorColor("#e07850")
+                builder.withCursorText("#151110")
+                // Ghostty colors carry no alpha; blend Superset's 25% orange
+                // selection over #151110 instead of using its rgba() value.
+                builder.withSelectionBackground("#482b20")
+                // Match xterm.js drawBoldTextInBrightColors: bold takes the
+                // bright palette, which on a dark ground is the louder half.
+                builder.withBoldColor("bright")
+                builder.withCustom("bold-is-bright", "true")
+            case .light:
+                builder.withBackground("#ffffff")
+                builder.withForeground("#1c1917")
+                builder.withCursorColor("#b7522c")
+                builder.withCursorText("#ffffff")
+                // The same 25% accent selection, blended over white.
+                builder.withSelectionBackground("#f0d5c9")
+                builder.withBoldColor("bright")
+                builder.withCustom("bold-is-bright", "true")
+            }
+            builder.withCursorStyle(.block)
+            builder.withCursorStyleBlink(true)
+            // A legibility floor, not a style. It promotes only the pairings
+            // that fall below it — Codex's pure-black Working label on Ember,
+            // the near-ground slots on paper — and 1.2 is low enough that
+            // Codex's shimmer, whose darkest emitted grey stays above it, keeps
+            // its gradient instead of being flattened. A higher value causes Ghostty's
+            // binary shader to snap colored and dimmed text to pure black on paper.
+            builder.withMinimumContrast(1.2)
+            let palette = appearance == .light
+                ? TerminalPalette.emberPaper
+                : TerminalPalette.ember
+            for (index, color) in palette.enumerated() {
+                builder.withPalette(index, color: Self.hex(color))
+            }
+        }
+    }
+
+    /// The application's current appearance.
+    ///
+    /// Read from AppKit rather than from the preference: the preference has a
+    /// System case, and AppKit is where that resolves to something concrete.
+    /// This is also the source `AppTerminalView` reads, so a surface created
+    /// before its view is mounted starts on the scheme that view will report.
+    private static func currentColorScheme() -> TerminalColorScheme {
+        let appearance = NSApp?.effectiveAppearance ?? .currentDrawing()
+        return appearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua ? .light : .dark
     }
 
     public func semanticSnapshot() -> TerminalSemanticSnapshot {

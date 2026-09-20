@@ -89,55 +89,73 @@ final class TerminalPointerFocusTests: XCTestCase {
         XCTAssertEqual(view.terminalMouseShape, .text)
     }
 
-    // MARK: - Selection autoscroll
+    // MARK: - Window-activating click
 
+    /// The click that activates the window has to reach the view, or it cannot
+    /// move focus to the pane it landed in.
     @MainActor
-    func testDragInsideTheViewDoesNotAutoscroll() {
-        let bounds = NSRect(x: 0, y: 0, width: 200, height: 100)
+    func testSurfaceAcceptsFirstMouse() {
+        let view = AppTerminalView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
 
-        XCTAssertEqual(
-            AppTerminalView.autoscrollOvershoot(for: CGPoint(x: 10, y: 50), in: bounds),
-            0
+        XCTAssertTrue(view.acceptsFirstMouse(for: nil))
+    }
+
+    /// Accepting it must not also forward it to the program. A press delivered
+    /// to a mouse-mode program moves the cursor in an editor or presses a button
+    /// in a TUI, which is not what a click to focus a window asked for.
+    @MainActor
+    func testWindowActivatingClickIsNotForwardedToTheProgram() throws {
+        let view = AppTerminalView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        let click = try makeClick(eventNumber: 4321)
+
+        // AppKit asks this for the activating click, and the answer records
+        // which `mouseDown` to withhold.
+        _ = view.acceptsFirstMouse(for: click)
+        view.mouseDown(with: click)
+
+        XCTAssertTrue(
+            view.suppressesNextLeftMouseUp,
+            "A withheld press must withhold its release, or the program sees a release alone."
+        )
+        XCTAssertNil(
+            view.pointerSelectionStartPoint,
+            "The activating click must not begin a selection."
         )
     }
 
-    /// Ghostty's y axis grows downward, so a drag above the view is negative and
-    /// has to scroll toward earlier output.
+    /// The release is withheld exactly once. A later real click has to work
+    /// normally.
     @MainActor
-    func testDragAboveTheViewScrollsTowardEarlierOutput() {
-        let bounds = NSRect(x: 0, y: 0, width: 200, height: 100)
+    func testReleaseSuppressionAppliesOnlyToTheActivatingClick() throws {
+        let view = AppTerminalView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        let activating = try makeClick(eventNumber: 4321)
+        _ = view.acceptsFirstMouse(for: activating)
+        view.mouseDown(with: activating)
+        view.mouseUp(with: try makeClick(eventNumber: 4321, type: .leftMouseUp))
+        XCTAssertFalse(view.suppressesNextLeftMouseUp)
 
-        XCTAssertGreaterThan(
-            AppTerminalView.autoscrollOvershoot(for: CGPoint(x: 10, y: -20), in: bounds),
-            0
-        )
+        // A subsequent click is an ordinary one: it starts a selection.
+        view.mouseDown(with: try makeClick(eventNumber: 4322))
+
+        XCTAssertNotNil(view.pointerSelectionStartPoint)
+        XCTAssertFalse(view.suppressesNextLeftMouseUp)
     }
 
-    @MainActor
-    func testDragBelowTheViewScrollsTowardLaterOutput() {
-        let bounds = NSRect(x: 0, y: 0, width: 200, height: 100)
-
-        XCTAssertLessThan(
-            AppTerminalView.autoscrollOvershoot(for: CGPoint(x: 10, y: 140), in: bounds),
-            0
+    private func makeClick(
+        eventNumber: Int,
+        type: NSEvent.EventType = .leftMouseDown
+    ) throws -> NSEvent {
+        let event = NSEvent.mouseEvent(
+            with: type,
+            location: NSPoint(x: 10, y: 10),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: eventNumber,
+            clickCount: 1,
+            pressure: 1
         )
-    }
-
-    /// A drag flung far past the edge stays controllable instead of running
-    /// through the whole scrollback in a few ticks.
-    @MainActor
-    func testAutoscrollRateIsCapped() {
-        let bounds = NSRect(x: 0, y: 0, width: 200, height: 100)
-        let nearby = AppTerminalView.autoscrollOvershoot(
-            for: CGPoint(x: 10, y: -20),
-            in: bounds
-        )
-        let faraway = AppTerminalView.autoscrollOvershoot(
-            for: CGPoint(x: 10, y: -5000),
-            in: bounds
-        )
-
-        XCTAssertGreaterThan(faraway, nearby)
-        XCTAssertLessThanOrEqual(faraway, 5)
+        return try XCTUnwrap(event)
     }
 }
