@@ -479,6 +479,9 @@ struct WarrenCompositionRoot: View {
             guard let workspacePath = selectedWorkspacePath else { return }
             embeddedEditorModel.prewarm(workspacePath: workspacePath)
         }
+        .task(id: colorScheme) {
+            embeddedEditorModel.applyAppearance(WarrenEmbeddedEditorAppearance(colorScheme))
+        }
         .onChange(of: embeddedEditorModel.hasKeyboardFocus) { hasFocus in
             // Only the departure needs reporting. The return is reported by the
             // surface manager when the click makes a terminal first responder

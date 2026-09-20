@@ -414,6 +414,75 @@ func TestEnsureClaudeBindHookMergesIdempotently(t *testing.T) {
 	}
 }
 
+// A stale `#` comment form of the Warren hook entry must be normalized by the
+// installer rather than left running beside the correct entry: the comment
+// swallows the provider argument, so the session is mislabeled as Codex.
+func TestEnsureClaudeBindHookRepairsStaleCommentForm(t *testing.T) {
+	t.Setenv("WARREN_DATA_DIR", t.TempDir())
+	claudeDir := t.TempDir()
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	stale := "bash '/x/agent-bind.sh' # " + hookCommandMarker + " claude"
+	current := "bash '/x/agent-bind.sh' " + hookCommandMarker + " claude"
+	if err := os.WriteFile(settingsPath, []byte(`{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "`+current+`"}]},
+      {"hooks": [{"type": "command", "command": "`+stale+`"}]}
+    ],
+    "SessionEnd": [
+      {"hooks": [{"type": "command", "command": "`+stale+`"}]},
+      {"hooks": [{"type": "command", "command": "`+current+`"}]}
+    ]
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := EnsureClaudeBindHook(claudeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("a stale comment-form entry must make the install report changed")
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "' # "+hookCommandMarker) {
+		t.Fatalf("stale comment-form entry survived install:\n%s", data)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	hooks := document["hooks"].(map[string]any)
+	for _, event := range []string{"SessionStart", "SessionEnd"} {
+		entries, _ := hooks[event].([]any)
+		owned := 0
+		for _, entry := range entries {
+			item, _ := entry.(map[string]any)
+			inner, _ := item["hooks"].([]any)
+			for _, hook := range inner {
+				config, _ := hook.(map[string]any)
+				if text, _ := config["command"].(string); strings.Contains(text, hookCommandMarker) {
+					owned++
+				}
+			}
+		}
+		if owned != 1 {
+			t.Fatalf("%s warren entries = %d, want exactly 1", event, owned)
+		}
+	}
+	changed, err = EnsureClaudeBindHook(claudeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("install after repair must be a no-op")
+	}
+}
+
 func TestClaudeAttentionHookScript(t *testing.T) {
 	t.Setenv("WARREN_DATA_DIR", t.TempDir())
 	claudeDir := t.TempDir()

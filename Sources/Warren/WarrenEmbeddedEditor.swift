@@ -1629,14 +1629,18 @@ private final class WarrenEmbeddedEditorNavigationDelegate:
             cancelRevealFallback(for: webView)
             WarrenEmbeddedEditorPageVisibility.reveal(webView)
         case "reload":
-            cancelRevealFallback(for: webView)
-            WarrenEmbeddedEditorPointerBridge.cancel(in: webView)
-            WarrenEmbeddedEditorPageVisibility.conceal(webView)
-            webView.stopLoading()
-            webView.reloadFromOrigin()
+            reload(webView)
         default:
             break
         }
+    }
+
+    func reload(_ webView: WKWebView) {
+        cancelRevealFallback(for: webView)
+        WarrenEmbeddedEditorPointerBridge.cancel(in: webView)
+        WarrenEmbeddedEditorPageVisibility.conceal(webView)
+        webView.stopLoading()
+        webView.reloadFromOrigin()
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -1795,7 +1799,7 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     /// feeds this from SwiftUI's `colorScheme`, which is the only observer that
     /// sees both the preference and a system appearance change. The initial
     /// value covers the window between `init` and that first update.
-    private var currentAppearance: WarrenEmbeddedEditorAppearance = .resolvedFromApplication()
+    private(set) var currentAppearance: WarrenEmbeddedEditorAppearance = .resolvedFromApplication()
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -2205,42 +2209,40 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     /// Three things have to move together, because each covers a surface the
     /// others do not:
     ///
-    /// - `settings.json`, which the editor server watches and hot-applies. This
-    ///   is what actually restyles the workbench and its syntax colors.
-    /// - The injected style node in each live page. The user scripts only run at
-    ///   document start, so an already-loaded page keeps the ground it was
-    ///   created with until told otherwise.
+    /// - `settings.json`, which the editor server reads when serving the page.
     /// - The user scripts themselves, so the *next* navigation starts on the new
     ///   appearance rather than flashing the old one.
+    /// - Live web views, which must reload from origin so code-server picks up
+    ///   the updated theme settings while keeping open tabs and edits intact.
     func applyAppearance(_ appearance: WarrenEmbeddedEditorAppearance) {
         guard appearance != currentAppearance else { return }
         currentAppearance = appearance
 
         let settingsDirectory = supportDirectory
             .appendingPathComponent("user-data", isDirectory: true)
-        Task.detached(priority: .utility) {
-            // Best effort: the editor may not have been launched yet, in which
-            // case the next launch writes these settings anyway.
-            try? Self.writeManagedSettings(
-                settingsDirectory: settingsDirectory,
-                appearance: appearance
-            )
-        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await Task.detached(priority: .utility) {
+                try? Self.writeManagedSettings(
+                    settingsDirectory: settingsDirectory,
+                    appearance: appearance
+                )
+            }.value
 
-        let refresh = WarrenEmbeddedEditorChrome.appearanceSource(appearance: appearance)
-        let preview = WarrenEmbeddedEditorPreviewTheme.source(appearance: appearance)
-        for webView in webViews.values {
-            webView.evaluateJavaScript(refresh)
-            webView.evaluateJavaScript(preview)
-            (webView as? WarrenEmbeddedEditorWKWebView)?.applyPageGround()
-            let controller = webView.configuration.userContentController
-            controller.removeAllUserScripts()
-            WarrenEmbeddedEditorPointerBridge.install(in: webView.configuration)
-            WarrenEmbeddedEditorNativeSelectionBridge.install(in: webView.configuration)
-            WarrenEmbeddedEditorChrome.install(
-                in: webView.configuration,
-                appearance: appearance
-            )
+            guard self.currentAppearance == appearance else { return }
+
+            for webView in self.webViews.values {
+                (webView as? WarrenEmbeddedEditorWKWebView)?.applyPageGround()
+                let controller = webView.configuration.userContentController
+                controller.removeAllUserScripts()
+                WarrenEmbeddedEditorPointerBridge.install(in: webView.configuration)
+                WarrenEmbeddedEditorNativeSelectionBridge.install(in: webView.configuration)
+                WarrenEmbeddedEditorChrome.install(
+                    in: webView.configuration,
+                    appearance: appearance
+                )
+                self.navigationDelegate.reload(webView)
+            }
         }
     }
 
