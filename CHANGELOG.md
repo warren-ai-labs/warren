@@ -6,6 +6,91 @@ All notable changes to Warren are documented here.
 
 _No changes yet._
 
+## [0.22.0] - 2026-09-23
+
+> Minor release: adds Warren Browser, a Host-owned Chromium Session an Agent can
+> drive, and gives both clients one shared way to report a connection. The JSON
+> control protocol remains at 4.0.
+
+### Added
+
+- Add Warren Browser (RFC 0022). A browser Session owns a Chromium process instead
+  of a PTY, and an Agent drives it through 21 actions over the new `browser-v1`
+  capability, a `browser.*` RPC surface, an HTTP viewer page and frame stream, and
+  a `warren browser` CLI. Frames carry their own `browserFrame` binary kind so an
+  encoded still never reaches a VT parser, and each Session keeps its own profile
+  directory. `session.create` refuses `kind = "browser"`; a browser Session is
+  created through `browser.session.create`.
+- Make the browser a Desktop pane. It is an ordinary Tab that takes part in the
+  existing split, drop, maximize, and pane-group paths, with a Browser preset in
+  the command bar and a WKWebView viewer that reports its own viewport. A browser
+  Session has no PTY, so the visible-screen set keeps dropping browser leaves.
+- Drag a Session row out of the sidebar tree into a pane, so rich mode can put a
+  Workspace's other Sessions beside the one on screen.
+- Keep a sent message on screen until the timeline owns it. Both clients hold an
+  `accepted` state between the Host's receipt and the provider's echo, matched
+  through the new `agent-causation-v1` capability, which stamps the sending
+  `commandId` into `causedBy`; without it the clients fall back to oldest-first
+  text matching.
+- Persist the unsent message queue per endpoint and session on both clients, so a
+  tab close or an app relaunch no longer discards messages the user typed or the
+  Host had already accepted.
+- Grow the iOS composer for wrapped and pasted multi-line drafts, and report why
+  LAN discovery is unavailable instead of showing an idle LAN.
+- Tell an established client why its Host went away. A Relay route teardown now
+  hands each client the same `host_offline` payload a fresh refusal carries, with
+  the Host's name and last-seen time.
+- Keep the LAN advertisement aligned with the Host's current addresses, and
+  publish the system local host name with a `.local` candidate first.
+
+### Changed
+
+- Report connection state through one presentation layer both clients share:
+  `live`, `settling`, and `interrupted` with a 1.2s grace. Sub-second flaps no
+  longer paint a red banner, while an absent Host is still reported at once.
+- Prove liveness to the Host. iOS advertises and sends `app-heartbeat-v1` pings,
+  and all three Relay hops count any inbound frame as liveness rather than only
+  pongs, so a tunnel streaming output is no longer reaped mid-session.
+- Run Agent turns through a per-session ordered dispatcher on the Headless
+  reader, so a slow turn no longer delays the application heartbeat while two
+  turns for one session keep the CLI's arrival order.
+- Attenuate Swift's reconnect backoff with the same ±20% jitter as Web and the
+  Host connector, and share one 30s stability window instead of 10s against 60s.
+
+### Fixed
+
+- Acknowledge every screencast frame so the stream does not stall, recover a page
+  target that dies under a running Chromium, and render the live view at the
+  density the viewer reports. Scroll deltas follow CDP's sign convention in the
+  CSS pixels the Host was asked for, and the viewer reconnects with a keepalive
+  ping instead of sitting on its startup notice.
+- Upgrade the browser frame stream without `permessage-deflate`, which WebKit
+  offers and then rejects with an abnormal close.
+- Resolve `CausedBy` as a late-bound annotation instead of part of event
+  identity, so a transcript re-parse after a provider rebind no longer drops a
+  batch, and tighten the echo matcher so a longer message cannot claim a shorter
+  pending one.
+- Decode a denied `AskUserQuestion` whose `toolUseResult` is a plain string, so
+  the interaction reaches its terminal state instead of staying pending.
+- Derive sided modifier flags for remapped keyboards, and drop only pure control
+  commits when re-encoding AppKit control keys.
+- Stop the iOS Agent view from rescanning the transcript for every row. A body
+  pass that cost 4.9s at 1200 events is now stored reads plus one derivation per
+  refresh.
+- Let a long pane title truncate instead of pushing the sidebar's leading edge
+  off screen, and stop reserving the editor's width while the editor is closed.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and the Host state schema is unchanged;
+  this release migrates no state.
+- Warren Browser requires a Chromium the Host can launch, and only a local
+  endpoint can render the viewer, so the Desktop preset is offered locally and a
+  remote Host drops it.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.21.0] - 2026-09-20
 
 > Maintenance release: repairs stale Agent hook entries and keeps the embedded

@@ -161,15 +161,29 @@ func TestGhostlineRuntimeDoesNotInheritDaemonConfiguration(t *testing.T) {
 func TestGhostlineRuntimeMetadataDisabledByDefault(t *testing.T) {
 	runtime, _ := startGhostlineRuntime(t)
 	ctx := context.Background()
-	if err := runtime.Create(ctx, "warren_ghost_meta", t.TempDir(), "sh", nil); err != nil {
+	directory := t.TempDir()
+	if err := runtime.Create(ctx, "warren_ghost_meta", directory, "sh", nil); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	metadata, err := runtime.Metadata(ctx, "warren_ghost_meta")
 	if err != nil {
 		t.Fatalf("Metadata: %v", err)
 	}
-	if metadata.Process != "" || metadata.Directory != "" {
-		t.Fatalf("Metadata = %+v, want empty when probing is disabled", metadata)
+	// The OSC 7 working directory is collected regardless of ProbeForeground,
+	// so only the OS foreground probe is expected to be empty here.
+	if metadata.Process != "" || metadata.CommandLine != "" {
+		t.Fatalf("Metadata = %+v, want no foreground process when probing is disabled", metadata)
+	}
+	wantDirectory, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	gotDirectory, err := filepath.EvalSymlinks(metadata.Directory)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	if gotDirectory != wantDirectory {
+		t.Fatalf("Metadata directory = %q, want %q", gotDirectory, wantDirectory)
 	}
 }
 
