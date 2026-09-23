@@ -835,6 +835,34 @@ function normalizeProjectAgentEvent(event) {
   }
 }
 
+/**
+ * Local lifecycle of one outgoing message.
+ *
+ * `accepted` is the state that makes remote use bearable. The Host returns
+ * `accepted` as soon as the text reaches the provider's stdin, but the matching
+ * timeline row only appears once the provider writes it to its own transcript
+ * and the Host parses that back. Retiring the local item on the receipt made
+ * the bubble vanish and reappear, which over Relay is a visible second rather
+ * than an imperceptible one.
+ */
+export const agentQueueStatuses = ["queued", "sending", "accepted", "failed"];
+
+/**
+ * True while the user can still change or reorder an item. A request in flight
+ * may already have reached the Host, and an accepted one certainly has, so
+ * neither can be rewritten locally without lying about what the Agent will run.
+ */
+export function agentQueueItemMutable(item) {
+  return item?.status !== "sending" && item?.status !== "accepted";
+}
+
+/**
+ * How long an accepted message may wait for its transcript echo before the UI
+ * admits the Agent has not picked it up. This is deliberately not a failure:
+ * the Host confirmed the injection, so resending would duplicate it.
+ */
+export const agentEchoWaitMs = 20_000;
+
 export class AgentMessageQueue {
   constructor(items = []) {
     this.items = items.map(item => ({
@@ -846,6 +874,7 @@ export class AgentMessageQueue {
       failureReason: item.failureReason || null,
       failureCode: item.failureCode || "",
       indeterminate: Boolean(item.indeterminate),
+      acceptedAt: item.acceptedAt || null,
     }));
   }
 
@@ -858,7 +887,7 @@ export class AgentMessageQueue {
 
   edit(id, text, attachments) {
     const item = this.items.find(value => value.id === id);
-    if (!item || item.status === "sending") return false;
+    if (!item || !agentQueueItemMutable(item)) return false;
     item.text = String(text || "");
     if (attachments) item.attachments = [...attachments];
     item.status = "queued";
@@ -870,12 +899,38 @@ export class AgentMessageQueue {
 
   remove(id) {
     const index = this.items.findIndex(value => value.id === id);
-    if (index < 0 || this.items[index].status === "sending") return false;
+    if (index < 0 || !agentQueueItemMutable(this.items[index])) return false;
     this.items.splice(index, 1);
     return true;
   }
 
-  deliver(id) {
+  /// Records the Host receipt. The item keeps its place in the transcript until
+  /// the provider echoes it, so the bubble never disappears and comes back.
+  markAccepted(id, { at = new Date().toISOString() } = {}) {
+    const item = this.items.find(value => value.id === id);
+    if (!item || item.status === "accepted") return false;
+    item.status = "accepted";
+    item.acceptedAt = at;
+    item.failureReason = null;
+    item.failureCode = "";
+    item.indeterminate = false;
+    return true;
+  }
+
+  /// Clears an accepted message the user has given up waiting for. Distinct
+  /// from remove(): the message did reach the Agent, so this hides a row rather
+  /// than cancelling work, and it is deliberately not offered until the echo is
+  /// overdue. A request still in flight has an unknown outcome and stays.
+  dismissAccepted(id) {
+    const index = this.items.findIndex(value => value.id === id);
+    if (index < 0 || this.items[index].status !== "accepted") return false;
+    this.items.splice(index, 1);
+    return true;
+  }
+
+  /// Drops an item the Host has now echoed into the canonical timeline, which
+  /// owns the row from here on.
+  retire(id) {
     const index = this.items.findIndex(value => value.id === id);
     if (index < 0) return false;
     this.items.splice(index, 1);
@@ -884,7 +939,7 @@ export class AgentMessageQueue {
 
   moveToFront(id) {
     const index = this.items.findIndex(value => value.id === id);
-    if (index < 0 || this.items[index].status === "sending") return false;
+    if (index < 0 || !agentQueueItemMutable(this.items[index])) return false;
     if (index === 0) return true;
     const [item] = this.items.splice(index, 1);
     this.items.unshift(item);
@@ -893,7 +948,7 @@ export class AgentMessageQueue {
 
   reorder(id, beforeID = null) {
     const index = this.items.findIndex(value => value.id === id);
-    if (index < 0 || this.items[index].status === "sending") return false;
+    if (index < 0 || !agentQueueItemMutable(this.items[index])) return false;
     const [item] = this.items.splice(index, 1);
     const destination = beforeID ? this.items.findIndex(value => value.id === beforeID) : this.items.length;
     this.items.splice(destination < 0 ? this.items.length : destination, 0, item);
@@ -948,6 +1003,99 @@ export class AgentMessageQueue {
   }
 }
 
+/** A transcript row the user authored, whichever field the provider used. */
+export function isUserAgentEvent(event) {
+  return normalizeAgentEventType(event?.type) === "user"
+    || normalizeAgentEventType(event?.role) === "user";
+}
+
+// Echo reconciliation runs on both wire-shaped canonical events (role and
+// content live in `payload`) and on the projected rows the view renders, so
+// these read either shape rather than forcing callers to normalize first.
+function agentEventRole(event) {
+  return String(event?.role ?? event?.payload?.role ?? "").trim().toLowerCase();
+}
+
+function agentEventContent(event) {
+  return String(event?.content ?? event?.payload?.content ?? "").trim();
+}
+
+/** A completed user message, excluding streaming deltas. */
+function isEchoedUserMessage(event) {
+  if (agentEventRole(event) !== "user" && !isUserAgentEvent(event)) return false;
+  const type = String(event?.canonicalType ?? event?.type ?? "").trim().toLowerCase();
+  return type !== "message.delta";
+}
+
+/**
+ * Retires local queue items whose message is now present in the canonical
+ * timeline, so exactly one bubble exists for one message at all times.
+ *
+ * With `agent-causation-v1` the Host stamps the sending `commandId` onto the
+ * echoed user event, which is exact. Without it the only signal is the text,
+ * matched oldest-first with one claim per event: two identical prompts then
+ * retire in the order they were sent, which is the best available answer and
+ * the reason the capability exists.
+ *
+ * Returns the ids retired, so a caller can decide whether to publish.
+ */
+export function retireEchoedAgentMessages(queue, events = [], { causationSupported = true } = {}) {
+  const items = queue?.items || [];
+  if (items.length === 0) return [];
+  const retired = [];
+
+  const byCommand = new Map();
+  for (const item of items) {
+    if (item.status === "accepted" || item.status === "sending") byCommand.set(item.id, item);
+  }
+  const unclaimed = [];
+  for (const event of events) {
+    if (!isEchoedUserMessage(event)) continue;
+    const causedBy = String(event.causedBy || "").trim();
+    if (causedBy && byCommand.has(causedBy)) {
+      retired.push(causedBy);
+      byCommand.delete(causedBy);
+      continue;
+    }
+    if (!causedBy) unclaimed.push(event);
+  }
+
+  if (!causationSupported) {
+    // Oldest item first, one claim per event, so duplicates cannot both bind to
+    // the same row and no row retires two messages.
+    for (const event of unclaimed) {
+      const text = agentEventContent(event);
+      if (!text) continue;
+      const match = items.find(item => (
+        byCommand.has(item.id) && agentEchoMatchesText(item.text, text)
+      ));
+      if (!match) continue;
+      retired.push(match.id);
+      byCommand.delete(match.id);
+    }
+  }
+
+  for (const id of retired) queue.retire(id);
+  return retired;
+}
+
+/**
+ * Whether an echoed transcript line is the message that was sent. A provider
+ * never lengthens user text, so a longer echo is a different message; the Host
+ * clips long content and marks it with a trailing ellipsis.
+ */
+export function agentEchoMatchesText(sent, echoed) {
+  const left = String(sent ?? "").trim();
+  const right = String(echoed ?? "").trim();
+  if (!right) return false;
+  if (left === right) return true;
+  if (right.endsWith("…")) {
+    const clipped = right.slice(0, -1);
+    return clipped.length > 0 && left.startsWith(clipped);
+  }
+  return left.split(/\s+/).join(" ") === right.split(/\s+/).join(" ");
+}
+
 /**
  * Returns a collision-safe local queue identity for one Host and Session.
  * Endpoint identity is deliberately metadata (for example the WebSocket
@@ -969,6 +1117,113 @@ export function agentDraftKey(endpointIdentity, sessionID) {
   // Encode both components, not only slashes: endpoint/session punctuation
   // must never collide with the dot separator used by the storage key.
   return `warren.agent-draft.${encodeAgentDraftKeyPart(endpointIdentity)}.${encodeAgentDraftKeyPart(sessionID)}`;
+}
+
+export const agentQueueMaximumItems = 50;
+
+export function agentQueueStorageKey(endpointIdentity, sessionID) {
+  return `warren.agent-queue.${encodeAgentDraftKeyPart(endpointIdentity)}.${encodeAgentDraftKeyPart(sessionID)}`;
+}
+
+/**
+ * The queue entries worth keeping across a reload.
+ *
+ * Attachment bytes are not persisted — they can reach 64MB and the browser
+ * cannot re-read a file the user picked in a previous page. Keeping the text
+ * without its files would send a different message than the one on screen, so
+ * such an item is dropped instead.
+ */
+export function serializeAgentQueueItems(items = []) {
+  return items
+    .filter(item => !(item?.attachments?.length > 0))
+    .slice(-agentQueueMaximumItems)
+    .map(item => ({
+      id: item.id,
+      text: String(item.text || ""),
+      createdAt: item.createdAt,
+      status: item.status,
+      acceptedAt: item.acceptedAt || null,
+    }));
+}
+
+/**
+ * Restores persisted entries, downgrading anything whose outcome the reload
+ * destroyed.
+ *
+ * A request that was in flight has an unknown outcome: the Host may have run
+ * it. Re-queueing it silently would risk a duplicate, so it comes back as an
+ * indeterminate failure, which is the state `retry()` already knows to give a
+ * fresh commandId. An `accepted` item keeps its identity: the echo may already
+ * be in the timeline, in which case reconciliation retires it on the first
+ * merge, and otherwise the overdue notice is the honest thing to show.
+ */
+export function rehydrateAgentQueueItems(items = []) {
+  const restored = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const id = String(item?.id || "").trim();
+    const text = String(item?.text || "");
+    if (!id || !text) continue;
+    const status = String(item?.status || "queued");
+    if (status === "sending") {
+      restored.push({
+        id,
+        text,
+        createdAt: item.createdAt,
+        status: "failed",
+        failureReason: "Delivery was interrupted; the Agent may already have this",
+        failureCode: "command_indeterminate",
+        indeterminate: true,
+      });
+      continue;
+    }
+    if (status === "accepted") {
+      restored.push({
+        id,
+        text,
+        createdAt: item.createdAt,
+        status: "accepted",
+        acceptedAt: item.acceptedAt || new Date().toISOString(),
+      });
+      continue;
+    }
+    restored.push({
+      id,
+      text,
+      createdAt: item.createdAt,
+      status: status === "failed" ? "failed" : "queued",
+      failureReason: status === "failed" ? (item.failureReason || "Send failed") : null,
+      failureCode: status === "failed" ? String(item.failureCode || "") : "",
+      indeterminate: status === "failed" && Boolean(item.indeterminate),
+    });
+  }
+  return restored.slice(-agentQueueMaximumItems);
+}
+
+export function loadAgentQueue(storage, endpointIdentity, sessionID) {
+  let raw = null;
+  try { raw = storage?.getItem(agentQueueStorageKey(endpointIdentity, sessionID)); } catch { return new AgentMessageQueue(); }
+  if (!raw) return new AgentMessageQueue();
+  try {
+    return new AgentMessageQueue(rehydrateAgentQueueItems(JSON.parse(raw)));
+  } catch {
+    return new AgentMessageQueue();
+  }
+}
+
+export function saveAgentQueue(storage, endpointIdentity, sessionID, queue) {
+  const items = serializeAgentQueueItems(queue?.items || []);
+  const key = agentQueueStorageKey(endpointIdentity, sessionID);
+  try {
+    if (items.length === 0) storage?.removeItem(key);
+    else storage?.setItem(key, JSON.stringify(items));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function removeAgentQueue(storage, endpointIdentity, sessionID) {
+  try { storage?.removeItem(agentQueueStorageKey(endpointIdentity, sessionID)); } catch { /* best effort */ }
 }
 
 export function loadAgentDraft(storage, endpointIdentity, sessionID) {

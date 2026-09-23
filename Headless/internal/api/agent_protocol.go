@@ -370,11 +370,35 @@ func CanonicalAgentEventFromObservation(event AgentEvent, streamID, executionID 
 	}
 }
 
+// MergeCanonicalCausation reconciles the CausedBy annotation between a stored
+// event and a re-observed one. CausedBy is Host-derived provenance, not part of
+// the provider observation: it is learned from in-memory state that only exists
+// while the sending client's command is still pending. A transcript re-parse
+// after a rebind or restart therefore reproduces the same event with CausedBy
+// absent, and treating that as an identity conflict would drop the whole batch.
+// So it is late-bound: either side may supply it, and only two different
+// non-empty values are a real conflict.
+func MergeCanonicalCausation(existing, incoming string) (string, bool) {
+	if existing == incoming {
+		return existing, true
+	}
+	if existing == "" {
+		return incoming, true
+	}
+	if incoming == "" {
+		return existing, true
+	}
+	return "", false
+}
+
 // StableAgentEventID derives an idempotency identity for provider observations
 // that do not carry a native message/call ID. The provider-local sequence is
 // included as a tie breaker; the Host still owns the canonical stream sequence.
 // Keep the input aligned with CanonicalAgentEventFromObservation: every provider
 // field that can change the canonical payload must change this identity too.
+// CausedBy is deliberately excluded: it is Host-derived provenance rather than a
+// provider field, so attributing an echo must not change the event's identity.
+// See MergeCanonicalCausation.
 func StableAgentEventID(event AgentEvent) string {
 	value := struct {
 		Sequence   uint64         `json:"sequence"`

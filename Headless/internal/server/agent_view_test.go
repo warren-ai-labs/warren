@@ -1378,3 +1378,259 @@ func TestNativeInteractionResolutionPreservesQuestionSchema(t *testing.T) {
 	}
 	t.Fatal("resolved interaction event not found")
 }
+
+// userMessageEvent returns the canonical user rows a provider transcript would
+// produce for one echoed prompt.
+func userMessageEvents(t *testing.T, service *Service, sessionID string) []api.CanonicalAgentEvent {
+	t.Helper()
+	service.agentsMu.Lock()
+	entry := service.agents[sessionID]
+	entry.mu.Lock()
+	events := append([]api.CanonicalAgentEvent(nil), entry.canonicalEvents...)
+	entry.mu.Unlock()
+	service.agentsMu.Unlock()
+	var rows []api.CanonicalAgentEvent
+	for _, event := range events {
+		if isCanonicalUserMessage(event) {
+			rows = append(rows, event)
+		}
+	}
+	return rows
+}
+
+func TestEchoedUserMessageCarriesCommandCorrelation(t *testing.T) {
+	controller := &recordingAgentViewController{}
+	service := newAgentViewTestService(t, controller)
+	sessionID := "agent-view-session"
+
+	result, err := service.sendAgentMessage(context.Background(), api.AgentMessageSendRequest{
+		Session: sessionID, ClientMessageID: "cmd-1", Text: "run the tests",
+	})
+	if err != nil || !result.Accepted {
+		t.Fatalf("send result = %#v, err=%v", result, err)
+	}
+
+	source := api.AgentEvent{Provider: "claude", ID: "provider-uuid-1", Type: "user", Role: "user", Content: "run the tests"}
+	// The event identity must not depend on the correlation, or clients would
+	// see the same row twice across a reconnect.
+	wantEventID := api.StableAgentEventID(source)
+	service.recordAgentEvents(sessionID, []api.AgentEvent{source}, api.AgentStatus{Activity: api.AgentActivityWorking})
+
+	rows := userMessageEvents(t, service, sessionID)
+	if len(rows) != 1 {
+		t.Fatalf("user rows = %#v, want exactly one", rows)
+	}
+	if rows[0].CausedBy != "cmd-1" {
+		t.Fatalf("causedBy = %q, want cmd-1", rows[0].CausedBy)
+	}
+	if rows[0].EventID != wantEventID {
+		t.Fatalf("eventId = %q, want %q unchanged by correlation", rows[0].EventID, wantEventID)
+	}
+}
+
+func TestClippedEchoStillCorrelates(t *testing.T) {
+	controller := &recordingAgentViewController{}
+	service := newAgentViewTestService(t, controller)
+	sessionID := "agent-view-session"
+
+	long := strings.Repeat("a very long prompt ", 200)
+	if _, err := service.sendAgentMessage(context.Background(), api.AgentMessageSendRequest{
+		Session: sessionID, ClientMessageID: "cmd-long", Text: long,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A provider parser clips content to its own limit, appending an ellipsis
+	// exactly as truncate() does. Exact-match correlation would strand the
+	// message forever, which is what the iOS text match does today.
+	service.recordAgentEvents(sessionID, []api.AgentEvent{{
+		Provider: "claude", ID: "provider-uuid-long", Type: "user", Role: "user",
+		Content: long[:400] + "…",
+	}}, api.AgentStatus{Activity: api.AgentActivityWorking})
+
+	rows := userMessageEvents(t, service, sessionID)
+	if len(rows) != 1 || rows[0].CausedBy != "cmd-long" {
+		t.Fatalf("clipped echo rows = %#v, want causedBy cmd-long", rows)
+	}
+}
+
+func TestCorrelationFollowsInjectionOrder(t *testing.T) {
+	controller := &recordingAgentViewController{}
+	service := newAgentViewTestService(t, controller)
+	sessionID := "agent-view-session"
+
+	for _, value := range []struct{ id, text string }{
+		{"cmd-a", "first message"},
+		{"cmd-b", "second message"},
+	} {
+		if _, err := service.sendAgentMessage(context.Background(), api.AgentMessageSendRequest{
+			Session: sessionID, ClientMessageID: value.id, Text: value.text,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service.recordAgentEvents(sessionID, []api.AgentEvent{
+		{Provider: "claude", ID: "uuid-a", Type: "user", Role: "user", Content: "first message"},
+		{Provider: "claude", ID: "uuid-b", Type: "user", Role: "user", Content: "second message"},
+	}, api.AgentStatus{Activity: api.AgentActivityWorking})
+
+	rows := userMessageEvents(t, service, sessionID)
+	if len(rows) != 2 {
+		t.Fatalf("user rows = %#v, want two", rows)
+	}
+	if rows[0].CausedBy != "cmd-a" || rows[1].CausedBy != "cmd-b" {
+		t.Fatalf("correlation order = %q/%q, want cmd-a/cmd-b", rows[0].CausedBy, rows[1].CausedBy)
+	}
+}
+
+func TestUnrelatedEchoIsNotCorrelated(t *testing.T) {
+	controller := &recordingAgentViewController{}
+	service := newAgentViewTestService(t, controller)
+	sessionID := "agent-view-session"
+
+	if _, err := service.sendAgentMessage(context.Background(), api.AgentMessageSendRequest{
+		Session: sessionID, ClientMessageID: "cmd-1", Text: "run the tests",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A user message the Host never injected (typed straight into the terminal)
+	// must not claim a pending commandId, or the client would retire the wrong
+	// bubble and leave its own message pending forever.
+	service.recordAgentEvents(sessionID, []api.AgentEvent{{
+		Provider: "claude", ID: "uuid-x", Type: "user", Role: "user", Content: "something else entirely",
+	}}, api.AgentStatus{Activity: api.AgentActivityWorking})
+
+	rows := userMessageEvents(t, service, sessionID)
+	if len(rows) != 1 {
+		t.Fatalf("user rows = %#v, want one", rows)
+	}
+	if rows[0].CausedBy != "" {
+		t.Fatalf("causedBy = %q, want empty for an unrelated echo", rows[0].CausedBy)
+	}
+	// The pending correlation survives so the real echo can still claim it.
+	service.agentsMu.Lock()
+	entry := service.agents[sessionID]
+	entry.mu.Lock()
+	pending := len(entry.pendingCorrelations)
+	entry.mu.Unlock()
+	service.agentsMu.Unlock()
+	if pending != 1 {
+		t.Fatalf("pending correlations = %d, want 1 retained", pending)
+	}
+}
+
+func TestExpiredCorrelationIsDropped(t *testing.T) {
+	controller := &recordingAgentViewController{}
+	service := newAgentViewTestService(t, controller)
+	sessionID := "agent-view-session"
+
+	if _, err := service.sendAgentMessage(context.Background(), api.AgentMessageSendRequest{
+		Session: sessionID, ClientMessageID: "cmd-stale", Text: "stale message",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service.agentsMu.Lock()
+	entry := service.agents[sessionID]
+	entry.mu.Lock()
+	entry.pendingCorrelations[0].sentAt = time.Now().Add(-2 * agentCorrelationTTL)
+	entry.mu.Unlock()
+	service.agentsMu.Unlock()
+
+	service.recordAgentEvents(sessionID, []api.AgentEvent{{
+		Provider: "claude", ID: "uuid-stale", Type: "user", Role: "user", Content: "stale message",
+	}}, api.AgentStatus{Activity: api.AgentActivityWorking})
+
+	rows := userMessageEvents(t, service, sessionID)
+	if len(rows) != 1 || rows[0].CausedBy != "" {
+		t.Fatalf("expired correlation rows = %#v, want no causedBy", rows)
+	}
+}
+
+func TestReparsedEchoDoesNotConflictAfterCorrelation(t *testing.T) {
+	controller := &recordingAgentViewController{}
+	service := newAgentViewTestService(t, controller)
+	sessionID := "agent-view-session"
+
+	if _, err := service.sendAgentMessage(context.Background(), api.AgentMessageSendRequest{
+		Session: sessionID, ClientMessageID: "cmd-1", Text: "run the tests",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	source := api.AgentEvent{Provider: "claude", ID: "provider-uuid-1", Type: "user", Role: "user", Content: "run the tests"}
+	service.recordAgentEvents(sessionID, []api.AgentEvent{source}, api.AgentStatus{Activity: api.AgentActivityWorking})
+
+	// A provider rebind or daemon restart re-parses the same transcript line.
+	// StableAgentEventID reproduces the same eventId, but the in-memory
+	// correlation was already claimed, so the second observation carries no
+	// CausedBy. That must stay idempotent rather than conflicting: a conflict
+	// makes recordAgentEventsForHandle drop the entire batch.
+	assistant := api.AgentEvent{Provider: "claude", ID: "provider-uuid-2", Type: "assistant", Role: "assistant", Content: "done"}
+	service.recordAgentEvents(sessionID, []api.AgentEvent{source, assistant}, api.AgentStatus{Activity: api.AgentActivityReady})
+
+	service.agentsMu.Lock()
+	entry := service.agents[sessionID]
+	entry.mu.Lock()
+	events := append([]api.CanonicalAgentEvent(nil), entry.canonicalEvents...)
+	entry.mu.Unlock()
+	service.agentsMu.Unlock()
+
+	var userRows, assistantRows int
+	var causedBy string
+	for _, event := range events {
+		if isCanonicalUserMessage(event) {
+			userRows++
+			causedBy = event.CausedBy
+		}
+		if role, _ := event.Payload["role"].(string); role == "assistant" {
+			assistantRows++
+		}
+	}
+	if userRows != 1 {
+		t.Fatalf("user rows = %d, want exactly one after a re-parse", userRows)
+	}
+	if causedBy != "cmd-1" {
+		t.Fatalf("causedBy = %q, want cmd-1 retained across the re-parse", causedBy)
+	}
+	if assistantRows != 1 {
+		t.Fatalf("assistant rows = %d, want 1; the batch was dropped by a conflict", assistantRows)
+	}
+}
+
+func TestLongerEchoDoesNotClaimShorterMessage(t *testing.T) {
+	controller := &recordingAgentViewController{}
+	service := newAgentViewTestService(t, controller)
+	sessionID := "agent-view-session"
+
+	// "run" is queued first, so it is the FIFO head. A provider never lengthens
+	// user text, so the echo of a different, longer message must not claim it.
+	for _, value := range []struct{ id, text string }{
+		{"cmd-short", "run"},
+		{"cmd-long", "run the tests"},
+	} {
+		if _, err := service.sendAgentMessage(context.Background(), api.AgentMessageSendRequest{
+			Session: sessionID, ClientMessageID: value.id, Text: value.text,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service.recordAgentEvents(sessionID, []api.AgentEvent{{
+		Provider: "claude", ID: "uuid-long", Type: "user", Role: "user", Content: "run the tests",
+	}}, api.AgentStatus{Activity: api.AgentActivityWorking})
+
+	rows := userMessageEvents(t, service, sessionID)
+	if len(rows) != 1 {
+		t.Fatalf("user rows = %#v, want one", rows)
+	}
+	if rows[0].CausedBy != "" {
+		t.Fatalf("causedBy = %q, want empty: the head is a different, shorter message", rows[0].CausedBy)
+	}
+	// Both correlations survive, so each message can still claim its own echo.
+	service.agentsMu.Lock()
+	entry := service.agents[sessionID]
+	entry.mu.Lock()
+	pending := len(entry.pendingCorrelations)
+	entry.mu.Unlock()
+	service.agentsMu.Unlock()
+	if pending != 2 {
+		t.Fatalf("pending correlations = %d, want 2 retained", pending)
+	}
+}

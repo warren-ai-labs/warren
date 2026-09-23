@@ -44,9 +44,9 @@ test("automatic AI entry is opt-in, empty-only and follows preset order", () => 
 test("persisted preset order is normalized", () => {
   assert.deepEqual(
     normalizeSessionPresetOrder(["codex", "shell", "codex", "future"]),
-    ["codex", "shell", "claude", "opencode", "pi", "qoder", "antigravity", "trae"],
+    ["codex", "shell", "claude", "opencode", "pi", "qoder", "antigravity", "trae", "browser"],
   );
-  assert.deepEqual(normalizeSessionPresetOrder(null), ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "trae"]);
+  assert.deepEqual(normalizeSessionPresetOrder(null), ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "trae", "browser"]);
 });
 
 test("loading preset order repairs persisted data", () => {
@@ -56,26 +56,31 @@ test("loading preset order repairs persisted data", () => {
     setItem(_key, value) { this.value = value; },
   };
 
-  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["codex", "shell", "claude", "opencode", "pi", "qoder", "antigravity", "trae"]);
-  assert.equal(storage.value, '["codex","shell","claude","opencode","pi","qoder","antigravity","trae"]');
+  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["codex", "shell", "claude", "opencode", "pi", "qoder", "antigravity", "trae", "browser"]);
+  assert.equal(storage.value, '["codex","shell","claude","opencode","pi","qoder","antigravity","trae","browser"]');
 
   storage.value = "invalid-json";
-  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "trae"]);
-  assert.equal(storage.value, '["shell","claude","codex","opencode","pi","qoder","antigravity","trae"]');
+  assert.deepEqual(loadSessionPresetOrder(storage, "preset-order"), ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "trae", "browser"]);
+  assert.equal(storage.value, '["shell","claude","codex","opencode","pi","qoder","antigravity","trae","browser"]');
 });
 
 test("preset order controls presentation", () => {
   const presets = orderedSessionPresets(["shell", "codex", "claude"]);
 
-  assert.deepEqual(presets.map(preset => preset.kind), ["shell", "codex", "claude", "opencode", "pi", "qoder", "antigravity", "trae"]);
+  assert.deepEqual(
+    presets.map(preset => preset.kind),
+    ["shell", "codex", "claude", "opencode", "pi", "qoder", "antigravity", "trae", "browser"],
+  );
 });
 
 test("preset order moves within bounds", () => {
-  const order = ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "trae"];
+  const order = ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "trae", "browser"];
 
-  assert.deepEqual(moveSessionPreset(order, "codex", -1), ["shell", "codex", "claude", "opencode", "pi", "qoder", "antigravity", "trae"]);
+  assert.deepEqual(moveSessionPreset(order, "codex", -1), ["shell", "codex", "claude", "opencode", "pi", "qoder", "antigravity", "trae", "browser"]);
   assert.deepEqual(moveSessionPreset(order, "shell", -1), order);
-  assert.deepEqual(moveSessionPreset(order, "trae", 1), order);
+  // Trae is no longer last: the browser preset sits after it, so moving Trae
+  // down swaps the two instead of hitting the end of the list.
+  assert.deepEqual(moveSessionPreset(order, "trae", 1), ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "browser", "trae"]);
 });
 
 test("Trae is hidden by default and visibility only accepts known presets", () => {
@@ -89,7 +94,7 @@ test("Trae is hidden by default and visibility only accepts known presets", () =
   assert.deepEqual(normalizeHiddenSessionPresetKinds(["future", "codex", "codex"]), ["codex"]);
   assert.deepEqual(
     visibleSessionPresets(orderedSessionPresets(null), ["trae"]).map(preset => preset.kind),
-    ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity"],
+    ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "browser"],
   );
 });
 

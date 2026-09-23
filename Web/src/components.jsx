@@ -3,12 +3,23 @@ import { webAssetURL } from "./runtime.js";
 import { terminalSearchSummary } from "./terminal.js";
 import { terminalTabTitle } from "./title.js";
 import { shouldDismissOnBackdrop } from "./presentation.js";
+import { connectionSettling } from "./connection.js";
 import { createSearch, fieldRole, highlightSegments } from "./search.js";
 import {
   AGENT_REASONING_OPTIONS,
   formatAgentModel,
   getAvailableAgentModels,
 } from "./agent.js";
+
+// `settling` keeps the online styling and only breathes the dot: the transport
+// is retrying, and until that is confirmed lost it is not news.
+function connectionClassName(base, connection) {
+  return [
+    base,
+    connection.online ? "online" : "",
+    connection.presentation === connectionSettling ? "settling" : "",
+  ].filter(Boolean).join(" ");
+}
 
 const activityLabels = {
   working: "Working",
@@ -373,7 +384,7 @@ export function Sidebar({
       <div className="brand">
         <img className="brand-mark" src={webAssetURL("icon.svg")} alt="Warren" />
         {isBuild && <span className="build-badge">Build</span>}
-        <span className={`connection${connection.online ? " online" : ""}`}>
+        <span className={connectionClassName("connection", connection)}>
           <span className="connection-dot" />
           <span>{connection.message}</span>
         </span>
@@ -728,7 +739,7 @@ export function MobileShell({
               </>
             )}
           </div>
-          <span className={`mobile-connection${connection.online ? " online" : ""}`} aria-label={connection.message}>
+          <span className={connectionClassName("mobile-connection", connection)} aria-label={connection.message}>
             <span className="connection-dot" />
           </span>
         </div>

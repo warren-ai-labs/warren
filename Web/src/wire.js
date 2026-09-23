@@ -5,15 +5,19 @@ const DIRECTION_HOST_TO_CLIENT = 2;
 const KIND_INPUT = 1;
 const KIND_OUTPUT = 2;
 const KIND_ATOMIC_STATE = 3;
+const KIND_BROWSER_FRAME = 4;
+const BROWSER_FRAME_FORMAT = "browser-frame-jpeg-v1";
 const MAX_HEADER = 16 * 1024;
 const MAX_PAYLOAD = 8 * 1024 * 1024;
 const MAX_ATOMIC_STATE_PAYLOAD = 64 * 1024 * 1024;
+const MAX_BROWSER_FRAME_PAYLOAD = 4 * 1024 * 1024;
 const PREFIX_LENGTH = 15;
 
 export const binaryPayloadLimits = Object.freeze({
   output: MAX_PAYLOAD,
   input: MAX_PAYLOAD,
   atomicState: MAX_ATOMIC_STATE_PAYLOAD,
+  browserFrame: MAX_BROWSER_FRAME_PAYLOAD,
 });
 
 export function isBinaryEnvelope(bytes) {
@@ -36,7 +40,9 @@ function decodeEnvelope(bytes, expectedKind = null) {
   const payloadLength = view.getUint32(11);
   const payloadLimit = kind === KIND_ATOMIC_STATE
     ? MAX_ATOMIC_STATE_PAYLOAD
-    : MAX_PAYLOAD;
+    : kind === KIND_BROWSER_FRAME
+      ? MAX_BROWSER_FRAME_PAYLOAD
+      : MAX_PAYLOAD;
   if (headerLength > MAX_HEADER || payloadLength > payloadLimit) return null;
   const headerEnd = PREFIX_LENGTH + headerLength;
   const expected = headerEnd + payloadLength;
@@ -81,6 +87,21 @@ export function decodeAtomicStateFrame(bytes) {
   };
 }
 
+export function decodeBrowserFrame(bytes) {
+  const decoded = decodeEnvelope(bytes, KIND_BROWSER_FRAME);
+  if (!decoded || decoded.header.format !== BROWSER_FRAME_FORMAT) return null;
+  return {
+    header: {
+      sessionID: decoded.header.sessionID,
+      epoch: decoded.header.epoch,
+      sequence: decoded.header.sequence,
+      format: decoded.header.format,
+      payloadLength: decoded.header.payloadLength,
+    },
+    payload: decoded.payload,
+  };
+}
+
 export function decodeFrame(bytes) {
   if (!isBinaryEnvelope(bytes)) return null;
   if (bytes[6] === KIND_OUTPUT) {
@@ -90,6 +111,10 @@ export function decodeFrame(bytes) {
   if (bytes[6] === KIND_ATOMIC_STATE) {
     const state = decodeAtomicStateFrame(bytes);
     return state ? { type: "atomicState", ...state } : null;
+  }
+  if (bytes[6] === KIND_BROWSER_FRAME) {
+    const frame = decodeBrowserFrame(bytes);
+    return frame ? { type: "browserFrame", ...frame } : null;
   }
   return null;
 }

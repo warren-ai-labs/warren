@@ -27,6 +27,10 @@ struct WarrenDesktopPresetBar: View {
     let workspace: Workspace?
     let terminalGroup: TerminalGroup?
     let isBusy: Bool
+    /// Whether this endpoint can show the page a browser Session owns. A remote
+    /// Host runs its Chromium on its own machine, so launching one from here
+    /// would create a Session with nothing to look at.
+    let canUseEmbeddedBrowser: Bool
     let onLaunch: (TerminalSessionLaunchRequest) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -62,9 +66,10 @@ struct WarrenDesktopPresetBar: View {
             surface: tokens.background
         ) {
             HStack(spacing: WarrenSpacing.small) {
-                ForEach(WarrenDesktopSessionPreset.orderedVisible(
+                ForEach(WarrenDesktopSessionPreset.orderedLaunchable(
                     by: presetOrder,
-                    hidden: hiddenPresets
+                    hidden: hiddenPresets,
+                    embeddedBrowser: canUseEmbeddedBrowser
                 )) { preset in
                     Button {
                         guard pendingPresetID == nil, !isBusy else { return }

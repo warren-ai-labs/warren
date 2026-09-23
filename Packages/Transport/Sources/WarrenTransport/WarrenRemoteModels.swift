@@ -229,7 +229,35 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
         return components.url
     }
 
-    /// The HTTPS endpoint used to rotate a Relay refresh capability.
+    /// The HTTP URL of the Warren Browser viewer page for one Session.
+    ///
+    /// The Host token rides in the fragment, exactly as it does for the web
+    /// client: a fragment is never sent to a server, so the viewer page can read
+    /// it and put it on its own WebSocket without the token appearing in a
+    /// request line, a log, or a referrer.
+    public func browserViewerURL(sessionID: String) -> URL? {
+        guard var components = URLComponents(string: url) else { return nil }
+        switch components.scheme?.lowercased() {
+        case "ws": components.scheme = "http"
+        case "wss": components.scheme = "https"
+        case "http", "https": break
+        default: return nil
+        }
+        components.queryItems = [URLQueryItem(name: "session", value: sessionID)]
+        if isRelay {
+            // A Relay serves the viewer at its host-scoped route and nowhere
+            // else. Returning the unscoped path would hand back a URL that
+            // 404s, which is worse than returning nil: the region shows its
+            // empty state and says the Host is unreachable, instead of loading
+            // a web view pointed at a route that does not exist.
+            guard let hostID = effectiveRelayHostID else { return nil }
+            components.path = relayPath(components.path, hostID: hostID, endpoint: "v1/browser/view")
+        } else {
+            components.path = "/v1/browser/view"
+        }
+        components.fragment = "t=\(token)"
+        return components.url
+    }
     public var relaySessionRefreshURL: URL? {
         relaySessionURL(endpoint: "v1/session/refresh")
     }
@@ -1619,6 +1647,64 @@ public enum WarrenRemoteAgentCapability {
     public static let goals = "agent-goals-v1"
 }
 
+public enum WarrenRemoteCapability {
+    /// Lets the client prove liveness all the way to the Host. A protocol-level
+    /// WebSocket ping is answered by whatever terminates the socket — over
+    /// Relay that is Relay itself — so without this a client can report a
+    /// healthy connection while the Host is unreachable.
+    public static let appHeartbeat = "app-heartbeat-v1"
+    /// A user message echoed by the provider carries the commandId that sent it
+    /// in `causedBy`. Host-wide rather than per-Session. Without it the only
+    /// available correlation is comparing message text, which cannot tell two
+    /// identical prompts apart.
+    public static let agentCausation = "agent-causation-v1"
+}
+
+public extension WarrenRemoteAgentEvent {
+    /// Role and content as the canonical wire carries them. The canonical
+    /// decoder leaves both in `payload`, while a projected row hoists them, so
+    /// echo reconciliation reads either shape rather than requiring callers to
+    /// project first.
+    var canonicalRole: String {
+        if let role, !role.isEmpty { return role.lowercased() }
+        if case .string(let value)? = payload?["role"] { return value.lowercased() }
+        return ""
+    }
+
+    var canonicalContent: String {
+        if let content, !content.isEmpty { return content }
+        if case .string(let value)? = payload?["content"] { return value }
+        return ""
+    }
+
+    /// A completed user message, which is the only row an outgoing message can
+    /// be reconciled against. A streaming delta is not yet the final text.
+    var isEchoedUserMessage: Bool {
+        guard canonicalRole == "user"
+            || type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" else { return false }
+        return type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "message.delta"
+    }
+}
+
+/// Whether an echoed transcript line is the message that was sent.
+///
+/// A provider never lengthens user text, so a longer echo is a different
+/// message: accepting a plain prefix in that direction would let "run" claim the
+/// echo of "run the tests". Clipping is the one legitimate shortening and the
+/// Host marks it with a trailing ellipsis.
+public func agentEchoMatches(sent: String, echoed: String) -> Bool {
+    let left = sent.trimmingCharacters(in: .whitespacesAndNewlines)
+    let right = echoed.trimmingCharacters(in: .whitespacesAndNewlines)
+    if right.isEmpty { return false }
+    if left == right { return true }
+    if right.hasSuffix("…") {
+        let clipped = String(right.dropLast())
+        return !clipped.isEmpty && left.hasPrefix(clipped)
+    }
+    return left.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+        == right.split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+}
+
 public struct WarrenRemoteAgentAttachmentRef: Codable, Equatable, Hashable, Sendable {
     public let attachmentID: String
     public let name: String?
@@ -2138,6 +2224,24 @@ public struct WarrenRemoteAtomicState: Hashable, Sendable {
     }
 }
 
+/// One screencast frame of a Warren Browser Session (RFC 0022). The payload is
+/// an encoded still image, not terminal bytes.
+public struct WarrenRemoteBrowserFrame: Hashable, Sendable {
+    public let sessionID: String
+    public let epoch: UInt64
+    public let sequence: UInt64
+    public let format: String
+    public let payload: Data
+
+    public init(sessionID: String, epoch: UInt64, sequence: UInt64, format: String, payload: Data) {
+        self.sessionID = sessionID
+        self.epoch = epoch
+        self.sequence = sequence
+        self.format = format
+        self.payload = payload
+    }
+}
+
 public struct WarrenRemoteOutputAnchor: Hashable, Sendable {
     public let sessionID: String
     public let epoch: UInt64
@@ -2187,10 +2291,16 @@ public enum WarrenRemoteEvent: Sendable {
     case rosterDelta(WarrenRemoteRoster.Delta)
     case output(WarrenRemoteOutputFrame)
     case atomicState(WarrenRemoteAtomicState)
+    case browserFrame(WarrenRemoteBrowserFrame)
     case anchor(WarrenRemoteOutputAnchor)
     case agentEvents(streamID: String, executionID: String, events: [WarrenRemoteAgentEvent])
     case maintenance(message: String?)
     case disconnected(reason: String)
+    /// Relay answered, but the Host is not there. Separate from `disconnected`
+    /// because it is a fact about the Host rather than a transport flap: the
+    /// client keeps retrying, while the UI may say so immediately instead of
+    /// waiting out a grace period.
+    case hostAbsent(detail: String)
 }
 
 public enum WarrenRemoteConnectionState: String, Equatable, Sendable {

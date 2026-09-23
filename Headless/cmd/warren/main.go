@@ -111,7 +111,7 @@ func run(arguments []string) error {
 		return sshCommand(args[1:])
 	case "agent":
 		return agentCommand(args[1:])
-	case "task", "project", "workspace", "worktree", "terminal-group", "group", "session", "pane":
+	case "task", "project", "workspace", "worktree", "terminal-group", "group", "session", "browser", "pane":
 		if args[0] == "task" && len(args) > 1 && args[1] == "workspace" {
 			return taskWorkspaceCommand(args[2:])
 		}
@@ -1056,6 +1056,10 @@ var resourceActions = map[string]map[string]bool{
 		"list": true, "create": true, "split": true, "close": true,
 		"rename": true, "move": true, "remove": true, "delete": true,
 	},
+	"browser": {
+		"list": true, "create": true, "get": true, "action": true,
+		"close": true, "remove": true, "delete": true,
+	},
 }
 
 func knownResourceAction(resource, action string) bool {
@@ -1085,6 +1089,10 @@ func requiredPositionals(resource, action string) []string {
 		return []string{"PANE_GROUP_ID"}
 	case "session.undo":
 		return []string{"OPERATION_ID"}
+	case "browser.get", "browser.close", "browser.remove", "browser.delete":
+		return []string{"SESSION_ID"}
+	case "browser.action":
+		return []string{"SESSION_ID", "ACTION"}
 	}
 	return nil
 }
@@ -1299,7 +1307,11 @@ func resourceCommand(args []string) error {
 	if !knownResourceAction(resource, action) {
 		return newUsageError(fmt.Sprintf("unsupported command: %s %s", commandName, action), resourceUsageText(commandName))
 	}
-	params := parseFlags(args[2:])
+	var actionValueFlags map[string]bool
+	if resource == "browser" && action == "action" {
+		actionValueFlags = browserActionValueFlags
+	}
+	params := parseFlags(args[2:], actionValueFlags)
 	if boolValue(params, "help") || boolValue(params, "h") {
 		fmt.Print(actionUsageText(commandName, action))
 		return nil
@@ -1500,6 +1512,12 @@ func resourceCommand(args []string) error {
 				return newUsageError(err.Error(), actionUsageText(commandName, action))
 			}
 			return printValue(limitListRows(filtered, limit))
+		case "browser":
+			// A browser is a Session, so its roster already arrived with the
+			// state snapshot. Asking the Host separately would race the snapshot
+			// for no gain.
+			rows := browserRows(state, params)
+			return printValue(limitListRows(rows, limit))
 		}
 	}
 	method := ""
@@ -1629,6 +1647,40 @@ func resourceCommand(args []string) error {
 		return printValue(map[string]any{"sent": true})
 	case "session.read":
 		return sessionRead(ctx, c, params, false)
+	case "browser.create":
+		viewport, err := browserViewportFromParams(params)
+		if err != nil {
+			return err
+		}
+		var value api.BrowserSession
+		request := normalizedParams(params, resource, action)
+		request["viewport"] = viewport
+		if err := c.Request(ctx, "browser.session.create", request, &value); err != nil {
+			return err
+		}
+		return printValue(value)
+	case "browser.get":
+		var value api.BrowserSession
+		if err := c.Request(ctx, "browser.session.get", normalizedParams(params, resource, action), &value); err != nil {
+			return err
+		}
+		return printValue(value)
+	case "browser.close", "browser.remove", "browser.delete":
+		var value map[string]any
+		if err := c.Request(ctx, "browser.session.close", normalizedParams(params, resource, action), &value); err != nil {
+			return err
+		}
+		return printValue(value)
+	case "browser.action":
+		var value api.BrowserActionResult
+		request, err := browserActionParams(params)
+		if err != nil {
+			return err
+		}
+		if err := c.Request(ctx, "browser.action", request, &value); err != nil {
+			return err
+		}
+		return printValue(value)
 	default:
 		return fmt.Errorf("unsupported command: %s %s", resource, action)
 	}
@@ -3767,8 +3819,31 @@ func headlessCommand(args []string) error {
 	return command.Run()
 }
 
-func parseFlags(args []string) map[string]any {
+// browserActionValueFlags names the browser action flags that take a value.
+//
+// parseFlags decides whether a flag consumes the next argument from one global
+// set of bare booleans, and `--text` is in that set for the transcript readers
+// (`agent read --text`). For a browser action `--text "Sign in"` means click the
+// element whose text is "Sign in", so the flag is told it takes a value here
+// instead of leaving the string to land in the positionals. Every browser flag
+// that is not a value flag is a boolean, which is what keeps `--clear` and
+// `--interactive` from swallowing the token after them.
+var browserActionValueFlags = map[string]bool{
+	"url": true, "wait-until": true, "selector": true, "text": true, "value": true,
+	"values": true, "path": true, "state": true, "level": true, "tab": true,
+	"expression": true, "delay": true, "quality": true, "max-nodes": true,
+	"timeout": true, "dx": true, "dy": true, "limit": true, "width": true,
+	"height": true, "format": true,
+}
+
+func parseFlags(args []string, valueFlags ...map[string]bool) map[string]any {
 	value := map[string]any{"_": []string{}}
+	takesValue := func(key string) bool {
+		if len(valueFlags) > 0 && valueFlags[0][key] {
+			return true
+		}
+		return !bareBooleanFlags[key]
+	}
 	for index := 0; index < len(args); index++ {
 		item := args[index]
 		if !strings.HasPrefix(item, "--") {
@@ -3783,7 +3858,7 @@ func parseFlags(args []string) map[string]any {
 		// Bare boolean flags must not consume the next positional as their
 		// value. `--raw "text"` therefore sets raw=true and keeps "text" as a
 		// positional, while `--pinned true` still consumes "true" as its value.
-		if index+1 < len(args) && !strings.HasPrefix(args[index+1], "--") && !bareBooleanFlags[key] {
+		if index+1 < len(args) && !strings.HasPrefix(args[index+1], "--") && takesValue(key) {
 			value[key] = args[index+1]
 			index++
 		} else {
@@ -4523,6 +4598,17 @@ func printValue(value any) error {
 				fmt.Println(item.ID)
 			}
 			return nil
+		case []BrowserRow:
+			for _, item := range items {
+				fmt.Println(item.ID)
+			}
+			return nil
+		case api.BrowserSession:
+			fmt.Println(items.ID)
+			return nil
+		case *api.BrowserSession:
+			fmt.Println(items.ID)
+			return nil
 		case []ScreenPaneRow:
 			for _, item := range items {
 				fmt.Println(item.SessionID)
@@ -4648,6 +4734,12 @@ func printValue(value any) error {
 			rows = append(rows, screenPaneRowCells(item))
 		}
 		printTable([]string{"GROUP", "NAME", "PANE", "PANE ID", "WARREN SESSION ID", "TITLE", "REVISION", "SCREEN", "CURRENT"}, rows...)
+	case []BrowserRow:
+		rows := make([][]string, 0, len(items))
+		for _, item := range items {
+			rows = append(rows, browserRowCells(item))
+		}
+		printTable([]string{"SESSION ID", "TITLE", "WORKSPACE / GROUP", "LIFECYCLE", "CREATED"}, rows...)
 	case api.WorkspaceCreateResult:
 		printKVTable(workspaceCreateResultPairs(items))
 	case *api.WorkspaceCreateResult:
@@ -5403,6 +5495,7 @@ Commands:
   terminal-group list|create|remove|rename|home|move  (alias: group)
   pane list|create|split|close|rename|move|remove
   session list|current|panes|create|remove|rename|pin|move|send|read|undo
+  browser list|create|get|action|close  drive an embedded Chromium
   ssh list|TARGET                   list SSH aliases or start a tunnel
   headless [FLAGS]                  run the installed daemon
 
@@ -5660,6 +5753,25 @@ Session is a generic PTY resource. Use agent create for Codex, Claude, OpenCode,
 Pi, Qoder, or Antigravity; Trae is only a shell preset and has no Agent
 transcript/activity semantics.
 `
+	case "browser":
+		return `Usage:
+  warren browser list [--workspace ID | --group ID] [--search TEXT] [--limit N] [-q]
+  warren browser create [--workspace ID | --group GROUP_ID] [--url URL] [--title TITLE] [--window] [--width N] [--height N]
+  warren browser get SESSION_ID
+  warren browser action SESSION_ID ACTION [flags]
+  warren browser close SESSION_ID
+
+A browser is a Warren Session that owns a Chromium rather than a PTY, so it
+appears in the session and agent rosters and lives in a Workspace or Terminal
+Group like anything else. The action subcommand drives it; the common actions
+are navigate, snapshot, click, fill, text, evaluate, screenshot, and tabs.
+
+The page is drawn inside Warren from the browser's own frame stream, so Chromium
+runs with no window of its own. --window opts into a visible one, which is for
+debugging the browser runtime rather than for ordinary use.
+
+Run "warren browser action --help" for the action list and their flags.
+`
 	case "pane":
 		return `Usage:
   warren pane list [--workspace WORKSPACE_ID | --group GROUP_ID] [--search TEXT] [--all] [--limit N] [-q]
@@ -5701,6 +5813,37 @@ func taskWorkspaceUsageText(action string) string {
 func actionUsageText(commandName, action string) string {
 	name := commandName
 	switch canonicalResource(commandName) + "." + action {
+	case "browser.list":
+		return fmt.Sprintf("Usage:\n  warren %s %s [--workspace ID | --group ID] [--search TEXT] [--limit N] [-q]\n\nDefault output is limited to 10 rows. The list is projected from the roster, so it costs no extra round trip and cannot disagree with `warren session list`.\n", name, action)
+	case "browser.create":
+		return fmt.Sprintf("Usage:\n  warren %s create [--workspace ID | --group GROUP_ID] [--url URL] [--title TITLE] [--window] [--width N] [--height N]\n\nExactly one scope is required. The page is drawn inside Warren from the browser's frame stream, so Chromium runs with no window of its own; --window opts into a visible one for debugging the browser runtime. The URL, if given, is opened before the command returns.\n", name)
+	case "browser.get":
+		return fmt.Sprintf("Usage:\n  warren %s get SESSION_ID\n", name)
+	case "browser.action":
+		return fmt.Sprintf(`Usage:
+  warren %s action SESSION_ID ACTION [flags]
+
+The action name is positional, and every action answers with the page URL and
+title it left behind:
+  navigate --url URL [--wait-until load|domcontentloaded|networkidle|none]
+  snapshot [--interactive] [--max-nodes N]
+  click --selector SELECTOR
+  hover --selector SELECTOR
+  type --selector SELECTOR [--text TEXT | --value VALUE] [--clear] [--delay MS]
+  press --selector SELECTOR --value KEY
+  select --selector SELECTOR --value VALUE [--values A,B]
+  scroll [--dy N] [--dx N]
+  wait --selector SELECTOR [--state visible|hidden|attached|detached] [--timeout MS]
+  evaluate --expression JS
+  screenshot [--path FILE] [--full-page] [--quality N]
+  console [--level log|warn|error] [--limit N]
+  cookies
+  back | forward | reload [--hard]
+  viewport --width N --height N
+  tabs.list | tabs.new [--url URL] | tabs.select --tab TAB_ID | tabs.close --tab TAB_ID
+`, name)
+	case "browser.close", "browser.remove", "browser.delete":
+		return fmt.Sprintf("Usage:\n  warren %s close SESSION_ID\n\nThe Chromium and its profile directory are removed, and the Session ends. Use `warren session remove SESSION_ID` to reach the same end through the session resource.\n", name)
 	case "task.list", "project.list", "workspace.list", "session.list":
 		if canonicalResource(commandName) == "session" {
 			return fmt.Sprintf("Usage:\n  warren %s %s [--all | --ended] [WORKSPACE_ID] [--workspace ID] [--project ID] [--group ID] [--kind KIND] [--status STATUS] [--activity ACTIVITY] [--search TEXT] [--current] [--pinned] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)

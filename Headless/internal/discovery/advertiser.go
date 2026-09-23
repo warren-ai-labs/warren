@@ -87,6 +87,10 @@ func BuildAdvertisement(config Config) (Advertisement, error) {
 	if instance == "" {
 		instance = fmt.Sprintf("%s (%s)", displayName, shortHostID(hostID))
 	}
+	hostName := normalizeDNSHostName(dnsHostName)
+	if hostName == "" {
+		return Advertisement{}, fmt.Errorf("DNS host name is unavailable")
+	}
 	txt := []string{
 		"txtvers=" + TXTVersion,
 		"id=" + hostID,
@@ -96,11 +100,7 @@ func BuildAdvertisement(config Config) (Advertisement, error) {
 		fmt.Sprintf("tls=%d", boolInt(config.TLS)),
 		fmt.Sprintf("pair=%d", boolInt(config.PairingOpen)),
 	}
-	txt = append(txt, candidateTXTEntries(ips, config.Port)...)
-	hostName := normalizeDNSHostName(dnsHostName)
-	if hostName == "" {
-		return Advertisement{}, fmt.Errorf("DNS host name is unavailable")
-	}
+	txt = append(txt, candidateTXTEntries(hostName, ips, config.Port)...)
 	return Advertisement{
 		InstanceName: instance,
 		HostName:     hostName,
@@ -240,18 +240,40 @@ func LocalAddresses() ([]net.IP, error) {
 	return normalizeIPs(addresses), nil
 }
 
-func candidateAddresses(ips []net.IP, port int) []string {
-	values := make([]string, 0, len(ips))
+// candidateAddresses lists the values a client may dial for this Host. The
+// Host's own mDNS name comes first: it is the only candidate that survives a
+// DHCP address change, because the local resolver keeps that name aligned with
+// whatever address the interface holds now. A name that is not resolvable over
+// mDNS carries no such guarantee, so only `.local` names are advertised.
+func candidateAddresses(hostName string, ips []net.IP, port int) []string {
+	values := make([]string, 0, len(ips)+1)
+	if name, ok := localMDNSName(hostName); ok {
+		values = append(values, net.JoinHostPort(name, fmt.Sprint(port)))
+	}
 	for _, ip := range ips {
 		values = append(values, net.JoinHostPort(ip.String(), fmt.Sprint(port)))
 	}
 	return values
 }
 
+// localMDNSName reports whether a normalized DNS host name is resolved by the
+// mDNS responder, and returns it in dialable form (no trailing root label).
+func localMDNSName(hostName string) (string, bool) {
+	const suffix = ".local."
+	if !strings.HasSuffix(hostName, suffix) {
+		return "", false
+	}
+	name := strings.TrimSuffix(hostName, ".")
+	if name == "" || strings.ContainsAny(name, " \t") {
+		return "", false
+	}
+	return name, true
+}
+
 const maxDNSTXTStringBytes = 255
 
-func candidateTXTEntries(ips []net.IP, port int) []string {
-	addresses := candidateAddresses(ips, port)
+func candidateTXTEntries(hostName string, ips []net.IP, port int) []string {
+	addresses := candidateAddresses(hostName, ips, port)
 	entries := make([]string, 0, len(addresses))
 	var current []string
 	for _, address := range addresses {

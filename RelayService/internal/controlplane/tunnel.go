@@ -21,6 +21,11 @@ const (
 	publicRouteQueueCapacity  = 64
 	controlRouteQueueCapacity = 1024
 	controlRouteQueueBytes    = 8 << 20
+	// relayReadDeadline bounds silence on a tunnel, not activity. Every inbound
+	// frame refreshes it alongside the pong handler: a tunnel carrying a build's
+	// output is demonstrably alive, and tying liveness to pongs alone dropped
+	// busy tunnels whenever one control frame was lost or delayed.
+	relayReadDeadline = 75 * time.Second
 	// Terminal traffic is mostly tiny frames: a keystroke echo is a few bytes,
 	// and permessage-deflate without context takeover has a per-message floor of
 	// its own, so compressing those spends CPU to make them larger. Output
@@ -36,6 +41,21 @@ type hostTunnel struct {
 	clients    map[connectionID]*clientRoute
 	closed     chan struct{}
 	closeOnce  sync.Once
+	// readDeadline is the silence budget for this tunnel. Zero selects
+	// relayReadDeadline.
+	readDeadline time.Duration
+	// hostGone hands over the client routes that were attached when this tunnel
+	// died, so the owner can decide whether the Host is actually gone before
+	// anything is told to anyone. It takes over closing them. Nil means close
+	// them immediately, which is right when there is no presence to consult.
+	hostGone func(dying *hostTunnel, routes []*clientRoute)
+}
+
+func (tunnel *hostTunnel) silenceBudget() time.Duration {
+	if tunnel.readDeadline > 0 {
+		return tunnel.readDeadline
+	}
+	return relayReadDeadline
 }
 
 type tunnelQueuedWrite struct {
@@ -164,6 +184,8 @@ type clientRoute struct {
 	frames       chan relayFrame
 	done         chan struct{}
 	once         sync.Once
+	noticeMu     sync.Mutex
+	notice       []byte
 	windowMu     sync.Mutex
 	window       uint64
 	windowChange chan struct{}
@@ -222,7 +244,35 @@ func (route *clientRoute) release(frame relayFrame) {
 
 func (route *clientRoute) close() { route.once.Do(func() { close(route.done) }) }
 
-func newHostTunnel(connection *websocket.Conn) *hostTunnel {
+// notify records the terminal reason the route's consumer owes its peer. The
+// first writer wins: a Host that comes back and dies again must not replace the
+// explanation the client was already given.
+func (route *clientRoute) notify(payload []byte) {
+	if len(payload) == 0 {
+		return
+	}
+	route.noticeMu.Lock()
+	defer route.noticeMu.Unlock()
+	if route.notice == nil {
+		route.notice = payload
+	}
+}
+
+// takeNotice hands the recorded reason over for delivery exactly once, so a
+// consumer that races the closure cannot report it twice.
+func (route *clientRoute) takeNotice() []byte {
+	route.noticeMu.Lock()
+	defer route.noticeMu.Unlock()
+	notice := route.notice
+	route.notice = nil
+	return notice
+}
+
+func newHostTunnel(
+	connection *websocket.Conn,
+	readDeadline time.Duration,
+	hostGone func(dying *hostTunnel, routes []*clientRoute),
+) *hostTunnel {
 	if connection != nil {
 		connection.SetReadLimit(maxRelayMessageBytes + headerSize)
 	}
@@ -231,10 +281,12 @@ func newHostTunnel(connection *websocket.Conn) *hostTunnel {
 		writer = newTunnelWriter(connection)
 	}
 	return &hostTunnel{
-		connection: connection,
-		writer:     writer,
-		clients:    make(map[connectionID]*clientRoute),
-		closed:     make(chan struct{}),
+		connection:   connection,
+		writer:       writer,
+		clients:      make(map[connectionID]*clientRoute),
+		closed:       make(chan struct{}),
+		readDeadline: readDeadline,
+		hostGone:     hostGone,
 	}
 }
 
@@ -419,10 +471,11 @@ func (tunnel *hostTunnel) readLoop(touch func()) error {
 		return errors.New("host tunnel connection unavailable")
 	}
 	defer tunnel.close()
-	_ = tunnel.connection.SetReadDeadline(time.Now().Add(75 * time.Second))
+	budget := tunnel.silenceBudget()
+	_ = tunnel.connection.SetReadDeadline(time.Now().Add(budget))
 	tunnel.connection.SetPongHandler(func(string) error {
 		touch()
-		return tunnel.connection.SetReadDeadline(time.Now().Add(75 * time.Second))
+		return tunnel.connection.SetReadDeadline(time.Now().Add(budget))
 	})
 	go tunnel.heartbeat()
 	for {
@@ -430,6 +483,8 @@ func (tunnel *hostTunnel) readLoop(touch func()) error {
 		if err != nil {
 			return err
 		}
+		// Data is liveness evidence, not just pongs.
+		_ = tunnel.connection.SetReadDeadline(time.Now().Add(budget))
 		if messageType != websocket.BinaryMessage || len(data) > maxRelayMessageBytes+headerSize {
 			return errors.New("invalid host relay message")
 		}
@@ -521,7 +576,20 @@ func (tunnel *hostTunnel) close() {
 		clients := tunnel.clients
 		tunnel.clients = make(map[connectionID]*clientRoute)
 		tunnel.clientsMu.Unlock()
+		// A client holding an established route is owed the reason before its
+		// socket goes away — but only once there is a reason worth giving. A
+		// tunnel that just died may belong to a Host whose uplink hiccuped and
+		// which is back in under a second, so the decision is deferred to the
+		// owner rather than made here. It takes over closing these routes.
+		routes := make([]*clientRoute, 0, len(clients))
 		for _, route := range clients {
+			routes = append(routes, route)
+		}
+		if tunnel.hostGone != nil && len(routes) > 0 {
+			tunnel.hostGone(tunnel, routes)
+			return
+		}
+		for _, route := range routes {
 			route.close()
 		}
 	})

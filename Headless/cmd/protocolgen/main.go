@@ -47,6 +47,9 @@ type schema struct {
 						AtomicState struct {
 							Const int `json:"const"`
 						} `json:"atomicState"`
+						BrowserFrame struct {
+							Const int `json:"const"`
+						} `json:"browserFrame"`
 					} `json:"properties"`
 				} `json:"kinds"`
 				Limits struct {
@@ -60,6 +63,9 @@ type schema struct {
 						MaxAtomicStatePayload struct {
 							Const int `json:"const"`
 						} `json:"maxAtomicStatePayload"`
+						MaxBrowserFramePayload struct {
+							Const int `json:"const"`
+						} `json:"maxBrowserFramePayload"`
 					} `json:"properties"`
 				} `json:"limits"`
 				Layout struct {
@@ -139,15 +145,17 @@ func main() {
 	fmt.Fprintf(body, ")\n")
 	fmt.Fprintf(body, "\n")
 	fmt.Fprintf(body, "const (\n")
-	fmt.Fprintf(body, "\tKindInput       uint8 = %d\n", be.Kinds.Properties.Input.Const)
-	fmt.Fprintf(body, "\tKindOutput      uint8 = %d\n", be.Kinds.Properties.Output.Const)
-	fmt.Fprintf(body, "\tKindAtomicState uint8 = %d\n", be.Kinds.Properties.AtomicState.Const)
+	fmt.Fprintf(body, "\tKindInput        uint8 = %d\n", be.Kinds.Properties.Input.Const)
+	fmt.Fprintf(body, "\tKindOutput       uint8 = %d\n", be.Kinds.Properties.Output.Const)
+	fmt.Fprintf(body, "\tKindAtomicState  uint8 = %d\n", be.Kinds.Properties.AtomicState.Const)
+	fmt.Fprintf(body, "\tKindBrowserFrame uint8 = %d\n", be.Kinds.Properties.BrowserFrame.Const)
 	fmt.Fprintf(body, ")\n")
 	fmt.Fprintf(body, "\n")
 	fmt.Fprintf(body, "const (\n")
-	fmt.Fprintf(body, "\tMaxHeader             = %d\n", be.Limits.Properties.MaxHeader.Const)
-	fmt.Fprintf(body, "\tMaxPayload            = %d\n", be.Limits.Properties.MaxPayload.Const)
-	fmt.Fprintf(body, "\tMaxAtomicStatePayload = %d\n", be.Limits.Properties.MaxAtomicStatePayload.Const)
+	fmt.Fprintf(body, "\tMaxHeader              = %d\n", be.Limits.Properties.MaxHeader.Const)
+	fmt.Fprintf(body, "\tMaxPayload             = %d\n", be.Limits.Properties.MaxPayload.Const)
+	fmt.Fprintf(body, "\tMaxAtomicStatePayload  = %d\n", be.Limits.Properties.MaxAtomicStatePayload.Const)
+	fmt.Fprintf(body, "\tMaxBrowserFramePayload = %d\n", be.Limits.Properties.MaxBrowserFramePayload.Const)
 	fmt.Fprintf(body, ")\n")
 	fmt.Fprintf(body, "\n")
 	fmt.Fprintf(body, "// BinaryPrefixLength is magic(4) + version(1) + direction(1) + kind(1) + headerLength(4) + payloadLength(4).\n")

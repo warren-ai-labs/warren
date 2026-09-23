@@ -42,6 +42,9 @@ struct WarrenDesktopSidebarRows: View {
     let onRequestTerminalGroupCreate: () -> Void
     let onRequestTerminalGroupEdit: (TerminalGroup) -> Void
     let onAction: (WarrenDesktopAction) -> Void
+    /// Drops a Session onto a pane. `nil` when no pane can accept one, which is
+    /// every sidebar that is not mounted beside an arrangement.
+    let onSplitDropSession: ((String, String, SplitDropTarget) -> Void)?
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
     /// Reveals a marked Workspace's editor. Supplied only by the current Host's
@@ -75,7 +78,8 @@ struct WarrenDesktopSidebarRows: View {
         onAction: @escaping (WarrenDesktopAction) -> Void,
         onRequestRename: @escaping (WarrenDesktopRenameRequest) -> Void,
         onRequestDeletion: @escaping (WarrenDesktopDeletionRequest) -> Void,
-        onOpenEditor: @escaping (WorkspaceID) -> Void = { _ in }
+        onOpenEditor: @escaping (WorkspaceID) -> Void = { _ in },
+        onSplitDropSession: ((String, String, SplitDropTarget) -> Void)? = nil
     ) {
         self.taskGroups = taskGroups
         self.groups = groups
@@ -102,6 +106,7 @@ struct WarrenDesktopSidebarRows: View {
         self.onRequestTerminalGroupEdit = onRequestTerminalGroupEdit
         self.onAction = onAction
         self.onOpenEditor = onOpenEditor
+        self.onSplitDropSession = onSplitDropSession
         self.onRequestRename = onRequestRename
         self.onRequestDeletion = onRequestDeletion
     }
@@ -379,9 +384,15 @@ struct WarrenDesktopSidebarRows: View {
     private func isSessionSelected(
         _ session: WarrenDesktopSession
     ) -> Bool {
-        guard case .workspace = selection else { return false }
-        guard let selectedTabID else { return false }
-        return session.tabID == selectedTabID
+        guard let selectedTabID, session.tabID == selectedTabID else { return false }
+        switch selection {
+        case .workspace(let workspaceID):
+            return session.workspaceID == workspaceID
+        case .terminalGroup(let groupID):
+            return session.terminalGroupID == groupID
+        case .project, nil:
+            return false
+        }
     }
 
     /// Session leaves are only rendered where they can be read as leaves.
@@ -547,6 +558,83 @@ struct WarrenDesktopSidebarRows: View {
         return terminalGroups
     }
 
+    private func ownsTerminalGroupSessionLeaves(
+        _ group: WarrenDesktopTerminalGroup
+    ) -> Bool {
+        showsSessionRows
+    }
+
+    private func activeSessions(
+        in group: WarrenDesktopTerminalGroup
+    ) -> [WarrenDesktopSession] {
+        group.sessions.filter { $0.state.isActive }
+    }
+
+    private func isTerminalGroupRowSelected(
+        _ group: WarrenDesktopTerminalGroup,
+        ownsSessionLeaves: Bool
+    ) -> Bool {
+        guard selection == .terminalGroup(group.id) else { return false }
+        guard ownsSessionLeaves else { return true }
+        return !activeSessions(in: group).contains(where: isSessionSelected)
+    }
+
+    private func terminalGroupRowContainsSelection(
+        _ group: WarrenDesktopTerminalGroup,
+        ownsSessionLeaves: Bool
+    ) -> Bool {
+        guard selection == .terminalGroup(group.id) else { return false }
+        return !isTerminalGroupRowSelected(group, ownsSessionLeaves: ownsSessionLeaves)
+    }
+
+    private func terminalGroupRow(
+        _ group: WarrenDesktopTerminalGroup,
+        ownsSessionLeaves: Bool
+    ) -> some View {
+        WarrenDesktopTerminalGroupRow(
+            group: group,
+            isCollapsed: isCollapsed,
+            isSelected: isTerminalGroupRowSelected(group, ownsSessionLeaves: ownsSessionLeaves),
+            containsSelection: terminalGroupRowContainsSelection(group, ownsSessionLeaves: ownsSessionLeaves),
+            isInteractionDisabled: isInteractionDisabled,
+            showsSessionChildren: ownsSessionLeaves && !activeSessions(in: group).isEmpty,
+            rowHeight: workspaceDisplayMode.rowHeight,
+            onSelect: { onAction(.selectTerminalGroup(group.id)) },
+            onDoubleClick: { onAction(.selectTerminalGroup(group.id)) },
+            onRename: { onRequestTerminalGroupEdit(group.group) },
+            onSetHome: { onRequestTerminalGroupEdit(group.group) },
+            onDelete: {
+                onRequestDeletion(.terminalGroup(
+                    group.group,
+                    sessionCount: group.sessions.count
+                ))
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func terminalGroupSessionRows(
+        for group: WarrenDesktopTerminalGroup
+    ) -> some View {
+        ForEach(activeSessions(in: group)) { session in
+            WarrenDesktopWorkspaceSessionRow(
+                session: session,
+                terminalGroup: group.group,
+                isSelected: isSessionSelected(session),
+                isInteractionDisabled: isInteractionDisabled,
+                onOpen: { onAction(.openSession(session.id)) },
+                onRename: {
+                    onRequestRename(.session(session.id, title: session.displayTitle))
+                },
+                onTogglePin: {
+                    onAction(.setSessionPinned(session.id, !session.pinned))
+                },
+                onEnd: { onAction(.deleteSession(session.id)) },
+                onSplitDrop: onSplitDropSession
+            )
+        }
+    }
+
     private var terminalGroupsSection: some View {
         Group {
             if !tree.showsActiveOnly || !visibleTerminalGroups.isEmpty {
@@ -565,34 +653,20 @@ struct WarrenDesktopSidebarRows: View {
                     }
                     // No rows is the empty state; see the Tasks section above.
                     if !tree.terminalGroupsCollapsed || isCollapsed {
-                        if !visibleTerminalGroups.isEmpty {
-                            ScrollView(.vertical, showsIndicators: visibleTerminalGroups.count > 3) {
-                                LazyVStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                                    ForEach(visibleTerminalGroups) { group in
-                                        WarrenDesktopTerminalGroupRow(
-                                            group: group,
-                                            isCollapsed: isCollapsed,
-                                            isSelected: selection == .terminalGroup(group.id),
-                                            isInteractionDisabled: isInteractionDisabled,
-                                            onSelect: { onAction(.selectTerminalGroup(group.id)) },
-                                            onRename: { onRequestTerminalGroupEdit(group.group) },
-                                            onSetHome: { onRequestTerminalGroupEdit(group.group) },
-                                            onDelete: {
-                                                onRequestDeletion(.terminalGroup(
-                                                    group.group,
-                                                    sessionCount: group.sessions.count
-                                                ))
-                                            }
-                                        )
-                                    }
-                                }
+                        ForEach(visibleTerminalGroups) { group in
+                            let ownsLeaves = ownsTerminalGroupSessionLeaves(group)
+                            let liveSessions = activeSessions(in: group)
+                            WarrenDesktopSessionLeafGroup(
+                                leafCount: ownsLeaves ? liveSessions.count : 0,
+                                mode: workspaceDisplayMode,
+                                workspaceGlyph: .terminalGroup,
+                                isCurrentScope: selection == .terminalGroup(group.id)
+                            ) {
+                                terminalGroupRow(group, ownsSessionLeaves: ownsLeaves)
+                            } leaves: {
+                                terminalGroupSessionRows(for: group)
                             }
-                            .frame(
-                                maxHeight: (isCollapsed
-                                    ? WarrenLayoutMetrics.sidebarHeaderRowHeight
-                                    : WarrenLayoutMetrics.sidebarProjectRowHeight) * 3
-                                    + WarrenSpacing.xxs * 2
-                            )
+                            .padding(.top, workspaceDisplayMode.sessionGroupSpacing)
                         }
                     }
                 }
@@ -997,7 +1071,8 @@ struct WarrenDesktopSidebarRows: View {
                 onTogglePin: {
                     onAction(.setSessionPinned(session.id, !session.pinned))
                 },
-                onEnd: { onAction(.deleteSession(session.id)) }
+                onEnd: { onAction(.deleteSession(session.id)) },
+                onSplitDrop: onSplitDropSession
             )
         }
     }
@@ -1123,11 +1198,14 @@ struct WarrenDesktopSidebarRows: View {
 /// and the hover tooltip. A plain shell has no activity Warren can observe, so
 /// its leaf spends the trailing slot on nothing rather than on an invented
 /// marker.
+enum WarrenDesktopSessionRowScope {
+    case workspace(project: Project, workspace: Workspace, semanticScope: String)
+    case terminalGroup(TerminalGroup)
+}
+
 struct WarrenDesktopWorkspaceSessionRow: View {
     let session: WarrenDesktopSession
-    let project: Project
-    let workspace: Workspace
-    let semanticScope: String
+    let scope: WarrenDesktopSessionRowScope
     var isSelected: Bool = false
     let isInteractionDisabled: Bool
     let onOpen: () -> Void
@@ -1138,6 +1216,58 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     var onRename: (() -> Void)? = nil
     var onTogglePin: (() -> Void)? = nil
     var onEnd: (() -> Void)? = nil
+    /// Drops this Session onto a pane.
+    ///
+    /// The same handler the Tab strip uses, so a Session reaches a pane by
+    /// either door. Rich mode's tree is the only place a Workspace's other
+    /// Sessions are listed, which is where a drop is most useful.
+    var onSplitDrop: ((String, String, SplitDropTarget) -> Void)? = nil
+
+    init(
+        session: WarrenDesktopSession,
+        project: Project,
+        workspace: Workspace,
+        semanticScope: String,
+        isSelected: Bool = false,
+        isInteractionDisabled: Bool,
+        onOpen: @escaping () -> Void,
+        onRename: (() -> Void)? = nil,
+        onTogglePin: (() -> Void)? = nil,
+        onEnd: (() -> Void)? = nil,
+        onSplitDrop: ((String, String, SplitDropTarget) -> Void)? = nil
+    ) {
+        self.session = session
+        self.scope = .workspace(project: project, workspace: workspace, semanticScope: semanticScope)
+        self.isSelected = isSelected
+        self.isInteractionDisabled = isInteractionDisabled
+        self.onOpen = onOpen
+        self.onRename = onRename
+        self.onTogglePin = onTogglePin
+        self.onEnd = onEnd
+        self.onSplitDrop = onSplitDrop
+    }
+
+    init(
+        session: WarrenDesktopSession,
+        terminalGroup: TerminalGroup,
+        isSelected: Bool = false,
+        isInteractionDisabled: Bool,
+        onOpen: @escaping () -> Void,
+        onRename: (() -> Void)? = nil,
+        onTogglePin: (() -> Void)? = nil,
+        onEnd: (() -> Void)? = nil,
+        onSplitDrop: ((String, String, SplitDropTarget) -> Void)? = nil
+    ) {
+        self.session = session
+        self.scope = .terminalGroup(terminalGroup)
+        self.isSelected = isSelected
+        self.isInteractionDisabled = isInteractionDisabled
+        self.onOpen = onOpen
+        self.onRename = onRename
+        self.onTogglePin = onTogglePin
+        self.onEnd = onEnd
+        self.onSplitDrop = onSplitDrop
+    }
 
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var isFocused: Bool
@@ -1216,7 +1346,12 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     }
 
     private var semanticID: String {
-        "workspace-session.\(semanticScope).\(workspace.id.description).\(session.id.description)"
+        switch scope {
+        case let .workspace(_, workspace, semanticScope):
+            return "workspace-session.\(semanticScope).\(workspace.id.description).\(session.id.description)"
+        case let .terminalGroup(group):
+            return "terminal-group-session.\(group.id.description).\(session.id.description)"
+        }
     }
 
     private var semanticLabel: String {
@@ -1236,8 +1371,13 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         if session.pinned {
             values.append("Pinned")
         }
-        values.append(project.name)
-        values.append(workspace.name)
+        switch scope {
+        case let .workspace(project, workspace, _):
+            values.append(project.name)
+            values.append(workspace.name)
+        case let .terminalGroup(group):
+            values.append(group.name.isEmpty ? "Terminal Group" : group.name)
+        }
         if isSelected {
             values.append("Selected")
         }
@@ -1255,7 +1395,6 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                 sessionIcon
                     .frame(width: WarrenLayoutMetrics.sidebarLeafIconSlotSize,
                            height: WarrenLayoutMetrics.sidebarLeafIconSlotSize)
-
                 Text(title)
                     .font(WarrenTypography.navigationItem)
                     .foregroundStyle(
@@ -1283,6 +1422,23 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             .padding(.trailing, WarrenSpacing.compact)
             .frame(maxWidth: .infinity, minHeight: rowHeight)
             .contentShape(.rect)
+            // The drag source is native for the same reason a Tab's is: a drop
+            // over the AppKit terminal has to be resolved by the drag source.
+            // The handle owns the row's plain press, so it restores the click
+            // and the focus the Button used to take.
+            .overlay {
+                if let onSplitDrop, !isInteractionDisabled, let tabID = session.tabID {
+                    WarrenDesktopTabDragHandle(
+                        tabID: tabID,
+                        isEnabled: true,
+                        onSelect: {
+                            isFocused = true
+                            onOpen()
+                        },
+                        onSplitDrop: onSplitDrop
+                    )
+                }
+            }
         }
         .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, isFocused: isFocused))
         .disabled(isInteractionDisabled)

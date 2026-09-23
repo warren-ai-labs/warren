@@ -121,6 +121,11 @@ final class WarrenDesktopSessionTreeGuideTests: XCTestCase {
             worktreeInset,
             "The worktree tick must reach the dot"
         )
+        XCTAssertEqual(
+            guide(.terminalGroup).workspaceConnectorLength,
+            guide(.checkout).workspaceConnectorLength,
+            "The terminal group tick matches the checkout glyph in length"
+        )
     }
 
     /// The leading inset of a symbol's ink inside the row's glyph slot.

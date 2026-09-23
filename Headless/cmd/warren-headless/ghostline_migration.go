@@ -365,13 +365,57 @@ func checkedGhostlineClient(socketPath, phase string) (*ghostline.Client, error)
 	return client, nil
 }
 
+const ghostlineExecutableAlias = "warren-ghostline"
+
+// resolveGhostlineExecutable resolves or materializes the dedicated executable
+// alias for the detached Ghostline serve process. Running Ghostline under a
+// separate executable name protects it from blanket `pkill warren-headless` or
+// `killall warren-headless` invocations while retaining seamless compatibility
+// with process migration and handoff.
+//
+// If an alias cannot be created (e.g. in a read-only environment), it gracefully
+// falls back to the original executable.
+func resolveGhostlineExecutable(executable string, logger *slog.Logger) string {
+	if strings.TrimSpace(executable) == "" {
+		return ""
+	}
+	if filepath.Base(executable) == ghostlineExecutableAlias {
+		return executable
+	}
+	dir := filepath.Dir(executable)
+	aliasPath := filepath.Join(dir, ghostlineExecutableAlias)
+
+	if info, err := os.Lstat(aliasPath); err == nil {
+		if _, statErr := os.Stat(aliasPath); statErr == nil {
+			return aliasPath
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			_ = os.Remove(aliasPath)
+		}
+	}
+
+	target := filepath.Base(executable)
+	if err := os.Symlink(target, aliasPath); err == nil {
+		return aliasPath
+	} else if os.IsExist(err) {
+		if _, statErr := os.Stat(aliasPath); statErr == nil {
+			return aliasPath
+		}
+	} else if logger != nil {
+		logger.Debug("unable to create ghostline executable alias; using original executable", "alias", aliasPath, "error", err)
+	}
+
+	return executable
+}
+
 func v1GhostlineSpawn(config ghostlineMigrationConfig) []string {
 	executable, err := os.Executable()
 	if err != nil {
 		return nil
 	}
+	ghostlineExecutable := resolveGhostlineExecutable(executable, config.logger)
 	return []string{
-		executable,
+		ghostlineExecutable,
 		"--ghostline-serve",
 		"--ghostline-socket", "{socket}",
 		"--output-dir", config.outputDir,

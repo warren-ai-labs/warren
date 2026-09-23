@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -73,6 +74,33 @@ func (p *claudeParser) parse(line []byte) []api.AgentEvent {
 	return p.Parse(line)
 }
 
+type claudeToolUseResult struct {
+	FilePath        string          `json:"filePath"`
+	StructuredPatch json.RawMessage `json:"structuredPatch"`
+	Interrupted     bool            `json:"interrupted"`
+}
+
+// UnmarshalJSON accepts the tool metadata Claude attaches to a tool_result.
+// Healthy results use an object, but a denied interaction (or any tool error)
+// serializes `toolUseResult` as a string. Decoding that string into the object
+// shape would fail the whole record, dropping the tool_result that resolves a
+// Question and leaving a permanently pending card in every client. Non-object
+// values are valid provider metadata we do not consume, so they decode to the
+// zero value instead.
+func (r *claudeToolUseResult) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil
+	}
+	type plain claudeToolUseResult
+	var decoded plain
+	if err := json.Unmarshal(trimmed, &decoded); err != nil {
+		return err
+	}
+	*r = claudeToolUseResult(decoded)
+	return nil
+}
+
 type claudeRecord struct {
 	Type             string          `json:"type"`
 	Subtype          string          `json:"subtype"`
@@ -92,17 +120,13 @@ type claudeRecord struct {
 		Content    json.RawMessage `json:"content"`
 		Usage      json.RawMessage `json:"usage"`
 	} `json:"message"`
-	ToolUseResult struct {
-		FilePath        string          `json:"filePath"`
-		StructuredPatch json.RawMessage `json:"structuredPatch"`
-		Interrupted     bool            `json:"interrupted"`
-	} `json:"toolUseResult"`
-	ToolName   string          `json:"tool_name"`
-	ToolInput  json.RawMessage `json:"tool_input"`
-	ToolOutput json.RawMessage `json:"tool_output"`
-	ToolUseID  string          `json:"tool_use_id"`
-	CallID     string          `json:"call_id"`
-	Attachment struct {
+	ToolUseResult claudeToolUseResult `json:"toolUseResult"`
+	ToolName      string              `json:"tool_name"`
+	ToolInput     json.RawMessage     `json:"tool_input"`
+	ToolOutput    json.RawMessage     `json:"tool_output"`
+	ToolUseID     string              `json:"tool_use_id"`
+	CallID        string              `json:"call_id"`
+	Attachment    struct {
 		Type      string          `json:"type"`
 		HookName  string          `json:"hookName"`
 		HookEvent string          `json:"hookEvent"`

@@ -162,6 +162,10 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             return agentProvider
         case .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae:
             return kind
+        case .browser:
+            // A browser never carries a provider binding, so a promoted Agent is
+            // impossible here and the durable kind is the whole answer.
+            return kind
         }
     }
 
@@ -173,7 +177,7 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             true
         case .shell, .custom:
             agentStatus != nil
-        case .trae:
+        case .trae, .browser:
             false
         }
     }

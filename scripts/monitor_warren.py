@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Tuple
 
 
 APP_MARKERS = ("/Warren.app/Contents/MacOS/",)
-WARREN_BASENAMES = {"Warren", "WarrenDaemonMenuBar", "warren-headless"}
+WARREN_BASENAMES = {"Warren", "WarrenDaemonMenuBar", "warren-headless", "warren-ghostline"}
 TIME_RE = re.compile(r"^(\d+):(\d+(?:\.\d+)?)$")
 PALETTE = [
     "#e74c3c",
@@ -145,7 +145,7 @@ def is_warren_process(sample: ProcessSample) -> bool:
 
 def process_label(sample: ProcessSample) -> str:
     name = Path(sample.command.split(maxsplit=1)[0]).name
-    if "ghostline-serve" in sample.command:
+    if "ghostline-serve" in sample.command or name == "warren-ghostline":
         return "warren-headless (ghostline)"
     return name
 

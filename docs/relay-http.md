@@ -165,6 +165,12 @@ remain short-lived and refresh through an HttpOnly cookie.
 - **Pairing succeeds but the client cannot connect.** Confirm that the Relay
   URL and `WARREN_RELAY_ALLOWED_ORIGIN` use the same scheme, hostname, and
   port, and that the proxy forwards WebSocket upgrades.
+- **A client hangs instead of saying the Host is away.** Relay writes a
+  `host_offline` error and then closes cleanly, so the reason depends on the
+  close handshake surviving the proxy. A proxy that drops the connection when it
+  sees the close frame, rather than forwarding it, leaves the client reporting an
+  abnormal 1006 closure — and browser WebSockets discard buffered data when they
+  do, losing the explanation that was just written.
 - **A ticket is rejected as expired.** Pairing codes and Web tickets are
   reusable only within their configured sharing window. Generate a fresh
   pairing code and QR image after that window, or when you intentionally want

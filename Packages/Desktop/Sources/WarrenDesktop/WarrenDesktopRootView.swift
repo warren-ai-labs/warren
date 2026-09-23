@@ -102,6 +102,13 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// the region's own surface is the only thing that observes the pointer
     /// crossing into it.
     private let editorHasKeyboardFocus: Bool
+    /// Whether a browser viewer currently holds the keyboard.
+    ///
+    /// A viewer is a `WKWebView`, so a click inside its content moves AppKit's
+    /// first responder without telling the Terminal. Without this signal,
+    /// terminal reconciliation pulls the keyboard straight back out of the
+    /// browser pane (RFC 0022 §8.4).
+    private let browserHasKeyboardFocus: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
     /// Asks the runtime to open one document. Warren drives this exactly once
     /// per editor entry, to restore the Workspace's last document; every other
@@ -187,8 +194,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @AppStorage(WarrenPreferenceKey.terminalSplitChordsEnabled)
     private var splitChordsEnabled = false
     @Environment(\.warrenSemanticRecorder) private var semanticRecorder
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Presentation {
         let workspace: Workspace?
@@ -296,6 +303,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onRebuildUsage: ((@escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void) -> Void)? = nil,
         embeddedEditorAvailable: Bool = false,
         editorHasKeyboardFocus: Bool = false,
+        browserHasKeyboardFocus: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
         onOpenEditorDocument: @escaping @MainActor (Workspace, WarrenDesktopEditorDocument) -> Void = { _, _ in },
         persistenceEnabled: Bool = true,
@@ -384,6 +392,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.embeddedEditorAvailable = embeddedEditorAvailable
             && resolvedEndpointCapabilities.canUseEmbeddedEditor
         self.editorHasKeyboardFocus = editorHasKeyboardFocus
+        self.browserHasKeyboardFocus = browserHasKeyboardFocus
         self.editorSurface = editorSurface
         self.onOpenEditorDocument = onOpenEditorDocument
         self.persistenceEnabled = persistenceEnabled
@@ -520,6 +529,17 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             onOpenEditor: { workspaceID in
                 editorRegionWorkspaceIDs.insert(workspaceID)
                 dispatch(.selectWorkspace(workspaceID))
+            },
+            // A Session dropped from the tree lands in a pane exactly as a Tab
+            // dropped from the strip does: the drag source resolves the pane
+            // and the zone, and this performs the same split.
+            onSplitDropSession: { paneID, tabID, target in
+                handleSplitDrop(
+                    targetPaneID: paneID,
+                    droppedTabID: tabID,
+                    target: target,
+                    in: presentation
+                )
             }
         )
         .frame(width: sidebarState.renderedWidth)
@@ -1179,6 +1199,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     workspace: presentation.workspace,
                     terminalGroup: presentation.terminalGroup,
                     isBusy: isAddingSession,
+                    canUseEmbeddedBrowser: endpointCapabilities.canUseEmbeddedBrowser,
                     onLaunch: { request in
                         launchSession(request, in: presentation)
                     }
@@ -1253,7 +1274,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 // pass pull the keyboard back out of the editor mid-edit.
                 wantsTerminalFocus: !commandPalettePresented
                     && !settingsPresented
-                    && !editorHasKeyboardFocus,
+                    && !editorHasKeyboardFocus
+                    && !browserHasKeyboardFocus,
                 splitTree: currentTree,
                 activePaneID: currentPaneID,
                 allTabs: presentation.tabs,
@@ -2176,10 +2198,16 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         in tree: SplitLayoutTree
     ) -> Set<TerminalSessionID> {
         let tabsByID = Dictionary(presentation.tabs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let sessionIDs = tree.leaves.compactMap { leaf in
-            tabsByID[leaf.tabID]?.sessionID
+        // A browser pane is a pane like any other, but its Session has no PTY:
+        // there is nothing to subscribe, size, or recover for it, and only the
+        // viewer page renders it (RFC 0022 §3).
+        let sessionIDs = tree.leaves.compactMap { leaf -> TerminalSessionID? in
+            guard let sessionID = tabsByID[leaf.tabID]?.sessionID else { return nil }
+            return projection.session(id: sessionID)?.kind == .browser ? nil : sessionID
         }
-        if sessionIDs.isEmpty, let fallback = presentation.tab?.sessionID {
+        if sessionIDs.isEmpty,
+           let fallback = presentation.tab?.sessionID,
+           projection.session(id: fallback)?.kind != .browser {
             return [fallback]
         }
         return Set(sessionIDs)

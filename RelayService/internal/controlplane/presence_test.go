@@ -54,15 +54,26 @@ func pairClient(t *testing.T, server *Server, base, websocketBase string) (strin
 }
 
 func presenceServer(t *testing.T, wait time.Duration) (*Server, *httptest.Server, string) {
+	return presenceServerWithLossConfirmation(t, wait, 150*time.Millisecond)
+}
+
+// presenceServerWithLossConfirmation also sets how long a dropped Host tunnel is
+// given to come back. Tests keep it short so they do not spend the production 3s
+// waiting for a Host they never intend to reconnect.
+func presenceServerWithLossConfirmation(
+	t *testing.T,
+	wait, lossConfirmation time.Duration,
+) (*Server, *httptest.Server, string) {
 	t.Helper()
 	server, err := NewServer(Config{
-		PublicURL:        "https://relay.example.test",
-		AdminToken:       "admin-bootstrap",
-		SigningKey:       []byte("0123456789abcdef0123456789abcdef"),
-		AllowedOrigin:    "https://relay.example.test",
-		PairingTTL:       time.Minute,
-		AccessTTL:        time.Hour,
-		HostPresenceWait: wait,
+		HostLossConfirmation: lossConfirmation,
+		PublicURL:            "https://relay.example.test",
+		AdminToken:           "admin-bootstrap",
+		SigningKey:           []byte("0123456789abcdef0123456789abcdef"),
+		AllowedOrigin:        "https://relay.example.test",
+		PairingTTL:           time.Minute,
+		AccessTTL:            time.Hour,
+		HostPresenceWait:     wait,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -151,6 +162,177 @@ func TestHostOfflineErrorCarriesPresenceDetail(t *testing.T) {
 	}
 }
 
+// The reason is only useful if it survives the disconnect. Closing the TCP
+// connection without a close handshake leaves the explanation racing a truncated
+// stream, and browser WebSockets discard buffered data when they report an
+// abnormal 1006 close — which showed up in the field as a client that had been
+// told "host offline" and displayed "Authenticating…" instead.
+func TestClientRefusalsFinishTheCloseHandshake(t *testing.T) {
+	server, httpServer, websocketBase := presenceServer(t, 150*time.Millisecond)
+	hostID, _, token, host := pairClient(t, server, httpServer.URL, websocketBase)
+	host.Close()
+	waitForHostOffline(t, server, hostID)
+
+	for _, probe := range []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{name: "host offline", token: token, want: "host offline"},
+		{name: "unauthorized", token: "not-a-token", want: "unauthorized"},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			client, _, err := websocket.DefaultDialer.Dial(websocketBase+"/v1/client/connect", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			if err := client.WriteJSON(map[string]string{
+				"t": "auth", "version": clientProtocolVersion, "access_token": probe.token,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+			var payload map[string]any
+			if err := client.ReadJSON(&payload); err != nil {
+				t.Fatalf("read refusal: %v", err)
+			}
+			if payload["error"] != probe.want {
+				t.Fatalf("refusal = %#v, want error %q", payload, probe.want)
+			}
+			// A second read drains the close frame. Without one, gorilla reports
+			// an unexpected EOF here, which is exactly the truncation that loses
+			// the payload on other clients.
+			_, _, err = client.ReadMessage()
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+				t.Fatalf("refusal did not end with a close frame: %v", err)
+			}
+		})
+	}
+}
+
+// waitForClientRoute blocks until the Host has been handed a client's auth
+// frame, which is when the client is genuinely attached. Waiting only for the
+// route to appear is not enough: the route is registered before the auth frame
+// is forwarded, and a Host that dies inside that window tears the client down
+// before any reason can reach it.
+func waitForClientRoute(t *testing.T, host *websocket.Conn) {
+	t.Helper()
+	_ = host.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		_, payload, err := host.ReadMessage()
+		if err != nil {
+			t.Fatalf("host never received the client's auth frame: %v", err)
+		}
+		frame, err := decodeRelayFrame(payload)
+		if err != nil || frame.Kind != frameText {
+			continue
+		}
+		if bytes.Contains(frame.Payload, []byte(`"t":"auth"`)) {
+			return
+		}
+	}
+}
+
+// A client that already had a working connection is owed the reason it stopped,
+// and owed it at once. Tearing its route down silently sent it into its own
+// backoff, and it then waited out the whole presence window before Relay was
+// willing to explain the absence: measured at 16.5s from the Host dying to the
+// reason reaching the screen.
+func TestDyingHostTellsEstablishedClientsWhy(t *testing.T) {
+	// A presence window far longer than the assertion below: the client must be
+	// told by the teardown itself, not by a reconnect that had to wait for the
+	// Host first. The confirmation window is short because this Host is not
+	// coming back.
+	server, httpServer, websocketBase := presenceServerWithLossConfirmation(
+		t, maxHostPresenceWait, 150*time.Millisecond,
+	)
+	hostID, _, token, host := pairClient(t, server, httpServer.URL, websocketBase)
+
+	client, _, err := websocket.DefaultDialer.Dial(websocketBase+"/v1/client/connect", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.WriteJSON(map[string]string{
+		"t": "auth", "version": clientProtocolVersion, "access_token": token,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForClientRoute(t, host)
+
+	started := time.Now()
+	host.Close()
+	waitForHostOffline(t, server, hostID)
+
+	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	messageType, payload, err := client.ReadMessage()
+	if err != nil {
+		t.Fatalf("established client learned nothing when the Host died: %v", err)
+	}
+	if messageType != websocket.TextMessage {
+		t.Fatalf("notice message type = %d, want text", messageType)
+	}
+	var notice map[string]any
+	if err := json.Unmarshal(payload, &notice); err != nil {
+		t.Fatalf("notice is not JSON: %v (%s)", err, payload)
+	}
+	if notice["code"] != "host_offline" || notice["error"] != "host offline" {
+		t.Fatalf("notice is not the offline reason: %#v", notice)
+	}
+	if notice["host_name"] != "Mac" {
+		t.Fatalf("notice did not name the Host: %#v", notice)
+	}
+	if lastSeen, ok := notice["last_seen_at"].(string); !ok {
+		t.Fatalf("notice has no last_seen_at: %#v", notice)
+	} else if _, err := time.Parse(time.RFC3339, lastSeen); err != nil {
+		t.Fatalf("last_seen_at is not RFC3339: %q", lastSeen)
+	}
+	// The reason is only useful if it survives the disconnect, so the route's
+	// teardown has to end with a close handshake rather than a dropped TCP
+	// connection. A second read drains that close frame; without one gorilla
+	// reports an unexpected EOF, the same truncation that discards the payload
+	// in a browser.
+	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, _, err := client.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+		t.Fatalf("teardown did not end with a close frame: %v", err)
+	}
+	// Bounded on both sides. It must not wait out the presence window, and it
+	// must not skip the confirmation window either: a reason delivered the instant
+	// a tunnel drops is a reason given to a Host that may still be coming back.
+	elapsed := time.Since(started)
+	if elapsed > 2*time.Second {
+		t.Fatalf("reason took %v to arrive, want well inside the presence window", elapsed)
+	}
+	if elapsed < 150*time.Millisecond {
+		t.Fatalf("reason arrived in %v, before the Host was given a chance to return", elapsed)
+	}
+}
+
+// The reason is handed over exactly once, and the first one to be recorded is
+// the one the peer gets: a Host that comes back and dies again must not rewrite
+// an explanation the client was already given.
+func TestRouteNoticeIsDeliveredOnce(t *testing.T) {
+	route := newClientRoute()
+	route.notify([]byte(`{"code":"host_offline"}`))
+	route.notify([]byte(`{"code":"replaced"}`))
+	if notice := route.takeNotice(); string(notice) != `{"code":"host_offline"}` {
+		t.Fatalf("first notice did not win: %s", notice)
+	}
+	if notice := route.takeNotice(); notice != nil {
+		t.Fatalf("notice was delivered twice: %s", notice)
+	}
+	// A route with nothing recorded must not manufacture an empty reason.
+	empty := newClientRoute()
+	if notice := empty.takeNotice(); notice != nil {
+		t.Fatalf("unnotified route produced a notice: %s", notice)
+	}
+	empty.notify(nil)
+	if notice := empty.takeNotice(); notice != nil {
+		t.Fatalf("nil notice was recorded: %s", notice)
+	}
+}
+
 // The wait must not become a way to hold a client socket open forever: an
 // unrelated Host connecting does not release a waiter.
 // A wait longer than a client's welcome deadline would cause the stall it is
@@ -215,5 +397,106 @@ func TestPresenceSignalIsScopedToOneHost(t *testing.T) {
 	}
 	if replacement := server.registry.hostOnlineSignal("host-a"); replacement == first {
 		t.Fatal("a fired signal was reused for the next wait")
+	}
+}
+
+// A tunnel dying is not the same as a Host being away. A home uplink hiccup or a
+// Wi-Fi roam drops the tunnel and the Host is back in under a second — and
+// because an announced absence deliberately skips the client's settle grace,
+// reporting it on the spot paints a red "Mac is offline" banner immediately, for
+// a hiccup the user should never have seen. Measured at 300ms: exactly the
+// failure the presentation contract exists to avoid.
+func TestBriefHostDropIsNotReportedAsAnAbsence(t *testing.T) {
+	// Long enough that the returning Host lands inside it.
+	server, httpServer, websocketBase := presenceServerWithLossConfirmation(
+		t, maxHostPresenceWait, 2*time.Second,
+	)
+	hostID, credential, token, host := pairClient(t, server, httpServer.URL, websocketBase)
+
+	client, _, err := websocket.DefaultDialer.Dial(websocketBase+"/v1/client/connect", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.WriteJSON(map[string]string{
+		"t": "auth", "version": clientProtocolVersion, "access_token": token,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForClientRoute(t, host)
+
+	host.Close()
+	returned := dialV2Host(t, websocketBase, hostID, credential, "Mac")
+	defer returned.Close()
+	waitForHost(t, httpServer.URL, server, hostID)
+
+	// The route is dropped either way — the client reconnects and is handed the
+	// new tunnel inside its own grace, so nothing is shown. What must not happen
+	// is being told the Host is offline, because it is not.
+	_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for {
+		_, payload, readErr := client.ReadMessage()
+		if readErr != nil {
+			// A closed socket with no reason is the correct outcome: there was
+			// nothing worth saying.
+			return
+		}
+		var notice map[string]any
+		if json.Unmarshal(payload, &notice) != nil {
+			continue
+		}
+		if notice["code"] == "host_offline" {
+			t.Fatalf("a Host that came straight back was reported as offline: %#v", notice)
+		}
+	}
+}
+
+// The confirmation window cannot become a way to never report an absence: a Host
+// that reconnects and immediately loses its own handshake has not come back, and
+// the clients still waiting on it must be told.
+func TestFailedHostReturnStillReportsTheAbsence(t *testing.T) {
+	server, httpServer, websocketBase := presenceServerWithLossConfirmation(
+		t, maxHostPresenceWait, 400*time.Millisecond,
+	)
+	hostID, credential, token, host := pairClient(t, server, httpServer.URL, websocketBase)
+
+	client, _, err := websocket.DefaultDialer.Dial(websocketBase+"/v1/client/connect", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.WriteJSON(map[string]string{
+		"t": "auth", "version": clientProtocolVersion, "access_token": token,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForClientRoute(t, host)
+	host.Close()
+
+	// Dial the Host endpoint and abandon the handshake. This fires the presence
+	// signal without ever producing an authorized tunnel.
+	go func() {
+		endpoint := websocketBase + "/v1/host/connect?host_id=" + hostID + "&version=2.0"
+		aborted, _, dialErr := websocket.DefaultDialer.Dial(
+			endpoint, http.Header{"Authorization": []string{"Bearer " + credential}},
+		)
+		if dialErr == nil {
+			aborted.Close()
+		}
+	}()
+
+	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	for {
+		_, payload, readErr := client.ReadMessage()
+		if readErr != nil {
+			t.Fatalf("a Host that never finished returning left its clients uninformed: %v", readErr)
+		}
+		var notice map[string]any
+		if json.Unmarshal(payload, &notice) != nil {
+			continue
+		}
+		if notice["code"] == "host_offline" {
+			return
+		}
 	}
 }

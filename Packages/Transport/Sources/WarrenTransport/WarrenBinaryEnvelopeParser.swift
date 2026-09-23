@@ -34,6 +34,10 @@ extension WarrenWireCodec {
         let payloadLength: Int
     }
 
+    /// The browser frame header is the atomic-state header on the wire, so the
+    /// raw shape is shared rather than duplicated.
+    typealias RawBrowserFrameHeader = RawAtomicStateHeader
+
     func parseEnvelope(_ bytes: [UInt8]) throws -> ParsedEnvelope {
         guard bytes.count >= Self.binaryPrefixLength else {
             throw WarrenWireCodecError.truncatedFrame
@@ -63,7 +67,7 @@ extension WarrenWireCodec {
         guard headerLength <= maxHeader else {
             throw WarrenWireCodecError.headerTooLarge(actual: headerLength, limit: maxHeader)
         }
-        let payloadLimit = kind == .atomicState ? maxAtomicStatePayload : maxPayload
+        let payloadLimit = payloadLimit(for: kind)
         guard payloadLength <= payloadLimit else {
             throw WarrenWireCodecError.payloadTooLarge(actual: payloadLength, limit: payloadLimit)
         }
@@ -89,6 +93,25 @@ extension WarrenWireCodec {
             payload: Data(bytes[payloadOffset..<expectedLength]),
             payloadLength: payloadLength
         )
+    }
+
+    /// The payload budget each kind is allowed, which is a property of the kind
+    /// and not of the frame.
+    ///
+    /// The Go binding applies the same per-kind budget at the envelope stage, so
+    /// a browser frame over 4 MiB is rejected here rather than one layer later:
+    /// a limit that only the header decoder knows about is a limit the envelope
+    /// has already accepted, and the two bindings would disagree about what a
+    /// legal frame is.
+    func payloadLimit(for kind: BinaryFrameKind) -> Int {
+        switch kind {
+        case .atomicState:
+            return maxAtomicStatePayload
+        case .browserFrame:
+            return maxBrowserFramePayload
+        case .input, .output:
+            return maxPayload
+        }
     }
 
     private func checkedLength(_ value: UInt32) throws -> Int {

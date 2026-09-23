@@ -607,6 +607,82 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
+    /// A browser Session has no PTY, so its screencast still is its own binary
+    /// kind and its own event rather than terminal output (RFC 0022 §7.3).
+    func testBrowserFrameEmitsATypedEventRatherThanTerminalOutput() async throws {
+        let (client, task, consuming, recorder) = try await connectedClient()
+        let session = TerminalSessionID(rawValue: sessionUUID)
+        let codec = WarrenWireCodec()
+        let payload = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0xFF, 0xD9])
+        let header = try XCTUnwrap(BinaryBrowserFrameHeader(
+            sessionID: session,
+            epoch: 8,
+            sequence: 64,
+            format: WarrenRemoteClient.browserFrameFormat,
+            payloadLength: payload.count
+        ))
+        await task.enqueue(.binary(try codec.encodeBrowserFrame(header: header, payload: payload)))
+
+        let expected = WarrenRemoteBrowserFrame(
+            sessionID: sessionUUID.uuidString.lowercased(),
+            epoch: 8,
+            sequence: 64,
+            format: WarrenRemoteClient.browserFrameFormat,
+            payload: payload
+        )
+        try await waitUntil {
+            await recorder.contains { event in
+                if case .browserFrame(let frame) = event { return frame == expected }
+                return false
+            }
+        }
+        let sawOutput = await recorder.contains { event in
+            if case .output = event { return true }
+            return false
+        }
+        XCTAssertFalse(sawOutput)
+        await client.stop()
+        consuming.cancel()
+    }
+
+    /// The DENB codec carries whatever `format` the header names, so the client
+    /// boundary is where a screencast still is checked against the one format a
+    /// Browser Session may emit. An unknown format must fail the connection
+    /// instead of reaching a renderer with no decoder for it.
+    func testBrowserFrameWithAnUnknownFormatIsRejected() async throws {
+        let (client, task, consuming, recorder) = try await connectedClient()
+        let session = TerminalSessionID(rawValue: sessionUUID)
+        let codec = WarrenWireCodec()
+        let payload = Data([0xFF, 0xD8, 0xFF, 0xD9])
+        let header = try XCTUnwrap(BinaryBrowserFrameHeader(
+            sessionID: session,
+            epoch: 8,
+            sequence: 64,
+            format: "browser-frame-png-v1",
+            payloadLength: payload.count
+        ))
+        await task.enqueue(.binary(try codec.encodeBrowserFrame(header: header, payload: payload)))
+
+        // The codec refuses the frame, so the client never sees a browser frame
+        // at all: the reason must name the format, or the disconnect is a
+        // mystery to whoever reads it.
+        try await waitUntil {
+            await recorder.contains { event in
+                if case .disconnected(let reason) = event {
+                    return reason.contains("browser-frame-png-v1")
+                }
+                return false
+            }
+        }
+        let sawBrowserFrame = await recorder.contains { event in
+            if case .browserFrame = event { return true }
+            return false
+        }
+        XCTAssertFalse(sawBrowserFrame)
+        await client.stop()
+        consuming.cancel()
+    }
+
     func testWorkspaceCreateResultDecodesEmbeddedWorkspace() throws {
         let data = Data("""
         {"id":"workspace-1","project":"project-1","name":"feature/chat","path":"/tmp/chat","branch":"feature/chat","kind":"worktree","created":true,"gitWorktree":true}
@@ -866,6 +942,76 @@ final class WarrenRemoteClientTests: XCTestCase {
         XCTAssertFalse(page.hasMore)
         await client.stop()
         consuming.cancel()
+    }
+
+    // A protocol-level WebSocket ping is answered by whatever terminates the
+    // socket, which over Relay is Relay itself. Without an application ping the
+    // client reports a healthy connection to an unreachable Host.
+    func testProbeAsksTheHostWhenAppHeartbeatIsNegotiated() async throws {
+        let task = ScriptedWebSocketTask()
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\",\"app-heartbeat-v1\"]}"))
+        await task.enqueue(.text(rosterJSON(revision: 1)))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task,
+            capabilities: ["roster-delta", WarrenRemoteCapability.appHeartbeat]
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        await client.probeConnection()
+        try await waitUntil {
+            await task.sentMessages.contains { message in
+                guard case .text(let text) = message else { return false }
+                return text.contains("\"t\":\"ping\"")
+            }
+        }
+        await client.stop()
+    }
+
+    func testProbeSendsNoApplicationPingWithoutTheCapability() async throws {
+        // connectedClient()'s welcome advertises only roster-delta, i.e. an
+        // older Host. The protocol ping remains the only liveness signal.
+        let (client, task, consuming, _) = try await connectedClient()
+        defer { consuming.cancel() }
+        await client.probeConnection()
+        // Give the probe a chance to emit before asserting its absence.
+        try await Task.sleep(for: .milliseconds(50))
+        let sent = await task.sentMessages
+        let applicationPings = sent.filter { message in
+            guard case .text(let text) = message else { return false }
+            return text.contains("\"t\":\"ping\"")
+        }
+        XCTAssertTrue(applicationPings.isEmpty, "an older Host must not be sent an app-level ping")
+        await client.stop()
+    }
+
+    func testNegotiatedHeartbeatCapabilityIsAdvertised() async throws {
+        let task = ScriptedWebSocketTask()
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\",\"app-heartbeat-v1\"]}"))
+        await task.enqueue(.text(rosterJSON(revision: 1)))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task,
+            capabilities: ["roster-delta", WarrenRemoteCapability.appHeartbeat]
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        let sentFrames = await task.sentMessages
+        let auth = try XCTUnwrap(sentFrames.first)
+        guard case .text(let text) = auth else { return XCTFail("auth was not text") }
+        XCTAssertTrue(
+            text.contains(WarrenRemoteCapability.appHeartbeat),
+            "the auth frame must advertise app-heartbeat-v1 or the Host will never answer one"
+        )
+        await client.stop()
     }
 
     private func connectedClient() async throws -> (

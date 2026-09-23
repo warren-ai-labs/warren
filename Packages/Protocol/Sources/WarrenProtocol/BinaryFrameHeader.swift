@@ -83,3 +83,59 @@ public struct BinaryAtomicStateFrameHeader: Codable, Hashable, Sendable {
         self = value
     }
 }
+
+/// Metadata for one screencast frame of a Warren Browser Session (RFC 0022).
+///
+/// The shape is byte-for-byte the atomic-state header, so a client that decodes
+/// one has the other and the two kinds differ only in `format` and in which
+/// decoder receives the payload. The payload is an encoded still image and must
+/// never reach a VT output parser.
+public struct BinaryBrowserFrameHeader: Codable, Hashable, Sendable {
+    public let sessionID: TerminalSessionID
+    public let epoch: UInt64
+    public let sequence: UInt64
+    public let format: String
+    public let payloadLength: Int
+
+    public init?(
+        sessionID: TerminalSessionID,
+        epoch: UInt64,
+        sequence: UInt64,
+        format: String,
+        payloadLength: Int
+    ) {
+        guard !format.isEmpty, payloadLength >= 0 else { return nil }
+        self.sessionID = sessionID
+        self.epoch = epoch
+        self.sequence = sequence
+        self.format = format
+        self.payloadLength = payloadLength
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionID, epoch, sequence, format, payloadLength
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let sessionID = try container.decode(TerminalSessionID.self, forKey: .sessionID)
+        let epoch = try container.decode(UInt64.self, forKey: .epoch)
+        let sequence = try container.decode(UInt64.self, forKey: .sequence)
+        let format = try container.decode(String.self, forKey: .format)
+        let payloadLength = try container.decode(Int.self, forKey: .payloadLength)
+        guard let value = Self(
+            sessionID: sessionID,
+            epoch: epoch,
+            sequence: sequence,
+            format: format,
+            payloadLength: payloadLength
+        ) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: format.isEmpty ? .format : .payloadLength,
+                in: container,
+                debugDescription: "format must be non-empty and payloadLength must be non-negative."
+            )
+        }
+        self = value
+    }
+}

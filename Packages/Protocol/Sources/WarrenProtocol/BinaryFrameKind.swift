@@ -17,11 +17,19 @@ public enum BinaryFrameKind: UInt8, Codable, Hashable, Sendable {
     case input = 1
     case output = 2
     case atomicState = 3
+    /// One screencast frame for a Warren Browser Session (RFC 0022).
+    ///
+    /// Its own kind for the same reason `atomicState` is one: the payload is an
+    /// encoded still image, and feeding it to a VT output parser would corrupt
+    /// the terminal. A browser Session has no PTY, so there is no terminal
+    /// stream for these bytes to be confused with — but a client that
+    /// subscribes to a Session without checking its kind would otherwise try.
+    case browserFrame = 4
 
     public var direction: BinaryFrameDirection {
         switch self {
         case .input: return .clientToHost
-        case .output, .atomicState: return .hostToClient
+        case .output, .atomicState, .browserFrame: return .hostToClient
         }
     }
 }

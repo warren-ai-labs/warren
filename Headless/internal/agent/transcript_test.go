@@ -812,6 +812,34 @@ func TestClaudeToolResultErrorAndFiles(t *testing.T) {
 	}
 }
 
+func TestClaudeDeniedQuestionResolvesWithStringToolResult(t *testing.T) {
+	// Claude serializes toolUseResult as an object for healthy results but as a
+	// plain string when the user denies the request. Decoding that string into
+	// the object shape used to fail the entire record, dropping the tool_result
+	// and leaving the Question pending forever in every client.
+	path := filepath.Join(t.TempDir(), "claude-denied-question.jsonl")
+	writeLines(t, path,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","isSidechain":false,"message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_ask","name":"AskUserQuestion","input":{"questions":[{"question":"Continue?","header":"Continue","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}`,
+		`{"type":"user","uuid":"u1","timestamp":"2026-08-16T10:00:05Z","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_ask","content":"The user doesn't want to proceed with this tool use.","is_error":true}]},"toolUseResult":"Error: The user doesn't want to proceed with this tool use."}`,
+	)
+	parser := newParser("claude")
+	events, _, err := readNew(path, 0, parser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want requested + resolved", events)
+	}
+	if events[0].Type != "question" || events[0].Payload["state"] != "pending" {
+		t.Fatalf("requested = %#v", events[0])
+	}
+	resolved := events[1]
+	if resolved.Type != "question" || resolved.ID != "toolu_ask" ||
+		resolved.Payload["state"] != "cancelled" {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+}
+
 func TestClaudeAssistantCarriesModelUsage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "claude-assistant.jsonl")
 	writeLines(t, path,

@@ -114,7 +114,7 @@ a paired-client token, a workspace path, or any other secret.
 | build | development | Host build label |
 | tls | 0 | Whether the advertised listener uses TLS |
 | pair | 0 or 1 | Whether the explicit pairing window is currently open |
-| cand, cand.1, cand.2, … | 10.23.138.54:8789,192.168.1.117:8789 | Normalized candidates, split across numbered TXT keys when needed |
+| cand, cand.1, cand.2, … | matebook-x-pro-2.local:8789,10.23.138.54:8789,192.168.1.117:8789 | Normalized candidates, split across numbered TXT keys when needed |
 
 Each candidate TXT item, including its key and `=`, is at most 255 bytes as
 required by DNS-SD. The receiver concatenates `cand`, `cand.1`, `cand.2`, and
@@ -126,6 +126,17 @@ Headless omits loopback, point-to-point, link-local, unspecified, and multicast
 addresses from the candidate set. This keeps VPN tunnel and non-routable
 interface addresses out of the LAN advertisement while retaining routable
 addresses from active interfaces.
+
+The Host's own mDNS name is listed first when the Host answers for a `.local`
+name, followed by the address candidates. A client that keeps the name reaches
+the Host after a DHCP change without a new discovery result, because the local
+resolver keeps that name aligned with the interface's current address.
+
+The candidate list is a snapshot of the interfaces that were reachable when the
+responder started. When that set changes, the Host stops the responder and
+publishes a new advertisement instead of leaving the previous addresses in
+place; a record that still lists the old address keeps clients dialing a Host
+that is no longer there.
 
 The pair value is dynamic. It is 0 after daemon startup and after the 60-second
 window expires. Changing the value does not require restarting the mDNS

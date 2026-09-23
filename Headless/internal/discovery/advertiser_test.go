@@ -40,7 +40,7 @@ func TestBuildAdvertisementPublishesOnlyNonSecretMetadata(t *testing.T) {
 		"build=dev-build",
 		"tls=1",
 		"pair=1",
-		"cand=192.168.1.117:8789,[2001:db8::1]:8789",
+		"cand=warren-test.local:8789,192.168.1.117:8789,[2001:db8::1]:8789",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("TXT %q missing %q", joined, expected)
@@ -96,7 +96,7 @@ func TestBuildAdvertisementChunksLargeCandidateLists(t *testing.T) {
 		}
 		got = append(got, strings.Split(parts[1], ",")...)
 	}
-	want := candidateAddresses(normalizeIPs(input), 8789)
+	want := candidateAddresses(advertisement.HostName, normalizeIPs(input), 8789)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("candidate TXT values = %v, want %v", got, want)
 	}
@@ -145,6 +145,39 @@ func TestBuildAdvertisementNormalizesDNSHostName(t *testing.T) {
 			}
 			if advertisement.HostName != test.want {
 				t.Fatalf("host name = %q, want %q", advertisement.HostName, test.want)
+			}
+		})
+	}
+}
+
+func TestBuildAdvertisementAdvertisesStableNameOnlyForLocalNames(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		dnsName    string
+		wantPrefix string
+	}{
+		{name: "local name", dnsName: "warren-test", wantPrefix: "cand=warren-test.local:8789,"},
+		{name: "public name", dnsName: "warren-test.example.com", wantPrefix: "cand=192.168.1.10:8789"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			advertisement, err := BuildAdvertisement(Config{
+				HostID:      "host",
+				HostName:    "Warren",
+				DNSHostName: test.dnsName,
+				Port:        8789,
+				Candidates:  []net.IP{net.ParseIP("192.168.1.10")},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var candidates string
+			for _, value := range advertisement.TXT {
+				if strings.HasPrefix(value, "cand=") {
+					candidates = value
+				}
+			}
+			if !strings.HasPrefix(candidates, test.wantPrefix) {
+				t.Fatalf("candidate TXT = %q, want prefix %q", candidates, test.wantPrefix)
 			}
 		})
 	}

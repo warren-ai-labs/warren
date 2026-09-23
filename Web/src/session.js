@@ -20,6 +20,9 @@ export const sessionPresets = [
   // Trae is currently only a launch preset for an interactive shell. It does
   // not have Warren transcript/activity/send integration yet.
   { kind: "trae", label: "Trae", title: "Trae", isAgent: false },
+  // A Warren Browser Session owns a Chromium rather than a PTY, so it has no
+  // command to override and no provider transcript.
+  { kind: "browser", label: "Browser", title: "Browser", isAgent: false },
 ];
 
 export const defaultSessionPresetOrder = sessionPresets.map(preset => preset.kind);

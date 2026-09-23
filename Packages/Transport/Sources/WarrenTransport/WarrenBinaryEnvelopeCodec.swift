@@ -110,7 +110,7 @@ extension WarrenWireCodec {
                 actual: payload.count
             )
         }
-        let payloadLimit = kind == .atomicState ? maxAtomicStatePayload : maxPayload
+        let payloadLimit = payloadLimit(for: kind)
         guard payload.count <= payloadLimit else {
             throw WarrenWireCodecError.payloadTooLarge(actual: payload.count, limit: payloadLimit)
         }
@@ -248,6 +248,77 @@ extension WarrenWireCodec {
             throw WarrenWireCodecError.invalidHeaderJSON
         }
         return WarrenDecodedAtomicStateFrame(header: header, payload: envelope.payload)
+    }
+
+    /// Encodes one Host-to-Client screencast frame for a Warren Browser Session.
+    public func encodeBrowserFrame(
+        header: BinaryBrowserFrameHeader,
+        payload: Data
+    ) throws -> [UInt8] {
+        try encodeEnvelope(
+            kind: .browserFrame,
+            header: header,
+            payload: Array(payload),
+            headerPayloadLength: header.payloadLength
+        )
+    }
+
+    public func decodeBrowserFrame(_ bytes: [UInt8]) throws -> WarrenDecodedBrowserFrame {
+        let envelope = try parseEnvelope(bytes)
+        guard envelope.direction == .hostToClient else {
+            throw WarrenWireCodecError.invalidDirection(
+                expected: .hostToClient,
+                received: envelope.direction
+            )
+        }
+        guard envelope.kind == .browserFrame else {
+            throw WarrenWireCodecError.kindDirectionMismatch(
+                kind: envelope.kind,
+                direction: envelope.direction
+            )
+        }
+        return try decodeBrowserFrameHeader(envelope)
+    }
+
+    func decodeBrowserFrameHeader(_ envelope: ParsedEnvelope) throws -> WarrenDecodedBrowserFrame {
+        let raw: RawBrowserFrameHeader
+        do {
+            raw = try JSONDecoder().decode(RawBrowserFrameHeader.self, from: Data(envelope.headerBytes))
+        } catch {
+            throw WarrenWireCodecError.invalidHeaderJSON
+        }
+        guard raw.payloadLength >= 0 else {
+            throw WarrenWireCodecError.negativePayloadLength
+        }
+        guard raw.payloadLength <= maxBrowserFramePayload else {
+            throw WarrenWireCodecError.payloadTooLarge(
+                actual: raw.payloadLength,
+                limit: maxBrowserFramePayload
+            )
+        }
+        guard raw.payloadLength == envelope.payloadLength else {
+            throw WarrenWireCodecError.payloadLengthMismatch(
+                expected: raw.payloadLength,
+                actual: envelope.payloadLength
+            )
+        }
+        guard let header = BinaryBrowserFrameHeader(
+            sessionID: raw.sessionID,
+            epoch: raw.epoch,
+            sequence: raw.sequence,
+            format: raw.format,
+            payloadLength: raw.payloadLength
+        ) else {
+            throw WarrenWireCodecError.invalidHeaderJSON
+        }
+        // The format is checked here and not at the client boundary, for the
+        // same reason the Go binding rejects it in DecodeBrowserFrame: the
+        // payload is handed to an image decoder, and that decoder must not be
+        // the component that discovers it was given the wrong encoding.
+        guard header.format == WarrenRemoteClient.browserFrameFormat else {
+            throw WarrenWireCodecError.unsupportedFrameFormat(header.format)
+        }
+        return WarrenDecodedBrowserFrame(header: header, payload: envelope.payload)
     }
 
 }

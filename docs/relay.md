@@ -121,9 +121,16 @@ Ordered by what actually fails, most common first:
    rotated invite, a revoked device family, or an expired capability all
    surface as an authentication failure; a fresh invite from
    `warren relay share` is the fix. Nothing needs to be restarted.
-4. **A pairing link is rejected as expired.** Links live for the configured
+4. **The Host went away mid-session.** The client is told immediately, not after
+   a reconnect: Relay writes a `host_offline` error onto the connection it is
+   already holding, naming the Host and when it was last seen, then closes the
+   socket cleanly. The banner reads `<name> is offline · last seen <time>`. If
+   that message does not appear and the client just hangs, the refusal is being
+   dropped before the close handshake finishes — the client reports an abnormal
+   1006 close and discards whatever was still buffered.
+5. **A pairing link is rejected as expired.** Links live for the configured
    sharing window (seven days by default). Generate a new one.
-5. **Wrong route is in use.** In the app open **Connection methods** and check
+6. **Wrong route is in use.** In the app open **Connection methods** and check
    which path is active, then switch or enable automatic LAN routing. A client
    pinned to `Relay only` will not fall back to LAN on its own.
 

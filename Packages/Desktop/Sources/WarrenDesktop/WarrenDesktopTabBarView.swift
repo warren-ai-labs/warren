@@ -914,6 +914,9 @@ struct WarrenDesktopSoloPaneIdentity: View {
                     )
                 }
             }
+            // The controls keep their own width so a squeezed row truncates the
+            // title instead of overlapping the buttons with it.
+            .fixedSize(horizontal: true, vertical: false)
             .opacity(showsControls ? 1 : 0)
             .allowsHitTesting(showsControls)
             .accessibilityHidden(!showsControls)
@@ -921,7 +924,13 @@ struct WarrenDesktopSoloPaneIdentity: View {
         .padding(.leading, WarrenSpacing.medium)
         .padding(.trailing, WarrenSpacing.compact)
         .frame(minHeight: WarrenLayoutMetrics.tabBarHeight)
-        .fixedSize(horizontal: true, vertical: false)
+        // The row is free, so this identity would happily take the whole width
+        // of a title it can grow to: a Session named after a long shell command
+        // made the row demand hundreds of points more than the window had, and
+        // the resulting overflow is centred on the window — which pushed the
+        // sidebar's leading edge off screen instead of clipping the title. The
+        // identity is the flexible part of the row; its title already
+        // truncates in the middle.
         .onHover { isHovered = $0 }
         .help(identity.fullTitle)
         .accessibilityElement(children: .contain)

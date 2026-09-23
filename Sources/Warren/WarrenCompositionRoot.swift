@@ -38,6 +38,9 @@ struct WarrenCompositionRoot: View {
     @StateObject private var remoteModel: WarrenRemoteApplicationModel
     @StateObject private var multiHostSidebar: WarrenMultiHostSidebarModel
     @StateObject private var embeddedEditorModel: WarrenEmbeddedEditorModel
+    /// The browser viewer's keyboard signal. Shared with the viewer cache,
+    /// which registers each region's web view with it (RFC 0022 §8.4).
+    @StateObject private var browserFocusModel = WarrenBrowserViewerFocusModel.shared
     @State private var surfaceManager: TerminalSurfaceManager
     @State private var isProjectImporterPresented = false
     @State private var supersetImportPreview: SupersetImportPreview?
@@ -302,6 +305,7 @@ struct WarrenCompositionRoot: View {
             },
             embeddedEditorAvailable: selectedEndpointCapabilities.canUseEmbeddedEditor,
             editorHasKeyboardFocus: embeddedEditorModel.hasKeyboardFocus,
+            browserHasKeyboardFocus: browserFocusModel.hasKeyboardFocus,
             editorSurface: { workspace in
                 AnyView(WarrenEmbeddedEditorSurface(
                     workspace: workspace,
@@ -329,6 +333,10 @@ struct WarrenCompositionRoot: View {
                 },
                 onBlurred: { sessionID in
                     remoteModel.blur(sessionID: sessionID)
+                },
+                browserSurface: { sessionID in
+                    guard selectedEndpointCapabilities.canUseEmbeddedBrowser else { return nil }
+                    return AnyView(WarrenBrowserSurface(sessionID: sessionID, model: remoteModel))
                 },
                 searchPresented: Binding(
                     get: {
@@ -490,6 +498,14 @@ struct WarrenCompositionRoot: View {
             // Mark the daemon's view of focus stale before reporting the
             // departure, so the click that brings the keyboard back is reported
             // rather than being read as already-current.
+            surfaceManager.noteTerminalFocusSurrendered()
+            remoteModel.relinquishTerminalFocus()
+        }
+        .onChange(of: browserFocusModel.hasKeyboardFocus) { hasFocus in
+            // The browser viewer is a second region that can take the keyboard
+            // away from the Terminal, so it reports the departure the same way
+            // the editor does.
+            guard hasFocus else { return }
             surfaceManager.noteTerminalFocusSurrendered()
             remoteModel.relinquishTerminalFocus()
         }
@@ -1566,6 +1582,9 @@ private struct WarrenTerminalSurfaceView: View {
     let isAttaching: Bool
     let onFocused: (TerminalSessionID, TerminalSize?) -> Void
     let onBlurred: (TerminalSessionID) -> Void
+    /// Builds the Host's viewer page for a browser Session, or `nil` when the
+    /// selected Host cannot run one.
+    let browserSurface: @MainActor (String) -> AnyView?
     @Binding var searchPresented: Bool
     @State private var searchQuery = ""
     @FocusState private var searchFieldFocused: Bool
@@ -1575,7 +1594,23 @@ private struct WarrenTerminalSurfaceView: View {
         context.tab.sessionID.flatMap(surfaceManager.surface(for:))
     }
 
+    /// A browser pane renders the Host's viewer page instead of a PTY.
+    ///
+    /// The browser is a Session like any other, so it is a pane like any other:
+    /// its Tab names it, the arrangement sizes it, and the viewer reports the
+    /// size the page should be. Nothing here is terminal-shaped, which is why
+    /// the pane is the whole of the integration (RFC 0022 §8.1).
     var body: some View {
+        if context.tab.kind == .browser,
+           let sessionID = context.tab.sessionID,
+           let viewer = browserSurface(sessionID.description) {
+            viewer
+        } else {
+            terminalBody
+        }
+    }
+
+    private var terminalBody: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         return ZStack {
             TerminalHostRepresentable(

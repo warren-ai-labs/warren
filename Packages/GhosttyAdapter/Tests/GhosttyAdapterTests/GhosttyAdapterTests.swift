@@ -2,6 +2,7 @@ import XCTest
 import WarrenDomain
 import AppKit
 import GhosttyKit
+import IOKit
 @testable import GhosttyTerminal
 @testable import GhosttyAdapter
 
@@ -262,6 +263,67 @@ final class GhosttyAdapterTests: XCTestCase {
         )
         XCTAssertEqual(released?.modifier, .control)
         XCTAssertEqual(released?.action.rawValue, GHOSTTY_ACTION_RELEASE.rawValue)
+    }
+
+    func testAppKitInputModifiersTrackSidedModifiers() {
+        // AppKit's named flags are aggregate, so the left/right distinction
+        // only exists in the device-dependent masks of `modifierFlags.rawValue`.
+        // Ghostty needs it for `macos-option-as-alt = left|right` and for
+        // `keyboard-remapping`, both of which match per side.
+        XCTAssertEqual(
+            TerminalInputModifiers(from: NSEvent.ModifierFlags([.control])),
+            [.ctrl]
+        )
+        XCTAssertEqual(
+            TerminalInputModifiers(from: appKitFlags([.control], device: NX_DEVICERCTLKEYMASK)),
+            [.ctrl, .ctrlRight]
+        )
+        XCTAssertEqual(
+            TerminalInputModifiers(from: appKitFlags([.shift], device: NX_DEVICERSHIFTKEYMASK)),
+            [.shift, .shiftRight]
+        )
+        XCTAssertEqual(
+            TerminalInputModifiers(from: appKitFlags([.option], device: NX_DEVICERALTKEYMASK)),
+            [.alt, .altRight]
+        )
+        XCTAssertEqual(
+            TerminalInputModifiers(from: appKitFlags([.command], device: NX_DEVICERCMDKEYMASK)),
+            [.super_, .superRight]
+        )
+
+        // The sided bits have to reach Ghostty's C enum, not stop at the
+        // Swift type: Ghostty strips sides when matching keybinds but honors
+        // them for remapping and option-as-alt.
+        let mods = TerminalInputModifiers(
+            from: appKitFlags([.command], device: NX_DEVICERCMDKEYMASK)
+        ).ghosttyMods
+        XCTAssertTrue(mods.rawValue & GHOSTTY_MODS_SUPER.rawValue != 0)
+        XCTAssertTrue(mods.rawValue & GHOSTTY_MODS_SUPER_RIGHT.rawValue != 0)
+        XCTAssertTrue(mods.rawValue & GHOSTTY_MODS_CTRL_RIGHT.rawValue == 0)
+    }
+
+    private func appKitFlags(
+        _ flags: NSEvent.ModifierFlags,
+        device: Int32
+    ) -> NSEvent.ModifierFlags {
+        NSEvent.ModifierFlags(rawValue: flags.rawValue | UInt(device))
+    }
+
+    func testAppKitTextInputDropsControlCommitForHardwareKeyEncoding() {
+        // AppKit commits Ctrl-key input as a raw C0 byte through insertText;
+        // Ghostty must encode those from the physical key instead of UTF-8.
+        XCTAssertNil(TerminalInputText.keyEncodingText("\u{03}"))
+        XCTAssertNil(TerminalInputText.keyEncodingText("\u{7F}"))
+        XCTAssertNil(TerminalInputText.keyEncodingText("\r"))
+
+        // A control byte followed by more text is not a pure control commit,
+        // so the whole string is still forwarded as UTF-8.
+        XCTAssertEqual(TerminalInputText.keyEncodingText("\u{03}c"), "\u{03}c")
+
+        // Ordinary committed text, including IME output, passes through.
+        XCTAssertEqual(TerminalInputText.keyEncodingText("c"), "c")
+        XCTAssertEqual(TerminalInputText.keyEncodingText("你好"), "你好")
+        XCTAssertEqual(TerminalInputText.keyEncodingText(""), "")
     }
 
     func testAppKitModifierStateReleasesRemappedKeyWhenDestinationRemainsHeld() {

@@ -375,6 +375,10 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
     case antigravity
     case trae
     case custom
+    /// A Warren-owned Chromium. It has no PTY and no provider, so it is neither
+    /// a shell template nor an Agent: the runtime renders a viewer instead of a
+    /// terminal surface.
+    case browser
 
     public var displayName: String {
         switch self {
@@ -387,6 +391,7 @@ public enum TerminalSessionKind: String, Codable, CaseIterable, Hashable, Sendab
         case .antigravity: "Antigravity"
         case .trae: "Trae Agent"
         case .custom: "Custom"
+        case .browser: "Browser"
         }
     }
 

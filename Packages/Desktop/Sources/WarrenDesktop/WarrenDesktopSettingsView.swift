@@ -1066,7 +1066,37 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
+    @ViewBuilder
     private func presetCommandRow(for preset: WarrenDesktopSessionPreset, tokens: WarrenColorTokens) -> some View {
+        // A browser preset has no command line, so it gets the reason why
+        // instead of an input field that would silently discard what is typed.
+        if preset.request.kind == .browser {
+            HStack(spacing: WarrenSpacing.standard) {
+                HStack(spacing: WarrenSpacing.compact) {
+                    WarrenDesktopPresetIcon(preset: preset)
+                        .frame(width: 16, height: 16)
+                    Text(preset.presetBarTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(tokens.foreground)
+                }
+                .frame(width: 150, alignment: .leading)
+
+                Text("No command: the Host launches Chromium itself.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(tokens.mutedForeground)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, WarrenSpacing.standard)
+            .padding(.vertical, 10)
+        } else {
+            commandBackedPresetCommandRow(for: preset, tokens: tokens)
+        }
+    }
+
+    private func commandBackedPresetCommandRow(
+        for preset: WarrenDesktopSessionPreset,
+        tokens: WarrenColorTokens
+    ) -> some View {
         let binding: Binding<String> = {
             switch preset.request.kind {
             case .shell: return $shellCommand
@@ -1078,6 +1108,7 @@ struct WarrenDesktopSettingsView: View {
             case .antigravity: return $antigravityCommand
             case .trae: return $traeCommand
             case .custom: return .constant("")
+            case .browser: return .constant("")
             }
         }()
         let placeholder: String = {
@@ -1091,6 +1122,7 @@ struct WarrenDesktopSettingsView: View {
             case .antigravity: return "agy"
             case .trae: return "trae-cli interactive"
             case .custom: return ""
+            case .browser: return ""
             }
         }()
 
@@ -1262,6 +1294,9 @@ struct WarrenDesktopSettingsView: View {
         case .trae:
             WarrenInputField("Trae", text: $traeCommand, placeholder: "trae-cli interactive")
         case .custom:
+            EmptyView()
+        case .browser:
+            // A browser preset has no command: the Host launches Chromium itself.
             EmptyView()
         }
     }

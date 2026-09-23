@@ -18,8 +18,12 @@ struct WarrenDesktopTerminalGroupRow: View {
     let group: WarrenDesktopTerminalGroup
     let isCollapsed: Bool
     let isSelected: Bool
+    var containsSelection: Bool = false
     let isInteractionDisabled: Bool
+    var showsSessionChildren: Bool = false
+    var rowHeight: CGFloat = WarrenLayoutMetrics.sidebarProjectRowHeight
     let onSelect: () -> Void
+    var onDoubleClick: (() -> Void)? = nil
     let onRename: () -> Void
     let onSetHome: () -> Void
     let onDelete: () -> Void
@@ -77,7 +81,10 @@ struct WarrenDesktopTerminalGroupRow: View {
 
     private var expandedRow: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        return Button(action: onSelect) {
+        return Button(action: {
+            guard !showsSessionChildren else { return }
+            onSelect()
+        }) {
             HStack(spacing: WarrenSpacing.compact) {
                 Image(systemName: "square.3.stack.3d")
                     .font(.system(size: 12, weight: .regular))
@@ -90,7 +97,11 @@ struct WarrenDesktopTerminalGroupRow: View {
 
                 Text(group.group.name.isEmpty ? "Terminal Group" : group.group.name)
                     .font(WarrenTypography.sidebarContainerRow)
-                    .foregroundStyle(tokens.projectText)
+                    .foregroundStyle(
+                        isSelected || containsSelection
+                            ? tokens.workspaceSelectedText
+                            : tokens.projectText
+                    )
                     .lineLimit(1)
                     .truncationMode(.middle)
 
@@ -101,7 +112,7 @@ struct WarrenDesktopTerminalGroupRow: View {
                     .opacity(isHovered || isFocused || forceHover ? 1 : 0)
                     .accessibilityHidden(true)
 
-                if let activity = group.activity {
+                if let activity = group.activity, !showsSessionChildren {
                     WarrenDesktopActivityIndicator(activity: activity)
                 }
 
@@ -109,35 +120,40 @@ struct WarrenDesktopTerminalGroupRow: View {
             }
             .padding(.leading, WarrenDesktopSidebarIndent.terminalGroup)
             .padding(.trailing, WarrenSpacing.compact)
-            .frame(minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight)
+            .frame(minHeight: rowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
         }
-        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, isFocused: isFocused))
+        .buttonStyle(WarrenInteractiveRowStyle(
+            isSelected: isSelected,
+            isFocused: isFocused,
+            showsHoverBackground: !showsSessionChildren
+        ))
         .disabled(isInteractionDisabled)
         .focused($isFocused)
         .foregroundStyle(tokens.projectText)
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            if !isInteractionDisabled { onDoubleClick?() }
+        })
         .accessibilityLabel("Terminal group \(group.group.name)")
-        .accessibilityValue(
-            "\(group.runningSessionCount) running terminal\(group.runningSessionCount == 1 ? "" : "s")"
-        )
+        .accessibilityValue(terminalGroupAccessibilityValue)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .warrenSemanticElement(
             id: "terminal-group.\(group.id.description)",
             role: .button,
             label: "Terminal group \(group.group.name)",
-            value: isSelected ? "Selected" : "Not selected",
+            value: terminalGroupSemanticValue,
             isEnabled: !isInteractionDisabled,
             isSelected: isSelected,
             action: onSelect
         )
-        .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight)
+        .frame(maxWidth: .infinity, minHeight: rowHeight)
         .background(tokens.interactionBackground(for: .resolve(
             disabled: isInteractionDisabled,
             pressed: false,
             selected: isSelected,
             focused: isFocused,
-            hovered: isHovered
+            hovered: showsSessionChildren ? false : isHovered
         )))
         .clipShape(.rect(cornerRadius: WarrenRadius.row))
         .contentShape(.rect)
@@ -147,6 +163,27 @@ struct WarrenDesktopTerminalGroupRow: View {
         }
         .padding(.horizontal, WarrenSpacing.compact)
         .accessibilityElement(children: .contain)
+    }
+
+    private var terminalGroupSemanticValue: String {
+        var values: [String] = []
+        if containsSelection {
+            values.append("Contains the selected session")
+        }
+        values.append(isSelected ? "Selected" : "Not selected")
+        return values.joined(separator: " · ")
+    }
+
+    private var terminalGroupAccessibilityValue: String {
+        var values: [String] = []
+        if containsSelection {
+            values.append("Contains the selected session")
+        }
+        values.append(
+            "\(group.runningSessionCount) running terminal\(group.runningSessionCount == 1 ? "" : "s")"
+        )
+        values.append(isSelected ? "Selected" : "Not selected")
+        return values.joined(separator: " · ")
     }
 
     @ViewBuilder
