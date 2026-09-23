@@ -120,6 +120,51 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.22.0",
+        dateISO: "2026-09-23",
+        date: "September 23, 2026",
+        title: "Warren adds a browser an Agent can drive.",
+        summary:
+          "A minor release that adds Warren Browser, a Host-owned Chromium Session an Agent drives, makes the browser an ordinary Desktop pane, and gives both clients one shared connection presentation; the JSON control protocol remains at 4.0.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add Warren Browser (RFC 0022): a browser Session owns a Chromium process instead of a PTY, and an Agent drives it through 21 actions over the new `browser-v1` capability, a `browser.*` RPC surface, an HTTP viewer page and frame stream, and a `warren browser` CLI. Frames carry their own `browserFrame` binary kind, and each Session keeps its own profile directory.",
+              "Make the browser an ordinary Desktop pane with a Browser preset in the command bar and a WKWebView viewer that reports its own viewport, and let a Session row be dragged out of the sidebar tree into a pane.",
+              "Keep a sent message on screen until the timeline owns it: both clients hold an `accepted` state between the Host's receipt and the provider's echo, matched through the new `agent-causation-v1` capability.",
+              "Persist the unsent message queue per endpoint and session on both clients, so a tab close or an app relaunch no longer discards messages, and grow the iOS composer for multi-line drafts.",
+              "Tell an established client why its Host went away, with the Host's name and last-seen time, and keep the LAN advertisement aligned with the Host's current addresses.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Report connection state through one presentation layer both clients share — live, settling, and interrupted with a 1.2s grace — so sub-second flaps no longer paint a red banner while an absent Host is still reported at once.",
+              "Prove liveness to the Host: iOS advertises and sends `app-heartbeat-v1` pings, and all three Relay hops count any inbound frame as liveness, not only pongs.",
+              "Run Agent turns through a per-session ordered dispatcher on the Headless reader, so a slow turn no longer delays the heartbeat while two turns for one session keep the CLI's arrival order.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Acknowledge every screencast frame, recover a page target that dies under a running Chromium, render the live view at the density the viewer reports, and follow CDP's scroll convention; the viewer also reconnects with a keepalive ping instead of stalling.",
+              "Resolve `CausedBy` as a late-bound annotation rather than part of event identity, and tighten the echo matcher so a longer message cannot claim a shorter pending one.",
+              "Decode a denied `AskUserQuestion` whose `toolUseResult` is a plain string, and derive sided modifier flags for remapped keyboards so AppKit control keys are encoded from hardware input.",
+              "Stop the iOS Agent view from rescanning the transcript for every row, let a long pane title truncate instead of pushing the sidebar off screen, and stop reserving the editor's width while the editor is closed.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0 and the Host state schema is unchanged; this release migrates no state.",
+              "Warren Browser requires a Chromium the Host can launch, and only a local endpoint can render the viewer, so a remote Host drops the Desktop preset.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.21.0",
         dateISO: "2026-09-20",
         date: "September 20, 2026",
@@ -1361,6 +1406,51 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.22.0",
+        dateISO: "2026-09-23",
+        date: "2026 年 9 月 23 日",
+        title: "Warren 新增可由 Agent 驱动的浏览器。",
+        summary:
+          "次版本：新增 Warren Browser——由 Host 持有、可被 Agent 驱动的 Chromium Session；浏览器成为普通的 Desktop pane；两个客户端共用一套连接展示状态。JSON 控制协议仍为 4.0。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "新增 Warren Browser（RFC 0022）：浏览器 Session 持有 Chromium 进程而非 PTY，Agent 通过 21 个 action 驱动它，对应新的 `browser-v1` capability、`browser.*` RPC、HTTP viewer 页面与帧流，以及 `warren browser` CLI。帧使用独立的 `browserFrame` 二进制类型，每个 Session 拥有自己的 profile 目录。",
+              "浏览器成为普通的 Desktop pane：命令栏新增 Browser preset，WKWebView viewer 自行上报 viewport；侧边栏树中的 Session 行也可拖入 pane。",
+              "已发送的消息在看到它出现在时间线之前不会消失：两个客户端在 Host 回执与 provider echo 之间维持 `accepted` 状态，通过新的 `agent-causation-v1` capability 匹配。",
+              "两个客户端按 endpoint 与 session 持久化未发送队列，关闭 tab 或重启 App 不再丢失消息；iOS 输入框可随多行草稿长高。",
+              "Host 离开时告知已连接的客户端，并带上 Host 名称与最后在线时间；LAN 广播随 Host 当前地址更新。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "两个客户端共用一套连接展示：live、settling、interrupted，宽限期 1.2 秒；亚秒级抖动不再立刻变红，Host 确实不在了仍会立即上报。",
+              "向 Host 证明活性：iOS 声明并发送 `app-heartbeat-v1` ping，Relay 三段链路都把所有入站帧计为活性，而不只看 pong。",
+              "Headless 读取端用按 session 排序的 dispatcher 执行 Agent 轮次：慢轮次不再阻塞心跳，而同一 session 的两轮仍保持 CLI 的到达顺序。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "确认每一个 screencast 帧以免流中断，在 Chromium 仍运行时恢复已死的 page target，按 viewer 上报的密度渲染实时画面，并使用 CDP 的滚动方向约定；viewer 也会用 keepalive ping 重连而不是停在启动提示上。",
+              "将 `CausedBy` 视为后绑定批注而非事件身份的一部分；echo 匹配也收紧，更长的消息不会认领更短的待发消息。",
+              "修复被拒绝的 `AskUserQuestion`（其 `toolUseResult` 为字符串）无法解码；为改键键盘推导左右修饰键，使 AppKit 控制键从硬件输入编码。",
+              "iOS Agent 视图不再为每一行重新扫描 transcript；过长的 pane 标题改为截断而不再把侧边栏挤出屏幕；编辑器关闭时不再预留其宽度。",
+            ],
+          },
+          {
+            title: "发布说明",
+            items: [
+              "JSON 控制协议仍为 4.0，Host state schema 未变；本版本不迁移状态。",
+              "Warren Browser 需要 Host 可启动的 Chromium，且只有本机 endpoint 能渲染 viewer，因此远端 Host 不会提供 Desktop preset。",
+              "本地打包使用现有 Apple Development 签名且未 notarize；归档仅适合内部或临时测试，不适合一般公开分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.21.0",
         dateISO: "2026-09-20",
