@@ -1389,6 +1389,51 @@ final class WarrenRemoteModelTests: XCTestCase {
             payload: Data("xyz".utf8)
         ))
     }
+
+    /// The Host refuses `kind = "browser"` on `session.create`, so a browser
+    /// preset must be created through `browser.session.create` — and without a
+    /// command, which that call does not take.
+    @MainActor
+    func testBrowserLaunchUsesTheBrowserCreateCall() {
+        let workspaceCall = WarrenRemoteApplicationModel.createSessionCall(
+            scope: ("workspace", "workspace-1"),
+            request: TerminalSessionLaunchRequest(kind: .browser)
+        )
+        XCTAssertEqual(workspaceCall.method, "browser.session.create")
+        XCTAssertEqual(workspaceCall.params, ["workspace": "workspace-1"])
+
+        let groupCall = WarrenRemoteApplicationModel.createSessionCall(
+            scope: ("group", "group-1"),
+            request: TerminalSessionLaunchRequest(kind: .browser, title: "Docs")
+        )
+        XCTAssertEqual(groupCall.method, "browser.session.create")
+        XCTAssertEqual(groupCall.params, ["group": "group-1", "title": "Docs"])
+    }
+
+    @MainActor
+    func testTerminalLaunchKeepsTheSessionCreateCall() {
+        let call = WarrenRemoteApplicationModel.createSessionCall(
+            scope: ("workspace", "workspace-1"),
+            request: .claude
+        )
+        XCTAssertEqual(call.method, "session.create")
+        XCTAssertEqual(call.params, [
+            "workspace": "workspace-1",
+            "kind": "claude",
+            "command": "claude",
+        ])
+
+        let shell = WarrenRemoteApplicationModel.createSessionCall(
+            scope: ("group", "group-1"),
+            request: .shell
+        )
+        XCTAssertEqual(shell.method, "session.create")
+        XCTAssertEqual(shell.params, [
+            "group": "group-1",
+            "kind": "shell",
+            "command": "",
+        ])
+    }
 }
 
 private actor SendProgress {

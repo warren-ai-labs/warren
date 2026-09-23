@@ -10,6 +10,14 @@ public struct WarrenDesktopEndpointCapabilities: Hashable, Sendable {
     public let canAddProject: Bool
     public let canImportSuperset: Bool
     public let canUseEmbeddedEditor: Bool
+    /// Whether the Host can run an embedded Chromium (RFC 0022).
+    ///
+    /// Local-only for the same reason the editor is: the browser runtime is a
+    /// process the Host launches with an isolated profile directory, so it
+    /// belongs to the machine that owns it rather than to whichever client is
+    /// watching. A remote Host with Chrome still reports false here, which keeps
+    /// the region from being offered where the user cannot reach the page.
+    public let canUseEmbeddedBrowser: Bool
     public let canOpenExternalIDE: Bool
     public let canCopyLocalWebURL: Bool
 
@@ -17,12 +25,14 @@ public struct WarrenDesktopEndpointCapabilities: Hashable, Sendable {
         canAddProject: Bool,
         canImportSuperset: Bool,
         canUseEmbeddedEditor: Bool,
+        canUseEmbeddedBrowser: Bool,
         canOpenExternalIDE: Bool,
         canCopyLocalWebURL: Bool
     ) {
         self.canAddProject = canAddProject
         self.canImportSuperset = canImportSuperset
         self.canUseEmbeddedEditor = canUseEmbeddedEditor
+        self.canUseEmbeddedBrowser = canUseEmbeddedBrowser
         self.canOpenExternalIDE = canOpenExternalIDE
         self.canCopyLocalWebURL = canCopyLocalWebURL
     }
@@ -32,6 +42,7 @@ public struct WarrenDesktopEndpointCapabilities: Hashable, Sendable {
         canAddProject: true,
         canImportSuperset: true,
         canUseEmbeddedEditor: true,
+        canUseEmbeddedBrowser: true,
         canOpenExternalIDE: true,
         canCopyLocalWebURL: true
     )
@@ -42,6 +53,7 @@ public struct WarrenDesktopEndpointCapabilities: Hashable, Sendable {
         canAddProject: false,
         canImportSuperset: false,
         canUseEmbeddedEditor: false,
+        canUseEmbeddedBrowser: false,
         canOpenExternalIDE: false,
         canCopyLocalWebURL: false
     )

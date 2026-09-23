@@ -270,26 +270,29 @@ func main() {
 	if portErr != nil {
 		fatal(fmt.Errorf("resolve listener port: %w", portErr))
 	}
-	var stopDiscovery func() error
-	if candidates, addressErr := discovery.LocalAddresses(); addressErr != nil {
-		logger.Warn("Warren LAN discovery disabled", "error", addressErr)
-	} else if candidates = discovery.FilterForListener(candidates, listener.Addr().String()); len(candidates) == 0 {
-		logger.Info("Warren LAN discovery disabled", "reason", "listener has no non-loopback candidates")
-	} else if shutdown, discoveryErr := discovery.Start(discovery.Config{
-		HostID:          state.Snapshot().Host.ID,
-		HostName:        state.Snapshot().Host.Name,
-		Protocol:        api.Version,
-		Build:           version,
-		Port:            listenerPortNumber,
-		Candidates:      candidates,
-		PairingOpen:     false,
-		PairingOpenFunc: httpHandler.PairingOpen,
-	}); discoveryErr != nil {
-		logger.Warn("Warren LAN discovery disabled", "error", discoveryErr)
-	} else {
-		stopDiscovery = shutdown
-		logger.Info("warren LAN discovery ready", "service", discovery.ServiceType, "port", listenerPort(listener), "candidates", len(candidates))
+	dnsHostName, hostNameErr := discovery.LocalDNSHostName()
+	if hostNameErr != nil {
+		logger.Warn("Warren LAN discovery host name unavailable", "error", hostNameErr)
 	}
+	// The advertisement is republished whenever the Host's reachable addresses
+	// change, so a client never keeps dialing an address that DHCP has already
+	// handed to another machine.
+	discoverySupervisor := discovery.NewSupervisor(discovery.SupervisorConfig{
+		Advertisement: discovery.Config{
+			HostID:          state.Snapshot().Host.ID,
+			HostName:        state.Snapshot().Host.Name,
+			DNSHostName:     dnsHostName,
+			Protocol:        api.Version,
+			Build:           version,
+			Port:            listenerPortNumber,
+			PairingOpen:     false,
+			PairingOpenFunc: httpHandler.PairingOpen,
+		},
+		ListenerAddress: listener.Addr().String(),
+		Logger:          logger,
+	})
+	discoverySupervisor.Refresh()
+	go discoverySupervisor.Run(serviceContext)
 	relaySupervisor := newRelaySupervisor(service, httpHandler, serviceContext, token, state.Snapshot().Host.Name, strings.TrimSpace(*relayURL), "", logger)
 	service.SetLiveActivityPublisher(func(ctx context.Context, snapshot server.LiveActivitySnapshot) error {
 		return relaySupervisor.PublishLiveActivity(ctx, snapshot)
@@ -352,9 +355,7 @@ func main() {
 	if lanHTTPServer != nil {
 		_ = lanHTTPServer.Close()
 	}
-	if stopDiscovery != nil {
-		_ = stopDiscovery()
-	}
+	discoverySupervisor.Stop()
 	relaySupervisor.Stop()
 	stopService()
 	service.Shutdown()

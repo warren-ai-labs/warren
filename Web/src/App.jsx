@@ -16,10 +16,15 @@ import {
   workspaceTabs,
 } from "./catalog.js";
 import {
+  ConnectionPresenter,
   WarrenConnection,
   appHeartbeatCapability,
   agentCapabilities,
+  agentCausationCapability,
   connectionErrorDetail,
+  connectionInterrupted,
+  connectionLive,
+  connectionSettling,
   hostOfflineDetail,
   hostWaitCopyDelayMs,
   rejectPendingRequests,
@@ -72,9 +77,13 @@ import {
   agentLaunchCommand,
   agentQueueKey,
   encodeAgentAttachmentChunk,
+  loadAgentQueue,
   mergeAgentEvents,
+  retireEchoedAgentMessages,
   projectAgentControlState,
   removeAgentDraft,
+  removeAgentQueue,
+  saveAgentQueue,
   validateAgentAttachment,
 } from "./agent.js";
 import {
@@ -247,6 +256,11 @@ export default function App() {
     loadAgentCompletionSoundEnabled()
   ));
   const [connectionStatus, setConnectionStatus] = useState({ message: "Connecting…", online: false });
+  // What the user is told, which is not the same as what the transport is
+  // doing: a sub-second flap stays invisible, a confirmed loss is named.
+  const [connectionPresentation, setConnectionPresentation] = useState(
+    { state: connectionSettling, detail: "" },
+  );
   const [feedback, setFeedback] = useState(null);
   const [pendingSessionID, setPendingSessionID] = useState(null);
   const [creatingSessionKind, setCreatingSessionKind] = useState(null);
@@ -568,6 +582,20 @@ export default function App() {
     }
   }, []);
 
+  // One presenter for the app's lifetime. It owns the grace period, so the
+  // render never has to reason about how long the transport has been down.
+  // The last status the user was actually shown, held so a settling stretch can
+  // keep displaying it.
+  const settledConnectionRef = useRef({ message: "Connecting…", online: false });
+  const presenterRef = useRef(null);
+  const presenter = useCallback(() => {
+    if (presenterRef.current === null) {
+      presenterRef.current = new ConnectionPresenter({ onChange: setConnectionPresentation });
+    }
+    return presenterRef.current;
+  }, []);
+  useEffect(() => () => presenterRef.current?.stop(), []);
+
   // An authenticated socket whose welcome has not arrived is usually Relay
   // holding this client while it waits for an absent Host. Say that instead of
   // showing "Authenticating…" for the whole wait.
@@ -575,11 +603,18 @@ export default function App() {
     clearHostWaitCopy();
     hostWaitCopyTimerRef.current = setTimeout(() => {
       hostWaitCopyTimerRef.current = null;
+      const message = waitingForHostMessage(hostNameRef.current);
       setConnectionStatus(previous => (previous.online
         ? previous
-        : { message: waitingForHostMessage(hostNameRef.current), online: false }));
+        : { message, online: false }));
+      // The presenter owns the banner's reason once the grace expires, so its
+      // copy has to move with this one. unsettled() only rewrites the detail
+      // while settling — an announced reason such as "unauthorized" is kept —
+      // and it does not re-arm the deadline, so the wait is still reported on
+      // the original schedule.
+      presenter().unsettled(message);
     }, hostWaitCopyDelayMs);
-  }, [clearHostWaitCopy]);
+  }, [clearHostWaitCopy, presenter]);
 
   const scheduleMaintenanceTimeout = useCallback(() => {
     clearMaintenanceTimeout();
@@ -1446,8 +1481,45 @@ export default function App() {
 
   const publishAgentQueue = useCallback((sessionID, queue) => {
     const items = queue.items.map(item => ({ ...item, attachments: [...(item.attachments || [])] }));
+    // Every queue mutation funnels through here, so persisting alongside the
+    // render keeps storage and the screen from drifting. A message the user
+    // typed must survive a reload: closing the tab is not a decision to
+    // discard work the Agent has not answered yet.
+    saveAgentQueue(localStorage, webSocketURL(), sessionID, queue);
     setAgentQueueBySession(previous => ({ ...previous, [sessionID]: items }));
   }, []);
+
+  // Brings a Session's pending messages back when it is opened after a reload.
+  // Draining immediately is safe: `queued` items were never sent, and anything
+  // whose outcome the reload destroyed came back as an indeterminate failure
+  // that waits for the user rather than resending itself.
+  useEffect(() => {
+    const sessionID = state.activeSession;
+    if (!sessionID) return;
+    const queueKey = agentQueueKey(webSocketURL(), sessionID);
+    if (agentQueueRef.current[queueKey]) return;
+    const queue = loadAgentQueue(localStorage, webSocketURL(), sessionID);
+    if (queue.items.length === 0) return;
+    agentQueueRef.current[queueKey] = queue;
+    publishAgentQueue(sessionID, queue);
+    drainAgentQueueRef.current?.(sessionID);
+  }, [state.activeSession, publishAgentQueue]);
+
+  // Retires local bubbles the Host has now echoed into the canonical timeline.
+  // Called wherever agent events land, so one message is represented by exactly
+  // one bubble whether it arrived live, from a replay, or from the local cache.
+  const reconcileAgentQueueWithEvents = useCallback((sessionID, events) => {
+    const queue = agentQueueRef.current[agentQueueKey(webSocketURL(), sessionID)];
+    if (!queue || queue.items.length === 0) return;
+    // Connection-level, not per-Session: the Host correlates on the shared
+    // provider observation path, so this must not be filtered through a
+    // Session's agentCapabilities projection.
+    const causationSupported = agentCapabilitiesRef.current.has(agentCausationCapability);
+    if (retireEchoedAgentMessages(queue, events, { causationSupported }).length > 0) {
+      publishAgentQueue(sessionID, queue);
+      drainAgentQueueRef.current?.(sessionID);
+    }
+  }, [publishAgentQueue]);
 
   // Interaction cards and Agent messages can be used while the Agent view is
   // passive. Await the Host's lease receipt before sending a mutation; an
@@ -1487,6 +1559,10 @@ export default function App() {
       if (!sent) finish(false);
     });
   }, [request]);
+
+  // Lets the echo reconciler, which runs on the event path, kick the queue
+  // without the two callbacks having to depend on each other.
+  const drainAgentQueueRef = useRef(null);
 
   const drainAgentQueue = useCallback(sessionID => {
     // A queue belongs to both its endpoint and Session. Only the focused
@@ -1543,7 +1619,10 @@ export default function App() {
         return;
       }
       agentMessageRequestRef.current.delete(queueKey);
-      queue.deliver(item.id);
+      // The receipt only means the text reached the provider. The item keeps
+      // its place until the provider echoes it into the timeline, so the
+      // bubble never disappears and comes back a second later over Relay.
+      queue.markAccepted(item.id);
       publishAgentQueue(sessionID, queue);
       drainAgentQueue(sessionID);
     };
@@ -1613,6 +1692,8 @@ export default function App() {
     }
   }, [agentStateBySession, publishAgentQueue, request]);
 
+  drainAgentQueueRef.current = drainAgentQueue;
+
   const queueAgentMessage = useCallback((sessionID, text, attachments = []) => {
     const queueKey = agentQueueKey(webSocketURL(), sessionID);
     const queue = agentQueueRef.current[queueKey] || new AgentMessageQueue();
@@ -1645,7 +1726,10 @@ export default function App() {
 
   const deleteAgentQueueItem = useCallback((sessionID, itemID) => {
     const queue = agentQueueRef.current[agentQueueKey(webSocketURL(), sessionID)];
-    if (!queue || !queue.remove(itemID)) return;
+    if (!queue) return;
+    // A queued or failed message is cancelled; an accepted one was already
+    // handed to the Agent, so the same control only clears an overdue row.
+    if (!queue.remove(itemID) && !queue.dismissAccepted(itemID)) return;
     publishAgentQueue(sessionID, queue);
   }, [publishAgentQueue]);
 
@@ -1678,6 +1762,16 @@ export default function App() {
       }
     }
   }, [agentStateBySession, drainAgentQueue]);
+
+  // Retire echoed bubbles from the projected transcript rather than from each
+  // arrival path. Events reach this state live, from history, from a replay,
+  // from gap recovery, and from the local cache; reconciling here covers all of
+  // them with one rule instead of five call sites that can drift.
+  useEffect(() => {
+    for (const [sessionID, state] of Object.entries(agentStateBySession)) {
+      if (state?.events?.length) reconcileAgentQueueWithEvents(sessionID, state.events);
+    }
+  }, [agentStateBySession, reconcileAgentQueueWithEvents]);
 
   useEffect(() => {
     // Focus is granted asynchronously after the composer/terminal request;
@@ -1799,7 +1893,9 @@ export default function App() {
           reject(new Error(detail));
           return;
         }
-        queue.deliver(item.id);
+        // Send now shares the ordinary lifecycle: the Host accepted it, and the
+        // provider's echo is what finally retires the local bubble.
+        queue.markAccepted(item.id);
         publishAgentQueue(sessionID, queue);
         resolve(result);
       };
@@ -2390,6 +2486,7 @@ export default function App() {
     }
 
     setConnectionStatus({ message: "Connected", online: true });
+    presenter().live();
     setEmptyOverride(null);
     if (gitNeedsReloadRef.current || fileDiffNeedsReloadRef.current) {
       gitNeedsReloadRef.current = false;
@@ -2421,7 +2518,7 @@ export default function App() {
     for (const sessionID of completedSessions) {
       agentCompletionEventsRef.current.emit({ sessionID });
     }
-  }, [applyRosterDelta, attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, recordNavigation, request, restoreGitUIForWorkspace]);
+  }, [applyRosterDelta, attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, presenter, recordNavigation, request, restoreGitUIForWorkspace]);
 
   const acceptMessage = useCallback(event => {
     if (event.data instanceof ArrayBuffer) {
@@ -2519,6 +2616,11 @@ export default function App() {
           ? message.capabilities.filter(value => typeof value === "string")
           : [],
       );
+      // Relay only sends a welcome once it holds an authorized Host tunnel, so
+      // the connection is usable here. Waiting for the roster would spend
+      // another round trip inside the grace period, which measured as the
+      // difference between a silent reconnect and a flash of the red banner.
+      presenter().live();
       break;
     case "response": {
       const handler = pendingRequestsRef.current.get(message.id);
@@ -2820,6 +2922,10 @@ export default function App() {
         }
         const detail = hostOfflineDetail(message) || connectionErrorDetail(message);
         setConnectionStatus({ message: detail, online: false });
+        // Relay waited ~15s for the Host before sending this, and an
+        // unauthorized socket will not fix itself either. Both are facts, not
+        // flaps, so they skip the grace period.
+        presenter().lost(detail);
         setEmptyOverride({ loading: false, message: detail });
         clearPendingSession();
         announceFeedback(detail || "Connection failed", "error");
@@ -2856,6 +2962,9 @@ export default function App() {
     case "maintenance":
       scheduleMaintenanceTimeout();
       setConnectionStatus({ message: message.message || "Updating Warren…", online: false });
+      // The Host announced this itself, so it is worth showing at once: the
+      // wait is real and the user should know why the screen stopped moving.
+      presenter().lost(message.message || "Updating Warren…");
       break;
     default:
       break;
@@ -2872,6 +2981,7 @@ export default function App() {
     fitTerminal,
     markAttachReady,
     markPresentationReady,
+    presenter,
     requestSessionFocus,
     scheduleMaintenanceTimeout,
   ]);
@@ -2897,11 +3007,16 @@ export default function App() {
       settingsLoadedRef.current = false;
       agentCapabilitiesRef.current = new Set();
       setConnectionStatus({ message: "Connecting…", online: false });
+      // Even the first attempt goes through the grace period, so a fast
+      // connect never flashes "Connecting…" on screen.
+      presenter().unsettled("Connecting…");
       clearPendingSession();
       return;
     }
     if (state === "open") {
       setConnectionStatus({ message: "Authenticating…", online: false });
+      // The socket is up but nothing is usable until the welcome lands.
+      presenter().unsettled("Authenticating…");
       scheduleHostWaitCopy();
       return;
     }
@@ -2930,7 +3045,15 @@ export default function App() {
     stagedRecoveryOutputRef.current = [];
     recoveryAnchorRef.current = null;
     setConnectionStatus({ message: "Reconnecting…", online: false });
-  }, [cancelSubscription, clearHostWaitCopy, clearMaintenanceTimeout, clearPendingSession, scheduleHostWaitCopy]);
+    presenter().unsettled("Reconnecting…");
+  }, [
+    cancelSubscription,
+    clearHostWaitCopy,
+    clearMaintenanceTimeout,
+    clearPendingSession,
+    presenter,
+    scheduleHostWaitCopy,
+  ]);
 
   messageHandlerRef.current = acceptMessage;
   connectionStateHandlerRef.current = acceptConnectionState;
@@ -3404,7 +3527,12 @@ export default function App() {
         token: runtime.token,
         clientID: runtime.clientID,
         getToken: () => runtime.token,
-        capabilities: ["roster-delta", appHeartbeatCapability, ...agentCapabilities],
+        capabilities: [
+          "roster-delta",
+          appHeartbeatCapability,
+          agentCausationCapability,
+          ...agentCapabilities,
+        ],
         onMessage: event => messageHandlerRef.current(event),
         onState: state => connectionStateHandlerRef.current(state),
       });
@@ -3767,6 +3895,7 @@ export default function App() {
         return next;
       });
       removeAgentDraft(localStorage, endpointIdentity, dialog.id);
+      removeAgentQueue(localStorage, endpointIdentity, dialog.id);
       // If the deleted session owns the visible terminal, clear it right away
       // instead of waiting for the next roster broadcast. The empty-state
       // overlay is opaque, but the xterm surface behind it must not keep the
@@ -4180,6 +4309,18 @@ export default function App() {
     }
   }, [agentConnectionGeneration, agentViewActive, selectedSession?.id]);
 
+  // While settling, the copy stays on the last thing the user was told. The
+  // dot breathes; the words do not change, because a word change reads as an
+  // event and a 900ms flap is not one.
+  const connectionView = useMemo(() => {
+    const settling = connectionPresentation.state === connectionSettling;
+    if (!settling) settledConnectionRef.current = connectionStatus;
+    return {
+      ...(settling ? settledConnectionRef.current : connectionStatus),
+      presentation: connectionPresentation.state,
+    };
+  }, [connectionPresentation, connectionStatus]);
+
   return (
     <>
       <TransientFeedback feedback={feedback} />
@@ -4191,7 +4332,7 @@ export default function App() {
           activeWorkspace={selectedWorkspaceID}
           expandedProjects={expandedProjects}
           tabsForWorkspace={workspaceID => workspaceTabs(catalog, workspaceID)}
-          connection={connectionStatus}
+          connection={connectionView}
           onToggleProject={toggleProject}
           onChooseWorkspace={chooseWorkspace}
           onOpenWorkspace={openWorkspace}
@@ -4215,7 +4356,7 @@ export default function App() {
               projectName={selectedWorkspace ? catalog.projectsByID.get(selectedWorkspace.project)?.name || "" : ""}
               tabs={tabs}
               activeSession={activeSession}
-              connection={connectionStatus}
+              connection={connectionView}
               agentSession={isAgentSession ? selectedSession : null}
               agentViewActive={agentViewActive}
               onAttachSession={attachSession}

@@ -16,6 +16,8 @@ enum WarrenDesktopWorkspaceGlyph: Equatable, Sendable {
     case mergedWorktree
     /// Any other worktree: a plain 5pt dot.
     case worktree
+    /// A standalone terminal group: stacked squares glyph.
+    case terminalGroup
 
     init(_ workspace: Workspace) {
         if workspace.branch == nil {
@@ -472,6 +474,11 @@ struct WarrenDesktopWorkspaceRow: View {
                     lineWidth: WarrenSpacing.hairline
                 )
                 .frame(width: 5, height: 5)
+                .accessibilityHidden(true)
+        case .terminalGroup:
+            Image(systemName: "square.3.stack.3d")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(isSelectionDisabled ? disabledColor : tokens.mutedForeground)
                 .accessibilityHidden(true)
         }
     }

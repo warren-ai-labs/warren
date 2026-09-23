@@ -110,6 +110,10 @@ type HTTPServer struct {
 	// pairing and requires an explicit Host-side action again.
 	pairingMu     sync.Mutex
 	pairingWindow *lanPairingWindow
+	// ordered runs per-session requests off the WebSocket reader without
+	// reordering them. Shared by the local and Relay control paths so a session
+	// keeps one ordering domain no matter which transport a client arrives on.
+	ordered *orderedDispatcher
 }
 
 type rosterMessage struct {
@@ -133,6 +137,7 @@ func NewHTTPServer(service *Service, token string, logger *slog.Logger) *HTTPSer
 		Logger:        logger,
 		peers:         make(map[*wsPeer]struct{}),
 		relayPeers:    make(map[relay.ConnectionID]*relayControlPeer),
+		ordered:       newOrderedDispatcher(),
 		upgrader: websocket.Upgrader{
 			EnableCompression: true,
 			ReadBufferSize:    256 * 1024,
@@ -258,6 +263,8 @@ func (s *HTTPServer) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /v1/state", s.handleState)
 	mux.HandleFunc("GET /v1/ws", s.handleWebSocket)
+	mux.HandleFunc("GET /v1/browser/view", s.handleBrowserView)
+	mux.HandleFunc("GET /v1/browser/stream", s.handleBrowserStream)
 	mux.HandleFunc("GET /v1/settings", s.handleSettings)
 	mux.HandleFunc("PUT /v1/settings", s.handleSettings)
 	mux.HandleFunc("POST /v1/pairing/enable", s.handlePairingEnable)
@@ -1220,6 +1227,18 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 			}(command, backgroundContext)
 			continue
 		}
+		if key := orderedRequestKey(command); key != "" {
+			requestContext := request.Context()
+			submitted := s.ordered.submit(key, func() {
+				if err := peer.handle(requestContext, command); err != nil {
+					_ = peer.writeError(command.ID, err)
+				}
+			})
+			if !submitted {
+				_ = peer.writeError(command.ID, errTooManyQueuedRequests)
+			}
+			continue
+		}
 		handleStartedAt := time.Now()
 		if err := peer.handle(request.Context(), command); err != nil {
 			_ = peer.writeError(command.ID, err)
@@ -1379,6 +1398,16 @@ func (s *HTTPServer) HandleRelayControl(
 		}(backgroundContext)
 		return nil
 	}
+	if key := orderedRequestKey(command); key != "" {
+		if !s.ordered.submit(key, func() {
+			if err := peer.handle(ctx, command); err != nil {
+				_ = peer.writeError(command.ID, err)
+			}
+		}) {
+			return peer.writeError(command.ID, errTooManyQueuedRequests)
+		}
+		return nil
+	}
 	return peer.handle(ctx, command)
 }
 
@@ -1408,6 +1437,35 @@ func isSlowMutation(method string) bool {
 	default:
 		return false
 	}
+}
+
+// orderedRequestKey names the ordering domain for a request that must run off
+// the WebSocket reader but stay in order relative to its siblings. An empty
+// string means the request is not eligible and runs inline as before.
+//
+// These are the requests that made a pong miss its deadline: a turn can sit
+// inside the provider for seconds, and on the reader it delays every command
+// behind it on the same connection. They cannot simply be backgrounded, because
+// a CLI consumes injected input in arrival order — two turns that raced would
+// reach the provider reversed.
+func orderedRequestKey(command api.Envelope) string {
+	switch command.Method {
+	case "agent.turn.start", "agent.turn.steer", "agent.turn.cancel":
+		// executionId identifies one Agent stream, and a stream belongs to
+		// exactly one session, so it is already a per-session domain. A request
+		// without one fails validation immediately and is cheap to run inline.
+		if id := stringParam(command.Params, "executionId"); id != "" {
+			return "execution:" + id
+		}
+	case "session.focus":
+		if id := stringParam(command.Params, "id"); id != "" {
+			return "session:" + id
+		}
+		if id := strings.TrimSpace(command.Session); id != "" {
+			return "session:" + id
+		}
+	}
+	return ""
 }
 
 func isBackgroundRequest(method string) bool {
@@ -2055,6 +2113,34 @@ func (p *wsPeer) writeBinary(data []byte) error {
 
 func (p *wsPeer) enqueueBinary(data []byte) bool {
 	return p.enqueue(outboundMessage{kind: websocket.BinaryMessage, data: data})
+}
+
+// enqueueDroppableBinary sends a message that is safe to drop when the peer
+// cannot keep up.
+//
+// The outbound queue treats overflow as a per-client failure and closes the
+// peer, which is right for terminal output — the client reconnects and replays
+// from its anchor — and wrong for a screencast frame. A viewer that paused, or a
+// machine that slept, would have its whole connection torn down, taking every
+// terminal subscription on the same socket with it, to deliver frames that carry
+// no state the next frame does not also carry.
+func (p *wsPeer) enqueueDroppableBinary(data []byte) bool {
+	p.enqueueMu.Lock()
+	defer p.enqueueMu.Unlock()
+	if p.closed == nil {
+		return false
+	}
+	select {
+	case <-p.closed:
+		return false
+	default:
+	}
+	select {
+	case p.outbound <- outboundMessage{kind: websocket.BinaryMessage, data: data}:
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *wsPeer) enqueueControlBinary(data []byte) bool {
@@ -2865,6 +2951,78 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, value)
+	case "browser.session.create":
+		headless, headlessErr := browserHeadlessFromParams(params)
+		if headlessErr != nil {
+			return headlessErr
+		}
+		var viewport api.BrowserViewport
+		if err := decodeParam(params, "viewport", &viewport); err != nil {
+			return err
+		}
+		session, err := p.server.Service.CreateBrowserSession(ctx, BrowserCreateOptions{
+			WorkspaceID:     stringParam(params, "workspace"),
+			TerminalGroupID: stringParam(params, "group"),
+			Title:           stringParam(params, "title"),
+			URL:             stringParam(params, "url"),
+			Headless:        headless,
+			Viewport:        viewport,
+		})
+		if err != nil {
+			return err
+		}
+		// The Chromium is already running at this point, so the create answer is
+		// the live projection rather than the durable record: a caller that
+		// asked for a URL needs to know the browser is on it.
+		projection, err := p.server.Service.BrowserSession(session.ID)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, projection)
+	case "browser.session.list":
+		return p.writeResult(command.ID, p.server.Service.BrowserSessions(
+			stringParam(params, "workspace"),
+			stringParam(params, "group"),
+		))
+	case "browser.session.get":
+		id := stringParam(params, "id")
+		if id == "" {
+			return p.writeCanonicalError(command.ID, errors.New("id is required"))
+		}
+		projection, err := p.server.Service.BrowserSession(id)
+		if err != nil {
+			return p.writeCanonicalError(command.ID, err)
+		}
+		return p.writeResult(command.ID, projection)
+	case "browser.session.close":
+		id := stringParam(params, "id")
+		if id == "" {
+			return p.writeCanonicalError(command.ID, errors.New("id is required"))
+		}
+		if err := p.server.Service.CloseBrowserSession(ctx, id); err != nil {
+			return p.writeCanonicalError(command.ID, err)
+		}
+		return p.writeResult(command.ID, map[string]bool{"closed": true})
+	case "browser.action":
+		id := stringParam(params, "id")
+		if id == "" {
+			return p.writeCanonicalError(command.ID, errors.New("id is required"))
+		}
+		var action api.BrowserAction
+		if err := decodeParam(params, "action", &action); err != nil {
+			return p.writeCanonicalError(command.ID, err)
+		}
+		result, err := p.server.Service.PerformBrowserAction(ctx, id, action)
+		if err != nil {
+			return p.writeCanonicalError(command.ID, err)
+		}
+		return p.writeResult(command.ID, result)
+	case "browser.subscribe":
+		id := stringParam(params, "id")
+		if id == "" {
+			return p.writeCanonicalError(command.ID, errors.New("id is required"))
+		}
+		return p.subscribeBrowser(command.ID, id)
 	case "session.create":
 		var value api.Session
 		var err error
@@ -3042,6 +3200,12 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		if session.Lifecycle != "running" {
 			return fmt.Errorf("session is not running: %s", id)
+		}
+		if session.Kind == sessionKindBrowser {
+			// A browser Session has no terminal to attach to. A client that
+			// subscribes to everything it displays reaches this branch, so it
+			// must succeed rather than fail on a browser it is also viewing.
+			return p.subscribeBrowser(command.ID, id)
 		}
 		anchor := anchorFromParams(params)
 		anchorLabel := "none"

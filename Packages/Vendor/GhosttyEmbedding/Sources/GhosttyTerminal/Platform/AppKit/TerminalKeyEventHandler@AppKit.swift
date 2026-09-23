@@ -76,7 +76,16 @@
                     translationModifiers: translationEvent.modifierFlags
                 )
                 for text in collected {
-                    text.withCString { ptr in
+                    // AppKit may commit Ctrl-key input through insertText as a
+                    // raw C0 byte. Do not pass that byte as UTF-8: Ghostty's
+                    // encoder needs the physical key and Control modifier to
+                    // produce the correct legacy or Kitty sequence.
+                    guard let encoded = TerminalInputText.keyEncodingText(text) else {
+                        input.text = nil
+                        surface.sendKeyEvent(input)
+                        continue
+                    }
+                    encoded.withCString { ptr in
                         input.text = ptr
                         surface.sendKeyEvent(input)
                     }

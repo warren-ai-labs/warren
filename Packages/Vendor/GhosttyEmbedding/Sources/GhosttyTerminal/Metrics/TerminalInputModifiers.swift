@@ -11,6 +11,7 @@ import GhosttyKit
     import UIKit
 #elseif canImport(AppKit)
     import AppKit
+    import IOKit
 #endif
 
 public struct TerminalInputModifiers: OptionSet, Sendable {
@@ -56,7 +57,25 @@ public struct TerminalInputModifiers: OptionSet, Sendable {
             if flags.contains(.command) { mods.insert(.super_) }
             if flags.contains(.capsLock) { mods.insert(.caps) }
             if flags.contains(.numericPad) { mods.insert(.num) }
+            mods.insert(Self.rightSides(from: flags.rawValue))
             self = mods
+        }
+
+        /// The sided modifiers hidden in `NSEvent.modifierFlags.rawValue`.
+        ///
+        /// AppKit's named flags are aggregate and carry no left/right
+        /// distinction, so Ghostty's `*_RIGHT` mod bits can only come from the
+        /// device-dependent masks in `IOKit/hidsystem/IOLLEvent.h`. Without
+        /// them, Ghostty's own side-aware features (`macos-option-as-alt` set
+        /// to `left` or `right`, and `keyboard-remapping`) cannot tell which
+        /// side a modifier was held on.
+        private static func rightSides(from rawValue: UInt) -> TerminalInputModifiers {
+            var mods = TerminalInputModifiers()
+            if rawValue & UInt(NX_DEVICERSHIFTKEYMASK) != 0 { mods.insert(.shiftRight) }
+            if rawValue & UInt(NX_DEVICERCTLKEYMASK) != 0 { mods.insert(.ctrlRight) }
+            if rawValue & UInt(NX_DEVICERALTKEYMASK) != 0 { mods.insert(.altRight) }
+            if rawValue & UInt(NX_DEVICERCMDKEYMASK) != 0 { mods.insert(.superRight) }
+            return mods
         }
     #endif
 }

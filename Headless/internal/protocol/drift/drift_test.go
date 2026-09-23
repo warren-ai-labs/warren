@@ -49,6 +49,9 @@ type schemaDoc struct {
 						AtomicState struct {
 							Const int `json:"const"`
 						} `json:"atomicState"`
+						BrowserFrame struct {
+							Const int `json:"const"`
+						} `json:"browserFrame"`
 					} `json:"properties"`
 				} `json:"kinds"`
 				Limits struct {
@@ -62,6 +65,9 @@ type schemaDoc struct {
 						MaxAtomicStatePayload struct {
 							Const int `json:"const"`
 						} `json:"maxAtomicStatePayload"`
+						MaxBrowserFramePayload struct {
+							Const int `json:"const"`
+						} `json:"maxBrowserFramePayload"`
 					} `json:"properties"`
 				} `json:"limits"`
 				Layout struct {
@@ -203,10 +209,12 @@ func TestProtocolBindings(t *testing.T) {
 		mustIntEqual(t, path, contents, `DirectionHostToClient uint8 = (\d+)`, be.Directions.Properties.HostToClient.Const)
 		mustIntEqual(t, path, contents, `KindInput\s+uint8 = (\d+)`, be.Kinds.Properties.Input.Const)
 		mustIntEqual(t, path, contents, `KindOutput\s+uint8 = (\d+)`, be.Kinds.Properties.Output.Const)
-		mustIntEqual(t, path, contents, `KindAtomicState uint8 = (\d+)`, be.Kinds.Properties.AtomicState.Const)
+		mustIntEqual(t, path, contents, `KindAtomicState\s+uint8 = (\d+)`, be.Kinds.Properties.AtomicState.Const)
+		mustIntEqual(t, path, contents, `KindBrowserFrame\s+uint8 = (\d+)`, be.Kinds.Properties.BrowserFrame.Const)
 		mustIntEqual(t, path, contents, `MaxHeader\s+= (\d+)`, be.Limits.Properties.MaxHeader.Const)
 		mustIntEqual(t, path, contents, `MaxPayload\s+= (\d+)`, be.Limits.Properties.MaxPayload.Const)
-		mustIntEqual(t, path, contents, `MaxAtomicStatePayload = (\d+)`, be.Limits.Properties.MaxAtomicStatePayload.Const)
+		mustIntEqual(t, path, contents, `MaxAtomicStatePayload\s+= (\d+)`, be.Limits.Properties.MaxAtomicStatePayload.Const)
+		mustIntEqual(t, path, contents, `MaxBrowserFramePayload\s+= (\d+)`, be.Limits.Properties.MaxBrowserFramePayload.Const)
 		mustIntEqual(t, path, contents, `BinaryPrefixLength = (\d+)`, be.Layout.Properties.PrefixLength.Const)
 		if !strings.Contains(contents, fmt.Sprintf("LogicalVersion = %q", s.Properties.LogicalVersion.Const)) {
 			t.Errorf("LogicalVersion literal not found")
@@ -229,16 +237,18 @@ func TestProtocolBindings(t *testing.T) {
 		path := filepath.Join(root, "Headless/internal/output/wire.go")
 		contents := mustRead(t, path)
 		aliases := map[string]string{
-			"BinaryMagic":              "protocol.BinaryMagic",
-			"Version":                  "protocol.BinaryWireVersion",
-			"DirectionClientToHost":    "protocol.DirectionClientToHost",
-			"DirectionHostToClient":    "protocol.DirectionHostToClient",
-			"KindInput":                "protocol.KindInput",
-			"KindOutput":               "protocol.KindOutput",
-			"KindAtomicState":          "protocol.KindAtomicState",
-			"MaxHeader":                "protocol.MaxHeader",
-			"MaxPayload":               "protocol.MaxPayload",
-			"MaxAtomicStatePayload":    "protocol.MaxAtomicStatePayload",
+			"BinaryMagic":            "protocol.BinaryMagic",
+			"Version":                "protocol.BinaryWireVersion",
+			"DirectionClientToHost":  "protocol.DirectionClientToHost",
+			"DirectionHostToClient":  "protocol.DirectionHostToClient",
+			"KindInput":              "protocol.KindInput",
+			"KindOutput":             "protocol.KindOutput",
+			"KindAtomicState":        "protocol.KindAtomicState",
+			"KindBrowserFrame":       "protocol.KindBrowserFrame",
+			"MaxHeader":              "protocol.MaxHeader",
+			"MaxPayload":             "protocol.MaxPayload",
+			"MaxAtomicStatePayload":  "protocol.MaxAtomicStatePayload",
+			"MaxBrowserFramePayload": "protocol.MaxBrowserFramePayload",
 		}
 		for name, target := range aliases {
 			pattern := `\b` + name + `\b\s*=\s*` + regexp.QuoteMeta(target)
@@ -270,6 +280,7 @@ func TestProtocolBindings(t *testing.T) {
 		mustIntEqual(t, path, contents, `case\s+input\s*=\s*(\d+)`, be.Kinds.Properties.Input.Const)
 		mustIntEqual(t, path, contents, `case\s+output\s*=\s*(\d+)`, be.Kinds.Properties.Output.Const)
 		mustIntEqual(t, path, contents, `case\s+atomicState\s*=\s*(\d+)`, be.Kinds.Properties.AtomicState.Const)
+		mustIntEqual(t, path, contents, `case\s+browserFrame\s*=\s*(\d+)`, be.Kinds.Properties.BrowserFrame.Const)
 	})
 
 	t.Run("ts_wire_matches_schema", func(t *testing.T) {
@@ -286,9 +297,11 @@ func TestProtocolBindings(t *testing.T) {
 		mustIntEqual(t, path, contents, `KIND_INPUT\s*=\s*(\d+)`, be.Kinds.Properties.Input.Const)
 		mustIntEqual(t, path, contents, `KIND_OUTPUT\s*=\s*(\d+)`, be.Kinds.Properties.Output.Const)
 		mustIntEqual(t, path, contents, `KIND_ATOMIC_STATE\s*=\s*(\d+)`, be.Kinds.Properties.AtomicState.Const)
+		mustIntEqual(t, path, contents, `KIND_BROWSER_FRAME\s*=\s*(\d+)`, be.Kinds.Properties.BrowserFrame.Const)
 		mustIntEqual(t, path, contents, `MAX_HEADER\s*=\s*(\d+)\s*\*\s*1024`, be.Limits.Properties.MaxHeader.Const/1024)
 		mustIntEqual(t, path, contents, `MAX_PAYLOAD\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024`, be.Limits.Properties.MaxPayload.Const/(1024*1024))
 		mustIntEqual(t, path, contents, `MAX_ATOMIC_STATE_PAYLOAD\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024`, be.Limits.Properties.MaxAtomicStatePayload.Const/(1024*1024))
+		mustIntEqual(t, path, contents, `MAX_BROWSER_FRAME_PAYLOAD\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024`, be.Limits.Properties.MaxBrowserFramePayload.Const/(1024*1024))
 		mustIntEqual(t, path, contents, `PREFIX_LENGTH\s*=\s*(\d+)`, be.Layout.Properties.PrefixLength.Const)
 	})
 

@@ -36,6 +36,80 @@ final class WarrenProtocolTests: XCTestCase {
         XCTAssertEqual(header.payloadLength, 5)
     }
 
+    /// A browser Session has no PTY, so its screencast still needs its own kind
+    /// to stay out of a VT output parser (RFC 0022 §7.3).
+    func testBrowserFrameKindIsFourAndHostToClientOnly() {
+        XCTAssertEqual(BinaryFrameKind.browserFrame.rawValue, 4)
+        XCTAssertEqual(BinaryFrameKind.browserFrame.direction, .hostToClient)
+        XCTAssertEqual(BinaryFrameKind(rawValue: 4), .browserFrame)
+        XCTAssertNil(BinaryFrameKind(rawValue: 5))
+
+        let kinds: [BinaryFrameKind] = [.input, .output, .atomicState, .browserFrame]
+        XCTAssertEqual(Set(kinds).count, 4)
+        XCTAssertEqual(kinds.map(\.rawValue), [1, 2, 3, 4])
+        XCTAssertEqual(kinds.map(\.direction), [
+            .clientToHost,
+            .hostToClient,
+            .hostToClient,
+            .hostToClient,
+        ])
+    }
+
+    func testBinaryBrowserFrameHeaderRoundTripsThroughJSON() throws {
+        let header = try XCTUnwrap(
+            BinaryBrowserFrameHeader(
+                sessionID: sessionID,
+                epoch: 4,
+                sequence: 91,
+                format: "browser-frame-jpeg-v1",
+                payloadLength: 5
+            )
+        )
+        let decoded = try JSONDecoder().decode(
+            BinaryBrowserFrameHeader.self,
+            from: JSONEncoder().encode(header)
+        )
+        XCTAssertEqual(header, decoded)
+        XCTAssertEqual(decoded.format, "browser-frame-jpeg-v1")
+        XCTAssertEqual(decoded.payloadLength, 5)
+    }
+
+    func testBinaryBrowserFrameHeaderRejectsAnEmptyFormatOrNegativeLength() throws {
+        XCTAssertNil(BinaryBrowserFrameHeader(
+            sessionID: sessionID,
+            epoch: 1,
+            sequence: 2,
+            format: "",
+            payloadLength: 1
+        ))
+        XCTAssertNil(BinaryBrowserFrameHeader(
+            sessionID: sessionID,
+            epoch: 1,
+            sequence: 2,
+            format: "browser-frame-jpeg-v1",
+            payloadLength: -1
+        ))
+
+        let emptyFormatJSON = """
+        {"sessionID":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","epoch":1,"sequence":2,"format":"","payloadLength":1}
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                BinaryBrowserFrameHeader.self,
+                from: Data(emptyFormatJSON.utf8)
+            )
+        )
+        let negativeLengthJSON = """
+        {"sessionID":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","epoch":1,"sequence":2,"format":"browser-frame-jpeg-v1","payloadLength":-1}
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                BinaryBrowserFrameHeader.self,
+                from: Data(negativeLengthJSON.utf8)
+            )
+        )
+    }
+
     func testProtocolVersionRequiresAnExactCleanBreakMatch() {
         let current = ProtocolVersion.current
         XCTAssertTrue(current.canDecode(current))

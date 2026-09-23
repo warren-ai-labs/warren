@@ -84,6 +84,31 @@ restart reconnects the single Relay connector and retries the route. Reset
 disables the route and clears local route metadata without deleting Host
 enrollment.
 
+## Reporting a lost Host
+
+A client that had a working connection is owed the reason it stopped, and owed
+it immediately. Relay knows why: it holds the Host tunnel, so it observes the
+loss first.
+
+When a Host tunnel dies, Relay writes `host_offline` onto every client route it
+is about to tear down, then completes the WebSocket close handshake. The payload
+is the same one a fresh connection would be refused with — a stable `code`, the
+Host's name, and `last_seen_at` — so the client can say "Mac is offline · last
+seen just now" rather than showing a spinner.
+
+The close handshake is part of the contract, not an implementation detail. A
+peer that has not finished echoing the close reports an abnormal 1006 closure
+and discards whatever was still buffered, which loses the payload that was just
+written. Every refusal and every teardown that carries a reason therefore sends
+a close frame and drains until the peer answers.
+
+Clients apply this through one presentation rule, shared by Web and native: a
+transport that is merely retrying stays silent for a short grace period, while a
+reason Relay announced is reported at once and outranks a later generic retry
+notice. The Relay wait for an absent Host (`awaitAuthorizedTunnel`) is bounded
+below a client's own welcome deadline so the courtesy wait can never become the
+stall it exists to prevent.
+
 ## Client-facing commands
 
 Warren exposes only the operations a Host operator needs:
@@ -116,6 +141,8 @@ and token are created and cleaned up per process.
 
 - Protocol versions and stream classes are validated at both Relay and Host.
 - Host generations fence revoked capabilities and close active streams.
+- A refusal or teardown reason is delivered before the socket goes away, with the
+  close handshake completed so the payload survives it.
 - Redirects are disabled for enrollment and route requests.
 - Query strings, fragments, and userinfo are rejected from Relay origins.
 - Relay never stores terminal output, user input, or a Host Secret.

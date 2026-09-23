@@ -381,7 +381,10 @@ func tuiSupportsAgentInteractions(kind string) bool {
 // provider writes its binding file.
 func agentProviderForKind(kind string) string {
 	family, _ := splitAgentKey(kind)
-	if family == "shell" || family == "custom" {
+	if family == "shell" || family == "custom" || family == sessionKindBrowser {
+		// A browser is a Session with no provider. Reporting one would make
+		// clients render it as an agent and offer agent controls that have
+		// nothing to drive.
 		return ""
 	}
 	return family

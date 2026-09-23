@@ -128,6 +128,38 @@ A client preference containing placeholders for Warren Terminal Session and
 runtime metadata. Warren clients share its placeholder language, while each
 client may keep its own preferred value.
 
+**Warren Browser Session**:
+A Warren Terminal Session whose runtime is a Chromium the Host launched rather
+than a Ghostline PTY. It has the same durable lifecycle, Tab, and pane
+arrangement as any other Session, and is created with `browser.session.create`
+rather than `session.create`, because the terminal creation path would record a
+Session that can never start. Its output is screencast frames, never PTY bytes.
+_Avoid_: Browser Tab, browser window, Chrome Session
+
+**Warren Browser**:
+The Host-owned embedded Chromium runtime behind a Warren Browser Session,
+together with the closed action vocabulary both the viewer page and an agent use
+to drive it. The viewer page and the agent send the same normalized actions over
+the same stream, so there is one input path, not two.
+_Avoid_: browser-use, browser component
+
+**Browser Viewer**:
+The page the Host serves that renders one Warren Browser Session. It owns the
+canvas, the stream WebSocket, and the input forwarding; the client hosts it in a
+web view and owns nothing else. It is a surface, not a resource.
+_Avoid_: browser pane, browser region
+
+**Browser Frame**:
+One JPEG screencast frame for a Warren Browser Session, carried on the DENB
+envelope under its own kind. It is a distinct kind for the same reason
+`atomicState` is one: these bytes must never reach a VT output parser, and a
+browser Session has no PTY at all.
+
+**Browser Action**:
+A normalized instruction in a closed vocabulary — `navigate`, `click`, `type`,
+`wait`, `snapshot`, `screenshot`, `evaluate` — sent to one Warren Browser
+Session. An unknown action is a protocol error, not a passthrough.
+
 **Warren Host**:
 A running Warren Headless authority that owns Projects, Workspaces, Terminal
 Sessions, and the Web interface through which those resources are accessed.

@@ -90,6 +90,10 @@ func (s *Service) AgentViewCapabilities() []string {
 		api.CapabilityAppHeartbeat,
 		api.CapabilityRosterDelta,
 		api.CapabilityPaneGroups,
+		// Correlation happens on the provider observation path, which every
+		// agent-backed Session shares, so this is a Host-wide guarantee rather
+		// than a per-Session capability.
+		api.CapabilityAgentCausation,
 	}
 	if s == nil {
 		return capabilities
@@ -998,6 +1002,10 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 		s.finishAgentAction(actionKey, call, nil, api.ErrAgentBusy)
 		return api.AgentMessageSendResult{}, api.ErrAgentBusy
 	}
+	// injectedText is what the provider will echo into its transcript, which is
+	// not always request.Text: the legacy path rewrites the body for
+	// attachments. Correlation matches against this value, not the client's.
+	injectedText := request.Text
 	if handle := s.currentAgentHandle(request.Session); handle != nil {
 		if err := handle.SendMessage(ctx, request); err != nil {
 			s.finishAgentAction(actionKey, call, nil, err)
@@ -1034,7 +1042,11 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 			s.finishAgentAction(actionKey, call, nil, err)
 			return api.AgentMessageSendResult{}, err
 		}
+		injectedText = text
 	}
+	// Registered only after the provider accepted the injection, so a failed
+	// send cannot claim a later message's transcript echo.
+	s.recordAgentMessageCorrelation(request.Session, request.ClientMessageID, injectedText)
 	result := api.AgentMessageSendResult{Accepted: true, Session: request.Session, ClientMessageID: request.ClientMessageID}
 	s.agentViewMu.Lock()
 	s.agentMessageResults[cacheKey] = result

@@ -95,6 +95,8 @@ struct WarrenDesktopSidebar: View {
     let editorActivity: WarrenDesktopEditorActivityOverlay
     /// Reveals a marked Workspace's editor from its sidebar row.
     var onOpenEditor: (WorkspaceID) -> Void = { _ in }
+    /// Drops a Session from the tree onto a pane.
+    var onSplitDropSession: ((String, String, SplitDropTarget) -> Void)? = nil
 
     /// The current Host's marked Workspaces, for the current-Host tree.
     private var editorMarkedWorkspaceIDs: Set<WorkspaceID> {
@@ -185,7 +187,8 @@ struct WarrenDesktopSidebar: View {
                                     onAction: onAction,
                                     onRequestRename: onRequestRename,
                                     onRequestDeletion: onRequestDeletion,
-                                    onOpenEditor: onOpenEditor
+                                    onOpenEditor: onOpenEditor,
+                                    onSplitDropSession: onSplitDropSession
                                 )
                                 WarrenDesktopSidebarHostRows(
                                     hosts: sidebarHostProjections.map {
@@ -218,7 +221,8 @@ struct WarrenDesktopSidebar: View {
                                         }
                                     },
                                     onToggleActiveOnly: toggleActiveOnly,
-                                    onRetry: onRetrySidebarHost
+                                    onRetry: onRetrySidebarHost,
+                                    onSplitDropSession: onSplitDropSession
                                 )
                             }
                         } else {
@@ -268,7 +272,8 @@ struct WarrenDesktopSidebar: View {
                             onAction: onAction,
                             onRequestRename: onRequestRename,
                             onRequestDeletion: onRequestDeletion,
-                            onOpenEditor: onOpenEditor
+                            onOpenEditor: onOpenEditor,
+                            onSplitDropSession: onSplitDropSession
                             )
                         }
                     }

@@ -206,3 +206,60 @@ func TestCanonicalCommandJournalReconcilesStalePendingAsUnknown(t *testing.T) {
 		t.Fatalf("unknown replay error = %q", replay.Error)
 	}
 }
+
+func TestCanonicalAgentEventStoreTreatsCausationAsLateBound(t *testing.T) {
+	s, err := OpenAgentEventStore(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	base := api.CanonicalAgentEvent{
+		EventID: "evt-user", Type: "message.created", Origin: api.AgentEventOrigin{Kind: "provider", Confidence: "native"},
+		Payload: map[string]any{"role": "user", "content": "run the tests"}, OccurredAt: time.Now().UTC(),
+	}
+
+	// Correlated on first observation.
+	attributed := base
+	attributed.CausedBy = "cmd-1"
+	assigned, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{attributed})
+	if err != nil || len(assigned) != 1 || assigned[0].CausedBy != "cmd-1" {
+		t.Fatalf("attributed append = %#v, err=%v", assigned, err)
+	}
+
+	// A transcript re-parse after a restart has no correlation left in memory.
+	// It must replay idempotently and must not clear the stored annotation.
+	replay, err := s.AppendCanonicalEvents(ctx, "exec-1", "exec-1", []api.CanonicalAgentEvent{base})
+	if err != nil {
+		t.Fatalf("unattributed replay err = %v, want nil", err)
+	}
+	if len(replay) != 1 || replay[0].CausedBy != "cmd-1" || replay[0].Sequence != 1 {
+		t.Fatalf("unattributed replay = %#v, want causedBy cmd-1 at sequence 1", replay)
+	}
+
+	// The reverse order also converges: a row stored without causation accepts
+	// a later attribution, at the same sequence.
+	plain := base
+	plain.EventID = "evt-user-2"
+	if _, err := s.AppendCanonicalEvents(ctx, "exec-2", "exec-2", []api.CanonicalAgentEvent{plain}); err != nil {
+		t.Fatal(err)
+	}
+	late := plain
+	late.CausedBy = "cmd-2"
+	annotated, err := s.AppendCanonicalEvents(ctx, "exec-2", "exec-2", []api.CanonicalAgentEvent{late})
+	if err != nil || len(annotated) != 1 || annotated[0].CausedBy != "cmd-2" || annotated[0].Sequence != 1 {
+		t.Fatalf("late annotation = %#v, err=%v", annotated, err)
+	}
+	// The annotation is durable, not just returned.
+	page, err := s.QueryCanonicalEvents(ctx, "exec-2", 0, 0, 10)
+	if err != nil || len(page.Events) != 1 || page.Events[0].CausedBy != "cmd-2" {
+		t.Fatalf("persisted annotation = %#v, err=%v", page.Events, err)
+	}
+
+	// Two different non-empty values remain a real conflict.
+	rival := late
+	rival.CausedBy = "cmd-other"
+	if _, err := s.AppendCanonicalEvents(ctx, "exec-2", "exec-2", []api.CanonicalAgentEvent{rival}); !errors.Is(err, ErrCanonicalEventConflict) {
+		t.Fatalf("rival causation = %v, want ErrCanonicalEventConflict", err)
+	}
+}

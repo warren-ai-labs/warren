@@ -10,6 +10,9 @@ export const agentCapabilities = [
   "agent-goals-v1",
 ];
 export const appHeartbeatCapability = "app-heartbeat-v1";
+// Host-wide, not per-Session: a user message echoed by the provider carries the
+// commandId that sent it, which is how a local bubble knows it has landed.
+export const agentCausationCapability = "agent-causation-v1";
 
 export function reconnectDelay(attempt, random = Math.random) {
   const base = Math.min(30_000, 500 * (2 ** attempt));
@@ -56,7 +59,13 @@ export function relativeTimeLabel(milliseconds) {
 // admits what it is actually doing. Relay holds a client socket while it waits
 // for an absent Host, so past this point the delay is the Host being away, not
 // authentication being slow.
-export const hostWaitCopyDelayMs = 3_000;
+//
+// It has to land *inside* the settle grace, and earlier than the reconnect that
+// preceded it: the grace is already counting down from the socket that died, so
+// a copy that arrives after it promotes would only ever be seen as
+// "interrupted · Authenticating…". Measured against a real Relay, a Host that
+// died mid-session showed exactly that for 13s before the real reason arrived.
+export const hostWaitCopyDelayMs = 1_000;
 
 export function waitingForHostMessage(hostName) {
   const name = typeof hostName === "string" && hostName.trim() ? hostName.trim() : "";
@@ -74,6 +83,105 @@ export function hostOfflineDetail(message, now = Date.now()) {
   const lastSeen = Date.parse(message.last_seen_at ?? "");
   if (!Number.isFinite(lastSeen)) return `${name} is offline`;
   return `${name} is offline · last seen ${relativeTimeLabel(now - lastSeen)}`;
+}
+
+// What the user is told about the connection, as opposed to what the transport
+// is doing. The transport flaps on every sub-second hiccup; a banner that flaps
+// with it trains the user to distrust it.
+export const connectionLive = "live";
+// Retrying, but not yet worth mentioning: the dot breathes, copy and content
+// stay as they were.
+export const connectionSettling = "settling";
+// Confirmed loss: show the reason.
+export const connectionInterrupted = "interrupted";
+
+// How long the transport may be unusable before the user hears about it. It has
+// to outlast a *successful* reconnect, or the banner flashes for the last
+// moments of a recovery that was already working. Measured against a local Relay
+// behind a 160ms RTT link with jitter, a full socket replacement (backoff, TCP,
+// WS upgrade, auth, welcome) took 0.85s–1.28s, so a 1.2s budget flashed on half
+// the attempts. 3s covers that with room for a slower mobile link and still
+// reports a real outage promptly.
+// Mirrors `warrenConnectionSettleGrace` in WarrenTransport.
+export const connectionSettleGraceMs = 3_000;
+
+// Maps transport events onto the three presentation states: degrade slowly,
+// recover instantly. Owns one timer; the caller is told only when the state
+// actually changes.
+export class ConnectionPresenter {
+  constructor({
+    onChange = () => {},
+    setTimer = setTimeout,
+    clearTimer = clearTimeout,
+    graceMs = connectionSettleGraceMs,
+  } = {}) {
+    this.onChange = onChange;
+    this.setTimer = (...args) => setTimer(...args);
+    this.clearTimer = (...args) => clearTimer(...args);
+    this.graceMs = graceMs;
+    // A cold start is settling, not interrupted: the first attempt must not
+    // paint "Offline" before it has had a chance to succeed.
+    this.state = connectionSettling;
+    this.detail = "";
+    this.timer = null;
+  }
+
+  // The transport can carry traffic. Recovery is immediate and unconditional.
+  live() {
+    this.clearDeadline();
+    this.publish(connectionLive, "");
+  }
+
+  // Connecting, reconnecting or probing. Starts the grace period; a flap that
+  // resolves inside it is never shown.
+  unsettled(detail = "") {
+    // Once the user has been told, stay told until the transport is
+    // demonstrably live: a notice that blinks with the backoff is worse than
+    // one that stays put. Its reason is kept too — a generic "Reconnecting…"
+    // must not overwrite "unauthorized".
+    if (this.state === connectionInterrupted) return;
+    if (detail) this.detail = detail;
+    if (this.state === connectionSettling) {
+      // Keep the original deadline. Re-arming on every retry would let a fast
+      // reconnect loop postpone the notice forever.
+      if (this.timer === null) this.armDeadline();
+      return;
+    }
+    this.publish(connectionSettling, this.detail);
+    this.armDeadline();
+  }
+
+  // A known absence rather than a flap, so skip the grace period. Relay only
+  // reports `host_offline` after waiting ~15s for the Host to come back.
+  lost(detail = "") {
+    this.clearDeadline();
+    this.publish(connectionInterrupted, detail || this.detail);
+  }
+
+  stop() {
+    this.clearDeadline();
+  }
+
+  armDeadline() {
+    this.timer = this.setTimer(() => {
+      this.timer = null;
+      this.publish(connectionInterrupted, this.detail);
+    }, this.graceMs);
+  }
+
+  clearDeadline() {
+    if (this.timer !== null) {
+      this.clearTimer(this.timer);
+      this.timer = null;
+    }
+  }
+
+  publish(state, detail) {
+    if (this.state === state && this.detail === detail) return;
+    this.state = state;
+    this.detail = detail;
+    this.onChange({ state, detail });
+  }
 }
 
 export class WarrenConnection {
@@ -165,7 +273,17 @@ export class WarrenConnection {
     if (!this.running) return false;
     if (this.socket && this.socket.readyState <= open) {
       if (this.socket.readyState === open) {
-        this.sendHeartbeatProbe();
+        if (this.pendingHeartbeatID === null) {
+          this.sendHeartbeatProbe();
+        } else {
+          // A probe was already outstanding when the environment changed. Its
+          // deadline was computed before the freeze, so a phone returning to
+          // the foreground had that timer fire immediately and close a socket
+          // that had just come back. Re-arm the same probe instead of leaving
+          // the stale deadline armed, and do not duplicate it: several
+          // lifecycle events fire together.
+          this.rearmHeartbeatDeadline();
+        }
         this.scheduleHeartbeat();
       }
       return false;
@@ -215,21 +333,52 @@ export class WarrenConnection {
       socket.close();
       return false;
     }
+    this.armHeartbeatDeadline(id, socket);
+    return true;
+  }
+
+  armHeartbeatDeadline(id, socket) {
     this.heartbeatDeadlineTimer = this.setTimer(() => {
       this.heartbeatDeadlineTimer = null;
       if (this.pendingHeartbeatID === id && this.socket === socket) socket.close();
     }, this.heartbeatTimeoutMs);
-    return true;
+  }
+
+  // Gives the outstanding probe a fresh window without changing its identity,
+  // so a late pong is still matchable.
+  rearmHeartbeatDeadline() {
+    const id = this.pendingHeartbeatID;
+    const socket = this.socket;
+    if (id === null || !socket) return;
+    if (this.heartbeatDeadlineTimer !== null) {
+      this.clearTimer(this.heartbeatDeadlineTimer);
+      this.heartbeatDeadlineTimer = null;
+    }
+    this.armHeartbeatDeadline(id, socket);
   }
 
   acceptHeartbeat(message) {
     if (message?.t !== "pong" || message.id !== this.pendingHeartbeatID) return false;
+    this.clearHeartbeatDeadline();
+    return true;
+  }
+
+  clearHeartbeatDeadline() {
     this.pendingHeartbeatID = null;
     if (this.heartbeatDeadlineTimer !== null) {
       this.clearTimer(this.heartbeatDeadlineTimer);
       this.heartbeatDeadlineTimer = null;
     }
-    return true;
+  }
+
+  // Any inbound frame proves the far end is alive, so it satisfies the probe in
+  // flight and defers the next one. Waiting for a matching pong while terminal
+  // output was streaming closed healthy sockets: the Host answers control
+  // requests one at a time per stream, so a slow request can delay a pong past
+  // its deadline while output keeps arriving.
+  noteInboundActivity() {
+    this.clearHeartbeatDeadline();
+    this.scheduleHeartbeat();
   }
 
   cancelHeartbeatTimer() {
@@ -318,10 +467,18 @@ export class WarrenConnection {
     };
     socket.onmessage = event => {
       if (socket !== this.socket) return;
+      this.noteInboundActivity();
       if (typeof event.data === "string") {
         try {
           const message = JSON.parse(event.data);
-          if (this.acceptHeartbeat(message)) return;
+          // Heartbeat traffic is transport bookkeeping and never reaches the
+          // application. A pong whose id no longer matches (data already
+          // satisfied the probe, or it answered a superseded one) is swallowed
+          // all the same rather than surfacing as an unknown message.
+          if (message?.t === "pong") {
+            this.acceptHeartbeat(message);
+            return;
+          }
           // Any answer from the far end ends the welcome wait: a welcome means
           // the Host is live, an error means it answered with a refusal.
           if (message?.t === "welcome" || message?.t === "error") this.cancelWelcomeTimer();

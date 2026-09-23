@@ -189,3 +189,56 @@ func TestOwnedRelayPublicHTTPRouteForwardsBRLY2Stream(t *testing.T) {
 		t.Fatalf("public response: status=%d body=%q", response.StatusCode, data[:count])
 	}
 }
+
+// RFC 0009 "Reporting a lost Host": the reason a client's Host went away must be
+// on the wire before the socket is, and the close handshake must complete or the
+// peer reports 1006 and discards it. Both halves are product contract, not
+// implementation detail, so they are pinned here alongside the RFC's other
+// invariants rather than only in the presence tests.
+func TestOwnedRelayDeliversTheReasonAHostWentAway(t *testing.T) {
+	server, httpServer, websocketBase := presenceServer(t, maxHostPresenceWait)
+	_, _, token, host := pairClient(t, server, httpServer.URL, websocketBase)
+
+	client, _, err := websocket.DefaultDialer.Dial(websocketBase+"/v1/client/connect", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.WriteJSON(map[string]string{
+		"t": "auth", "version": clientProtocolVersion, "access_token": token,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForClientRoute(t, host)
+	host.Close()
+
+	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, payload, err := client.ReadMessage()
+	if err != nil {
+		t.Fatalf("no reason reached an established client: %v", err)
+	}
+	var notice map[string]any
+	if json.Unmarshal(payload, &notice) != nil {
+		t.Fatalf("reason is not JSON: %s", payload)
+	}
+	// The stable code, the Host's name, and when it was last seen are what let a
+	// client say "Mac is offline · last seen just now" instead of spinning.
+	if notice["code"] != "host_offline" {
+		t.Fatalf("reason has no stable code: %#v", notice)
+	}
+	if notice["host_name"] != "Mac" {
+		t.Fatalf("reason did not name the Host: %#v", notice)
+	}
+	if _, ok := notice["last_seen_at"].(string); !ok {
+		t.Fatalf("reason has no last_seen_at: %#v", notice)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, _, err := client.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+		t.Fatalf("teardown skipped the close handshake, so the reason is lossy: %v", err)
+	}
+	// The courtesy wait for an absent Host must stay below a client's own welcome
+	// deadline (Web 25s, native 30s), or it becomes the stall it prevents.
+	if maxHostPresenceWait >= 25*time.Second {
+		t.Fatalf("maxHostPresenceWait %s reaches a client welcome deadline", maxHostPresenceWait)
+	}
+}

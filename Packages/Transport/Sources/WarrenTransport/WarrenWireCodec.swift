@@ -7,11 +7,12 @@ public enum WarrenDecodedBinaryMessage: Hashable, Sendable {
     case input(WarrenDecodedInputFrame)
     case output(WarrenDecodedOutputFrame)
     case atomicState(WarrenDecodedAtomicStateFrame)
+    case browserFrame(WarrenDecodedBrowserFrame)
 
     public var direction: BinaryFrameDirection {
         switch self {
         case .input: return .clientToHost
-        case .output, .atomicState: return .hostToClient
+        case .output, .atomicState, .browserFrame: return .hostToClient
         }
     }
 
@@ -20,6 +21,7 @@ public enum WarrenDecodedBinaryMessage: Hashable, Sendable {
         case .input: return .input
         case .output: return .output
         case .atomicState: return .atomicState
+        case .browserFrame: return .browserFrame
         }
     }
 }
@@ -58,6 +60,18 @@ public struct WarrenDecodedAtomicStateFrame: Hashable, Sendable {
     }
 }
 
+/// A Client-readable screencast frame for a Warren Browser Session. The payload
+/// is an encoded still image; nothing in the terminal pipeline may see it.
+public struct WarrenDecodedBrowserFrame: Hashable, Sendable {
+    public let header: BinaryBrowserFrameHeader
+    public let payload: Data
+
+    public init(header: BinaryBrowserFrameHeader, payload: Data) {
+        self.header = header
+        self.payload = payload
+    }
+}
+
 /// Encodes the bounded DENB terminal envelope.
 public struct WarrenWireCodec: Sendable {
     public static let binaryMagic: [UInt8] = [0x44, 0x45, 0x4E, 0x42] // DENB
@@ -65,17 +79,22 @@ public struct WarrenWireCodec: Sendable {
     public static let defaultMaxHeader = 16 * 1024
     public static let defaultMaxPayload = 8 * 1024 * 1024
     public static let defaultMaxAtomicStatePayload = 64 * 1024 * 1024
+    /// One screencast frame is far smaller than a terminal snapshot: the Host
+    /// caps it at 4 MiB, and a client should not accept more than a Host can
+    /// legally send.
+    public static let defaultMaxBrowserFramePayload = 4 * 1024 * 1024
 
     public let maxHeader: Int
     public let maxPayload: Int
     public let maxAtomicStatePayload: Int
+    public let maxBrowserFramePayload: Int
 
     /// The largest complete DENB envelope accepted by this codec. URLSession
     /// uses this value as its binary WebSocket message budget so the transport
     /// still admits a legal atomic-state snapshot without leaving a generous
     /// 128 MiB allocation window.
     public var maximumEnvelopeBytes: Int {
-        let payloadLimit = max(maxPayload, maxAtomicStatePayload)
+        let payloadLimit = max(maxPayload, maxAtomicStatePayload, maxBrowserFramePayload)
         let (headerAndPrefix, headerOverflow) = Self.binaryPrefixLength.addingReportingOverflow(maxHeader)
         let (total, payloadOverflow) = headerAndPrefix.addingReportingOverflow(payloadLimit)
         guard !headerOverflow, !payloadOverflow else { return Int.max }
@@ -85,11 +104,13 @@ public struct WarrenWireCodec: Sendable {
     public init(
         maxHeader: Int = WarrenWireCodec.defaultMaxHeader,
         maxPayload: Int = WarrenWireCodec.defaultMaxPayload,
-        maxAtomicStatePayload: Int = WarrenWireCodec.defaultMaxAtomicStatePayload
+        maxAtomicStatePayload: Int = WarrenWireCodec.defaultMaxAtomicStatePayload,
+        maxBrowserFramePayload: Int = WarrenWireCodec.defaultMaxBrowserFramePayload
     ) {
         self.maxHeader = max(0, maxHeader)
         self.maxPayload = max(0, maxPayload)
         self.maxAtomicStatePayload = max(0, maxAtomicStatePayload)
+        self.maxBrowserFramePayload = max(0, maxBrowserFramePayload)
     }
 
     /// Decodes either binary kind for a dispatcher that owns both directions.
@@ -102,6 +123,8 @@ public struct WarrenWireCodec: Sendable {
             return .output(try decodeOutputHeader(envelope))
         case .atomicState:
             return .atomicState(try decodeAtomicStateHeader(envelope))
+        case .browserFrame:
+            return .browserFrame(try decodeBrowserFrameHeader(envelope))
         }
     }
 

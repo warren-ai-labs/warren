@@ -1721,6 +1721,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var tabOrderByTerminalGroupID: [TerminalGroupID: [String]] = [:]
     private var appliedLiveTabSessionIDs: Set<TerminalSessionID> = []
     let surfaceManager: TerminalSurfaceManager
+    /// Latest screencast frame per Warren Browser Session. Kept out of the
+    /// terminal surface manager because the payload is an image, not VT state.
+    let browserFrameStore = WarrenBrowserFrameStore()
     public var onOpenTerminalURL: ((TerminalSessionID, String, TerminalOpenURLKind, String?) -> Bool)?
     private(set) var projectionPublicationCount: UInt64 = 0
 
@@ -3090,6 +3093,41 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         try await refreshRoster(using: wire)
     }
 
+    /// The one field a create answer is read for.
+    ///
+    /// `session.create` answers with the durable Session and
+    /// `browser.session.create` answers with the live browser projection, so the
+    /// two shapes differ. The new Session's ID is all either caller needs to
+    /// select the tab it just made.
+    private struct CreatedSession: Decodable {
+        let id: String
+    }
+
+    /// The Host call that creates one Session in a scope.
+    ///
+    /// A browser Session owns a Chromium instead of a PTY, so the Host refuses
+    /// `kind = "browser"` on `session.create` and creates it through
+    /// `browser.session.create` — which takes no command, because the Host
+    /// launches the browser itself rather than typing anything into a shell.
+    static func createSessionCall(
+        scope: (key: String, id: String),
+        request launch: TerminalSessionLaunchRequest
+    ) -> (method: String, params: [String: String]) {
+        // Only an explicit user-chosen name becomes the session title. Built-in
+        // preset launches leave it nil so the Host keeps the custom-title slot
+        // free for automatic AI title generation.
+        var params: [String: String] = [scope.key: scope.id]
+        if let title = launch.title {
+            params["title"] = title
+        }
+        guard launch.kind != .browser else {
+            return ("browser.session.create", params)
+        }
+        params["command"] = launch.command ?? ""
+        params["kind"] = launch.kind.rawValue
+        return ("session.create", params)
+    }
+
     func createSession(workspaceID: WorkspaceID, request launch: TerminalSessionLaunchRequest) {
         guard let wire,
               let workspace = projection.workspace(id: workspaceID),
@@ -3100,19 +3138,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         Task { @MainActor [weak self] in
             defer { self?.finishCreatingSession(in: workspaceID) }
             do {
-                // Only an explicit user-chosen name becomes the session title.
-                // Built-in preset launches leave it nil so the Host keeps the
-                // custom-title slot free for automatic AI title generation.
-                var params: [String: String] = [
-                    "workspace": workspaceID.description,
-                    "command": launch.command ?? "",
-                    "kind": launch.kind.rawValue,
-                ]
-                if let title = launch.title {
-                    params["title"] = title
-                }
-                let data = try await wire.request("session.create", params: params)
-                let created = try JSONDecoder().decode(RemoteRoster.Session.self, from: data)
+                let call = Self.createSessionCall(
+                    scope: ("workspace", workspaceID.description),
+                    request: launch
+                )
+                let data = try await wire.request(call.method, params: call.params)
+                let created = try JSONDecoder().decode(CreatedSession.self, from: data)
                 guard let sessionID = TerminalSessionID(uuidString: created.id) else {
                     throw NSError(domain: "WarrenRemote", code: 10, userInfo: [
                         NSLocalizedDescriptionKey: "The daemon returned an invalid Session ID.",
@@ -3150,19 +3181,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         Task { @MainActor [weak self] in
             defer { self?.finishCreatingSession(in: terminalGroupID) }
             do {
-                // Only an explicit user-chosen name becomes the session title.
-                // Built-in preset launches leave it nil so the Host keeps the
-                // custom-title slot free for automatic AI title generation.
-                var params: [String: String] = [
-                    "group": terminalGroupID.description,
-                    "command": launch.command ?? "",
-                    "kind": launch.kind.rawValue,
-                ]
-                if let title = launch.title {
-                    params["title"] = title
-                }
-                let data = try await wire.request("session.create", params: params)
-                let created = try JSONDecoder().decode(RemoteRoster.Session.self, from: data)
+                let call = Self.createSessionCall(
+                    scope: ("group", terminalGroupID.description),
+                    request: launch
+                )
+                let data = try await wire.request(call.method, params: call.params)
+                let created = try JSONDecoder().decode(CreatedSession.self, from: data)
                 guard let sessionID = TerminalSessionID(uuidString: created.id) else {
                     throw NSError(domain: "WarrenRemote", code: 10, userInfo: [
                         NSLocalizedDescriptionKey: "The daemon returned an invalid Session ID.",
@@ -3522,6 +3546,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var webAuthToken: String {
         guard endpointConfiguration?.type.lowercased() != "relay" else { return "" }
         return endpointConfiguration?.token ?? ""
+    }
+
+    /// The viewer page URL for one Warren Browser Session (RFC 0022 §8.2).
+    ///
+    /// `nil` until an Endpoint is selected, which is the honest answer: a viewer
+    /// page is served by the Host that owns the browser, so with no Host there is
+    /// nothing to load and the region shows its empty state instead of a web view
+    /// pointed at nowhere.
+    func browserViewerURL(sessionID: String) -> URL? {
+        liveEndpointConfiguration?.browserViewerURL(sessionID: sessionID)
     }
 
     /// Resolves the browser-open or clipboard URL for a Web address. Local
@@ -5139,6 +5173,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 format: state.format,
                 payload: state.payload
             )
+        case .browserFrame(let frame):
+            guard let sessionID = TerminalSessionID(uuidString: frame.sessionID) else { return }
+            consumeBrowserFrame(
+                sessionID: sessionID,
+                epoch: frame.epoch,
+                sequence: frame.sequence,
+                payload: frame.payload
+            )
         case .anchor(let anchor):
             guard let sessionID = TerminalSessionID(uuidString: anchor.sessionID) else { return }
             consumeAnchor(
@@ -5156,6 +5198,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 domain: "WarrenRemote",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: reason]
+            ))
+        case .hostAbsent(let detail):
+            // Relay already waited for the Host before telling us it is absent,
+            // so this is a confirmed absence rather than a flap: say it now
+            // instead of sitting through the transient-issue delay.
+            connectionError = detail
+            cancelTransientConnectionIssue()
+            presentDiagnostic(NSError(
+                domain: "WarrenRemote",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: detail]
             ))
         }
     }
@@ -5231,6 +5284,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 epoch: epoch,
                 sequence: sequence
             )
+    }
+
+    private func consumeBrowserFrame(
+        sessionID: TerminalSessionID,
+        epoch: UInt64,
+        sequence: UInt64,
+        payload: Data
+    ) {
+        browserFrameStore.install(
+            sessionID: sessionID,
+            frame: WarrenBrowserFrame(
+                epoch: epoch,
+                sequence: sequence,
+                format: WarrenRemoteClient.browserFrameFormat,
+                payload: payload
+            )
+        )
     }
 
     private func consumeAtomicState(
@@ -6073,7 +6143,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     func ensureVisibleSessions(_ sessionIDs: Set<TerminalSessionID>) {
-        let live = Set(projection.sessions.filter { $0.state.isActive }.map(\.id))
+        // A browser Session has no PTY: it is not a terminal screen to seed,
+        // subscribe, or resize. Only the browser region renders it (RFC 0022 §3).
+        let live = Set(
+            projection.sessions
+                .filter { $0.state.isActive && $0.kind != .browser }
+                .map(\.id)
+        )
         let visible = sessionIDs.intersection(live)
         let departed = visibleSessionIDs.subtracting(visible)
         let changed = visibleSessionIDs != visible
@@ -6196,9 +6272,33 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
+    /// Whether this Session is a Host-owned browser rather than a terminal.
+    ///
+    /// A browser Session carries no PTY (RFC 0022 §3): it has no surface, no
+    /// subscribe, no grid, and no resize. Treating one as a terminal mounts an
+    /// empty pane and reports that pane's character grid as the browser's pixel
+    /// viewport, which shrinks the page.
+    private func isBrowserSession(_ sessionID: TerminalSessionID) -> Bool {
+        projection.session(id: sessionID)?.kind == .browser
+    }
+
     private func presentSelectedSession() async {
         guard let tabID = navigation.selectedTabID,
               let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID else { return }
+        // A browser Session is presented by the browser region, not here. Leaving
+        // the Terminal attached to its previous Session is what keeps that
+        // Session on screen beside the viewer.
+        guard !isBrowserSession(sessionID) else {
+            TerminalDiagnostics.log("present_skipped_browser", [
+                "session": sessionID.description,
+            ])
+            // The browser now owns the content area, on its own or beside the
+            // Terminal. Either way the keyboard intent moved to the viewer, and
+            // leaving the Terminal focused would send typing to a pane the user
+            // is not looking at.
+            relinquishTerminalFocus()
+            return
+        }
         // A retained surface is the source of truth across ordinary navigation:
         // reparent it and swap the control lease. Re-subscribe only after a
         // transport gap (the preserved session set) or when no live surface or

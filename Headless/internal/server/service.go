@@ -22,6 +22,7 @@ import (
 	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
+	"github.com/abcdlsj/warren/Headless/internal/browser"
 	"github.com/abcdlsj/warren/Headless/internal/git"
 	"github.com/abcdlsj/warren/Headless/internal/output"
 	"github.com/abcdlsj/warren/Headless/internal/runtime"
@@ -169,6 +170,12 @@ type Service struct {
 	mergeLastRefresh atomic.Int64
 
 	outputMu sync.Mutex
+	// browserMu guards the lazily-created Chromium manager. A browser Session
+	// has no PTY runtime, so it cannot join Runtimes; creating the manager on
+	// first use also means a Host that never opens a browser never needs a
+	// writable profile directory.
+	browserMu sync.Mutex
+	browsers  *browser.Manager
 	// terminalGroupLifecycleMu serializes Group deletion with Group Session
 	// creation. Runtime creation and its durable Session record must observe
 	// the same Group snapshot, otherwise a concurrent forced deletion can
@@ -345,7 +352,31 @@ type agentSession struct {
 	// transcript yet, so reconcile does not walk the whole CLI directory tree
 	// on every one-second tick.
 	lastFind time.Time
+	// pendingCorrelations binds a client's commandId to the text the Host
+	// actually injected into the provider. A provider writes the user message
+	// into its own transcript with its own identity, so this is the only way a
+	// client can tell which timeline row is the message it just sent. FIFO: a
+	// CLI consumes injected input in order. Guarded by mu.
+	pendingCorrelations []pendingAgentCorrelation
 }
+
+// pendingAgentCorrelation is one outgoing message awaiting its transcript echo.
+// text is what the Host injected, which is not always what the client typed:
+// an empty prompt is replaced, and attachments rewrite the body.
+type pendingAgentCorrelation struct {
+	commandID string
+	text      string
+	sentAt    time.Time
+}
+
+// agentCorrelationTTL bounds how long an unmatched outgoing message keeps
+// waiting for its echo. A provider that never writes the message (crashed CLI,
+// discarded input) must not pin the entry or mislabel a much later message.
+const agentCorrelationTTL = 60 * time.Second
+
+// maxPendingAgentCorrelations bounds the table when a provider stops echoing
+// entirely. Dropping the oldest keeps the newest messages correlatable.
+const maxPendingAgentCorrelations = 64
 
 type Runtime interface {
 	Create(context.Context, string, string, string, []string) error
@@ -625,6 +656,11 @@ func (s *Service) Shutdown() {
 	if s.lifecycleCancel != nil {
 		s.lifecycleCancel()
 	}
+	// Every managed Chromium is a child process. Leaving one running past
+	// shutdown would strand a browser no Host can drive.
+	if manager := s.browserManagerIfPresent(); manager != nil {
+		manager.Close()
+	}
 	s.cleanupAgentAttachments()
 	s.outputMu.Lock()
 	outputs := make([]*outputSession, 0, len(s.outputs))
@@ -831,6 +867,12 @@ func (s *Service) refreshMetadata(ctx context.Context) {
 			continue
 		}
 		running[session.ID] = true
+		if session.Kind == sessionKindBrowser {
+			// A browser has no foreground process to probe. Its live state is
+			// read through the browser API, not through a PTY runtime.
+			s.metadataCache.remove(session.ID)
+			continue
+		}
 		provider, ok := s.runtimeFor(session).(runtime.RuntimeMetadataProvider)
 		if !ok {
 			s.metadataCache.remove(session.ID)
@@ -858,6 +900,17 @@ func (s *Service) reconcile(ctx context.Context) {
 			continue
 		}
 		seenSessions[session.ID] = struct{}{}
+		if session.Kind == sessionKindBrowser {
+			// A browser Session has no Ghostline runtime to probe. Its liveness
+			// is whether the manager still holds a Chromium for it, which only
+			// the daemon that started it can know.
+			if manager := s.browserManagerIfPresent(); manager == nil {
+				s.markEnded(session.ID)
+			} else if _, running := manager.Session(session.ID); !running {
+				s.markEnded(session.ID)
+			}
+			continue
+		}
 		if session.RuntimeKind != "" && session.RuntimeKind != settings.RuntimeGhostline {
 			// Preserve ownership metadata for removed runtimes. Do not silently
 			// reassign or mark such sessions ended during reconciliation.
@@ -2959,6 +3012,13 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 	if workspaceID != "" && groupID != "" {
 		return api.Session{}, errors.New("workspace and terminal group are mutually exclusive")
 	}
+	if normalizeProviderKind(kind) == sessionKindBrowser {
+		// A browser Session has no PTY and no Ghostline runtime, so the terminal
+		// creation path would record a Session that can never start. Refusing
+		// here is better than a Session stuck in "running" with nothing behind
+		// it.
+		return api.Session{}, errors.New("a browser Session is created with browser.session.create, not session.create")
+	}
 	state := s.Store.Snapshot()
 	var workspace *api.Workspace
 	var group *api.TerminalGroup
@@ -3339,6 +3399,12 @@ func (s *Service) DeleteSession(ctx context.Context, id string) error {
 		s.openCodeBindingMu.Lock()
 		releaseOpenCodeBinding = s.openCodeBindingMu.Unlock
 		defer releaseOpenCodeBinding()
+	}
+	// A browser Session owns a Chromium and a profile directory, not a PTY
+	// runtime. Killing a Ghostline runtime named after it would fail, and the
+	// browser would keep running.
+	if session.Kind == sessionKindBrowser {
+		return s.CloseBrowserSession(ctx, id)
 	}
 	// Only explicit Close Tab / Terminate Session reaches kill-session.
 	adapter := s.runtimeFor(*session)
@@ -5039,6 +5105,102 @@ func canonicalStatusEvent(status api.AgentStatus, streamID, executionID string) 
 	}
 }
 
+// recordAgentMessageCorrelation remembers that commandID was injected into the
+// session's provider as text, so the user event the provider later writes into
+// its transcript can carry that identity back to clients as CausedBy.
+func (s *Service) recordAgentMessageCorrelation(sessionID, commandID, text string) {
+	commandID = strings.TrimSpace(commandID)
+	if s == nil || commandID == "" {
+		return
+	}
+	s.lazyInit()
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	if entry == nil {
+		s.agentsMu.Unlock()
+		return
+	}
+	entry.mu.Lock()
+	now := time.Now()
+	entry.pendingCorrelations = pruneAgentCorrelations(entry.pendingCorrelations, now)
+	entry.pendingCorrelations = append(entry.pendingCorrelations, pendingAgentCorrelation{
+		commandID: commandID,
+		text:      strings.TrimSpace(text),
+		sentAt:    now,
+	})
+	if overflow := len(entry.pendingCorrelations) - maxPendingAgentCorrelations; overflow > 0 {
+		entry.pendingCorrelations = append(
+			[]pendingAgentCorrelation(nil), entry.pendingCorrelations[overflow:]...,
+		)
+	}
+	entry.mu.Unlock()
+	s.agentsMu.Unlock()
+}
+
+func pruneAgentCorrelations(pending []pendingAgentCorrelation, now time.Time) []pendingAgentCorrelation {
+	kept := pending[:0]
+	for _, value := range pending {
+		if now.Sub(value.sentAt) <= agentCorrelationTTL {
+			kept = append(kept, value)
+		}
+	}
+	return kept
+}
+
+// takeAgentCorrelation claims the commandId for one echoed user message. FIFO
+// order is the primary signal because a CLI consumes injected input in order;
+// the content check only guards against claiming an unrelated message, and must
+// tolerate a provider parser clipping long content to its own limit.
+// Callers hold entry.mu.
+func takeAgentCorrelation(entry *agentSession, content string) string {
+	if entry == nil || len(entry.pendingCorrelations) == 0 {
+		return ""
+	}
+	entry.pendingCorrelations = pruneAgentCorrelations(entry.pendingCorrelations, time.Now())
+	if len(entry.pendingCorrelations) == 0 {
+		return ""
+	}
+	content = strings.TrimSpace(content)
+	head := entry.pendingCorrelations[0]
+	if !agentCorrelationContentMatches(head.text, content) {
+		return ""
+	}
+	entry.pendingCorrelations = append(
+		[]pendingAgentCorrelation(nil), entry.pendingCorrelations[1:]...,
+	)
+	return head.commandID
+}
+
+// agentCorrelationContentMatches decides whether an echoed transcript line is
+// the message the Host injected. A provider never lengthens user text, so an
+// echo longer than the injection is a different message: accepting a plain
+// prefix in that direction would make "run" claim the echo of "run the tests".
+// Clipping is the one legitimate shortening, and it is self-announcing because
+// truncate appends an ellipsis.
+func agentCorrelationContentMatches(injected, echoed string) bool {
+	if echoed == "" {
+		return false
+	}
+	if injected == echoed {
+		return true
+	}
+	if clipped, ok := strings.CutSuffix(echoed, "…"); ok {
+		return clipped != "" && strings.HasPrefix(injected, clipped)
+	}
+	// Some providers reflow whitespace when storing the message.
+	return strings.Join(strings.Fields(injected), " ") == strings.Join(strings.Fields(echoed), " ")
+}
+
+// isCanonicalUserMessage reports whether a canonical event is a complete user
+// message, which is the only row an outgoing message can be correlated with.
+func isCanonicalUserMessage(event api.CanonicalAgentEvent) bool {
+	if event.Type != "message.created" {
+		return false
+	}
+	role, _ := event.Payload["role"].(string)
+	return strings.EqualFold(strings.TrimSpace(role), "user")
+}
+
 // canonicalProviderEvent turns one provider observation into an immutable
 // event row. Provider IDs identify a message/tool in the provider projection;
 // they are not event IDs because a provider may reuse them across deltas or
@@ -5131,9 +5293,13 @@ func (s *Service) appendCanonicalEventsLockedWithCheckpoint(sessionID string, en
 			}
 		}
 		if existing != nil {
-			if !canonicalEventsEquivalent(*existing, event) {
+			causedBy, ok := api.MergeCanonicalCausation(existing.CausedBy, event.CausedBy)
+			if !ok || !canonicalEventsEquivalent(*existing, event) {
 				return nil, fmt.Errorf("canonical agent event conflict at %s", event.EventID)
 			}
+			// Late-bound annotation: a re-observation may supply the causation
+			// the first one lacked, and never clears it.
+			existing.CausedBy = causedBy
 			assigned = append(assigned, *existing)
 			continue
 		}
@@ -5162,6 +5328,11 @@ func canonicalEventsEquivalent(existing, incoming api.CanonicalAgentEvent) bool 
 	incoming.OccurredAt = time.Time{}
 	existing.RecordedAt = time.Time{}
 	incoming.RecordedAt = time.Time{}
+	// CausedBy is reconciled separately by api.MergeCanonicalCausation: it is
+	// late-bound provenance, so its absence on a re-observation is not a
+	// semantic difference.
+	existing.CausedBy = ""
+	incoming.CausedBy = ""
 	left, leftErr := json.Marshal(existing)
 	right, rightErr := json.Marshal(incoming)
 	if leftErr != nil || rightErr != nil {
@@ -5259,6 +5430,12 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 			source.ID = api.StableAgentEventID(source)
 		}
 		canonicalEvent := canonicalProviderEvent(source, streamID, streamID)
+		if canonicalEvent.CausedBy == "" && isCanonicalUserMessage(canonicalEvent) {
+			// CausedBy is not part of StableAgentEventID, which hashes the
+			// provider observation. Attributing the echo therefore does not
+			// change the event identity clients dedupe on.
+			canonicalEvent.CausedBy = takeAgentCorrelation(entry, source.Content)
+		}
 		if strings.HasPrefix(canonicalEvent.Type, "interaction.") {
 			// Provider terminal observations often contain only requestId/state.
 			// Carry the immutable request schema forward so a resolved card can
@@ -7552,10 +7729,22 @@ func (s *Service) resizeFocusedLocked(
 // same viewport (roster-driven focus requests, duplicate browser callbacks)
 // make TUIs redraw and flicker. The recorded size also lets the server
 // answer same-size focus/resize requests as accurate no-ops.
+//
+// A browser Session has no PTY runtime, so it cannot answer a resize through
+// Runtimes; its viewport is a pixel size on the Chromium page instead. The two
+// are different units — columns and rows here, CSS pixels there — so a browser
+// size is not recorded here: runtimeSizes stays a map of PTY grid sizes, which
+// keeps the recovery log's size label meaningful. The dedupe that matters still
+// happens, on the page: Session.Resize reads the size the Chromium is actually
+// at and refuses an unchanged one, so a drag that re-reports the same size does
+// not restart the screencast on every event.
 func (s *Service) resizeRuntime(ctx context.Context, session api.Session, columns, rows int) (bool, error) {
 	size := ghostline.Size{Columns: columns, Rows: rows}
 	if current, known := s.runtimeSizeFor(session.ID); known && current == size {
 		return false, nil
+	}
+	if session.Kind == sessionKindBrowser {
+		return s.resizeBrowser(ctx, session, columns, rows)
 	}
 	adapter := s.runtimeFor(session)
 	if adapter == nil {
@@ -7566,6 +7755,32 @@ func (s *Service) resizeRuntime(ctx context.Context, session api.Session, column
 	}
 	s.rememberRuntimeSize(session.ID, size)
 	s.updateResponderSize(session.ID, columns, rows)
+	return true, nil
+}
+
+// resizeBrowser applies a client viewport to a browser Session.
+//
+// The client reports a pixel size, which is what the Chromium page wants
+// directly: the viewer is drawn from the screencast, so its box size and the
+// page size are the same measurement. A degenerate request — a pane collapsed
+// to zero, or a size below the smallest layout worth rendering — is refused
+// rather than applied, because a 0x0 viewport stops the screencast entirely
+// and the viewer goes black with no way back short of a reload.
+func (s *Service) resizeBrowser(ctx context.Context, session api.Session, columns, rows int) (bool, error) {
+	if columns <= 0 || rows <= 0 {
+		return false, nil
+	}
+	manager := s.browserManagerIfPresent()
+	if manager == nil {
+		return false, fmt.Errorf("browser session is not running: %s", session.ID)
+	}
+	chromium, ok := manager.Session(session.ID)
+	if !ok {
+		return false, fmt.Errorf("browser session is not running: %s", session.ID)
+	}
+	if err := chromium.Resize(ctx, api.BrowserViewport{Width: columns, Height: rows}); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 

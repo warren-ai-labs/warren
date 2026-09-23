@@ -412,7 +412,10 @@ Update the incompatible client or Host, then choose **Retry connection**.
 Headless also advertises each reachable Host on the local link as the
 `_warren._tcp` DNS-SD service. The TXT record contains the Host ID, display
 name, protocol/build metadata, pairing state, and non-loopback address
-candidates; it never contains the daemon token or workspace paths. The iOS
+candidates along with the Host's own `.local` name; it never contains the
+daemon token or workspace paths. The Host republishes that advertisement
+whenever its reachable addresses change, so a DHCP change does not leave
+clients dialing an address this machine no longer holds. The iOS
 client browses this service and races the advertised candidates with
 `GET /healthz`, updating a known Host's direct address after the response's
 Host ID matches. Discovery is best-effort, is disabled automatically when the

@@ -20,15 +20,17 @@ const (
 )
 
 const (
-	KindInput       uint8 = 1
-	KindOutput      uint8 = 2
-	KindAtomicState uint8 = 3
+	KindInput        uint8 = 1
+	KindOutput       uint8 = 2
+	KindAtomicState  uint8 = 3
+	KindBrowserFrame uint8 = 4
 )
 
 const (
-	MaxHeader             = 16384
-	MaxPayload            = 8388608
-	MaxAtomicStatePayload = 67108864
+	MaxHeader              = 16384
+	MaxPayload             = 8388608
+	MaxAtomicStatePayload  = 67108864
+	MaxBrowserFramePayload = 4194304
 )
 
 // BinaryPrefixLength is magic(4) + version(1) + direction(1) + kind(1) + headerLength(4) + payloadLength(4).
@@ -50,11 +52,13 @@ var Capabilities = []string{
 	"app-heartbeat-v1",
 	"roster-delta",
 	"pane-groups-v1",
+	"agent-causation-v1",
 	"agent-timeline-v1",
 	"agent-interactions-v1",
 	"agent-interrupt-v1",
 	"agent-attachments-v1",
 	"agent-goals-v1",
+	"browser-v1",
 }
 
 // TerminalStateFormats is the set of opaque terminal-state formats a client can install atomically.

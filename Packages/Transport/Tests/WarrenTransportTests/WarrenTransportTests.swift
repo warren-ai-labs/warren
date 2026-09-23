@@ -135,7 +135,14 @@ final class WarrenWireCodecTests: XCTestCase {
                 + WarrenWireCodec.defaultMaxHeader
                 + WarrenWireCodec.defaultMaxAtomicStatePayload
         )
-        let ordinaryOnly = WarrenWireCodec(maxHeader: 32, maxPayload: 64, maxAtomicStatePayload: 16)
+        // Every payload budget is small here, the browser frame one included, so
+        // the ordinary output limit is the largest one.
+        let ordinaryOnly = WarrenWireCodec(
+            maxHeader: 32,
+            maxPayload: 64,
+            maxAtomicStatePayload: 16,
+            maxBrowserFramePayload: 16
+        )
         XCTAssertEqual(
             ordinaryOnly.maximumEnvelopeBytes,
             WarrenWireCodec.binaryPrefixLength + 32 + 64

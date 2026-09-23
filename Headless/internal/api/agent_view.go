@@ -28,6 +28,12 @@ const (
 	// `pane-group.*` mutations. A client that does not negotiate it must not
 	// offer split UI, because there is no device-local layout path any more.
 	CapabilityPaneGroups = "pane-groups-v1"
+	// CapabilityAgentCausation advertises that a user message echoed by the
+	// provider carries the commandId that sent it in `causedBy`. A client that
+	// negotiated it can retire its local bubble on that identity alone; without
+	// it, the only available correlation is comparing message text, which cannot
+	// distinguish two identical prompts.
+	CapabilityAgentCausation = "agent-causation-v1"
 )
 
 var (
@@ -55,10 +61,11 @@ var AgentViewCapabilities = []string{
 // negotiation list so a welcome message is a true intersection rather than a
 // second, agent-only capability channel.
 func HostCapabilities() []string {
-	result := make([]string, 0, len(AgentViewCapabilities)+3)
+	result := make([]string, 0, len(AgentViewCapabilities)+4)
 	result = append(result, CapabilityAppHeartbeat)
 	result = append(result, CapabilityRosterDelta)
 	result = append(result, CapabilityPaneGroups)
+	result = append(result, CapabilityAgentCausation)
 	result = append(result, AgentViewCapabilities...)
 	return result
 }

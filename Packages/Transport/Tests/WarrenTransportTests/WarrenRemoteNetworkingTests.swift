@@ -113,3 +113,42 @@ final class WarrenRemoteNetworkingTests: XCTestCase {
         return Int(UInt16(bigEndian: bound.sin_port))
     }
 }
+
+final class WarrenReconnectBackoffTests: XCTestCase {
+    /// Every client that lost the same Relay computes the same unjittered delay,
+    /// so without jitter they all redial in the same instant and arrive as a
+    /// spike. The spread has to match the other two implementations: ±20%.
+    func testReconnectDelaySpreadsRetriesAcrossTwentyPercent() {
+        for attempt in 0...8 {
+            let low = WarrenRemoteClient.reconnectDelayMilliseconds(attempt: attempt, random: { 0 })
+            let high = WarrenRemoteClient.reconnectDelayMilliseconds(attempt: attempt, random: { 1 })
+            let mid = WarrenRemoteClient.reconnectDelayMilliseconds(attempt: attempt, random: { 0.5 })
+            XCTAssertLessThan(low, high, "attempt \(attempt) applied no jitter")
+            XCTAssertEqual(Double(low), Double(mid) * 0.8, accuracy: 1, "attempt \(attempt) lower bound")
+            XCTAssertEqual(Double(high), Double(mid) * 1.2, accuracy: 1, "attempt \(attempt) upper bound")
+        }
+    }
+
+    /// The cap applies to the base delay, so the jittered value may exceed 30s by
+    /// the jitter factor but must never escalate past it.
+    func testReconnectDelayIsBoundedAndMonotonic()  {
+        var previous = 0
+        for attempt in 0...10 {
+            let value = WarrenRemoteClient.reconnectDelayMilliseconds(attempt: attempt, random: { 0.5 })
+            XCTAssertGreaterThanOrEqual(value, previous, "attempt \(attempt) went backwards")
+            XCTAssertLessThanOrEqual(value, 30_000, "attempt \(attempt) exceeded the cap")
+            previous = value
+        }
+        // Mirrors `reconnectDelay` in Web/src/connection.js at the same midpoint.
+        XCTAssertEqual(WarrenRemoteClient.reconnectDelayMilliseconds(attempt: 0, random: { 0.5 }), 500)
+        XCTAssertEqual(WarrenRemoteClient.reconnectDelayMilliseconds(attempt: 20, random: { 0.5 }), 30_000)
+    }
+
+    /// The window must outlast a welcome round trip on a slow link (~1.3s
+    /// measured) so a connection that died instantly is not mistaken for a
+    /// healthy one, and must stay under a minute so a phone that flaps every
+    /// half minute does not escalate into maximum retry delays.
+    func testStabilityWindowMatchesTheHostConnector() {
+        XCTAssertEqual(WarrenRemoteClient.connectionStabilityWindow, .seconds(30))
+    }
+}

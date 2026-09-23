@@ -1,9 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  ConnectionPresenter,
   WarrenConnection,
   appHeartbeatCapability,
   connectionErrorDetail,
+  connectionInterrupted,
+  connectionLive,
+  connectionSettleGraceMs,
+  connectionSettling,
   hostOfflineDetail,
   hostWaitCopyDelayMs,
   reconnectDelay,
@@ -351,6 +356,24 @@ test("the waiting notice names the Host when it is known", () => {
   // The notice replaces "Authenticating…" only after that claim stops being
   // plausible, and must stay well inside Relay's own wait for the Host.
   assert.ok(hostWaitCopyDelayMs >= 1_000 && hostWaitCopyDelayMs <= 5_000);
+  // It also has to land inside the settle grace: the grace is already counting
+  // down from the socket that died, so a copy that arrives after the promotion
+  // is only ever read as "interrupted · Authenticating…".
+  assert.ok(hostWaitCopyDelayMs < connectionSettleGraceMs);
+});
+
+// A Host that dies mid-session leaves the client waiting on an authenticated
+// socket for the whole time Relay holds it. Rewriting the reason must not
+// postpone the deadline, or a reconnect loop would keep the stale copy.
+test("the waiting copy rewrites the reason without re-arming the grace", () => {
+  const presenter = new ConnectionPresenter();
+  presenter.unsettled("Reconnecting…");
+  presenter.unsettled("Connecting…");
+  presenter.unsettled("Authenticating…");
+  const waiting = waitingForHostMessage("Mac");
+  presenter.unsettled(waiting);
+  assert.equal(presenter.state, connectionSettling);
+  assert.equal(presenter.detail, waiting);
 });
 
 test("relative time labels stay short and read naturally", () => {
@@ -372,4 +395,300 @@ test("browser heartbeat accepts only the matching pong", () => {
   assert.equal(connection.acceptHeartbeat({ t: "pong", id: "other" }), false);
   assert.equal(connection.acceptHeartbeat({ t: "pong", id: "ping-1" }), true);
   assert.equal(connection.pendingHeartbeatID, null);
+});
+
+test("inbound data satisfies the probe so a busy stream is not closed", () => {
+  FakeSocket.instances = [];
+  const timers = [];
+  const connection = new WarrenConnection({
+    url: "ws://relay/v1/ws",
+    token: "secret",
+    WebSocketClass: FakeSocket,
+    capabilities: ["roster-delta", appHeartbeatCapability],
+    heartbeatIntervalMs: 10,
+    heartbeatTimeoutMs: 5,
+    setTimer: (callback, delay) => {
+      timers.push({ callback, delay, cancelled: false });
+      return timers.length - 1;
+    },
+    clearTimer: id => { timers[id].cancelled = true; },
+  });
+  connection.start();
+  const socket = FakeSocket.instances[0];
+  socket.open();
+  socket.onmessage({ data: JSON.stringify({ t: "welcome", capabilities: [appHeartbeatCapability] }) });
+
+  // Probe goes out, then terminal output arrives instead of a pong. The Host
+  // answers control requests one at a time per stream, so a slow request can
+  // delay the pong past its deadline while output keeps flowing.
+  const deadlineBefore = timers.length;
+  connection.sendHeartbeatProbe();
+  assert.equal(JSON.parse(socket.sent.at(-1)).t, "ping");
+  socket.onmessage({ data: JSON.stringify({ t: "roster", state: {} }) });
+
+  // The probe deadline was cancelled by the data, so firing it is a no-op.
+  timers[deadlineBefore].callback();
+  assert.equal(socket.readyState, 1, "data kept the socket alive");
+  assert.equal(connection.pendingHeartbeatID, null);
+});
+
+test("a silent socket is still closed once its probe deadline expires", () => {
+  FakeSocket.instances = [];
+  const timers = [];
+  const connection = new WarrenConnection({
+    url: "ws://relay/v1/ws",
+    token: "secret",
+    WebSocketClass: FakeSocket,
+    capabilities: ["roster-delta", appHeartbeatCapability],
+    heartbeatIntervalMs: 10,
+    heartbeatTimeoutMs: 5,
+    setTimer: (callback, delay) => {
+      timers.push({ callback, delay, cancelled: false });
+      return timers.length - 1;
+    },
+    clearTimer: id => { timers[id].cancelled = true; },
+  });
+  connection.start();
+  const socket = FakeSocket.instances[0];
+  socket.open();
+  socket.onmessage({ data: JSON.stringify({ t: "welcome", capabilities: [appHeartbeatCapability] }) });
+  const deadlineBefore = timers.length;
+  connection.sendHeartbeatProbe();
+  timers[deadlineBefore].callback();
+  assert.equal(socket.readyState, 3, "silence still closes a half-open socket");
+});
+
+test("resume re-arms a stale probe deadline instead of firing it", () => {
+  FakeSocket.instances = [];
+  const timers = [];
+  const connection = new WarrenConnection({
+    url: "ws://relay/v1/ws",
+    token: "secret",
+    WebSocketClass: FakeSocket,
+    capabilities: ["roster-delta", appHeartbeatCapability],
+    heartbeatIntervalMs: 10,
+    heartbeatTimeoutMs: 5,
+    setTimer: (callback, delay) => {
+      timers.push({ callback, delay, cancelled: false });
+      return timers.length - 1;
+    },
+    clearTimer: id => { timers[id].cancelled = true; },
+  });
+  connection.start();
+  const socket = FakeSocket.instances[0];
+  socket.open();
+  socket.onmessage({ data: JSON.stringify({ t: "welcome", capabilities: [appHeartbeatCapability] }) });
+
+  // A probe is outstanding when the tab is frozen.
+  const staleDeadline = timers.length;
+  connection.sendHeartbeatProbe();
+  const probeID = connection.pendingHeartbeatID;
+  const sentBeforeResume = socket.sent.length;
+  const timersBeforeResume = timers.length;
+
+  // Returning to the foreground must not duplicate the probe, and must not let
+  // the deadline computed before the freeze close a socket that just came back.
+  connection.resume();
+  assert.equal(socket.sent.length, sentBeforeResume, "the probe is not duplicated");
+  assert.equal(connection.pendingHeartbeatID, probeID, "the probe keeps its identity");
+  // The deadline computed before the freeze is cancelled, so the backlog of
+  // timers a browser releases on unfreeze can no longer close this socket.
+  assert.equal(timers[staleDeadline].cancelled, true, "the stale deadline was cancelled");
+  assert.equal(socket.readyState, 1, "the socket survived returning to the foreground");
+
+  // resume arms the replacement deadline first, then re-arms the interval, so
+  // the timeout is still enforced for the same probe.
+  timers[timersBeforeResume].callback();
+  assert.equal(socket.readyState, 3, "an unanswered probe still closes the socket");
+});
+
+test("a late pong that data already answered is not surfaced to the application", () => {
+  FakeSocket.instances = [];
+  const timers = [];
+  const received = [];
+  const connection = new WarrenConnection({
+    url: "ws://relay/v1/ws",
+    token: "secret",
+    WebSocketClass: FakeSocket,
+    capabilities: ["roster-delta", appHeartbeatCapability],
+    heartbeatIntervalMs: 10,
+    heartbeatTimeoutMs: 5,
+    onMessage: event => received.push(event.data),
+    setTimer: (callback, delay) => {
+      timers.push({ callback, delay, cancelled: false });
+      return timers.length - 1;
+    },
+    clearTimer: id => { timers[id].cancelled = true; },
+  });
+  connection.start();
+  const socket = FakeSocket.instances[0];
+  socket.open();
+  socket.onmessage({ data: JSON.stringify({ t: "welcome", capabilities: [appHeartbeatCapability] }) });
+  connection.sendHeartbeatProbe();
+  const probeID = connection.pendingHeartbeatID;
+  received.length = 0;
+
+  socket.onmessage({ data: JSON.stringify({ t: "roster", state: {} }) });
+  socket.onmessage({ data: JSON.stringify({ t: "pong", id: probeID }) });
+  assert.deepEqual(
+    received.map(value => JSON.parse(value).t),
+    ["roster"],
+    "the stale pong is swallowed, not delivered as an unknown message",
+  );
+});
+
+// A controllable clock for the presenter: `run()` fires the timers a virtual
+// advance would have fired, so grace-period rules are tested without waiting.
+function fakeTimers() {
+  const timers = new Map();
+  let nextID = 1;
+  let now = 0;
+  return {
+    setTimer(callback, delay) {
+      const id = nextID++;
+      timers.set(id, { callback, at: now + delay });
+      return id;
+    },
+    clearTimer(id) { timers.delete(id); },
+    advance(milliseconds) {
+      now += milliseconds;
+      for (const [id, timer] of [...timers.entries()]) {
+        if (timer.at <= now) {
+          timers.delete(id);
+          timer.callback();
+        }
+      }
+    },
+    get pending() { return timers.size; },
+  };
+}
+
+function presenterUnderTest(timers) {
+  const changes = [];
+  const presenter = new ConnectionPresenter({
+    onChange: change => changes.push(change),
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+  return { presenter, changes };
+}
+
+test("a sub-second flap never reaches the user", () => {
+  const timers = fakeTimers();
+  const { presenter, changes } = presenterUnderTest(timers);
+  presenter.live();
+  changes.length = 0;
+
+  presenter.unsettled("Reconnecting…");
+  timers.advance(900);
+  presenter.live();
+  timers.advance(5_000);
+
+  assert.equal(presenter.state, connectionLive);
+  assert.deepEqual(
+    changes.map(change => change.state),
+    [connectionSettling, connectionLive],
+    "the dot breathes and settles; no interruption is ever announced",
+  );
+});
+
+test("a loss that outlasts the grace period is announced with its reason", () => {
+  const timers = fakeTimers();
+  const { presenter, changes } = presenterUnderTest(timers);
+  presenter.live();
+  changes.length = 0;
+
+  presenter.unsettled("Reconnecting…");
+  timers.advance(connectionSettleGraceMs);
+
+  assert.equal(presenter.state, connectionInterrupted);
+  assert.deepEqual(changes.at(-1), { state: connectionInterrupted, detail: "Reconnecting…" });
+});
+
+test("a reconnect that succeeds inside the grace period stays silent", () => {
+  const timers = fakeTimers();
+  const { presenter, changes } = presenterUnderTest(timers);
+  presenter.live();
+  changes.length = 0;
+
+  // A measured worst case against a real Relay over a 160ms RTT link: the
+  // socket is replaced end to end in 1.3s. The user must not see a banner for
+  // a recovery that was already working.
+  presenter.unsettled("Reconnecting…");
+  timers.advance(1_300);
+  presenter.live();
+
+  assert.deepEqual(
+    changes.map(change => change.state),
+    [connectionSettling, connectionLive],
+  );
+});
+
+test("a reconnect loop cannot postpone the notice forever", () => {
+  const timers = fakeTimers();
+  const { presenter } = presenterUnderTest(timers);
+  presenter.live();
+
+  // Each failed attempt reports unsettled again. Re-arming the deadline every
+  // time would hide an outage for as long as the backoff keeps trying.
+  const attempts = Math.ceil(connectionSettleGraceMs / 400) + 1;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    presenter.unsettled("Reconnecting…");
+    timers.advance(400);
+  }
+
+  assert.equal(presenter.state, connectionInterrupted);
+});
+
+test("host_offline skips the grace period", () => {
+  const timers = fakeTimers();
+  const { presenter, changes } = presenterUnderTest(timers);
+  presenter.live();
+  changes.length = 0;
+
+  // Relay already waited ~15s for the Host before saying this.
+  presenter.lost("Mac is offline · last seen 3 minutes ago");
+
+  assert.equal(presenter.state, connectionInterrupted);
+  assert.equal(presenter.detail, "Mac is offline · last seen 3 minutes ago");
+  assert.equal(timers.pending, 0, "no deadline is left armed behind a known absence");
+});
+
+test("recovery from an announced interruption is immediate", () => {
+  const timers = fakeTimers();
+  const { presenter, changes } = presenterUnderTest(timers);
+  presenter.lost("unauthorized");
+  changes.length = 0;
+
+  presenter.live();
+
+  assert.equal(presenter.state, connectionLive);
+  assert.deepEqual(changes, [{ state: connectionLive, detail: "" }]);
+});
+
+test("a generic retry does not overwrite a specific reason", () => {
+  const timers = fakeTimers();
+  const { presenter } = presenterUnderTest(timers);
+  presenter.lost("Mac is offline · last seen 3 minutes ago");
+
+  presenter.unsettled("Reconnecting…");
+
+  assert.equal(presenter.state, connectionInterrupted, "already told; stay told until live");
+  assert.equal(presenter.detail, "Mac is offline · last seen 3 minutes ago");
+});
+
+test("a cold start is settling, so the first connect cannot flash Offline", () => {
+  const timers = fakeTimers();
+  const { presenter, changes } = presenterUnderTest(timers);
+
+  assert.equal(presenter.state, connectionSettling);
+  presenter.unsettled("Connecting…");
+  timers.advance(900);
+  presenter.live();
+
+  assert.deepEqual(
+    changes.map(change => change.state),
+    [connectionLive],
+    "nothing is published before the connection is usable",
+  );
 });

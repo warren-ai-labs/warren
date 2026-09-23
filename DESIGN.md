@@ -239,6 +239,11 @@ Warren bifurcates terminal execution into two first-class tracks:
 
 ## 9. Session and Runtime Design
 
+A Session names a long-running Host resource. Most Sessions own a Ghostline PTY;
+a Warren Browser Session owns a Chromium instead. It is the same resource
+lifecycle, the same Tab, the same pane arrangement — only the runtime behind it
+differs, and the output is screencast frames rather than PTY bytes.
+
 ### 9.1 Mapping and Creation
 
 One Terminal Session maps to one Ghostline PTY. Runtime IDs are derived from Warren Session IDs, never from user titles or branch names.
@@ -262,6 +267,7 @@ CreateSession(sessionScope, launchSpec, requestID)
   - Bounded in-memory ring for low-latency broadcast.
   - Ghostline durable history files for recovery across reconnects and restarts.
 - Every byte position is identified by `epoch + sequence`. Reconnecting clients present their last Recovery Anchor to catch up without skipping gaps.
+- A browser Session has no PTY, so it has none of the above. Its frames are identified by `sessionID + sequence`, carry a format constant rather than bytes positions, and are never fed to a VT parser. `session.create` refuses `kind = "browser"` and names `browser.session.create`, because the terminal path would otherwise record a Session that can never start.
 
 ### 9.3 Lifecycle and Recovery
 
@@ -286,7 +292,8 @@ Window
     ├── Preset Bar (Terminal / Editor modes, Agent activity indicators)
     └── Active Workspace Content
         ├── Terminal (Ghostty Native Surface)
-        └── Embedded Editor (code-server WebView)
+        ├── Embedded Editor (code-server WebView)
+        └── Browser (Chromium viewer, beside the Terminal)
 ```
 
 ### 10.1 Embedded Editor (`code-server`)
@@ -296,7 +303,34 @@ Window
 - Starts a managed `code-server` process bound to a random loopback port on demand, isolated to `~/Library/Application Support/Warren/EmbeddedEditor`.
 - Uses Warren Ember dark palette, positions File Explorer on the right, and suppresses duplicate global chrome.
 
-### 10.2 Raycast Integration
+### 10.2 Warren Browser (embedded Chromium)
+
+The browser is a **Session**, not a client region. It is created with
+`browser.session.create`, has a durable record, an action API, and a screencast —
+the opposite of the Embedded Editor, which is a client integration with no Host
+resource.
+
+- The Host launches a Chromium with `--remote-debugging-port` and a per-Session
+  profile directory, drives it over the Chrome DevTools Protocol, and publishes
+  frames as JPEG screencast frames on the existing DENB envelope under a new
+  `browserFrame` kind.
+- Warren.app hosts a `WKWebView` pointed at a viewer page the Host serves. The
+  page owns the canvas, the stream WebSocket, and input forwarding; the app owns
+  nothing but the web view, which is the same division of labor as the Embedded
+  Editor. Cookies and `localStorage` are per-Session and non-persistent, so one
+  browser Session never reaches another, the editor, or the user's system Chrome.
+- One action vocabulary serves both the user and the agent. The viewer page sends
+  the same normalized actions over the same stream that `warren browser action`
+  sends, so there is no second input path to keep in step.
+- `snapshot` returns a pruned interactive DOM with selectors, which is what makes
+  an agent able to act without spending context on a screenshot; `screenshot
+  --path` is the verification path, because reading a file costs a tool call
+  where an inline image costs context.
+- The region opens when a browser Tab is selected and closes when anything else
+  is selected. Closing it takes the viewer off screen; the browser keeps running
+  and stays reachable as an ordinary Tab.
+
+### 10.3 Raycast Integration
 
 - Warren registers the `warren://terminal?group=Inbox` URI protocol and provides a dedicated Raycast extension and Script Command fallback.
 - External launchers can trigger immediate terminal opening without bringing up window chrome manually.

@@ -384,8 +384,29 @@ func (s *AgentEventStore) appendCanonicalEvents(
 			if json.Unmarshal([]byte(existingJSON), &existing) != nil || !canonicalEventsEquivalent(existing, event) {
 				return nil, fmt.Errorf("%w: stream=%s eventId=%s", ErrCanonicalEventConflict, streamID, event.EventID)
 			}
+			causedBy, ok := api.MergeCanonicalCausation(existing.CausedBy, event.CausedBy)
+			if !ok {
+				return nil, fmt.Errorf("%w: stream=%s eventId=%s", ErrCanonicalEventConflict, streamID, event.EventID)
+			}
 			if event.Sequence != 0 && event.Sequence != existingSequence {
 				return nil, fmt.Errorf("%w: stream=%s sequence=%d", ErrCanonicalSequenceConflict, streamID, event.Sequence)
+			}
+			// The one sanctioned mutation of an otherwise immutable row: a
+			// re-observation may supply the causation the stored copy lacked.
+			// It may only add CausedBy, never change anything else, and the
+			// sequence never moves.
+			if causedBy != existing.CausedBy {
+				existing.CausedBy = causedBy
+				encoded, encodeErr := json.Marshal(existing)
+				if encodeErr != nil {
+					return nil, fmt.Errorf("encode canonical event causation: %w", encodeErr)
+				}
+				if _, execErr := tx.ExecContext(ctx,
+					`UPDATE agent_event_journal SET event_json = ? WHERE stream_id = ? AND event_id = ?`,
+					string(encoded), streamID, event.EventID,
+				); execErr != nil {
+					return nil, fmt.Errorf("annotate canonical event causation: %w", execErr)
+				}
 			}
 			event = existing
 			resolved = append(resolved, event)
@@ -639,6 +660,11 @@ func canonicalEventsEquivalent(existing, incoming api.CanonicalAgentEvent) bool 
 	incoming.OccurredAt = time.Time{}
 	existing.RecordedAt = time.Time{}
 	incoming.RecordedAt = time.Time{}
+	// CausedBy is reconciled separately by api.MergeCanonicalCausation. It is
+	// Host-derived provenance learned from in-memory state, so a re-parse after
+	// a restart legitimately lacks it; that is not a semantic difference.
+	existing.CausedBy = ""
+	incoming.CausedBy = ""
 	encodedExisting, errExisting := json.Marshal(existing)
 	encodedIncoming, errIncoming := json.Marshal(incoming)
 	if errExisting != nil || errIncoming != nil {

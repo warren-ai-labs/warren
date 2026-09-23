@@ -39,7 +39,7 @@ struct WarrenDesktopSessionTreeGuide: Equatable, Sendable {
     /// and the plain worktree dot starts 6.5pt in.
     private var workspaceGlyphInset: CGFloat {
         switch workspaceGlyph {
-        case .checkout: 0
+        case .checkout, .terminalGroup: 0
         case .mergedWorktree: 4.5
         case .worktree: 6.5
         }

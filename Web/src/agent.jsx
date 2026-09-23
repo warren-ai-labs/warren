@@ -4,12 +4,14 @@ import remarkGfm from "remark-gfm";
 
 import {
   agentDraftMaximumBytes,
+  agentEchoWaitMs,
   displayToolName,
   extractExecCommands,
   basename,
   formatFileList,
   groupAgentEvents,
   isCommandTool,
+  isUserAgentEvent,
   latestAgentAction,
   loadAgentDraft,
   isHiddenAgentEvent,
@@ -122,6 +124,7 @@ export function AgentView({
   const canInteract = capabilities.includes("agent-interactions-v1");
   const canUpload = capabilities.includes("agent-attachments-v1");
   const showWorking = shouldShowWorking(agentStatus, events);
+  const staleAcceptedIDs = useStaleAcceptedMessages(queueItems);
   const latestAction = useMemo(() => latestAgentAction(events), [events]);
   const workingTurnKey = `${session?.id || ""}:${agentTurnKey(turn || session?.agentTurn, events)}`;
   const showInputMeta = Boolean(disabledReason || queueItems.length > 0);
@@ -511,34 +514,13 @@ export function AgentView({
               );
             })}
             {queueItems.map(item => (
-              <div key={item.id} className="agent-message user queued">
-                <div className="agent-bubble">
-                  <MarkdownContent value={item.text || ""} />
-                  {item.attachments?.length > 0 && (
-                    <div className="agent-queue-item-attachments" aria-label="Queued attachments">
-                      {item.attachments.map((att, idx) => (
-                        <span key={idx} className="agent-attachment-chip ready">
-                          {att.name || "Attachment"}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="agent-message-meta">
-                  <span className={`agent-queue-tag ${item.status || "queued"}`}>
-                    {item.status === "sending" ? "Sending…" : item.status === "failed" ? "Failed" : "Queued"}
-                  </span>
-                  {item.failureReason && <span className="agent-queue-error-text">{item.failureReason}</span>}
-                  <button
-                    type="button"
-                    className="agent-queue-inline-delete"
-                    title="Remove queued message"
-                    onClick={() => onQueueDelete && onQueueDelete(item.id)}
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
+              <PendingAgentMessage
+                key={item.id}
+                item={item}
+                stale={staleAcceptedIDs.has(item.id)}
+                onDelete={onQueueDelete}
+                onOpenTerminal={onOpenTerminal}
+              />
             ))}
           </>
         )}
@@ -834,9 +816,108 @@ function agentModel(session, events = []) {
   return model || "";
 }
 
-function isUserAgentEvent(event) {
-  return normalizeAgentEventType(event?.type) === "user"
-    || normalizeAgentEventType(event?.role) === "user";
+/**
+ * Ids of accepted messages whose transcript echo is overdue.
+ *
+ * Only runs a timer while something is actually waiting, so an idle transcript
+ * does not re-render on a clock.
+ */
+function useStaleAcceptedMessages(queueItems) {
+  const [stale, setStale] = useState(() => new Set());
+  const pending = useMemo(
+    () => queueItems.filter(item => item.status === "accepted" && item.acceptedAt),
+    [queueItems],
+  );
+  useEffect(() => {
+    if (pending.length === 0) {
+      setStale(previous => (previous.size === 0 ? previous : new Set()));
+      return undefined;
+    }
+    let timer = null;
+    const evaluate = () => {
+      const now = Date.now();
+      const overdue = new Set();
+      let soonest = Number.POSITIVE_INFINITY;
+      for (const item of pending) {
+        const accepted = Date.parse(item.acceptedAt);
+        if (!Number.isFinite(accepted)) continue;
+        const elapsed = now - accepted;
+        if (elapsed >= agentEchoWaitMs) overdue.add(item.id);
+        else soonest = Math.min(soonest, agentEchoWaitMs - elapsed);
+      }
+      setStale(previous => (
+        previous.size === overdue.size && [...overdue].every(id => previous.has(id))
+          ? previous
+          : overdue
+      ));
+      if (Number.isFinite(soonest)) timer = setTimeout(evaluate, Math.max(250, soonest));
+    };
+    evaluate();
+    return () => {
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [pending]);
+  return stale;
+}
+
+/**
+ * One outgoing message that the canonical timeline does not own yet.
+ *
+ * An `accepted` message is deliberately rendered as an ordinary sent bubble: the
+ * Host has it, so the only thing still missing is the provider's echo, and
+ * making that swap invisible is the entire point. `stale` means the echo has not
+ * arrived in a reasonable time, which is worth saying because the Agent may be
+ * stuck — but it is not a failure, and resending would duplicate the message.
+ */
+function PendingAgentMessage({ item, stale, onDelete, onOpenTerminal }) {
+  const status = item.status || "queued";
+  const accepted = status === "accepted";
+  const label = status === "sending"
+    ? "Sending…"
+    : status === "failed"
+      ? "Failed"
+      : accepted
+        ? (stale ? "Sent · the Agent has not picked it up" : "Sent")
+        : "Queued";
+  return (
+    <div className={`agent-message user queued ${status}`}>
+      <div className="agent-bubble">
+        <MarkdownContent value={item.text || ""} />
+        {item.attachments?.length > 0 && (
+          <div className="agent-queue-item-attachments" aria-label="Queued attachments">
+            {item.attachments.map((attachment, index) => (
+              <span key={index} className="agent-attachment-chip ready">
+                {attachment.name || "Attachment"}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="agent-message-meta">
+        <span className={`agent-queue-tag ${status}`} role="status" aria-live="polite">{label}</span>
+        {item.failureReason && <span className="agent-queue-error-text">{item.failureReason}</span>}
+        {stale && onOpenTerminal && (
+          <button type="button" className="agent-queue-inline-action" onClick={onOpenTerminal}>
+            Open terminal
+          </button>
+        )}
+        {/* An accepted message already reached the Agent, so removing it early
+            would only hide what is about to appear. Once the echo is overdue the
+            user must still be able to clear the row: the provider may never
+            write it, and the bubble is otherwise permanent. */}
+        {((!accepted && status !== "sending") || (accepted && stale)) && (
+          <button
+            type="button"
+            className="agent-queue-inline-delete"
+            title="Remove queued message"
+            onClick={() => onDelete && onDelete(item.id)}
+          >
+            ×
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function blockKindKey(block, index) {

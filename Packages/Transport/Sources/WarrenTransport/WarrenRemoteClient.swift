@@ -11,6 +11,10 @@ public enum WarrenRemoteClientError: Error, Equatable, Sendable, LocalizedError 
     case notConnected
     case closed
     case authenticationFailed(String)
+    /// Relay accepted this client but the Host is not there. Distinct from an
+    /// authentication failure: the credentials are fine, so refreshing them
+    /// would be wasted work, and the copy already reads as a finished sentence.
+    case hostOffline(detail: String)
     case requestFailed(String)
     case requestFailedWithCode(code: String, message: String, details: [String: WarrenRemoteJSONValue]?)
     case incompatibleProtocol(expected: String, received: String)
@@ -34,6 +38,8 @@ public enum WarrenRemoteClientError: Error, Equatable, Sendable, LocalizedError 
             return "The Warren remote connection is closed."
         case .authenticationFailed(let message):
             return "Warren Host authentication failed: \(message)"
+        case .hostOffline(let detail):
+            return detail
         case .requestFailed(let message):
             return "Warren Host request failed: \(message)"
         case .requestFailedWithCode(let code, let message, _):
@@ -72,6 +78,7 @@ private enum WarrenRemoteSocketEvent: Sendable {
     case rosterDelta(WarrenRemoteRoster.Delta)
     case output(WarrenRemoteOutputFrame)
     case atomicState(WarrenRemoteAtomicState)
+    case browserFrame(WarrenRemoteBrowserFrame)
     case anchor(WarrenRemoteOutputAnchor)
     case agentEvents(streamID: String, executionID: String, events: [WarrenRemoteAgentEvent])
     case maintenance(message: String?)
@@ -89,6 +96,10 @@ private actor WarrenRemoteSocket {
     /// short interactive RPC deadline.
     private static let requestsWithoutTimeout: Set<String> = ["usage.rebuild"]
     private static let heartbeatInterval: Duration = .seconds(20)
+    /// How long an app-level ping may go unanswered. Generous relative to the
+    /// interval because the Host answers control frames one at a time per
+    /// stream, so a slow request can legitimately delay a pong.
+    private static let heartbeatTimeout: Duration = .seconds(10)
     private let terminalStateFormats: Set<String>
     /// Hard deadline for the authenticated welcome. Mobile networks may spend
     /// several seconds on DNS, TLS, and proxy negotiation before it arrives,
@@ -110,6 +121,12 @@ private actor WarrenRemoteSocket {
     private var isClosed = false
     private var welcomeHostID: String?
     private var welcomeAccessScopeID: String?
+    /// Taken from the welcome so the heartbeat decision stays local to the
+    /// socket that negotiated it.
+    private var supportsAppHeartbeat = false
+    private var heartbeatSequence = 0
+    private var pendingHeartbeatID: String?
+    private var heartbeatDeadlineTask: Task<Void, Never>?
 
     init(
         adapter: any WarrenWebSocketTaskAdapter,
@@ -154,6 +171,8 @@ private actor WarrenRemoteSocket {
             WarrenRemoteAgentCapability.interrupt,
             WarrenRemoteAgentCapability.attachments,
             WarrenRemoteAgentCapability.goals,
+            WarrenRemoteCapability.appHeartbeat,
+            WarrenRemoteCapability.agentCausation,
         ]
     ) async throws -> String {
         guard !isClosed else { throw WarrenRemoteClientError.closed }
@@ -225,10 +244,15 @@ private actor WarrenRemoteSocket {
         return (welcomeHostID, welcomeAccessScopeID)
     }
 
-    /// Keeps otherwise quiet LAN/relay connections alive. A protocol-level
-    /// ping does not enqueue a roster response behind terminal or Agent
-    /// traffic, so a busy Host cannot make an otherwise healthy socket look
-    /// disconnected just because a heartbeat request timed out.
+    /// Keeps otherwise quiet LAN/relay connections alive, and proves the Host is
+    /// answering rather than merely that the socket is open.
+    ///
+    /// The protocol-level ping only reaches whatever terminates the WebSocket,
+    /// which over Relay is Relay itself; on its own it reports a healthy
+    /// connection while the Host is unreachable. When the Host negotiated
+    /// app-heartbeat-v1 an application ping is sent too, and it is the one with
+    /// a deadline. The protocol ping stays as the check for the client↔Relay hop
+    /// and as the only liveness signal available from an older Host.
     func startHeartbeat() {
         guard heartbeatTask == nil, !isClosed else { return }
         heartbeatTask = Task { [weak self] in
@@ -245,8 +269,50 @@ private actor WarrenRemoteSocket {
                     await self?.fail(error)
                     return
                 }
+                await self?.sendApplicationHeartbeat()
             }
         }
+    }
+
+    /// Sends one app-level ping, keeping at most a single probe outstanding. A
+    /// probe already in flight means the deadline is already running.
+    private func sendApplicationHeartbeat() async {
+        guard supportsAppHeartbeat, !isClosed, pendingHeartbeatID == nil else { return }
+        heartbeatSequence += 1
+        let id = "ios-ping-\(heartbeatSequence)"
+        pendingHeartbeatID = id
+        do {
+            try await adapter.send(.text(#"{"t":"ping","id":"\#(id)"}"#))
+        } catch {
+            pendingHeartbeatID = nil
+            fail(error)
+            return
+        }
+        armHeartbeatDeadline(for: id)
+    }
+
+    private func armHeartbeatDeadline(for id: String) {
+        heartbeatDeadlineTask?.cancel()
+        heartbeatDeadlineTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.heartbeatTimeout)
+            guard !Task.isCancelled else { return }
+            await self?.failUnansweredHeartbeat(id)
+        }
+    }
+
+    private func failUnansweredHeartbeat(_ id: String) {
+        guard pendingHeartbeatID == id, !isClosed else { return }
+        fail(WarrenRemoteClientError.requestFailed("The Host stopped answering heartbeats."))
+    }
+
+    /// Any inbound frame proves the far end is alive, so it satisfies the probe
+    /// in flight. Requiring the matching pong would close healthy sockets
+    /// whenever a slow control request delayed it behind streaming output.
+    private func noteInboundActivity() {
+        guard pendingHeartbeatID != nil || heartbeatDeadlineTask != nil else { return }
+        pendingHeartbeatID = nil
+        heartbeatDeadlineTask?.cancel()
+        heartbeatDeadlineTask = nil
     }
 
     /// Probes the transport now instead of waiting out the remaining heartbeat
@@ -260,7 +326,12 @@ private actor WarrenRemoteSocket {
             try await adapter.ping()
         } catch {
             fail(error)
+            return
         }
+        // The protocol ping above only reached Relay. Ask the Host too, so a
+        // foreground probe cannot report a healthy connection to a Host that
+        // stopped answering.
+        await sendApplicationHeartbeat()
     }
 
     private func waitForWelcome() async throws -> String {
@@ -381,6 +452,9 @@ private actor WarrenRemoteSocket {
         receiveTask = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
+        heartbeatDeadlineTask?.cancel()
+        heartbeatDeadlineTask = nil
+        pendingHeartbeatID = nil
         requestTimeoutTasks.values.forEach { $0.cancel() }
         requestTimeoutTasks.removeAll()
         welcomeContinuation?.resume(throwing: WarrenRemoteClientError.closed)
@@ -399,6 +473,9 @@ private actor WarrenRemoteSocket {
         receiveTask = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
+        heartbeatDeadlineTask?.cancel()
+        heartbeatDeadlineTask = nil
+        pendingHeartbeatID = nil
         requestTimeoutTasks.values.forEach { $0.cancel() }
         requestTimeoutTasks.removeAll()
         welcomeContinuation?.resume(throwing: error)
@@ -419,6 +496,7 @@ private actor WarrenRemoteSocket {
         do {
             while !Task.isCancelled, !isClosed {
                 let message = try await adapter.receive()
+                noteInboundActivity()
                 switch message {
                 case .binary(let bytes):
                     guard bytes.count <= codec.maximumEnvelopeBytes else {
@@ -448,6 +526,21 @@ private actor WarrenRemoteSocket {
                             throw WarrenRemoteClientError.unsupportedTerminalStateFormat(frame.header.format)
                         }
                         _ = continuation?.yield(.atomicState(WarrenRemoteAtomicState(
+                            sessionID: sessionID.uuidString.lowercased(),
+                            epoch: frame.header.epoch,
+                            sequence: frame.header.sequence,
+                            format: frame.header.format,
+                            payload: frame.payload
+                        )))
+                    case .browserFrame(let frame):
+                        // The format is not re-checked here: decodeBrowserFrame
+                        // refuses a frame whose encoding it does not know, so a
+                        // second guard would be unreachable and would suggest
+                        // this boundary owns a rule the codec already enforces.
+                        guard let sessionID = UUID(uuidString: frame.header.sessionID.description) else {
+                            throw WarrenRemoteClientError.invalidResponse
+                        }
+                        _ = continuation?.yield(.browserFrame(WarrenRemoteBrowserFrame(
                             sessionID: sessionID.uuidString.lowercased(),
                             epoch: frame.header.epoch,
                             sequence: frame.header.sequence,
@@ -499,6 +592,10 @@ private actor WarrenRemoteSocket {
               let type = object["t"] as? String else {
             return
         }
+        // Heartbeats are transport bookkeeping and never reach the model.
+        if type == "pong" {
+            return
+        }
         switch type {
         case "welcome":
             let version = object["version"] as? String ?? "unknown"
@@ -534,6 +631,7 @@ private actor WarrenRemoteSocket {
                 welcomeResult = .success(version)
             }
             let capabilities = (object["capabilities"] as? [String]) ?? []
+            supportsAppHeartbeat = capabilities.contains(WarrenRemoteCapability.appHeartbeat)
             _ = continuation?.yield(.welcome(version: version, capabilities: capabilities))
         case "response":
             guard let id = object["id"] as? String else { return }
@@ -568,7 +666,13 @@ private actor WarrenRemoteSocket {
                 ?? object["message"] as? String
                 ?? "Remote authentication failed"
             let error: WarrenRemoteClientError
-            if message.hasPrefix("incompatible protocol version:") || message.hasPrefix("upgrade required:") {
+            if object["code"] as? String == "host_offline" {
+                // Relay already waited ~15s for the Host before saying this, so
+                // it is a fact about the Host rather than a transport hiccup.
+                // Carrying the name and last-seen time through means the client
+                // can show a sentence instead of a code.
+                error = .hostOffline(detail: Self.hostOfflineDetail(from: object))
+            } else if message.hasPrefix("incompatible protocol version:") || message.hasPrefix("upgrade required:") {
                 error = .upgradeRequired(message)
             } else {
                 error = .authenticationFailed(message)
@@ -665,6 +769,14 @@ private actor WarrenRemoteSocket {
         let data = (try? JSONSerialization.data(withJSONObject: value)) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
     }
+
+    /// Relay's `host_offline` error frame carries `host_name` and
+    /// `last_seen_at`; both are optional, so the copy degrades one step at a
+    /// time rather than falling back to the raw code.
+    private static func hostOfflineDetail(from object: [String: Any]) -> String {
+        let lastSeen = (object["last_seen_at"] as? String).flatMap(warrenParseRelayTimestamp)
+        return warrenHostOfflineDetail(hostName: object["host_name"] as? String, lastSeenAt: lastSeen)
+    }
 }
 
 /// Cross-platform client for the `warren-headless` Host WebSocket API.
@@ -675,6 +787,10 @@ private actor WarrenRemoteSocket {
 public actor WarrenRemoteClient {
     public static let replayTerminalStateFormat = "ghostline-vt-replay-v1"
     public static let snapshotTerminalStateFormat = "ghostty-vt-snapshot-v1"
+    /// The only screencast still-image format a Browser Session may emit
+    /// (RFC 0022). It is checked separately from `terminalStateFormats` because
+    /// a browser frame is never a terminal snapshot.
+    public static let browserFrameFormat = "browser-frame-jpeg-v1"
     public static let protocolVersion = "4.0"
     /// Control JSON is deliberately smaller than the largest binary DENB
     /// snapshot. These limits are enforced before JSON decoding and again at
@@ -771,6 +887,8 @@ public actor WarrenRemoteClient {
             WarrenRemoteAgentCapability.interrupt,
             WarrenRemoteAgentCapability.attachments,
             WarrenRemoteAgentCapability.goals,
+            WarrenRemoteCapability.appHeartbeat,
+            WarrenRemoteCapability.agentCausation,
         ]
         self.clientID = clientID ?? configuration.clientID
         self.codec = codec
@@ -1640,11 +1758,33 @@ public actor WarrenRemoteClient {
         return object
     }
 
+    /// How long a connection must survive before a later drop is treated as a
+    /// fresh problem rather than a continuation of the previous one. Without it,
+    /// a handshake that succeeds and immediately dies would loop at the minimum
+    /// delay forever and read as constant reconnecting.
+    ///
+    /// Mirrors `relayStableConnection` in the Host's Relay connector. A welcome
+    /// round trip takes about 1.3 s on a slow link, so anything well above that
+    /// distinguishes "connected and healthy" from "connected and instantly
+    /// dead"; the value stays below a minute so a phone that genuinely flaps
+    /// every half minute does not escalate into 30 s retry delays.
+    public static let connectionStabilityWindow: Duration = .seconds(30)
+
     /// A deterministic exponential backoff shared by mobile and desktop
     /// clients. The first retry waits 500 ms and the delay caps at 30 s.
-    public static func reconnectDelayMilliseconds(attempt: Int) -> Int {
+    ///
+    /// `random` supplies the jitter factor and is injectable for tests. Jitter
+    /// is not cosmetic: every client that lost the same Relay computes the same
+    /// unjittered delay, so they all redial in the same instant and arrive as a
+    /// spike. Mirrors `reconnectDelay` in `Web/src/connection.js` and
+    /// `BackoffDelay` in the Host connector, which both apply ±20%.
+    public static func reconnectDelayMilliseconds(
+        attempt: Int,
+        random: () -> Double = { Double.random(in: 0..<1) }
+    ) -> Int {
         let bounded = min(max(attempt, 0), 6)
-        return min(30_000, 500 * (1 << bounded))
+        let base = min(30_000, 500 * (1 << bounded))
+        return Int((Double(base) * (0.8 + random() * 0.4)).rounded())
     }
 
     public static func compatibleProtocolVersion(_ lhs: String, with rhs: String) -> Bool {
@@ -1742,7 +1882,12 @@ public actor WarrenRemoteClient {
                         return
                     }
                 }
-                if !refreshedAfterAuthenticationFailure {
+                if case .hostOffline(let detail) = error as? WarrenRemoteClientError {
+                    // Relay is reachable and this client is authorized; the
+                    // Host is simply away. Keep retrying, but let the UI say so
+                    // without waiting out a grace period.
+                    emit(.hostAbsent(detail: detail))
+                } else if !refreshedAfterAuthenticationFailure {
                     emit(.disconnected(reason: error.localizedDescription))
                 }
             }
@@ -1754,11 +1899,9 @@ public actor WarrenRemoteClient {
                 setConnectionState(.reconnecting)
                 continue
             }
-            // A socket that remained connected through a short stability
-            // window is considered healthy. Reset the backoff only after that
-            // point; otherwise a handshake that succeeds and immediately dies
-            // would loop at 500 ms forever and present as constant reconnecting.
-            if ContinuousClock.now - connectionStartedAt >= .seconds(10) {
+            // A socket that remained connected through the stability window is
+            // considered healthy, so a later drop starts a fresh sequence.
+            if ContinuousClock.now - connectionStartedAt >= Self.connectionStabilityWindow {
                 attempt = 0
             }
             setConnectionState(.reconnecting)
@@ -1896,6 +2039,10 @@ public actor WarrenRemoteClient {
         case .atomicState(let state):
             updateAnchor(sessionID: state.sessionID, epoch: state.epoch, sequence: state.sequence)
             emit(.atomicState(state))
+        // A screencast sequence is a frame counter, not a PTY byte position, so
+        // it must not touch the terminal recovery anchor.
+        case .browserFrame(let frame):
+            emit(.browserFrame(frame))
         case .anchor(let anchor):
             updateAnchor(sessionID: anchor.sessionID, epoch: anchor.epoch, sequence: anchor.sequence)
             emit(.anchor(anchor))

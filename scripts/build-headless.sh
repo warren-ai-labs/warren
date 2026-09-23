@@ -29,6 +29,7 @@ build_non_macos() {
         -o "$output_directory/warren-ssh-tunnel" \
         "$repository_root/Headless/cmd/warren-ssh-tunnel"
     cp -f "$output_directory/warren" "$output_directory/warren-cli"
+    ln -sf "warren-headless" "$output_directory/warren-ghostline"
 }
 
 if [[ "$(go env GOOS)" != darwin ]]; then
@@ -73,3 +74,4 @@ build_macos_product warren-headless "$output_directory/warren-headless"
 build_macos_product warren "$output_directory/warren"
 build_macos_product warren-ssh-tunnel "$output_directory/warren-ssh-tunnel"
 cp -f "$output_directory/warren" "$output_directory/warren-cli"
+ln -sf "warren-headless" "$output_directory/warren-ghostline"

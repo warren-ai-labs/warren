@@ -358,7 +358,15 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 client: client,
                 generation: generation
             )
-        case .welcome, .output, .atomicState, .anchor, .agentEvents, .maintenance:
+        case .hostAbsent(let detail):
+            connection.state = .reconnecting
+            connection.lastError = Self.boundedError(detail)
+            restartTunnelIfNeeded(
+                for: connection,
+                client: client,
+                generation: generation
+            )
+        case .welcome, .output, .atomicState, .browserFrame, .anchor, .agentEvents, .maintenance:
             break
         }
         rebuildProjection()

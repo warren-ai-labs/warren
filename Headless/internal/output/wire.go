@@ -31,11 +31,23 @@ const (
 	// distinct kind so clients can never feed snapshot bytes through their VT
 	// output parser by mistake.
 	KindAtomicState = protocol.KindAtomicState
+	// KindBrowserFrame carries one screencast frame for a Warren Browser
+	// Session (RFC 0022). Its own kind for the same reason KindAtomicState is
+	// one: the payload is an encoded image, and a client that subscribes to a
+	// Session without checking its kind must never hand these bytes to a VT
+	// parser. A browser Session has no PTY at all.
+	KindBrowserFrame = protocol.KindBrowserFrame
 
-	MaxHeader             = protocol.MaxHeader
-	MaxPayload            = protocol.MaxPayload
-	MaxAtomicStatePayload = protocol.MaxAtomicStatePayload
+	MaxHeader              = protocol.MaxHeader
+	MaxPayload             = protocol.MaxPayload
+	MaxAtomicStatePayload  = protocol.MaxAtomicStatePayload
+	MaxBrowserFramePayload = protocol.MaxBrowserFramePayload
 )
+
+// BrowserFrameFormat is the only image encoding a browserFrame payload may
+// carry. A client that receives any other value must drop the frame rather
+// than guess at a decoder.
+const BrowserFrameFormat = "browser-frame-jpeg-v1"
 
 var binaryPrefixLength = len(BinaryMagic) + 1 + 1 + 1 + 4 + 4
 
@@ -55,6 +67,17 @@ type inputHeader struct {
 }
 
 type atomicStateHeader struct {
+	SessionID     string `json:"sessionID"`
+	Epoch         uint64 `json:"epoch"`
+	Sequence      uint64 `json:"sequence"`
+	Format        string `json:"format"`
+	PayloadLength int    `json:"payloadLength"`
+}
+
+// browserFrameHeader is byte-for-byte the atomicState header shape. That is
+// deliberate: a client that has one decoder has the other, and the two kinds
+// differ only in the format constant and the payload's decoder.
+type browserFrameHeader struct {
 	SessionID     string `json:"sessionID"`
 	Epoch         uint64 `json:"epoch"`
 	Sequence      uint64 `json:"sequence"`
@@ -92,6 +115,20 @@ func EncodeAtomicState(sessionID string, epoch, sequence uint64, format string, 
 	}, payload)
 }
 
+// EncodeBrowserFrame wraps one screencast frame for a Warren Browser Session.
+// The payload must be a JPEG in the frame size the screencast reported; Warren
+// never re-encodes a frame, because re-encoding would decouple what the viewer
+// paints from what a screenshot action captured.
+func EncodeBrowserFrame(sessionID string, epoch, sequence uint64, payload []byte) ([]byte, error) {
+	return encodeEnvelope(DirectionHostToClient, KindBrowserFrame, browserFrameHeader{
+		SessionID:     sessionID,
+		Epoch:         epoch,
+		Sequence:      sequence,
+		Format:        BrowserFrameFormat,
+		PayloadLength: len(payload),
+	}, payload)
+}
+
 func EncodeInput(metadata InputMetadata, payload []byte) ([]byte, error) {
 	if metadata.Version == "" {
 		metadata.Version = protocol.LogicalVersion
@@ -107,8 +144,11 @@ func EncodeInput(metadata InputMetadata, payload []byte) ([]byte, error) {
 
 func encodeEnvelope(direction, kind byte, header any, payload []byte) ([]byte, error) {
 	maxPayload := MaxPayload
-	if kind == KindAtomicState {
+	switch kind {
+	case KindAtomicState:
 		maxPayload = MaxAtomicStatePayload
+	case KindBrowserFrame:
+		maxPayload = MaxBrowserFramePayload
 	}
 	if len(payload) > maxPayload {
 		return nil, fmt.Errorf("binary payload too large: %d > %d", len(payload), maxPayload)
@@ -200,6 +240,45 @@ func DecodeAtomicState(data []byte) (DecodedAtomicState, error) {
 	}, nil
 }
 
+// DecodedBrowserFrame is one screencast frame. Format is always
+// BrowserFrameFormat; a frame carrying any other value is rejected here rather
+// than handed to a decoder that would guess.
+type DecodedBrowserFrame struct {
+	SessionID string
+	Epoch     uint64
+	Sequence  uint64
+	Format    string
+	Payload   []byte
+}
+
+// DecodeBrowserFrame parses one Host-to-Client browser screencast frame.
+func DecodeBrowserFrame(data []byte) (DecodedBrowserFrame, error) {
+	direction, kind, headerBytes, payload, err := parseEnvelope(data)
+	if err != nil {
+		return DecodedBrowserFrame{}, err
+	}
+	if direction != DirectionHostToClient || kind != KindBrowserFrame {
+		return DecodedBrowserFrame{}, fmt.Errorf("not a host-to-client browser frame")
+	}
+	var header browserFrameHeader
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return DecodedBrowserFrame{}, fmt.Errorf("decode browser frame header: %w", err)
+	}
+	if header.Format != BrowserFrameFormat {
+		return DecodedBrowserFrame{}, fmt.Errorf("unsupported browser frame format %q", header.Format)
+	}
+	if header.PayloadLength != len(payload) {
+		return DecodedBrowserFrame{}, fmt.Errorf("browser frame payload length mismatch: header=%d actual=%d", header.PayloadLength, len(payload))
+	}
+	return DecodedBrowserFrame{
+		SessionID: header.SessionID,
+		Epoch:     header.Epoch,
+		Sequence:  header.Sequence,
+		Format:    header.Format,
+		Payload:   append([]byte(nil), payload...),
+	}, nil
+}
+
 func DecodeInput(data []byte) (InputMetadata, []byte, error) {
 	direction, kind, headerBytes, payload, err := parseEnvelope(data)
 	if err != nil {
@@ -238,7 +317,7 @@ func parseEnvelope(data []byte) (direction, kind byte, headerBytes, payload []by
 	direction = data[offset+1]
 	kind = data[offset+2]
 	if (direction == DirectionClientToHost && kind != KindInput) ||
-		(direction == DirectionHostToClient && kind != KindOutput && kind != KindAtomicState) {
+		(direction == DirectionHostToClient && kind != KindOutput && kind != KindAtomicState && kind != KindBrowserFrame) {
 		return 0, 0, nil, nil, fmt.Errorf("binary kind/direction mismatch")
 	}
 	headerLength := int(binary.BigEndian.Uint32(data[offset+3 : offset+7]))
@@ -247,8 +326,11 @@ func parseEnvelope(data []byte) (direction, kind byte, headerBytes, payload []by
 		return 0, 0, nil, nil, fmt.Errorf("binary header too large: %d", headerLength)
 	}
 	maxPayload := MaxPayload
-	if kind == KindAtomicState {
+	switch kind {
+	case KindAtomicState:
 		maxPayload = MaxAtomicStatePayload
+	case KindBrowserFrame:
+		maxPayload = MaxBrowserFramePayload
 	}
 	if payloadLength > maxPayload {
 		return 0, 0, nil, nil, fmt.Errorf("binary payload too large: %d", payloadLength)

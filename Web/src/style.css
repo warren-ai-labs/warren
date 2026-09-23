@@ -381,6 +381,24 @@ button:disabled {
   background: var(--color-status-ready);
 }
 
+/* A settling connection is retrying but not yet lost. The dot breathes instead
+   of changing colour, so a brief flap is visible without reading as an event. */
+.settling .connection-dot {
+  animation: connection-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes connection-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settling .connection-dot {
+    animation: none;
+    opacity: 0.55;
+  }
+}
+
 .sidebar-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -1379,6 +1397,15 @@ button:disabled {
   opacity: 0.92;
 }
 
+/* An accepted message is already in the Agent's hands, so it reads as an
+   ordinary sent bubble. The provider's echo then replaces it in place with no
+   visible change, which is the whole reason the state exists. */
+.agent-message.user.queued.accepted .agent-bubble {
+  background: var(--color-agent-bubble-surface);
+  border: 1px solid transparent;
+  opacity: 1;
+}
+
 .agent-queue-tag {
   display: inline-flex;
   align-items: center;
@@ -1396,6 +1423,25 @@ button:disabled {
 
 .agent-queue-tag.failed {
   color: var(--color-text-danger);
+}
+
+/* Confirmed delivery is reassurance, not news: it should be findable without
+   competing with the transcript. */
+.agent-queue-tag.accepted {
+  background: none;
+  padding-inline: 0;
+  color: var(--color-text-tertiary);
+}
+
+.agent-queue-inline-action {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  margin-inline-start: 6px;
+  cursor: pointer;
+  color: var(--color-text-accent);
+  font-size: var(--text-xs);
+  line-height: 1;
 }
 
 .agent-queue-inline-delete {

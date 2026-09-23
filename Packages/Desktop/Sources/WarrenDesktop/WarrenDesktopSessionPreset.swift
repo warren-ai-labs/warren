@@ -113,6 +113,15 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
             isPinned: true
         ),
         Self(
+            id: "browser",
+            title: "Browser",
+            subtitle: "Open a Warren-owned Chromium in this workspace",
+            symbolName: "globe",
+            createButtonTitle: "Open Browser",
+            request: TerminalSessionLaunchRequest(kind: .browser),
+            isPinned: true
+        ),
+        Self(
             id: "custom",
             title: "Custom Command",
             subtitle: "Run any command line, agent or development server",
@@ -172,6 +181,24 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         return orderedPinned(by: orderRawValue).filter { !hidden.contains($0.id) }
     }
 
+    /// The presets a launcher may actually offer at this endpoint.
+    ///
+    /// Visibility is a user preference; this is a capability. A browser Session's
+    /// Chromium runs on the Host with its own profile directory, and only a local
+    /// endpoint can show the page it draws — so a remote Host drops the browser
+    /// preset rather than offering a Session with nothing to look at. The
+    /// preference itself is untouched, so the preset returns when the user comes
+    /// back to a local endpoint.
+    public static func orderedLaunchable(
+        by orderRawValue: String,
+        hidden hiddenRawValue: String,
+        embeddedBrowser: Bool
+    ) -> [Self] {
+        orderedVisible(by: orderRawValue, hidden: hiddenRawValue).filter {
+            embeddedBrowser || $0.request.kind != .browser
+        }
+    }
+
     public static func settingVisibility(
         of id: String,
         visible: Bool,
@@ -219,6 +246,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         case "qoder": "Qoder"
         case "antigravity": "Antigravity"
         case "trae": "Trae"
+        case "browser": "Browser"
         default: title
         }
     }
@@ -233,6 +261,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         case "qoder": "preset-qoder"
         case "antigravity": "preset-antigravity"
         case "trae": "preset-trae"
+        case "browser": "preset-browser"
         default: nil
         }
     }
@@ -240,11 +269,14 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
     /// Whether this preset's artwork is a single-color glyph that Warren tints
     /// rather than a logo it reproduces.
     ///
-    /// These three ship as one flat grey picked against the Ember bar, which is
+    /// These ship as one flat grey picked against the Ember bar, which is
     /// the same grey as `mutedForeground` — so they are really the row's text
     /// color drawn as a shape, and on paper that grey goes muddy. Tinting them
     /// from the resolved token keeps one asset answering both appearances; a
     /// second set of files would be two greys to keep in step instead of none.
+    ///
+    /// `browser` belongs with them: a Warren-owned Chromium has no vendor mark,
+    /// so its glyph is Warren's own drawing rather than someone's logo.
     ///
     /// The rest are brand marks. Their color is the identity, so they are
     /// reproduced as authored in both appearances. `codex` is a brand mark too,
@@ -252,7 +284,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
     /// instead of a tint.
     var presetBarIconIsTintable: Bool {
         switch id {
-        case "shell", "opencode", "pi": true
+        case "shell", "opencode", "pi", "browser": true
         default: false
         }
     }
@@ -260,7 +292,7 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
     public var isAI: Bool {
         switch request.kind {
         case .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae: true
-        case .shell, .custom: false
+        case .shell, .custom, .browser: false
         }
     }
 
@@ -273,6 +305,9 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
     /// Commands are typed into a plain shell first, so quitting an agent CLI
     /// leaves the terminal alive; an empty shell command opens a bare shell.
     public func resolvedRequest(commandOverride: String) -> TerminalSessionLaunchRequest {
+        // A browser Session has no command line: the Host launches Chromium
+        // itself, so there is nothing a typed command could replace.
+        guard request.kind != .browser else { return request }
         let override = commandOverride.trimmingCharacters(in: .whitespacesAndNewlines)
         let command = override.isEmpty ? request.command : commandOverride
         return TerminalSessionLaunchRequest(kind: request.kind, command: command, title: request.title)
@@ -293,6 +328,7 @@ extension TerminalSessionKind {
         case .antigravity: "arrow.up.circle"
         case .trae: "sparkle.magnifyingglass"
         case .custom: "hammer"
+        case .browser: "globe"
         }
     }
 }

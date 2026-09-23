@@ -125,7 +125,7 @@ private struct SidebarHostRowsTestHarness: View {
 }
 
 @MainActor
-private func makeTabBar(
+func makeTabBar(
     tabs: [ClientTab],
     selectedTabID: String?,
     soloPane: WarrenDesktopSoloPaneIdentity.Model? = nil
@@ -813,6 +813,7 @@ final class WarrenDesktopTests: XCTestCase {
             canAddProject: false,
             canImportSuperset: false,
             canUseEmbeddedEditor: true,
+            canUseEmbeddedBrowser: true,
             canOpenExternalIDE: true,
             canCopyLocalWebURL: false
         )
@@ -824,8 +825,17 @@ final class WarrenDesktopTests: XCTestCase {
 
         XCTAssertEqual(endpoint.capabilities, hostEditor)
         XCTAssertTrue(endpoint.capabilities.canUseEmbeddedEditor)
+        XCTAssertTrue(endpoint.capabilities.canUseEmbeddedBrowser)
         XCTAssertTrue(endpoint.capabilities.canOpenExternalIDE)
         XCTAssertFalse(endpoint.capabilities.canAddProject)
+    }
+
+    // The browser runtime is a Host-launched Chromium, so a remote Host never
+    // gets it however capable it is: the capability is not a settings toggle.
+    func testRemoteEndpointsNeverAdvertiseTheEmbeddedBrowser() {
+        XCTAssertFalse(WarrenDesktopEndpointCapabilities.remote.canUseEmbeddedBrowser)
+        XCTAssertTrue(WarrenDesktopEndpointCapabilities.local.canUseEmbeddedBrowser)
+        XCTAssertFalse(WarrenDesktopEndpointCapabilities.remote.canUseEmbeddedEditor)
     }
 
     func testEmbeddedEditorKeepsIDEControlAvailableWithoutExternalApplications() {
@@ -2806,16 +2816,19 @@ final class WarrenDesktopTests: XCTestCase {
     }
 
     func testBuiltInPresetsMapToExplicitLaunchRequests() {
-        XCTAssertEqual(WarrenDesktopSessionPreset.pinned.map(\.id), ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "trae"])
+        XCTAssertEqual(WarrenDesktopSessionPreset.pinned.map(\.id), ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "trae", "browser"])
         XCTAssertEqual(
             WarrenDesktopSessionPreset.pinned.map(\.presetBarTitle),
-            ["Shell", "Claude", "Codex", "OpenCode", "Pi", "Qoder", "Antigravity", "Trae"]
+            ["Shell", "Claude", "Codex", "OpenCode", "Pi", "Qoder", "Antigravity", "Trae", "Browser"]
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.pinned.compactMap(\.presetBarIconName),
-            ["preset-shell", "preset-claude", "preset-codex", "preset-opencode", "preset-pi", "preset-qoder", "preset-antigravity", "preset-trae"]
+            ["preset-shell", "preset-claude", "preset-codex", "preset-opencode", "preset-pi", "preset-qoder", "preset-antigravity", "preset-trae", "preset-browser"]
         )
-        XCTAssertEqual(WarrenDesktopSessionPreset.pinned.map(\.request), [.shell, .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae])
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.pinned.map(\.request),
+            [.shell, .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae, TerminalSessionLaunchRequest(kind: .browser)]
+        )
         XCTAssertNil(TerminalSessionLaunchRequest.shell.command)
         XCTAssertEqual(TerminalSessionLaunchRequest.claude.command, "claude")
         // Built-in presets carry no user title: the Host derives the default
@@ -2851,24 +2864,24 @@ final class WarrenDesktopTests: XCTestCase {
     func testPresetOrderNormalizesPersistedIdentifiers() {
         XCTAssertEqual(
             WarrenDesktopSessionPreset.normalizedOrder("codex,shell,codex,future"),
-            ["codex", "shell", "claude", "opencode", "pi", "qoder", "antigravity", "trae"]
+            ["codex", "shell", "claude", "opencode", "pi", "qoder", "antigravity", "trae", "browser"]
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.normalizedOrder(""),
-            ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "trae"]
+            ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "trae", "browser"]
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.normalizedOrderRawValue("codex,shell,codex,future"),
-            "codex,shell,claude,opencode,pi,qoder,antigravity,trae"
+            "codex,shell,claude,opencode,pi,qoder,antigravity,trae,browser"
         )
     }
 
     func testPresetOrderControlsPresentation() {
-        let order = "shell,codex,claude,opencode,pi,qoder,antigravity,trae"
+        let order = "shell,codex,claude,opencode,pi,qoder,antigravity,trae,browser"
 
         XCTAssertEqual(
             WarrenDesktopSessionPreset.orderedPinned(by: order).map(\.id),
-            ["shell", "codex", "claude", "opencode", "pi", "qoder", "antigravity", "trae"]
+            ["shell", "codex", "claude", "opencode", "pi", "qoder", "antigravity", "trae", "browser"]
         )
         XCTAssertEqual(WarrenDesktopSessionPreset.firstAI(orderedBy: order)?.id, "codex")
     }
@@ -2880,7 +2893,7 @@ final class WarrenDesktopTests: XCTestCase {
                 by: WarrenDesktopSessionPreset.defaultOrderRawValue,
                 hidden: WarrenDesktopSessionPreset.defaultHiddenRawValue
             ).map(\.id),
-            ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity"]
+            ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "browser"]
         )
 
         let onlyTraeVisible = WarrenDesktopSessionPreset.pinned
@@ -2900,6 +2913,35 @@ final class WarrenDesktopTests: XCTestCase {
         )
     }
 
+    /// Only a local endpoint can show the page a browser Session draws, so a
+    /// remote Host must not offer the preset. The preference is untouched: the
+    /// preset returns when the endpoint does.
+    func testBrowserPresetIsOfferedOnlyWhereItsPageCanBeSeen() {
+        let order = WarrenDesktopSessionPreset.defaultOrderRawValue
+        let hidden = WarrenDesktopSessionPreset.defaultHiddenRawValue
+
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.orderedLaunchable(
+                by: order,
+                hidden: hidden,
+                embeddedBrowser: true
+            ).map(\.id),
+            ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity", "browser"]
+        )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.orderedLaunchable(
+                by: order,
+                hidden: hidden,
+                embeddedBrowser: false
+            ).map(\.id),
+            ["shell", "claude", "codex", "opencode", "pi", "qoder", "antigravity"]
+        )
+        XCTAssertFalse(
+            WarrenDesktopSessionPreset.normalizedHidden(hidden).contains("browser"),
+            "Endpoint capability must not be recorded as a hidden-preset preference"
+        )
+    }
+
     func testPresetLaunchFeedbackDisablesDuplicateStarts() {
         XCTAssertFalse(WarrenDesktopPresetLaunchFeedback.isDisabled(hasScope: true, isBusy: false, isPending: false))
         XCTAssertTrue(WarrenDesktopPresetLaunchFeedback.isDisabled(hasScope: true, isBusy: true, isPending: false))
@@ -2910,7 +2952,7 @@ final class WarrenDesktopTests: XCTestCase {
     }
 
     func testEveryPresetAcceptsItsOwnCommandOverride() {
-        for preset in WarrenDesktopSessionPreset.pinned {
+        for preset in WarrenDesktopSessionPreset.pinned where preset.request.kind != .browser {
             XCTAssertEqual(
                 preset.resolvedRequest(commandOverride: "personal-\(preset.id)").command,
                 "personal-\(preset.id)"
@@ -2918,6 +2960,19 @@ final class WarrenDesktopTests: XCTestCase {
         }
         let trae = WarrenDesktopSessionPreset.pinned.first { $0.id == "trae" }
         XCTAssertEqual(trae?.resolvedRequest(commandOverride: "").command, "trae-cli interactive")
+    }
+
+    /// A browser Session has no command line: the Host launches Chromium
+    /// itself. A typed override must not reach the launch request, or the
+    /// preset would promise a command nothing runs.
+    func testBrowserPresetIgnoresCommandOverrides() {
+        let browser = WarrenDesktopSessionPreset.pinned.first { $0.id == "browser" }
+        XCTAssertEqual(browser?.request.kind, .browser)
+        XCTAssertNil(browser?.request.command)
+        XCTAssertNil(browser?.resolvedRequest(commandOverride: "chromium --headless").command)
+        XCTAssertNil(browser?.resolvedRequest(commandOverride: "").command)
+        XCTAssertEqual(browser?.createButtonTitle, "Open Browser")
+        XCTAssertFalse(browser?.isAI ?? true)
     }
 
     func testAutomaticShellPolicyIsOptInForAnEmptyWorkspace() {
@@ -3016,19 +3071,23 @@ final class WarrenDesktopTests: XCTestCase {
     }
 
     func testPresetOrderMovesWithinBounds() {
-        let order = "shell,claude,codex,opencode,pi,qoder,antigravity,trae"
+        let order = "shell,claude,codex,opencode,pi,qoder,antigravity,trae,browser"
 
         XCTAssertEqual(
             WarrenDesktopSessionPreset.moving("codex", by: -1, in: order),
-            "shell,codex,claude,opencode,pi,qoder,antigravity,trae"
+            "shell,codex,claude,opencode,pi,qoder,antigravity,trae,browser"
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.moving("shell", by: -1, in: order),
             order
         )
         XCTAssertEqual(
-            WarrenDesktopSessionPreset.moving("trae", by: 1, in: order),
+            WarrenDesktopSessionPreset.moving("browser", by: 1, in: order),
             order
+        )
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.moving("trae", by: 1, in: order),
+            "shell,claude,codex,opencode,pi,qoder,antigravity,browser,trae"
         )
     }
 
@@ -3524,7 +3583,7 @@ final class WarrenDesktopTests: XCTestCase {
                 .map(\.id)
         )
 
-        XCTAssertEqual(tintable, ["shell", "opencode", "pi"])
+        XCTAssertEqual(tintable, ["shell", "opencode", "pi", "browser"])
         for brand in ["claude", "codex", "qoder", "antigravity", "trae"] {
             XCTAssertFalse(tintable.contains(brand), "\(brand) is a brand mark")
         }
@@ -4044,6 +4103,162 @@ final class WarrenDesktopTests: XCTestCase {
             on: "workspace-session.project-list.\(workspace.id.description).\(codex.id.description)"
         )
         XCTAssertEqual(actions, [.openSession(codex.id)])
+    }
+
+    @MainActor
+    func testRichTerminalGroupRowsShowEveryLiveSessionAsALeaf() throws {
+        let host = WarrenDomain.Host(name: "Terminal Host")
+        let terminalGroup = TerminalGroup(hostID: host.id, name: "Ops")
+        let shellSession = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            terminalGroupID: terminalGroup.id,
+            tabID: "tab.shell",
+            title: "zsh",
+            kind: .shell
+        )
+        let codexSession = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            terminalGroupID: terminalGroup.id,
+            tabID: "tab.codex",
+            title: "Fix bug",
+            kind: .codex,
+            activity: .working
+        )
+        let endedSession = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            terminalGroupID: terminalGroup.id,
+            title: "Old shell",
+            kind: .shell,
+            state: .exited
+        )
+        let group = WarrenDesktopTerminalGroup(
+            group: terminalGroup,
+            sessions: [shellSession, codexSession, endedSession]
+        )
+        let recorder = WarrenSemanticRecorder()
+        var actions: [WarrenDesktopAction] = []
+        let rows = WarrenDesktopSidebarRows(
+            taskGroups: [],
+            groups: [],
+            terminalGroups: [group],
+            workspaceActivitySummaries: [:],
+            workspaceDisplayMode: .rich,
+            tree: .constant(WarrenDesktopSidebarTreeState(
+                terminalGroupsCollapsed: false
+            )),
+            isCollapsed: false,
+            selection: .terminalGroup(terminalGroup.id),
+            selectedTabID: "tab.codex",
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
+            isInteractionDisabled: false,
+            onAddProject: {},
+            onRequestTaskCreate: {},
+            onFocusTask: { _ in },
+            onRequestTerminalGroupCreate: {},
+            onRequestTerminalGroupEdit: { _ in },
+            onAction: { actions.append($0) },
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in }
+        )
+        .frame(width: 420, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: rows)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let richNodes = recorder.snapshot().nodes.filter {
+            $0.id.hasPrefix("terminal-group-session.\(terminalGroup.id.description).")
+        }
+        XCTAssertEqual(richNodes.count, 2)
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: richNodes.map { ($0.label, $0.value) }),
+            [
+                "Codex Session Fix bug": "Working · Ops · Selected",
+                "Shell Session zsh": "Ops",
+            ]
+        )
+        XCTAssertTrue(
+            richNodes.first { $0.label.contains("Fix bug") }?.isSelected == true
+        )
+        XCTAssertFalse(
+            richNodes.first { $0.label.contains("zsh") }?.isSelected == true
+        )
+        XCTAssertFalse(richNodes.contains { $0.label.contains("Old shell") })
+
+        let groupNode = recorder.snapshot().node(id: "terminal-group.\(terminalGroup.id.description)")
+        XCTAssertNotNil(groupNode)
+        XCTAssertEqual(groupNode?.isSelected, false)
+        XCTAssertEqual(groupNode?.value, "Contains the selected session · Not selected")
+
+        try recorder.perform(
+            .press,
+            on: "terminal-group-session.\(terminalGroup.id.description).\(codexSession.id.description)"
+        )
+        XCTAssertEqual(actions, [.openSession(codexSession.id)])
+    }
+
+    @MainActor
+    func testCompactTerminalGroupRowsDoNotShowSessionLeaves() throws {
+        let host = WarrenDomain.Host(name: "Terminal Host")
+        let terminalGroup = TerminalGroup(hostID: host.id, name: "Ops")
+        let shellSession = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            terminalGroupID: terminalGroup.id,
+            tabID: "tab.shell",
+            title: "zsh",
+            kind: .shell
+        )
+        let group = WarrenDesktopTerminalGroup(
+            group: terminalGroup,
+            sessions: [shellSession]
+        )
+        let recorder = WarrenSemanticRecorder()
+        let rows = WarrenDesktopSidebarRows(
+            taskGroups: [],
+            groups: [],
+            terminalGroups: [group],
+            workspaceActivitySummaries: [:],
+            workspaceDisplayMode: .compact,
+            tree: .constant(WarrenDesktopSidebarTreeState(
+                terminalGroupsCollapsed: false
+            )),
+            isCollapsed: false,
+            selection: .terminalGroup(terminalGroup.id),
+            selectedTabID: "tab.shell",
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
+            isInteractionDisabled: false,
+            onAddProject: {},
+            onRequestTaskCreate: {},
+            onFocusTask: { _ in },
+            onRequestTerminalGroupCreate: {},
+            onRequestTerminalGroupEdit: { _ in },
+            onAction: { _ in },
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in }
+        )
+        .frame(width: 420, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: rows)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let richNodes = recorder.snapshot().nodes.filter {
+            $0.id.hasPrefix("terminal-group-session.\(terminalGroup.id.description).")
+        }
+        XCTAssertEqual(richNodes.count, 0)
+        let groupNode = recorder.snapshot().node(id: "terminal-group.\(terminalGroup.id.description)")
+        XCTAssertNotNil(groupNode)
+        XCTAssertEqual(groupNode?.isSelected, true)
     }
 
     /// Opening a Session keeps its workspace as the navigation scope, so both

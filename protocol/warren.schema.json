@@ -50,7 +50,7 @@
         },
         "kinds": {
           "type": "object",
-          "required": ["input", "output", "atomicState"],
+          "required": ["input", "output", "atomicState", "browserFrame"],
           "properties": {
             "input": { "type": "integer", "const": 1 },
             "output": { "type": "integer", "const": 2 },
@@ -58,16 +58,22 @@
               "type": "integer",
               "const": 3,
               "description": "Opaque terminal-state snapshot (e.g. ghostline-vt-replay-v1). Kept as a separate kind so clients can never feed snapshot bytes through their VT output parser."
+            },
+            "browserFrame": {
+              "type": "integer",
+              "const": 4,
+              "description": "One screencast frame for a Warren Browser Session (RFC 0022). Carries an encoded still image keyed by session and sequence, host-to-client only. It is a separate kind for the same reason atomicState is one: these bytes must never reach a VT output parser, and a browser Session has no PTY at all."
             }
           }
         },
         "limits": {
           "type": "object",
-          "required": ["maxHeader", "maxPayload", "maxAtomicStatePayload"],
+          "required": ["maxHeader", "maxPayload", "maxAtomicStatePayload", "maxBrowserFramePayload"],
           "properties": {
             "maxHeader": { "type": "integer", "const": 16384 },
             "maxPayload": { "type": "integer", "const": 8388608 },
-            "maxAtomicStatePayload": { "type": "integer", "const": 67108864 }
+            "maxAtomicStatePayload": { "type": "integer", "const": 67108864 },
+            "maxBrowserFramePayload": { "type": "integer", "const": 4194304 }
           }
         },
         "layout": {
@@ -123,6 +129,17 @@
                 "epoch": { "type": "integer", "minimum": 0 },
                 "sequence": { "type": "integer", "minimum": 0 },
                 "format": { "type": "string", "description": "TerminalStateFormat identifier (see terminalStateFormats)." },
+                "payloadLength": { "type": "integer", "minimum": 0 }
+              }
+            },
+            "browserFrame": {
+              "type": "object",
+              "required": ["sessionID", "epoch", "sequence", "format", "payloadLength"],
+              "properties": {
+                "sessionID": { "type": "string" },
+                "epoch": { "type": "integer", "minimum": 0 },
+                "sequence": { "type": "integer", "minimum": 0 },
+                "format": { "type": "string", "const": "browser-frame-jpeg-v1" },
                 "payloadLength": { "type": "integer", "minimum": 0 }
               }
             }
@@ -189,11 +206,13 @@
           "app-heartbeat-v1",
           "roster-delta",
           "pane-groups-v1",
+          "agent-causation-v1",
           "agent-timeline-v1",
           "agent-interactions-v1",
           "agent-interrupt-v1",
           "agent-attachments-v1",
-          "agent-goals-v1"
+          "agent-goals-v1",
+          "browser-v1"
         ]
       },
       "uniqueItems": true
@@ -280,6 +299,12 @@
         { "method": "terminal-group.home", "paramsRef": "{id: string, path: string}", "resultRef": "void" },
         { "method": "terminal-group.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
         { "method": "session.create", "paramsRef": "{...}", "resultRef": "api.Session" },
+        { "method": "browser.session.create", "paramsRef": "{workspace?: string, group?: string, url?: string, headless?: bool, viewport?: {width: int, height: int}}", "resultRef": "api.BrowserSession" },
+        { "method": "browser.session.list", "paramsRef": "{workspace?: string, group?: string}", "resultRef": "api.BrowserSession[]" },
+        { "method": "browser.session.get", "paramsRef": "{id: string}", "resultRef": "api.BrowserSession" },
+        { "method": "browser.session.close", "paramsRef": "{id: string}", "resultRef": "void" },
+        { "method": "browser.action", "paramsRef": "{id: string, action: api.BrowserAction}", "resultRef": "api.BrowserActionResult" },
+        { "method": "browser.subscribe", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "{subscribed: bool, attachmentId: string}" },
         { "method": "session.delete", "paramsRef": "{id: string}", "resultRef": "void" },
         { "method": "session.delete.preflight", "paramsRef": "{id: string}", "resultRef": "api.SessionDeletePreflight" },
         { "method": "session.current", "paramsRef": "free", "resultRef": "api.Session | null" },
@@ -392,7 +417,10 @@
             "type": { "type": "string" },
             "occurredAt": { "type": "string", "format": "date-time" },
             "recordedAt": { "type": "string", "format": "date-time" },
-            "causedBy": { "type": "string" },
+            "causedBy": {
+              "type": "string",
+              "description": "The commandId of the client command that caused this event. Host-derived provenance, not part of the event identity: a re-parsed transcript may omit it, and a client must treat it as late-bound rather than as a change to the row. Present on a user message.created when capability 'agent-causation-v1' is negotiated, and on a turn boundary cancelled by an explicit command."
+            },
             "origin": {
               "type": "object",
               "required": ["kind", "confidence"],
@@ -488,6 +516,8 @@
         { "method": "GET", "path": "/healthz", "purpose": "Typed subsystem health (see Headless/internal/api/health.go)." },
         { "method": "GET", "path": "/v1/state", "purpose": "Lightweight state read; not the same as the roster WS push." },
         { "method": "GET", "path": "/v1/ws", "purpose": "Main WebSocket upgrade; the full RPC surface lives here." },
+        { "method": "GET", "path": "/v1/browser/view", "purpose": "The Warren Browser viewer page for one browser Session (RFC 0022)." },
+        { "method": "GET", "path": "/v1/browser/stream", "purpose": "WebSocket carrying browserFrame screencast frames down and normalized pointer/key input up for one browser Session." },
         { "method": "GET", "path": "/v1/settings", "purpose": "Read settings (token, model, etc)." },
         { "method": "PUT", "path": "/v1/settings", "purpose": "Update settings." },
         { "method": "POST", "path": "/v1/relay/join", "purpose": "Ask Headless to claim this Host with a Relay enrollment key and bind the returned Relay signing key." },

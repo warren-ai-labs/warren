@@ -33,6 +33,12 @@ struct WarrenDesktopSidebarHostRows: View {
     let onFocusTask: (TaskID) -> Void
     let onToggleActiveOnly: () -> Void
     let onRetry: (String) -> Void
+    /// Drops a Session onto a pane in the arrangement on screen.
+    ///
+    /// Only the active endpoint's Sessions can be dropped: a pane leaf names a
+    /// Session of the endpoint this window is on, so a background Host's row is
+    /// routed through `onOpenSession` instead.
+    var onSplitDropSession: ((String, String, SplitDropTarget) -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -60,7 +66,8 @@ struct WarrenDesktopSidebarHostRows: View {
         onOpenSession: @escaping (WarrenDesktopHostResourceRef<TerminalSessionID>) -> Void = { _ in },
         onFocusTask: @escaping (TaskID) -> Void,
         onToggleActiveOnly: @escaping () -> Void,
-        onRetry: @escaping (String) -> Void
+        onRetry: @escaping (String) -> Void,
+        onSplitDropSession: ((String, String, SplitDropTarget) -> Void)? = nil
     ) {
         self.hosts = hosts
         self.showsActiveOnly = showsActiveOnly
@@ -81,6 +88,7 @@ struct WarrenDesktopSidebarHostRows: View {
         self.onFocusTask = onFocusTask
         self.onToggleActiveOnly = onToggleActiveOnly
         self.onRetry = onRetry
+        self.onSplitDropSession = onSplitDropSession
     }
 
     var body: some View {
@@ -333,6 +341,9 @@ struct WarrenDesktopSidebarHostRows: View {
                                             : nil,
                                         onEnd: canMutate(host)
                                             ? { onAction(.deleteSession(session.id)) }
+                                            : nil,
+                                        onSplitDrop: host.endpointID == activeEndpointID
+                                            ? onSplitDropSession
                                             : nil
                                     )
                                 }

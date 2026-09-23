@@ -80,7 +80,12 @@ const (
 	// A connection that stayed authenticated this long is evidence the endpoint
 	// is healthy, so a later drop starts a fresh backoff sequence instead of
 	// escalating the previous one.
-	relayStableConnection = 60 * time.Second
+	//
+	// Mirrors `connectionStabilityWindow` in WarrenRemoteClient. The two ends
+	// share the value so a Relay outage produces one predictable recovery
+	// profile rather than a Host and a phone disagreeing about when a
+	// connection counted as healthy.
+	relayStableConnection = 30 * time.Second
 )
 
 // relayDialer matches websocket.DefaultDialer but negotiates permessage-deflate.
@@ -699,6 +704,9 @@ func (connector *Connector) connectOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// Relay traffic proves the tunnel is alive. Relying on pongs alone tore
+		// down tunnels that were actively forwarding client work.
+		_ = connection.SetReadDeadline(time.Now().Add(relayHeartbeatTimeout))
 		if messageType != websocket.BinaryMessage {
 			continue
 		}

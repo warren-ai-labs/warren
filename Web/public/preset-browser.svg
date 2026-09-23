@@ -1,0 +1,8 @@
+<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Browser</title>
+  <g stroke="#A8A5A3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="10" cy="10" r="7.25"/>
+    <path d="M3.05 7.5h13.9M3.05 12.5h13.9"/>
+    <path d="M10 2.75c1.95 2.05 2.95 4.47 2.95 7.25S11.95 15.2 10 17.25C8.05 15.2 7.05 12.78 7.05 10S8.05 4.8 10 2.75Z"/>
+  </g>
+</svg>

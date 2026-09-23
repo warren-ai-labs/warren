@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 
 import {
   agentDraftKey,
+  agentQueueMaximumItems,
+  agentQueueStorageKey,
+  loadAgentQueue,
+  rehydrateAgentQueueItems,
+  saveAgentQueue,
   AgentMessageQueue,
+  retireEchoedAgentMessages,
   agentEventLimit,
   agentLaunchCommand,
   defaultAgentLaunchCommand,
@@ -682,4 +688,261 @@ test("isHiddenAgentEvent hides status, turn, and execution control-plane events 
   assert.equal(isHiddenAgentEvent({ type: "tool_call" }), false);
   assert.equal(isHiddenAgentEvent({ type: "tool_output" }), false);
   assert.equal(isHiddenAgentEvent({ type: "question" }), false);
+});
+
+test("a receipt keeps the bubble and the echo retires it", () => {
+  const queue = new AgentMessageQueue();
+  const item = queue.enqueue({ text: "run the tests" });
+  queue.markSending(item.id);
+
+  // The Host receipt only means the text reached the provider. Retiring here is
+  // what made the bubble vanish and reappear a second later over Relay.
+  assert.equal(queue.markAccepted(item.id), true);
+  assert.equal(queue.items.length, 1);
+  assert.equal(queue.items[0].status, "accepted");
+  assert.ok(queue.items[0].acceptedAt);
+
+  const retired = retireEchoedAgentMessages(queue, [
+    { type: "message.created", payload: { role: "user", content: "run the tests" }, causedBy: item.id },
+  ]);
+  assert.deepEqual(retired, [item.id]);
+  assert.equal(queue.items.length, 0, "the timeline row owns the message now");
+});
+
+test("an unrelated user event does not retire a pending message", () => {
+  const queue = new AgentMessageQueue();
+  const item = queue.enqueue({ text: "run the tests" });
+  queue.markSending(item.id);
+  queue.markAccepted(item.id);
+
+  // Typed straight into the terminal: no causedBy, and with causation
+  // negotiated the client must not fall back to guessing by text.
+  const retired = retireEchoedAgentMessages(queue, [
+    { type: "message.created", payload: { role: "user", content: "run the tests" } },
+  ]);
+  assert.deepEqual(retired, []);
+  assert.equal(queue.items.length, 1);
+});
+
+test("two identical messages retire in the order they were sent", () => {
+  const queue = new AgentMessageQueue();
+  const first = queue.enqueue({ text: "again" });
+  const second = queue.enqueue({ text: "again" });
+  for (const id of [first.id, second.id]) {
+    queue.markSending(id);
+    queue.markAccepted(id);
+  }
+  const retired = retireEchoedAgentMessages(queue, [
+    { type: "message.created", payload: { role: "user", content: "again" }, causedBy: second.id },
+  ]);
+  assert.deepEqual(retired, [second.id], "causation identifies the exact message, not the first match");
+  assert.deepEqual(queue.items.map(entry => entry.id), [first.id]);
+});
+
+test("without causation support identical messages retire oldest first", () => {
+  const queue = new AgentMessageQueue();
+  const first = queue.enqueue({ text: "again" });
+  const second = queue.enqueue({ text: "again" });
+  for (const id of [first.id, second.id]) {
+    queue.markSending(id);
+    queue.markAccepted(id);
+  }
+  // An older Host never stamps causedBy. One echo may claim only one message,
+  // or a single row would retire both bubbles.
+  const retired = retireEchoedAgentMessages(
+    queue,
+    [{ type: "message.created", payload: { role: "user", content: "again" } }],
+    { causationSupported: false },
+  );
+  assert.deepEqual(retired, [first.id]);
+  assert.deepEqual(queue.items.map(entry => entry.id), [second.id]);
+});
+
+test("a clipped echo still retires its message", () => {
+  const queue = new AgentMessageQueue();
+  const long = "a".repeat(500);
+  const item = queue.enqueue({ text: long });
+  queue.markSending(item.id);
+  queue.markAccepted(item.id);
+  const retired = retireEchoedAgentMessages(
+    queue,
+    [{ type: "message.created", payload: { role: "user", content: `${long.slice(0, 200)}…` } }],
+    { causationSupported: false },
+  );
+  assert.deepEqual(retired, [item.id]);
+});
+
+test("a longer echo does not claim a shorter pending message", () => {
+  const queue = new AgentMessageQueue();
+  const item = queue.enqueue({ text: "run" });
+  queue.markSending(item.id);
+  queue.markAccepted(item.id);
+  // A provider never lengthens user text, so this is a different message.
+  const retired = retireEchoedAgentMessages(
+    queue,
+    [{ type: "message.created", payload: { role: "user", content: "run the tests" } }],
+    { causationSupported: false },
+  );
+  assert.deepEqual(retired, []);
+  assert.equal(queue.items.length, 1);
+});
+
+test("an accepted message cannot be edited, reordered, or removed", () => {
+  const queue = new AgentMessageQueue();
+  const item = queue.enqueue({ text: "already sent" });
+  const later = queue.enqueue({ text: "still local" });
+  queue.markSending(item.id);
+  queue.markAccepted(item.id);
+  // It is already in the provider's stdin; rewriting it locally would lie
+  // about what the Agent is going to run.
+  assert.equal(queue.edit(item.id, "changed"), false);
+  assert.equal(queue.remove(item.id), false);
+  assert.equal(queue.moveToFront(later.id), true);
+  assert.equal(queue.items[0].id, later.id);
+  assert.equal(queue.items.find(entry => entry.id === item.id).text, "already sent");
+});
+
+test("a streaming user delta does not retire a pending message", () => {
+  const queue = new AgentMessageQueue();
+  const item = queue.enqueue({ text: "partial" });
+  queue.markSending(item.id);
+  queue.markAccepted(item.id);
+  const retired = retireEchoedAgentMessages(queue, [
+    { type: "message.delta", payload: { role: "user", content: "partial" }, causedBy: item.id },
+  ]);
+  assert.deepEqual(retired, [], "only a completed message ends the wait");
+});
+
+test("an overdue accepted message can be dismissed but not cancelled", () => {
+  const queue = new AgentMessageQueue();
+  const item = queue.enqueue({ text: "sent but never echoed" });
+  queue.markSending(item.id);
+  queue.markAccepted(item.id);
+
+  // remove() means "cancel this work", which is a lie once the Agent has it.
+  assert.equal(queue.remove(item.id), false);
+  // Dismissing is the honest option: the row goes, the message still ran.
+  assert.equal(queue.dismissAccepted(item.id), true);
+  assert.equal(queue.items.length, 0);
+});
+
+test("a message still in flight cannot be dismissed", () => {
+  const queue = new AgentMessageQueue();
+  const item = queue.enqueue({ text: "in flight" });
+  queue.markSending(item.id);
+  // The outcome is unknown, so neither control may drop it.
+  assert.equal(queue.dismissAccepted(item.id), false);
+  assert.equal(queue.remove(item.id), false);
+  assert.equal(queue.items.length, 1);
+});
+
+function memoryStorage(initial = {}) {
+  const data = new Map(Object.entries(initial));
+  return {
+    data,
+    getItem: key => (data.has(key) ? data.get(key) : null),
+    setItem: (key, value) => { data.set(key, String(value)); },
+    removeItem: key => { data.delete(key); },
+  };
+}
+
+test("a pending queue survives a reload", () => {
+  const storage = memoryStorage();
+  const queue = new AgentMessageQueue();
+  const item = queue.enqueue({ text: "run the tests" });
+  saveAgentQueue(storage, "wss://host/ws", "session-1", queue);
+
+  const restored = loadAgentQueue(storage, "wss://host/ws", "session-1");
+  assert.equal(restored.items.length, 1);
+  assert.equal(restored.items[0].id, item.id, "the commandId must survive so a retry stays idempotent");
+  assert.equal(restored.items[0].text, "run the tests");
+  assert.equal(restored.items[0].status, "queued");
+});
+
+test("a queue is scoped to one endpoint and session", () => {
+  const storage = memoryStorage();
+  const queue = new AgentMessageQueue();
+  queue.enqueue({ text: "mine" });
+  saveAgentQueue(storage, "wss://host-a/ws", "session-1", queue);
+
+  assert.equal(loadAgentQueue(storage, "wss://host-b/ws", "session-1").items.length, 0);
+  assert.equal(loadAgentQueue(storage, "wss://host-a/ws", "session-2").items.length, 0);
+  assert.notEqual(
+    agentQueueStorageKey("wss://host-a/ws", "s.1"),
+    agentQueueStorageKey("wss://host-a/ws.s", "1"),
+    "punctuation in either component must not collide",
+  );
+});
+
+test("a reload turns an in-flight message into an indeterminate failure", () => {
+  const storage = memoryStorage();
+  const queue = new AgentMessageQueue();
+  const item = queue.enqueue({ text: "maybe sent" });
+  queue.markSending(item.id);
+  saveAgentQueue(storage, "wss://host/ws", "session-1", queue);
+
+  // The Host may have run it. Re-queueing would risk a duplicate, so the user
+  // decides, and retry() will mint a new commandId first.
+  const restored = loadAgentQueue(storage, "wss://host/ws", "session-1").items[0];
+  assert.equal(restored.status, "failed");
+  assert.equal(restored.indeterminate, true);
+  assert.equal(restored.failureCode, "command_indeterminate");
+});
+
+test("a reload keeps an accepted message waiting for its echo", () => {
+  const storage = memoryStorage();
+  const queue = new AgentMessageQueue();
+  const item = queue.enqueue({ text: "already sent" });
+  queue.markSending(item.id);
+  queue.markAccepted(item.id, { at: "2026-09-22T10:00:00.000Z" });
+  saveAgentQueue(storage, "wss://host/ws", "session-1", queue);
+
+  const restored = loadAgentQueue(storage, "wss://host/ws", "session-1").items[0];
+  assert.equal(restored.status, "accepted");
+  assert.equal(restored.id, item.id, "the echo is matched by causedBy, which is this id");
+  assert.equal(restored.acceptedAt, "2026-09-22T10:00:00.000Z");
+});
+
+test("an attachment-bearing message is not persisted", () => {
+  const storage = memoryStorage();
+  const queue = new AgentMessageQueue();
+  queue.enqueue({ text: "look at this", attachments: [{ name: "shot.png", mimeType: "image/png" }] });
+  queue.enqueue({ text: "plain" });
+  saveAgentQueue(storage, "wss://host/ws", "session-1", queue);
+
+  // The bytes cannot be persisted and the browser cannot re-read the file, so
+  // restoring the text alone would send a different message than was shown.
+  const restored = loadAgentQueue(storage, "wss://host/ws", "session-1");
+  assert.deepEqual(restored.items.map(entry => entry.text), ["plain"]);
+});
+
+test("an emptied queue clears its storage entry", () => {
+  const storage = memoryStorage();
+  const queue = new AgentMessageQueue();
+  const item = queue.enqueue({ text: "cancelled" });
+  saveAgentQueue(storage, "wss://host/ws", "session-1", queue);
+  queue.remove(item.id);
+  saveAgentQueue(storage, "wss://host/ws", "session-1", queue);
+
+  assert.equal(storage.getItem(agentQueueStorageKey("wss://host/ws", "session-1")), null);
+});
+
+test("corrupt stored queue data is ignored", () => {
+  const storage = memoryStorage({
+    [agentQueueStorageKey("wss://host/ws", "session-1")]: "{not json",
+  });
+  assert.equal(loadAgentQueue(storage, "wss://host/ws", "session-1").items.length, 0);
+  assert.deepEqual(rehydrateAgentQueueItems([{ id: "", text: "no id" }, { id: "x", text: "" }]), []);
+});
+
+test("a stored queue cannot grow without bound", () => {
+  const items = Array.from({ length: agentQueueMaximumItems + 10 }, (_, index) => ({
+    id: `command-${index}`,
+    text: `message ${index}`,
+    status: "queued",
+  }));
+  const restored = rehydrateAgentQueueItems(items);
+  assert.equal(restored.length, agentQueueMaximumItems);
+  // The newest messages are the ones still worth sending.
+  assert.equal(restored.at(-1).id, `command-${items.length - 1}`);
 });
