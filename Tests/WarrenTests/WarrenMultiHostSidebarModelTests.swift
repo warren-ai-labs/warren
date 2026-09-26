@@ -217,6 +217,61 @@ final class WarrenMultiHostSidebarModelTests: XCTestCase {
         XCTAssertEqual(model.projection.host(for: "prod")?.endpointLabel, "Production")
     }
 
+    @MainActor
+    func testPromotingAHostNeitherMisfilesNorEmptiesEitherHostMidSwitch() {
+        let model = WarrenMultiHostSidebarModel()
+        defer { model.stop() }
+
+        let host = Host(name: "Local Mac")
+        let project = Project(hostID: host.id, name: "local-project", rootPath: "/tmp/local-project")
+        let localProjection = WarrenDesktopProjection(
+            host: host,
+            groups: [.init(project: project)],
+            connectionState: .attached
+        )
+        let remote = WarrenRemoteEndpointConfiguration(
+            name: "prod",
+            url: "http://127.0.0.1:1",
+            token: "token"
+        )
+        let display = WarrenDisplayConfiguration(endpoints: ["local", "prod"])
+
+        model.configure(
+            display: display,
+            endpoints: [remote],
+            activeEndpointID: "local",
+            activeProjection: localProjection,
+            activeConnectionError: nil
+        )
+
+        // The selection moved to prod, but the interactive model still
+        // publishes the local roster.
+        model.configure(
+            display: display,
+            endpoints: [remote],
+            activeEndpointID: "prod",
+            activeProjection: localProjection,
+            activeProjectionIsCurrent: false,
+            activeConnectionError: nil
+        )
+        XCTAssertEqual(model.projection.host(for: "prod")?.projectGroups, [])
+        XCTAssertEqual(model.projection.host(for: "prod")?.connectionState, .connecting)
+        XCTAssertEqual(model.projection.host(for: "local")?.projectGroups, localProjection.groups)
+        XCTAssertEqual(model.projection.host(for: "local")?.connectionState.isConnected, false)
+
+        // The interactive model then resets to an empty connecting projection.
+        model.configure(
+            display: display,
+            endpoints: [remote],
+            activeEndpointID: "prod",
+            activeProjection: WarrenDesktopProjection
+                .empty(host: Host(name: "prod"))
+                .withConnectionState(.connecting),
+            activeConnectionError: nil
+        )
+        XCTAssertEqual(model.projection.host(for: "local")?.projectGroups, localProjection.groups)
+    }
+
     private func roster(revision: UInt64?) -> WarrenRemoteRoster {
         WarrenRemoteRoster(
             revision: revision,

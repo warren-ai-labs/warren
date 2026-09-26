@@ -179,18 +179,33 @@ public struct WarrenDesktopSidebarProjection: Equatable, Sendable {
 ///
 /// The assignment is keyed by endpoint alias, never by array position. The
 /// palette is intentionally low-saturation and is applied by the sidebar as a
-/// leading rule down the Host's subtree; it is not persisted in the endpoint
+/// plate behind the Host's subtree; it is not persisted in the endpoint
 /// catalog.
 public enum WarrenDesktopHostTint {
-    /// A rule is a thin shape rather than a large wash, so it carries the tint
-    /// at a much higher opacity: the same hue that vanished as a 4% background
-    /// is clearly visible as a line, and it identifies the Host without
-    /// tinting the rows themselves.
+    /// The plate's wash over the sidebar surface.
     ///
-    /// Width and opacity are shared with the Session rail so the sidebar draws
-    /// one kind of vertical line; only the hue changes at the Host level.
-    public static let ruleWidth: CGFloat = WarrenLayoutMetrics.sidebarRailWidth
-    public static let ruleOpacity = 0.30
+    /// A 4% wash resolved to a few units of 255 and did not read as a grouping,
+    /// and a thin leading rule identified the Host without bounding it: two
+    /// adjacent Hosts still read as one list. These values are the lowest that
+    /// separate neighbouring plates at a glance while leaving every tier of row
+    /// text, the selection fill, and the activity marks above their resting
+    /// contrast. Ember needs the larger fraction: its identity hues sit much
+    /// closer to the near-black ground than Paper's sit to the off-white one,
+    /// so the same fraction moves the surface by fewer units.
+    public static func plateOpacity(for colorScheme: ColorScheme) -> Double {
+        colorScheme == .dark ? 0.14 : 0.10
+    }
+
+    /// The plate's outline, which keeps its edge crisp where two plates meet.
+    public static func plateStrokeOpacity(for colorScheme: ColorScheme) -> Double {
+        colorScheme == .dark ? 0.22 : 0.20
+    }
+
+    /// Horizontal inset from the rail edges. Rows inset their own selection
+    /// fill by `WarrenSpacing.compact`, so a smaller plate inset keeps a
+    /// visible band of plate around a selected row instead of touching it.
+    public static let plateInset: CGFloat = WarrenSpacing.xs
+    public static let plateRadius: CGFloat = WarrenRadius.medium
 
     public static func color(
         for endpointID: String,

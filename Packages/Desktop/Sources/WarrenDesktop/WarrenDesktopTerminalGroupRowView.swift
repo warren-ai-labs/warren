@@ -47,8 +47,8 @@ struct WarrenDesktopTerminalGroupRow: View {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "square.3.stack.3d")
                     .font(.system(size: 12, weight: .regular))
-                if let activity = group.activity {
-                    WarrenDesktopActivityIndicator(activity: activity)
+                if let mark = group.mark {
+                    WarrenDesktopActivityIndicator(mark: mark)
                         .offset(x: 5, y: -3)
                 }
             }
@@ -112,8 +112,8 @@ struct WarrenDesktopTerminalGroupRow: View {
                     .opacity(isHovered || isFocused || forceHover ? 1 : 0)
                     .accessibilityHidden(true)
 
-                if let activity = group.activity, !showsSessionChildren {
-                    WarrenDesktopActivityIndicator(activity: activity)
+                if let mark = group.mark, !showsSessionChildren {
+                    WarrenDesktopActivityIndicator(mark: mark)
                 }
 
                 Spacer(minLength: 0)

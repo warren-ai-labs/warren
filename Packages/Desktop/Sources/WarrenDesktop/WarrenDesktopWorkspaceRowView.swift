@@ -36,7 +36,7 @@ enum WarrenDesktopWorkspaceGlyph: Equatable, Sendable {
 struct WarrenDesktopWorkspaceRow: View {
     let workspace: Workspace
     let semanticScope: String
-    let activity: AgentActivityState?
+    let mark: WarrenActivityMark?
     let activeTabCount: Int
     let isCollapsed: Bool
     let isSelected: Bool
@@ -122,9 +122,9 @@ struct WarrenDesktopWorkspaceRow: View {
                 // The icon rail has no room for leaves, so the aggregate marker
                 // is the only signal a workspace has work in it. It is never
                 // redundant here, however the tree is configured.
-                if let activity {
+                if let mark {
                     WarrenDesktopWorkspaceActivityIndicator(
-                        activity: activity,
+                        mark: mark,
                         activeTabCount: activeTabCount,
                         isCompact: true
                     )
@@ -213,9 +213,9 @@ struct WarrenDesktopWorkspaceRow: View {
                     deletionStatus(tokens: tokens)
                 }
 
-                if let activity, !showsSessionChildren {
+                if let mark, !showsSessionChildren {
                     WarrenDesktopWorkspaceActivityIndicator(
-                        activity: activity,
+                        mark: mark,
                         activeTabCount: activeTabCount,
                         isCompact: false
                     )
@@ -484,45 +484,26 @@ struct WarrenDesktopWorkspaceRow: View {
     }
 }
 
-/// Superset-style Agent activity point. Live/actionable states pulse; ready is
-/// a quiet static marker.
+/// Agent state as one mark: a dot for the states that need nothing, a glyph
+/// badge for the ones that want a person.
+///
+/// The view is a thin wrapper over the shared `WarrenActivityMarkView`; the
+/// Desktop's only contribution is the palette. It used to take a bare
+/// `AgentActivityState` and fold everything into hue, which dropped the Host's
+/// attention payload on the floor — the row that most needed someone drew the
+/// same quiet dot as an idle Agent whenever the lifecycle half of the snapshot
+/// was stale.
 struct WarrenDesktopActivityIndicator: View {
-    let activity: AgentActivityState
+    let mark: WarrenActivityMark
+    var dotSize: CGFloat = 7
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        WarrenStatusIndicator(
-            color: color,
-            isActive: activity == .working || activity == .blocked,
-            size: indicatorSize,
-            accessibilityLabel: accessibilityLabel
+        WarrenActivityMarkView(
+            mark: mark,
+            color: mark.color(WarrenColorTokens.resolved(for: colorScheme)),
+            dotSize: dotSize
         )
-        .frame(width: 10, height: 10)
-    }
-
-    private var indicatorSize: CGFloat {
-        activity == .blocked ? 6 : 7
-    }
-
-    private var color: Color {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        return switch activity {
-        case .failed: tokens.destructive
-        case .blocked: tokens.warning
-        case .working: tokens.amber
-        case .ready: tokens.success
-        case .exited: tokens.mutedForeground
-        }
-    }
-
-    private var accessibilityLabel: String {
-        switch activity {
-        case .failed: "Session failed"
-        case .blocked: "Session needs attention"
-        case .working: "Agent working"
-        case .ready: "Agent ready"
-        case .exited: "Session exited"
-        }
     }
 }
 
@@ -530,18 +511,18 @@ struct WarrenDesktopActivityIndicator: View {
 /// higher-priority failure or input state remains visible beside the orange
 /// working marker.
 struct WarrenDesktopWorkspaceActivityIndicator: View {
-    let activity: AgentActivityState
+    let mark: WarrenActivityMark
     let activeTabCount: Int
     let isCompact: Bool
 
     @Environment(\.colorScheme) private var colorScheme
 
     private var showsMultipleWorkingTabs: Bool {
-        activity == .working && activeTabCount > 1
+        mark == .working && activeTabCount > 1
     }
 
     private var showsMixedActivity: Bool {
-        activity != .working && activeTabCount > 0
+        mark != .working && activeTabCount > 0
     }
 
     private var visibleDotCount: Int {
@@ -557,12 +538,12 @@ struct WarrenDesktopWorkspaceActivityIndicator: View {
             activeTabCluster
         } else if showsMixedActivity {
             HStack(spacing: WarrenSpacing.xxs) {
-                WarrenDesktopActivityIndicator(activity: activity)
+                WarrenDesktopActivityIndicator(mark: mark)
                 activeTabCluster
                     .accessibilityHidden(true)
             }
         } else {
-            WarrenDesktopActivityIndicator(activity: activity)
+            WarrenDesktopActivityIndicator(mark: mark)
         }
     }
 

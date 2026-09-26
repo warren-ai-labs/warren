@@ -17,7 +17,7 @@ struct WarrenDesktopTabBar: View {
     /// keeps the pane control and the Session switcher from drifting apart.
     let presentation: WarrenDesktopPaneBarPresentation
     let tabTitles: [String: String]
-    let tabActivities: [TerminalSessionID: AgentActivityState]
+    let tabMarks: [TerminalSessionID: WarrenActivityMark]
     let pinnedSessionIDs: Set<TerminalSessionID>
     let selectedTabID: String?
     /// The pane group the track draws, when the scope's layout has one.
@@ -72,7 +72,7 @@ struct WarrenDesktopTabBar: View {
     init(
         presentation: WarrenDesktopPaneBarPresentation,
         tabTitles: [String: String],
-        tabActivities: [TerminalSessionID: AgentActivityState],
+        tabMarks: [TerminalSessionID: WarrenActivityMark],
         pinnedSessionIDs: Set<TerminalSessionID>,
         selectedTabID: String?,
         splitGroup: WarrenDesktopSplitGroup? = nil,
@@ -116,7 +116,7 @@ struct WarrenDesktopTabBar: View {
     ) {
         self.presentation = presentation
         self.tabTitles = tabTitles
-        self.tabActivities = tabActivities
+        self.tabMarks = tabMarks
         self.pinnedSessionIDs = pinnedSessionIDs
         self.selectedTabID = selectedTabID
         self.splitGroup = splitGroup
@@ -322,11 +322,11 @@ struct WarrenDesktopTabBar: View {
         canStartDrag: Bool
     ) -> some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        let activity = tab.sessionID.flatMap { tabActivities[$0] }
+        let mark = tab.sessionID.flatMap { tabMarks[$0] }
         WarrenDesktopTabItem(
             tab: tab,
             displayTitle: tabTitles[tab.id] ?? tab.title,
-            activity: activity,
+            mark: mark,
             isSelected: selectedTabID == tab.id,
             showsTrailingSeparator: showsTrailingSeparator,
             canStartDrag: canStartDrag,
@@ -357,9 +357,12 @@ struct WarrenDesktopTabBar: View {
                 )
             },
             onDismissActivity: {
+                // The dismiss intent is defined over the lifecycle state,
+                // which is what the Host tracks per Session; the mark only adds
+                // what was being asked on top of it.
                 guard let sessionID = tab.sessionID,
-                      let activity else { return }
-                onDismissActivity(sessionID, activity)
+                      let mark else { return }
+                onDismissActivity(sessionID, mark.activityState)
             },
             sessionMoveTargets: tab.sessionID.map { sessionID in
                 sessionMoveTargets.filter {
@@ -839,7 +842,7 @@ struct WarrenDesktopSoloPaneIdentity: View {
         let title: String
         let fullTitle: String
         let providerPresetID: String?
-        let activity: AgentActivityState?
+        let mark: WarrenActivityMark?
         let canClose: Bool
     }
 
@@ -878,8 +881,8 @@ struct WarrenDesktopSoloPaneIdentity: View {
                 .truncationMode(.middle)
                 .textSelection(.enabled)
 
-            if let activity = identity.activity {
-                WarrenDesktopActivityIndicator(activity: activity)
+            if let mark = identity.mark {
+                WarrenDesktopActivityIndicator(mark: mark)
             }
 
             HStack(spacing: WarrenSpacing.xxs) {

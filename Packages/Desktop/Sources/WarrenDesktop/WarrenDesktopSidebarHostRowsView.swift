@@ -92,7 +92,14 @@ struct WarrenDesktopSidebarHostRows: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+        // Plates need a visible seam between them; the flat single-Host tree
+        // keeps its tighter rhythm.
+        VStack(
+            alignment: .leading,
+            spacing: !isCollapsed && usesHostSectionPresentation
+                ? WarrenSpacing.xs
+                : WarrenSpacing.xxs
+        ) {
             if !isCollapsed, usesHostSectionPresentation {
                 WarrenDesktopSidebarHostsSectionHeader(hostCount: hosts.count)
             }
@@ -230,28 +237,39 @@ struct WarrenDesktopSidebarHostRows: View {
         let tint = tokens.hostSectionTints.indices.contains(tintIndex)
             ? tokens.hostSectionTints[tintIndex]
             : .clear
+        let isExpanded = isHostExpanded(host)
         return VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
             WarrenDesktopSidebarHostHeader(
                 host: host,
-                isExpanded: isHostExpanded(host),
+                isExpanded: isExpanded,
+                summary: WarrenDesktopSidebarHostSummary(host),
                 onToggle: { toggleHost(host.endpointID) },
                 onRetry: { onRetry(host.endpointID) }
             )
 
-            if isHostExpanded(host) {
+            if isExpanded {
                 hostProjectRows(for: host)
             }
         }
-        // A Host is a compact tree group, not a padded card. A 4% wash over the
-        // sidebar surface resolves to a few units of 255 and does not read as a
-        // grouping at all, so the subtree is marked by a leading rule instead:
-        // it spans the same range, survives a squint, and costs no vertical
-        // chrome.
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(tint.opacity(WarrenDesktopHostTint.ruleOpacity))
-                .frame(width: WarrenDesktopHostTint.ruleWidth)
-                .padding(.leading, WarrenSpacing.compact)
+        .padding(.bottom, isExpanded ? WarrenSpacing.xs : 0)
+        // A Host is a bounded group: the plate is what tells one Host's
+        // projects from the next Host's. It is drawn behind the rows and inset
+        // inside their selection fill, so no row text, fill, or mark changes
+        // position or loses its own contrast.
+        .background {
+            let shape = RoundedRectangle(
+                cornerRadius: WarrenDesktopHostTint.plateRadius,
+                style: .continuous
+            )
+            shape
+                .fill(tint.opacity(WarrenDesktopHostTint.plateOpacity(for: colorScheme)))
+                .overlay {
+                    shape.strokeBorder(
+                        tint.opacity(WarrenDesktopHostTint.plateStrokeOpacity(for: colorScheme)),
+                        lineWidth: WarrenSpacing.hairline
+                    )
+                }
+                .padding(.horizontal, WarrenDesktopHostTint.plateInset)
                 .accessibilityHidden(true)
         }
         .accessibilityElement(children: .contain)
@@ -448,7 +466,7 @@ struct WarrenDesktopSidebarHostRows: View {
         return WarrenDesktopWorkspaceRow(
             workspace: workspace,
             semanticScope: "host.\(host.endpointID)",
-            activity: summary?.activity,
+            mark: summary?.mark,
             activeTabCount: summary?.activeTabCount ?? 0,
             isCollapsed: false,
             isSelected: isWorkspaceRowSelected(workspace.id, in: host)
@@ -886,9 +904,31 @@ private struct WarrenDesktopSidebarHostsSectionHeader: View {
     }
 }
 
+/// What a Host heading says about the subtree it can hide.
+struct WarrenDesktopSidebarHostSummary: Equatable {
+    let projectCount: Int
+    /// The most actionable mark anywhere on the Host, so collapsing a Host
+    /// never hides an Agent that is waiting on someone. An exited Session asks
+    /// for nothing and is left out.
+    let mark: WarrenActivityMark?
+
+    init(_ host: WarrenDesktopSidebarHostProjection) {
+        projectCount = host.projectGroups.count
+        mark = host.workspaceActivitySummaries.values
+            .compactMap(\.mark)
+            .filter { $0 != .exited }
+            .max()
+    }
+
+    var countLabel: String {
+        "\(projectCount) \(projectCount == 1 ? "project" : "projects")"
+    }
+}
+
 private struct WarrenDesktopSidebarHostHeader: View {
     let host: WarrenDesktopSidebarHostProjection
     let isExpanded: Bool
+    let summary: WarrenDesktopSidebarHostSummary
     let onToggle: () -> Void
     let onRetry: () -> Void
 
@@ -898,21 +938,52 @@ private struct WarrenDesktopSidebarHostHeader: View {
     @FocusState private var isToggleFocused: Bool
     @FocusState private var isRetryFocused: Bool
 
+    /// The Host's own name, when it adds something to the endpoint label.
+    private var hostDetail: String? {
+        guard let hostName = host.hostName,
+              hostName.caseInsensitiveCompare(host.endpointLabel) != .orderedSame else {
+            return nil
+        }
+        return hostName
+    }
+
+    /// A collapsed Host still reports what it holds; an expanded one shows it.
+    private var showsSummary: Bool {
+        !isExpanded && host.connectionState.isConnected
+    }
+
+    private var accessibilityValue: String {
+        guard showsSummary else { return isExpanded ? "Expanded" : "Collapsed" }
+        return "Collapsed, \(summary.countLabel)"
+    }
+
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let isEngaged = isHovered || isToggleFocused
         HStack(spacing: WarrenSpacing.small) {
             Button(action: onToggle) {
-                HStack(spacing: WarrenSpacing.small) {
-                    Text(host.title)
+                HStack(spacing: WarrenSpacing.xs) {
+                    Text(host.endpointLabel)
                         .font(WarrenTypography.groupHeading)
-                        .foregroundStyle(tokens.mutedForeground)
+                        .foregroundStyle(tokens.projectText)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .layoutPriority(1)
+                    if let hostDetail {
+                        Text(hostDetail)
+                            .font(WarrenTypography.navigationMeta)
+                            .foregroundStyle(tokens.sidebarMetaText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    // Always drawn: a collapsed Host has nothing else saying it
+                    // can be opened.
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(tokens.mutedForeground)
+                        .foregroundStyle(
+                            isEngaged ? tokens.sidebarMetaTextActive : tokens.sidebarMetaText
+                        )
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                        .opacity(isHovered || isToggleFocused ? 1 : 0)
                         .animation(
                             WarrenMotion.animation(
                                 .stateChange,
@@ -920,21 +991,34 @@ private struct WarrenDesktopSidebarHostHeader: View {
                             ),
                             value: isExpanded
                         )
-                    Spacer(minLength: 0)
+                    Spacer(minLength: WarrenSpacing.xs)
+                    if showsSummary {
+                        if let mark = summary.mark {
+                            WarrenDesktopActivityIndicator(mark: mark)
+                        }
+                        Text(summary.countLabel)
+                            .font(WarrenTypography.navigationMeta)
+                            .foregroundStyle(
+                                isEngaged ? tokens.sidebarMetaTextActive : tokens.sidebarMetaText
+                            )
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
                 }
                 .contentShape(.rect)
             }
             .buttonStyle(WarrenChromeButtonStyle(isFocused: isToggleFocused))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .focused($isToggleFocused)
+            .help(host.title)
             .accessibilityLabel("Host \(host.title)")
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityValue(accessibilityValue)
             .accessibilityHint("Show or hide this Host's projects and workspaces")
             .warrenSemanticElement(
                 id: "host.\(host.endpointID).toggle",
                 role: .button,
                 label: "Host \(host.title)",
-                value: isExpanded ? "Expanded" : "Collapsed",
+                value: accessibilityValue,
                 action: onToggle
             )
 
@@ -942,7 +1026,9 @@ private struct WarrenDesktopSidebarHostHeader: View {
         }
         .frame(height: WarrenLayoutMetrics.sidebarHostHeaderHeight)
         .padding(.leading, WarrenDesktopSidebarIndent.host)
-        .padding(.trailing, WarrenSpacing.compact)
+        // Keep trailing content clear of the plate's edge by the same margin
+        // the rows keep.
+        .padding(.trailing, WarrenSpacing.compact + WarrenDesktopHostTint.plateInset)
         .onHover { isHovered = $0 }
     }
 

@@ -6,6 +6,14 @@ import { shouldDismissOnBackdrop } from "./presentation.js";
 import { connectionSettling } from "./connection.js";
 import { createSearch, fieldRole, highlightSegments } from "./search.js";
 import {
+  activityMarkIsAnimated,
+  activityMarkLabel,
+  activityMarkLifecycle,
+  activityMarkPriority,
+  activityMarkWord,
+  resolveActivityMark,
+} from "./activity.js";
+import {
   AGENT_REASONING_OPTIONS,
   formatAgentModel,
   getAvailableAgentModels,
@@ -20,24 +28,6 @@ function connectionClassName(base, connection) {
     connection.presentation === connectionSettling ? "settling" : "",
   ].filter(Boolean).join(" ");
 }
-
-const activityLabels = {
-  working: "Working",
-  blocked: "Needs attention",
-  failed: "Failed",
-  ready: "Ready",
-  exited: "Exited",
-  connecting: "Connecting",
-};
-
-const activityPriority = {
-  failed: 6,
-  blocked: 5,
-  connecting: 3,
-  working: 2,
-  ready: 1,
-  exited: 0,
-};
 
 const terminalIcon = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
@@ -243,26 +233,28 @@ function useBodyScrollLock(active) {
   }, [active]);
 }
 
-function statusActivity(status) {
-  return status?.activity || "";
-}
-
 function statusLabel(status) {
-  const activity = statusActivity(status);
-  if (activity === "failed") return activityLabels.failed;
-  if (status?.attention || activity === "blocked") return "Needs attention";
-  return activityLabels[activity];
+  return activityMarkWord(resolveActivityMark(status));
 }
 
+/// One Agent status as a dot.
+///
+/// The hue carries what a state asks of a person and motion carries whether work
+/// is progressing. Shape was tried for the states that want someone — a glyph
+/// badge — and it read worse at the size a row actually uses, so the kind of a
+/// request lives in the tooltip and the label instead.
 export function ActivityDot({ status }) {
-  const activity = statusActivity(status);
-  const label = statusLabel(status);
-  if (!label) return null;
-  const attention = activity !== "failed" && status?.attention ? " attention" : "";
-  // Working is the only state that moves. Attention, blocked, and failed
-  // states stay still so an actionable explanation is easier to read.
-  const pulse = activity === "working" ? " pulse" : "";
-  return <span className={`activity ${activity}${attention}${pulse}`} title={label} aria-label={label} />;
+  const mark = resolveActivityMark(status);
+  if (!mark) return null;
+  const label = activityMarkLabel(mark);
+  // The lifecycle class keeps carrying the hue, so the palette stays in one
+  // place.
+  const className = [
+    "activity",
+    activityMarkLifecycle(mark),
+    activityMarkIsAnimated(mark) ? "pulse" : "",
+  ].filter(Boolean).join(" ");
+  return <span className={className} title={label} aria-label={label} role="img" />;
 }
 
 function mergedBadgeTitle(tabs) {
@@ -2278,11 +2270,7 @@ function highestStatus(sessions) {
 }
 
 function statusPriority(status) {
-  if (!status) return 0;
-  const activity = statusActivity(status);
-  if (activity === "failed") return 6;
-  if (status.attention || activity === "blocked") return 5;
-  return activityPriority[activity] || 0;
+  return activityMarkPriority(resolveActivityMark(status));
 }
 
 function PlusIcon() {

@@ -86,7 +86,15 @@ test("agent surfaces keep semantic state aliases and touch-safe tablet/mobile co
   assert.match(css, /\.context-menu-scrim\s*\{[\s\S]*?z-index: calc\(var\(--layer-menu\) - 1\)/);
   assert.match(css, /\.search-overlay\.open\s*\{[\s\S]*?animation: scrim-in var\(--duration-overlay\)/);
   assert.match(css, /\.worktree-dialog-overlay\s*\{[\s\S]*?animation: scrim-in var\(--duration-overlay\)/);
-  assert.match(read("components.jsx"), /const pulse = activity === "working" \? " pulse" : ""/);
+  // Motion policy lives in activity.js, where activity.test.js pins it: only
+  // progressing work moves. The dot must keep delegating rather than reviving a
+  // second copy of that rule.
+  assert.match(read("components.jsx"), /activityMarkIsAnimated\(mark\) \? "pulse" : ""/);
+  // A glyph badge for the actionable tier read worse at the size a row actually
+  // uses, so the mark is one dot again and the kind of a request lives in the
+  // word rather than in a shape.
+  assert.doesNotMatch(css, /\.activity-glyph/);
+  assert.doesNotMatch(read("components.jsx"), /activityMarkGlyph/);
 });
 
 test("feedback states gate repeated actions and preserve actionable failures", () => {

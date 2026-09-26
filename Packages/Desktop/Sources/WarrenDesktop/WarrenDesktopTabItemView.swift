@@ -7,7 +7,7 @@ import WarrenObservation
 struct WarrenDesktopTabItem: View {
     let tab: ClientTab
     let displayTitle: String
-    let activity: AgentActivityState?
+    let mark: WarrenActivityMark?
     let isSelected: Bool
     /// Whether this Tab still draws the hairline that divides it from the Tab
     /// after it. Members of one pane-group run hide theirs: the group's rule is
@@ -67,7 +67,7 @@ struct WarrenDesktopTabItem: View {
         return Self.contextMenuActions(
             sessionID: sessionID,
             isPinned: isPinned,
-            hasActivity: activity != nil,
+            hasActivity: mark != nil,
             workspaceMoveTargets: workspaceMoveTargets,
             terminalGroupMoveTargets: terminalGroupMoveTargets,
             onMoveSession: onMoveSession,
@@ -141,8 +141,8 @@ struct WarrenDesktopTabItem: View {
                             .foregroundStyle(tokens.mutedForeground)
                             .accessibilityHidden(true)
                     }
-                    if let activity {
-                        WarrenDesktopActivityIndicator(activity: activity)
+                    if let mark {
+                        WarrenDesktopActivityIndicator(mark: mark)
                             .accessibilityHidden(true)
                     }
                     HStack(spacing: 0) {

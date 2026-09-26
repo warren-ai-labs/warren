@@ -453,8 +453,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 )
             )
         })
-        let tabActivities = Dictionary(uniqueKeysWithValues: projection.sessions.compactMap { session in
-            session.activity.map { (session.id, $0) }
+        let tabMarks = Dictionary(uniqueKeysWithValues: projection.sessions.compactMap { session in
+            session.activityMark.map { (session.id, $0) }
         })
         let pinnedSessionIDs = Set(
             projection.sessions.filter(\.pinned).map(\.id)
@@ -476,7 +476,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let tabBarView = makeTabBarView(
             presentation: presentation,
             tabTitles: tabTitles,
-            tabActivities: tabActivities,
+            tabMarks: tabMarks,
             pinnedSessionIDs: pinnedSessionIDs,
             isAddingSession: isAddingSession,
             sessionMoveTargets: sessionMoveTargets,
@@ -1056,7 +1056,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private func makeTabBarView(
         presentation: Presentation,
         tabTitles: [String: String],
-        tabActivities: [TerminalSessionID: AgentActivityState],
+        tabMarks: [TerminalSessionID: WarrenActivityMark],
         pinnedSessionIDs: Set<TerminalSessionID>,
         isAddingSession: Bool,
         sessionMoveTargets: [WarrenDesktopSessionMoveTarget],
@@ -1084,14 +1084,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     entries: entries,
                     presentation: presentation,
                     tabTitles: tabTitles,
-                    tabActivities: tabActivities
+                    tabMarks: tabMarks
                 )
             }
         )
         return AnyView(WarrenDesktopTabBar(
             presentation: paneBar,
             tabTitles: tabTitles,
-            tabActivities: tabActivities,
+            tabMarks: tabMarks,
             pinnedSessionIDs: pinnedSessionIDs,
             selectedTabID: navigation.selectedTabID,
             splitGroup: splitGroup(tree: barTree, presentation: presentation),
@@ -2658,7 +2658,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         entries: [ClientTab],
         presentation: Presentation,
         tabTitles: [String: String],
-        tabActivities: [TerminalSessionID: AgentActivityState]
+        tabMarks: [TerminalSessionID: WarrenActivityMark]
     ) -> WarrenDesktopSoloPaneIdentity.Model? {
         guard let tab = entries.first ?? presentation.tab, tab.sessionID != nil else { return nil }
         let session = tab.sessionID.flatMap { projection.session(id: $0) }
@@ -2670,7 +2670,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 WarrenDesktopSessionPreset.builtIns
                     .first { $0.request.kind == session.presentedKind }?.id
             },
-            activity: tab.sessionID.flatMap { tabActivities[$0] },
+            mark: tab.sessionID.flatMap { tabMarks[$0] },
             canClose: true
         )
     }

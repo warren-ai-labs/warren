@@ -48,7 +48,7 @@ final class WarrenDesktopTopChromeWidthTests: XCTestCase {
             title: title,
             fullTitle: title,
             providerPresetID: nil,
-            activity: nil,
+            mark: nil,
             canClose: true
         )
         let bar = makeTabBar(
