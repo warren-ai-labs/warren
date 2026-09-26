@@ -1055,6 +1055,10 @@ struct WarrenCompositionRoot: View {
             endpoints: endpointCatalog,
             activeEndpointID: selectedEndpointID,
             activeProjection: remoteModel.projection,
+            // An attached projection that is not ready for the selected
+            // endpoint is the previous Host's, still published mid-switch.
+            activeProjectionIsCurrent: !remoteModel.projection.isConnected
+                || remoteModel.isReady(for: selectedEndpointID),
             activeConnectionError: remoteModel.connectionError
         )
         applyPendingSidebarSelectionIfReady()

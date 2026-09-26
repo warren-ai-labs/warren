@@ -322,11 +322,11 @@ struct WarrenDesktopCommandPalette: View {
                     .layoutPriority(1)
                 }
 
-                // Activity is a dot rather than the glyph's colour: the glyph now
-                // carries the provider's own mark, and the sidebar already uses
-                // this indicator, so both surfaces read the same way.
-                if case .activity(let activity) = row.status {
-                    WarrenDesktopActivityIndicator(activity: activity)
+                // Activity is its own mark rather than the glyph's colour: the
+                // glyph carries the provider, and the sidebar already uses this
+                // indicator, so both surfaces read the same way.
+                if case .mark(let mark) = row.status {
+                    WarrenDesktopActivityIndicator(mark: mark)
                 }
 
                 if row.status == .pinned {

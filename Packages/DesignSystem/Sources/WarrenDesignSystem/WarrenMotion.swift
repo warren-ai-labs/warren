@@ -18,6 +18,9 @@ public enum WarrenMotion {
     public static let stateChangeDuration: TimeInterval = 0.14
     public static let overlayDuration: TimeInterval = 0.16
     public static let activityPulseDuration: TimeInterval = 1.2
+    /// The Agent-working cadence. Twice the standard period, because this state
+    /// can last for minutes and only has to stay noticeable, not urgent.
+    public static let quietActivityPulseDuration: TimeInterval = 2.4
     public static let spinnerFrameDuration: TimeInterval = 0.09
 
     public static func animation(
@@ -36,6 +39,42 @@ public enum WarrenMotion {
     }
 }
 
+/// How loudly an activity ring reads.
+///
+/// `standard` is the connection/build cadence: a transport that is retrying or a
+/// build that is running is a short-lived condition worth interrupting for.
+///
+/// `quiet` is for an Agent that is working. That is not short-lived and needs no
+/// response, but it was drawn at the same volume — and motion outranks both
+/// shape and color in peripheral vision, so "busy, leave it alone" was louder
+/// than "halted, waiting on you". Slower, smaller, and fainter keeps "it is
+/// alive" readable in the corner of the eye without competing for it.
+public enum WarrenStatusPulseIntensity: Hashable, Sendable {
+    case standard
+    case quiet
+
+    var duration: TimeInterval {
+        switch self {
+        case .standard: WarrenMotion.activityPulseDuration
+        case .quiet: WarrenMotion.quietActivityPulseDuration
+        }
+    }
+
+    var peakScale: CGFloat {
+        switch self {
+        case .standard: 1.9
+        case .quiet: 1.7
+        }
+    }
+
+    var peakOpacity: CGFloat {
+        switch self {
+        case .standard: 0.75
+        case .quiet: 0.26
+        }
+    }
+}
+
 /// A stable status dot with an optional compositor-driven activity ring.
 /// The ring is inserted only while work is active, so static warning and
 /// failure states do not keep an infinite animation alive.
@@ -43,6 +82,7 @@ public struct WarrenStatusIndicator: View {
     private let color: Color
     private let isActive: Bool
     private let size: CGFloat
+    private let intensity: WarrenStatusPulseIntensity
     private let accessibilityLabel: String
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -51,18 +91,20 @@ public struct WarrenStatusIndicator: View {
         color: Color,
         isActive: Bool = false,
         size: CGFloat = 7,
+        intensity: WarrenStatusPulseIntensity = .standard,
         accessibilityLabel: String
     ) {
         self.color = color
         self.isActive = isActive
         self.size = size
+        self.intensity = intensity
         self.accessibilityLabel = accessibilityLabel
     }
 
     public var body: some View {
         ZStack {
             if isActive, !reduceMotion {
-                WarrenStatusPulseRing(color: color, size: size)
+                WarrenStatusPulseRing(color: color, size: size, intensity: intensity)
             }
             Circle()
                 .fill(color)
@@ -78,13 +120,14 @@ public struct WarrenStatusIndicator: View {
 private struct WarrenStatusPulseRing: NSViewRepresentable {
     let color: Color
     let size: CGFloat
+    let intensity: WarrenStatusPulseIntensity
 
     func makeNSView(context: Context) -> WarrenStatusPulseView {
-        WarrenStatusPulseView(color: NSColor(color), size: size)
+        WarrenStatusPulseView(color: NSColor(color), size: size, intensity: intensity)
     }
 
     func updateNSView(_ nsView: WarrenStatusPulseView, context: Context) {
-        nsView.update(color: NSColor(color), size: size)
+        nsView.update(color: NSColor(color), size: size, intensity: intensity)
     }
 }
 
@@ -99,9 +142,11 @@ final class WarrenStatusPulseView: NSView {
 
     private let pulseLayer = CALayer()
     private var pulseSize: CGFloat
+    private var intensity: WarrenStatusPulseIntensity
 
-    init(color: NSColor, size: CGFloat) {
+    init(color: NSColor, size: CGFloat, intensity: WarrenStatusPulseIntensity = .standard) {
         pulseSize = size
+        self.intensity = intensity
         super.init(frame: NSRect(origin: .zero, size: CGSize(width: size, height: size)))
         wantsLayer = true
         layer?.masksToBounds = false
@@ -126,9 +171,16 @@ final class WarrenStatusPulseView: NSView {
         installAnimationIfNeeded()
     }
 
-    func update(color: NSColor, size: CGFloat) {
+    func update(color: NSColor, size: CGFloat, intensity: WarrenStatusPulseIntensity = .standard) {
         let sizeChanged = pulseSize != size
         pulseSize = size
+        // A cadence change has to replace the running animation, not wait for
+        // the next one: `installAnimationIfNeeded` is a no-op while a key is
+        // already attached.
+        if self.intensity != intensity {
+            self.intensity = intensity
+            pulseLayer.removeAnimation(forKey: Self.animationKey)
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         pulseLayer.backgroundColor = color.withAlphaComponent(0.65).cgColor
@@ -153,15 +205,15 @@ final class WarrenStatusPulseView: NSView {
         guard pulseLayer.animation(forKey: Self.animationKey) == nil else { return }
         let scale = CABasicAnimation(keyPath: "transform.scale")
         scale.fromValue = 1
-        scale.toValue = 1.9
+        scale.toValue = intensity.peakScale
 
         let opacity = CABasicAnimation(keyPath: "opacity")
-        opacity.fromValue = 0.75
+        opacity.fromValue = intensity.peakOpacity
         opacity.toValue = 0
 
         let group = CAAnimationGroup()
         group.animations = [scale, opacity]
-        group.duration = WarrenMotion.activityPulseDuration
+        group.duration = intensity.duration
         group.repeatCount = .infinity
         group.timingFunction = CAMediaTimingFunction(name: .easeOut)
         group.isRemovedOnCompletion = false
@@ -172,6 +224,7 @@ final class WarrenStatusPulseView: NSView {
 private struct WarrenStatusPulseRing: View {
     let color: Color
     let size: CGFloat
+    let intensity: WarrenStatusPulseIntensity
 
     @State private var expanded = false
 
@@ -179,11 +232,11 @@ private struct WarrenStatusPulseRing: View {
         Circle()
             .fill(color.opacity(0.65))
             .frame(width: size, height: size)
-            .scaleEffect(expanded ? 1.9 : 1)
-            .opacity(expanded ? 0 : 0.75)
+            .scaleEffect(expanded ? intensity.peakScale : 1)
+            .opacity(expanded ? 0 : intensity.peakOpacity)
             .onAppear {
                 withAnimation(
-                    .easeOut(duration: WarrenMotion.activityPulseDuration)
+                    .easeOut(duration: intensity.duration)
                         .repeatForever(autoreverses: false)
                 ) {
                     expanded = true

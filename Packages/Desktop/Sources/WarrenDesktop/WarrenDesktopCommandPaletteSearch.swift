@@ -1,5 +1,6 @@
 import Foundation
 import WarrenClientCore
+import WarrenDesignSystem
 import WarrenDomain
 
 /// Command-palette search over everything the desktop shell can navigate to.
@@ -54,26 +55,44 @@ enum WarrenDesktopCommandPaletteSearch {
     }
 
     enum Status: Hashable, Sendable {
-        case activity(AgentActivityState)
+        case mark(WarrenActivityMark)
         case pinned
 
+        /// What the row says, so a result names the request rather than the
+        /// lifecycle state the request implies.
         var label: String {
             switch self {
-            case .activity(.working): return "Working"
-            case .activity(.blocked): return "Blocked"
-            case .activity(.failed): return "Failed"
-            case .activity(.ready): return "Ready"
-            case .activity(.exited): return "Exited"
+            case .mark(let mark): return mark.statusWord
             case .pinned: return "Pinned"
+            }
+        }
+
+        /// What `is:` matches, which is deliberately not `label`.
+        ///
+        /// The filter vocabulary is typed by users and pinned by
+        /// `WarrenSearchTests`, so it stays as it was: all three attention marks
+        /// answer to `is:blocked`, which is the lifecycle the Host reports with
+        /// every one of them. Splitting the displayed word from the matched one
+        /// is what lets the row name an approval without retiring a query
+        /// people already type.
+        var filterToken: String {
+            switch self {
+            case .mark(let mark): return mark.lifecycle.rawValue
+            case .pinned: return "pinned"
             }
         }
 
         /// Ranking weight. Blocked work is what a user opens the palette to find,
         /// so it outranks everything, and a pin is an explicit user signal that
         /// stacks on top of whatever the agent is doing.
-        static func boost(activity: AgentActivityState?, pinned: Bool) -> Int {
-            let activityBoost = switch activity {
-            case .blocked: 70
+        ///
+        /// This order is not the sidebar's: a rollup ranks a failure highest
+        /// because it is the more specific fact about work that already stopped,
+        /// while a search ranks an unanswered request highest because that is
+        /// what the person is hunting for.
+        static func boost(mark: WarrenActivityMark?, pinned: Bool) -> Int {
+            let activityBoost = switch mark {
+            case .approvalNeeded, .inputNeeded, .attentionUnspecified: 70
             case .failed: 60
             case .working: 50
             case .ready: 20
@@ -151,7 +170,7 @@ enum WarrenDesktopCommandPaletteSearch {
         private func accepts(_ kind: Kind, statuses filter: Set<String>) -> Bool {
             guard !filter.isEmpty else { return true }
             guard let status = statuses[kind] else { return false }
-            return filter.contains(status.label.lowercased())
+            return filter.contains(status.filterToken)
         }
 
         private func map(_ results: [WarrenSearchResult<Kind>]) -> [Result] {
@@ -273,7 +292,7 @@ enum WarrenDesktopCommandPaletteSearch {
         private mutating func addWorkspace(_ workspace: Workspace, in project: Project) {
             let title = Self.workspaceTitle(workspace)
             let branch = workspace.branch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let activity = projection.activity(in: workspace.id)
+            let mark = projection.mark(in: workspace.id)
             // A worktree whose branch equals its name would otherwise render as
             // `Project › review` next to a title that already says `review`.
             let context = title.lowercased() == workspace.name.lowercased()
@@ -290,8 +309,8 @@ enum WarrenDesktopCommandPaletteSearch {
                     (workspace.path as NSString).lastPathComponent,
                 ],
                 contextValues: [project.name, workspace.name, branch],
-                status: activity.map(Status.activity) ?? (workspace.pinned ? .pinned : nil),
-                boost: Status.boost(activity: activity, pinned: workspace.pinned)
+                status: mark.map(Status.mark) ?? (workspace.pinned ? .pinned : nil),
+                boost: Status.boost(mark: mark, pinned: workspace.pinned)
             )
         }
 
@@ -306,14 +325,14 @@ enum WarrenDesktopCommandPaletteSearch {
                 let task = group.task
                 var projectNames: [String] = []
                 var branches: [String] = []
-                var activity: AgentActivityState?
+                var mark: WarrenActivityMark?
                 for workspace in group.workspaces {
                     if let project = workspaceContext[workspace.id]?.project,
                        !projectNames.contains(project.name) {
                         projectNames.append(project.name)
                     }
                     branches.append(Self.workspaceTitle(workspace))
-                    activity = Self.dominant(activity, projection.activity(in: workspace.id))
+                    mark = Self.dominant(mark, projection.mark(in: workspace.id))
                 }
                 let context = projectNames.isEmpty
                     ? Self.workspaceCountLabel(group.workspaces.count)
@@ -324,8 +343,8 @@ enum WarrenDesktopCommandPaletteSearch {
                     context: context,
                     aliases: [task.source, task.externalID] + branches,
                     contextValues: projectNames,
-                    status: activity.map(Status.activity) ?? (task.pinned ? .pinned : nil),
-                    boost: Status.boost(activity: activity, pinned: task.pinned)
+                    status: mark.map(Status.mark) ?? (task.pinned ? .pinned : nil),
+                    boost: Status.boost(mark: mark, pinned: task.pinned)
                 )
             }
         }
@@ -337,11 +356,11 @@ enum WarrenDesktopCommandPaletteSearch {
         /// The state a container should report: whichever of its children is
         /// most in need of attention.
         private static func dominant(
-            _ lhs: AgentActivityState?,
-            _ rhs: AgentActivityState?
-        ) -> AgentActivityState? {
-            let left = Status.boost(activity: lhs, pinned: false)
-            let right = Status.boost(activity: rhs, pinned: false)
+            _ lhs: WarrenActivityMark?,
+            _ rhs: WarrenActivityMark?
+        ) -> WarrenActivityMark? {
+            let left = Status.boost(mark: lhs, pinned: false)
+            let right = Status.boost(mark: rhs, pinned: false)
             return right > left ? rhs : lhs
         }
 
@@ -350,15 +369,15 @@ enum WarrenDesktopCommandPaletteSearch {
         private mutating func addTerminalGroups() {
             for group in projection.terminalGroups {
                 terminalGroupsByID[group.id] = group
-                let activity = projection.activity(in: group.id)
+                let mark = projection.mark(in: group.id)
                 add(
                     .terminalGroup(group.id),
                     title: group.name,
                     context: group.home.map(Self.displayPath) ?? "Standalone sessions",
                     path: group.home,
                     aliases: [group.home.map { ($0 as NSString).lastPathComponent }],
-                    status: activity.map(Status.activity),
-                    boost: Status.boost(activity: activity, pinned: false)
+                    status: mark.map(Status.mark),
+                    boost: Status.boost(mark: mark, pinned: false)
                 )
             }
         }
@@ -423,9 +442,9 @@ enum WarrenDesktopCommandPaletteSearch {
                 ],
                 kinds: [session.presentedKind.displayName],
                 providerKind: session.presentedKind,
-                status: session.activity.map(Status.activity)
+                status: session.activityMark.map(Status.mark)
                     ?? (session.pinned ? .pinned : nil),
-                boost: Status.boost(activity: session.activity, pinned: session.pinned)
+                boost: Status.boost(mark: session.activityMark, pinned: session.pinned)
             )
         }
 

@@ -57,6 +57,14 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
     private var activeHost: ActiveHost?
     private var overflowAliases = Set<String>()
     private var connections: [String: Connection] = [:]
+    /// The last Host section drawn from a real roster, per endpoint.
+    ///
+    /// Promoting a Host swaps both sides of the switch: the new active Host
+    /// waits for the interactive transport and the old one restarts as a
+    /// background connection with no roster. Neither transient is evidence
+    /// that the Host's projects went away, and presenting it as an empty Host
+    /// made the sidebar drop the user's expanded projects and jump.
+    private var lastKnownHosts: [String: WarrenDesktopSidebarHostProjection] = [:]
 
     /// Reconciles the client-local display configuration with the current
     /// interactive Host projection. Repeated calls are cheap: unchanged
@@ -66,6 +74,7 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
         endpoints: [WarrenRemoteEndpointConfiguration],
         activeEndpointID: String,
         activeProjection: WarrenDesktopProjection,
+        activeProjectionIsCurrent: Bool = true,
         activeConnectionError: String?
     ) {
         let activeID = Self.normalizedEndpointID(activeEndpointID)
@@ -103,11 +112,20 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 }
         )
 
+        // Right after a switch the interactive model still publishes the
+        // previous Host's roster. Drawing it would file that Host's projects
+        // under the newly selected one, so stand in a connecting Host instead.
         activeHost = ActiveHost(
             endpointID: activeID,
             endpointLabel: labels[activeID] ?? activeID,
-            projection: activeProjection,
-            lastError: Self.boundedError(activeConnectionError)
+            projection: activeProjectionIsCurrent
+                ? activeProjection
+                : WarrenDesktopProjection
+                    .empty(host: Host(name: labels[activeID] ?? activeID))
+                    .withConnectionState(.connecting),
+            lastError: activeProjectionIsCurrent
+                ? Self.boundedError(activeConnectionError)
+                : nil
         )
 
         let backgroundAliases = aliases.filter { $0 != activeID }
@@ -172,6 +190,7 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
         aliases.removeAll()
         overflowAliases.removeAll()
         activeHost = nil
+        lastKnownHosts.removeAll()
         projection = WarrenDesktopSidebarProjection()
     }
 
@@ -462,46 +481,10 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
     }
 
     private func rebuildProjection() {
-        let hosts = aliases.map { endpointID -> WarrenDesktopSidebarHostProjection in
-            if endpointID == activeEndpointID, let activeHost {
-                return WarrenDesktopSidebarHostProjection(
-                    endpointID: endpointID,
-                    endpointLabel: activeHost.endpointLabel,
-                    host: activeHost.projection.host,
-                    connectionState: activeHost.projection.connectionState,
-                    projectGroups: activeHost.projection.groups,
-                    tasks: activeHost.projection.taskGroups.map(\.task),
-                    workspaceActivitySummaries: activeHost.projection.workspaceActivitySummaries,
-                    activeSessionsByWorkspaceID: activeHost.projection.activeSessionsByWorkspaceID,
-                    activeWorkspaceIDs: activeHost.projection.activeWorkspaceIDs,
-                    lastError: activeHost.lastError
-                )
-            }
-            if let connection = connections[endpointID] {
-                return Self.makeProjection(for: connection)
-            }
-            if overflowAliases.contains(endpointID) {
-                return WarrenDesktopSidebarHostProjection(
-                    endpointID: endpointID,
-                    endpointLabel: labels[endpointID] ?? endpointID,
-                    connectionState: .disconnected,
-                    lastError: "Sidebar connection limit reached."
-                )
-            }
-            if configurations[endpointID] == nil {
-                return WarrenDesktopSidebarHostProjection(
-                    endpointID: endpointID,
-                    endpointLabel: endpointID,
-                    connectionState: .failed,
-                    lastError: "Endpoint is not configured."
-                )
-            }
-            return WarrenDesktopSidebarHostProjection(
-                endpointID: endpointID,
-                endpointLabel: labels[endpointID] ?? endpointID,
-                connectionState: .disconnected
-            )
+        let hosts = aliases.map { endpointID in
+            presented(freshProjection(for: endpointID))
         }
+        lastKnownHosts = lastKnownHosts.filter { aliases.contains($0.key) }
         let next = WarrenDesktopSidebarProjection(
             hosts: hosts,
             currentEndpointID: activeEndpointID
@@ -509,6 +492,85 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
         if projection != next {
             projection = next
         }
+    }
+
+    /// Keeps a Host's last real roster on screen while it is only between
+    /// connections. Its rows stay disabled until the Host is attached again,
+    /// so nothing can be routed through the retained values.
+    private func presented(
+        _ fresh: WarrenDesktopSidebarHostProjection
+    ) -> WarrenDesktopSidebarHostProjection {
+        let isAwaitingRoster: Bool
+        switch fresh.connectionState {
+        case .attached:
+            isAwaitingRoster = fresh.host == nil
+        case .connecting, .reconnecting:
+            isAwaitingRoster = true
+        case .failed, .disconnected:
+            isAwaitingRoster = false
+        }
+        guard isAwaitingRoster else {
+            if fresh.host != nil {
+                lastKnownHosts[fresh.endpointID] = fresh
+            }
+            return fresh
+        }
+        guard let known = lastKnownHosts[fresh.endpointID] else { return fresh }
+        return WarrenDesktopSidebarHostProjection(
+            endpointID: fresh.endpointID,
+            endpointLabel: fresh.endpointLabel,
+            host: known.host,
+            connectionState: fresh.connectionState == .attached
+                ? .connecting
+                : fresh.connectionState,
+            projectGroups: known.projectGroups,
+            tasks: known.tasks,
+            workspaceActivitySummaries: known.workspaceActivitySummaries,
+            activeSessionsByWorkspaceID: known.activeSessionsByWorkspaceID,
+            activeWorkspaceIDs: known.activeWorkspaceIDs,
+            lastError: fresh.lastError
+        )
+    }
+
+    private func freshProjection(for endpointID: String) -> WarrenDesktopSidebarHostProjection {
+        if endpointID == activeEndpointID, let activeHost {
+            return WarrenDesktopSidebarHostProjection(
+                endpointID: endpointID,
+                endpointLabel: activeHost.endpointLabel,
+                host: activeHost.projection.host,
+                connectionState: activeHost.projection.connectionState,
+                projectGroups: activeHost.projection.groups,
+                tasks: activeHost.projection.taskGroups.map(\.task),
+                workspaceActivitySummaries: activeHost.projection.workspaceActivitySummaries,
+                activeSessionsByWorkspaceID: activeHost.projection.activeSessionsByWorkspaceID,
+                activeWorkspaceIDs: activeHost.projection.activeWorkspaceIDs,
+                lastError: activeHost.lastError
+            )
+        }
+        if let connection = connections[endpointID] {
+            return Self.makeProjection(for: connection)
+        }
+        if overflowAliases.contains(endpointID) {
+            return WarrenDesktopSidebarHostProjection(
+                endpointID: endpointID,
+                endpointLabel: labels[endpointID] ?? endpointID,
+                connectionState: .disconnected,
+                lastError: "Sidebar connection limit reached."
+            )
+        }
+        if configurations[endpointID] == nil {
+            return WarrenDesktopSidebarHostProjection(
+                endpointID: endpointID,
+                endpointLabel: endpointID,
+                connectionState: .failed,
+                lastError: "Endpoint is not configured."
+            )
+        }
+        return WarrenDesktopSidebarHostProjection(
+            endpointID: endpointID,
+            endpointLabel: labels[endpointID] ?? endpointID,
+            connectionState: .disconnected
+        )
     }
 
     nonisolated static func resolveAliases(

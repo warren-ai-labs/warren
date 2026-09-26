@@ -938,7 +938,7 @@ struct WarrenDesktopSidebarRows: View {
             WarrenDesktopWorkspaceRow(
                 workspace: presentedWorkspace,
                 semanticScope: semanticScope,
-                activity: activitySummary?.activity,
+                mark: activitySummary?.mark,
                 activeTabCount: activitySummary?.activeTabCount ?? 0,
                 isCollapsed: isCollapsed,
                 isSelected: isWorkspaceRowSelected(
@@ -1306,18 +1306,11 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     /// A shell that never bound an Agent reports no activity, so it has no state
     /// to name. Treating that as "Running" claimed knowledge of a process Warren
     /// does not track.
+    ///
+    /// The word comes from the mark the row already draws, so the marker and the
+    /// text can never disagree about which half of the status won.
     private var statusLabel: String? {
-        if let attention {
-            return attention.kind.rowLabel
-        }
-        guard let activity = session.activity else { return nil }
-        switch activity {
-        case .working: return "Working"
-        case .blocked: return "Needs attention"
-        case .failed: return "Failed"
-        case .ready: return "Idle"
-        case .exited: return "Exited"
-        }
+        session.activityMark?.statusWord
     }
 
     /// The full state sentence, kept for assistive technology and the hover
@@ -1332,6 +1325,9 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             let reason = attention.reason.trimmingCharacters(in: .whitespacesAndNewlines)
             return reason.isEmpty ? statusLabel : reason
         }
+        // `session.activity`, not the drawn mark: a completion the person has
+        // already read should stop drawing, but its sentence is still the honest
+        // answer to "what is this Session doing".
         switch session.activity {
         case .blocked, .failed, .exited:
             return statusLabel
@@ -1414,8 +1410,8 @@ struct WarrenDesktopWorkspaceSessionRow: View {
 
                 Spacer(minLength: WarrenSpacing.xs)
 
-                if let activity = session.activity {
-                    WarrenDesktopActivityIndicator(activity: activity)
+                if let mark = session.activityMark {
+                    WarrenDesktopActivityIndicator(mark: mark)
                 }
             }
             .padding(.leading, WarrenDesktopSidebarIndent.session)
@@ -1530,17 +1526,6 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme).mutedForeground)
                 .accessibilityHidden(true)
-        }
-    }
-}
-
-private extension AgentAttentionKind {
-    /// The row says what is being asked of the user, not which enum case the
-    /// provider reported.
-    var rowLabel: String {
-        switch self {
-        case .input: "Input needed"
-        case .approval: "Approval needed"
         }
     }
 }

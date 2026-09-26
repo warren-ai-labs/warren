@@ -231,7 +231,7 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
                     title: $0.title,
                     fullTitle: $0.title,
                     providerPresetID: nil,
-                    activity: nil,
+                    mark: nil,
                     canClose: true
                 )
             }

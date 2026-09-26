@@ -1674,7 +1674,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var activityUpdatedAtBySessionID: [TerminalSessionID: Date] = [:]
     private var agentCompletionTracker = WarrenAgentCompletionTracker()
     private let agentCompletionSubject = PassthroughSubject<WarrenAgentCompletionEvent, Never>()
-    private var dismissedActivityBySessionID: [TerminalSessionID: AgentActivityState] = [:]
+    private var activityAcknowledgments = WarrenDesktopActivityAcknowledgments()
     private var suppressFramedAnchorUpdates: Set<TerminalSessionID> = []
     /// Sessions with a live daemon-side output subscription feeding their
     /// retained surface. One entry per warm/active surface; background
@@ -1983,7 +1983,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         agentCompletionTracker = WarrenAgentCompletionTracker()
         tabOrderByWorkspaceID.removeAll()
         tabOrderByTerminalGroupID.removeAll()
-        dismissedActivityBySessionID.removeAll()
+        activityAcknowledgments = WarrenDesktopActivityAcknowledgments()
         lastReportedScreenSessions.removeAll()
         creatingSessionWorkspaceIDs.removeAll()
         creatingSessionTerminalGroupIDs.removeAll()
@@ -3991,13 +3991,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         case .setSessionPinned(let id, let pinned):
             request("session.pin", params: ["id": id.description, "pinned": String(pinned)])
         case .dismissActivity(let id, let expectedActivity):
-            let candidate = projection.session(id: id)?.activity
-            guard WarrenActivityDismissal.canDismiss(
-                candidate: candidate,
-                expected: expectedActivity
-            ) else { return }
-            dismissedActivityBySessionID[id] = expectedActivity
-            publishProjectionIfChanged(projection.withSessionActivity(nil, for: id))
+            // Records that the notice was read rather than erasing the status.
+            // Nil-ing the status also dropped `agentStatus`, which made a shell
+            // the Host had promoted to an Agent read as a plain shell again —
+            // tolerable for a rarely-used menu item, wrong now that visiting a
+            // row does this.
+            guard let session = projection.session(id: id),
+                  WarrenActivityDismissal.canDismiss(
+                      candidate: session.activity,
+                      expected: expectedActivity
+                  ) else { return }
+            acknowledgeActivity(for: session)
         case .moveProject(let projectID, let before):
             guard !deletingProjectIDs.contains(projectID),
                   let group = projection.groups.first(where: { $0.project.id == projectID }),
@@ -5220,23 +5224,25 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 activityUpdatedAtBySessionID[sessionID] = Date()
             }
             agentStatusBySessionID[sessionID] = status
-            let activity = status.activity
-            let presentation = WarrenActivityDismissal.presentedActivity(
-                candidate: activity,
-                dismissed: dismissedActivityBySessionID[sessionID]
-            )
-            if presentation.clearsDismissal {
-                dismissedActivityBySessionID.removeValue(forKey: sessionID)
+            // The Agent moved, so any completion notice this person read is now
+            // about a previous state. Dropping it here is what lets a second
+            // completion light up instead of being swallowed by the first one's
+            // acknowledgment.
+            if activityAcknowledgments.invalidate(
+                sessionID: sessionID,
+                currentActivity: status.activity
+            ) {
+                persistActivityAcknowledgments()
             }
             // Activity events are live updates and should not wait for the
             // next roster tick. The roster remains authoritative when it is
             // applied, so a stale event cache cannot overwrite a newer
             // server snapshot later.
-            let presentedStatus = presentation.activity == nil ? nil : status
             publishProjectionIfChanged(
                 projection.withSessionAgentStatus(
-                    presentedStatus,
+                    status,
                     activityUpdatedAt: activityUpdatedAtBySessionID[sessionID],
+                    acknowledgedActivity: activityAcknowledgments[sessionID],
                     for: sessionID
                 )
             )
@@ -5894,6 +5900,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let rosterObservationDate = Date()
         var nextLastObservedActivityBySessionID = lastObservedActivityBySessionID
         var nextActivityUpdatedAtBySessionID = activityUpdatedAtBySessionID
+        var nextAcknowledgments = activityAcknowledgments
+        var acknowledgmentsChanged = false
         let sessions = remoteSessions.map { value, id, workspaceID, terminalGroupID in
             let candidateStatus = Self.resolvedAgentStatus(
                 rosterStatus: value.agentStatus,
@@ -5914,12 +5922,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             } else {
                 nextLastObservedActivityBySessionID.removeValue(forKey: id)
             }
-            let presentation = WarrenActivityDismissal.presentedActivity(
-                candidate: candidateActivity,
-                dismissed: dismissedActivityBySessionID[id]
-            )
-            if presentation.clearsDismissal {
-                dismissedActivityBySessionID.removeValue(forKey: id)
+            if nextAcknowledgments.invalidate(sessionID: id, currentActivity: candidateActivity) {
+                acknowledgmentsChanged = true
             }
             return WarrenDesktopSession(
                 id: id,
@@ -5932,14 +5936,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 kind: TerminalSessionKind(rawValue: value.kind) ?? .custom,
                 agentProvider: value.agentProvider.flatMap(TerminalSessionKind.init(rawValue:)),
                 state: value.lifecycle == "running" ? .attached : .exited,
-                agentStatus: presentation.activity == nil ? nil : candidateStatus,
+                agentStatus: candidateStatus,
                 activityUpdatedAt: nextActivityUpdatedAtBySessionID[id],
                 runtimeProcess: value.process ?? value.command ?? "",
                 runtimeCommandLine: value.commandLine ?? "",
                 workingDirectory: value.directory
                     ?? workspaceID.flatMap { workspacePaths[$0] }
                     ?? terminalGroupID.flatMap { groupHomes[$0] }
-                    ?? ""
+                    ?? "",
+                acknowledgedActivity: nextAcknowledgments[id]
             )
         }
         let liveSessionIDs = Set(remoteSessions.map(\.1))
@@ -5949,8 +5954,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         activityUpdatedAtBySessionID = nextActivityUpdatedAtBySessionID.filter {
             liveSessionIDs.contains($0.key)
         }
-        dismissedActivityBySessionID = dismissedActivityBySessionID.filter {
-            liveSessionIDs.contains($0.key)
+        nextAcknowledgments.retain(sessionIDs: liveSessionIDs)
+        if acknowledgmentsChanged || nextAcknowledgments != activityAcknowledgments {
+            activityAcknowledgments = nextAcknowledgments
+            persistActivityAcknowledgments()
         }
         let activeStatusSessionIDs = Set(
             remoteSessions.compactMap { value, id, _, _ in
@@ -6949,6 +6956,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private func publishNavigationIfChanged(_ nextNavigation: WarrenDesktopNavigationState) {
         guard navigation != nextNavigation else { return }
         navigation = nextNavigation
+        // Selection is the acknowledgment. Hooking it here rather than in
+        // `selectSession` covers the sidebar leaf, the Tab strip, the command
+        // palette, and the keyboard with one rule.
+        acknowledgeSelectedActivity()
     }
 
     private func switchNavigationScope(to rawScope: String) {
@@ -6970,6 +6981,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     private func restorePersistedTabOrders(scope: String) {
+        // Acknowledgments ride along with Tab order because they answer the same
+        // kind of question — what did this device look like last time — and are
+        // keyed to the same Host. Restoring them is what makes "does not expire"
+        // true across a relaunch: the roster carries no transition history, so a
+        // client with no record would have to guess, and `hadPreviousObservation`
+        // makes it guess "nothing is new".
+        activityAcknowledgments = WarrenDesktopActivityAcknowledgmentStore.restore(scope: scope)
         let orders = WarrenDesktopNavigationPersistence.restoreTabOrders(scope: scope)
         tabOrderByWorkspaceID = orders.workspace.reduce(into: [:]) { result, entry in
             guard let id = WorkspaceID(uuidString: entry.key) else { return }
@@ -6979,6 +6997,35 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             guard let id = TerminalGroupID(uuidString: entry.key) else { return }
             result[id] = entry.value
         }
+    }
+
+    /// Records that this person has now seen whatever the Session was reporting.
+    ///
+    /// Called from every path that puts a Session on screen, because the answer
+    /// to "have I seen this" cannot depend on which door was used.
+    private func acknowledgeActivity(for session: WarrenDesktopSession) {
+        guard activityAcknowledgments.acknowledge(session) else { return }
+        persistActivityAcknowledgments()
+        publishProjectionIfChanged(
+            projection.withSessionAcknowledgedActivity(
+                activityAcknowledgments[session.id],
+                for: session.id
+            )
+        )
+    }
+
+    private func acknowledgeSelectedActivity() {
+        guard let tabID = navigation.selectedTabID,
+              let session = projection.sessions.first(where: { $0.tabID == tabID })
+        else { return }
+        acknowledgeActivity(for: session)
+    }
+
+    private func persistActivityAcknowledgments() {
+        WarrenDesktopActivityAcknowledgmentStore.save(
+            activityAcknowledgments,
+            scope: navigationScope
+        )
     }
 
     private func persistTabOrders() {

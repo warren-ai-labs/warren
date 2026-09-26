@@ -4,7 +4,61 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
-_No changes yet._
+### Changed
+
+- Encode Agent activity as one mark all three clients share, and draw it as a
+  dot everywhere. Motion means exactly one thing — work is progressing — so a
+  halted Session no longer pulses indefinitely while it waits; color says what a
+  state asks of a person, so the actionable tier (`approval`, `input`, `unnamed`,
+  `failed`) takes the attention hue. A glyph badge for that tier was tried and
+  read worse at the size a row actually uses, so the kind of a request rides on
+  the status word and the accessibility label rather than a drawn symbol.
+  `DESIGN.md` §8.2 states the rules, `WarrenActivityMark` implements them, and
+  `Web/src/activity.js` mirrors the table.
+- Report what the Host is asking for, not just the lifecycle value beside it. An
+  attention payload outranks the `activity` it arrives with on every surface, so
+  a stale `ready` no longer draws the quiet idle marker on the one row that needs
+  someone; `failed` still outranks attention. The Desktop dropped attention
+  entirely before this — its marker took a bare lifecycle state — and its
+  Workspace rollup had no rung for it, so collapsing the tree lost the request.
+- Distinguish an `approval` request from an `input` request wherever activity is
+  drawn or named: the sidebar tree, Workspace and Terminal Group rollups, the Tab
+  strip, the solo pane identity, the command palette, the Web session and
+  workspace rows, and the iOS scope rows, search rows, and state chip. The Host
+  has always reported which one it was and no client rendered it. `is:blocked`
+  keeps matching all of them, because that is the lifecycle the Host reports with
+  every request.
+- Roll a Workspace's Sessions up through one ladder instead of four
+  near-copies. The Desktop projection, the Desktop command palette, the iOS
+  search index, and the Web all had their own; search ranking stays deliberately
+  different from visual salience, and that difference is now stated where it
+  lives rather than implied by duplication.
+
+### Added
+
+- Treat a finished turn as a completion notice rather than a steady state.
+  `ready` now means "this just finished" and stops being drawn once you have
+  looked at it, on both native clients; the acknowledgement is device-local (the
+  Host has no business knowing which screen you read it on) and persists, so a
+  weekend of finished work is still waiting on Monday. It retires itself the
+  moment the Agent works again, so a second completion lights up instead of being
+  swallowed by the first one's acknowledgement. Only `ready` can be retired by
+  being seen: opening a Session that wants an approval does not answer it, and a
+  failure does not un-fail because you visited.
+- Stop drawing an ended Session. `exited` is a permanent state rather than an
+  event, so it no longer carries a grey dot; every Session that ever ended used
+  to keep one, which was background noise that said nothing new. The status is
+  unchanged for search, `is:` filters, and accessibility.
+
+### Changed
+
+- Quiet the working pulse. An Agent that is working now pulses at 2.4s with a
+  0.26 peak instead of 1.2s at 0.75: motion outranks shape and color in
+  peripheral vision, so "busy, leave it alone" was drawing more attention than
+  "halted, waiting on you". Connection and build dots keep the original cadence.
+- Say "Done" instead of "Idle" for a Session whose Agent has finished. The mark
+  is drawn only while the completion is news, so the old word described a state
+  rather than the event that put it on screen.
 
 ## [0.22.0] - 2026-09-23
 

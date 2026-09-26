@@ -137,7 +137,7 @@ func makeTabBar(
             solo: soloPane
         ),
         tabTitles: Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0.title) }),
-        tabActivities: [:],
+        tabMarks: [:],
         pinnedSessionIDs: [],
         selectedTabID: selectedTabID,
         chromeMode: .workspace,
@@ -474,7 +474,7 @@ final class WarrenDesktopTests: XCTestCase {
         )
         XCTAssertEqual(
             localHostHeader.frame.y,
-            projectsHeader.frame.y + projectsHeader.frame.height + Double(WarrenSpacing.xxs),
+            projectsHeader.frame.y + projectsHeader.frame.height + Double(WarrenSpacing.xs),
             accuracy: 0.01
         )
         XCTAssertTrue(initialSnapshot.node(id: localID)?.value?.contains("Expanded") == true)
@@ -502,7 +502,10 @@ final class WarrenDesktopTests: XCTestCase {
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         hostingView.layoutSubtreeIfNeeded()
-        XCTAssertEqual(recorder.snapshot().node(id: "host.local.toggle")?.value, "Collapsed")
+        XCTAssertEqual(
+            recorder.snapshot().node(id: "host.local.toggle")?.value,
+            "Collapsed, 1 project"
+        )
     }
 
     @MainActor
@@ -3985,6 +3988,76 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(projection.session(id: failed.id), failed)
     }
 
+    /// The rollup used to reduce to the lifecycle half of the status before it
+    /// ever reached a row, so a collapsed Workspace could not say whether the
+    /// Agent inside it wanted an approval, wanted an answer, or had merely
+    /// stopped. Every one of those drew the same marker.
+    func testWorkspaceRollupKeepsWhatTheHostIsAskingFor() {
+        let fixture = WarrenDesktopFixture.preview
+        let workspaceID = fixture.groups[0].workspaces[0].id
+        let working = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspaceID,
+            tabID: "working",
+            title: "Working",
+            kind: .codex,
+            activity: .working
+        )
+        let awaitingApproval = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspaceID,
+            tabID: "approval",
+            title: "Approval",
+            kind: .claude,
+            agentStatus: AgentStatus(
+                activity: .blocked,
+                attention: AgentAttention(kind: .approval, reason: "Run rm -rf build?")
+            )
+        )
+        let projection = WarrenDesktopProjection(
+            host: fixture.host,
+            groups: fixture.groups,
+            sessions: [working, awaitingApproval]
+        )
+
+        XCTAssertEqual(projection.mark(in: workspaceID), .approvalNeeded)
+        XCTAssertEqual(
+            projection.workspaceActivitySummaries[workspaceID]?.mark,
+            .approvalNeeded
+        )
+        // The lifecycle accessors still answer as before, so a caller that only
+        // compares states is unaffected by the richer rollup.
+        XCTAssertEqual(projection.activity(in: workspaceID), .blocked)
+    }
+
+    /// A Host can report an attention payload alongside a lifecycle value that
+    /// has not caught up yet. Reading the lifecycle first drew the quiet idle
+    /// marker on the one Session that needed someone.
+    func testAStaleReadyCarryingAttentionStillReadsAsActionable() {
+        let fixture = WarrenDesktopFixture.preview
+        let workspaceID = fixture.groups[0].workspaces[0].id
+        let session = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspaceID,
+            tabID: "stale",
+            title: "Stale",
+            kind: .claude,
+            agentStatus: AgentStatus(
+                activity: .ready,
+                attention: AgentAttention(kind: .input, reason: "Which branch?")
+            )
+        )
+        let projection = WarrenDesktopProjection(
+            host: fixture.host,
+            groups: fixture.groups,
+            sessions: [session]
+        )
+
+        XCTAssertEqual(session.activityMark, .inputNeeded)
+        XCTAssertEqual(projection.mark(in: workspaceID), .inputNeeded)
+        XCTAssertEqual(session.activityMark?.tier, .actionable)
+    }
+
 
 
     @MainActor
@@ -4088,7 +4161,7 @@ final class WarrenDesktopTests: XCTestCase {
                 // The open Session is the selected row, so its value carries the
                 // selection the same way every other navigation row does.
                 "Codex Session Implement API": "Working · API · feature · Selected",
-                "Claude Code Session Review API": "Idle · API · feature",
+                "Claude Code Session Review API": "Done · API · feature",
                 "Shell Session Bound shell": "Working · API · feature",
                 "Shell Session Plain shell": "API · feature",
             ]
@@ -4103,6 +4176,195 @@ final class WarrenDesktopTests: XCTestCase {
             on: "workspace-session.project-list.\(workspace.id.description).\(codex.id.description)"
         )
         XCTAssertEqual(actions, [.openSession(codex.id)])
+    }
+
+    /// A completion notice is news exactly once. Selecting the row is what
+    /// retires it, so the tree stops drawing it while the Session keeps reporting
+    /// `ready` — and a failure or a request is never retired by being seen.
+    @MainActor
+    func testACompletionStopsDrawingOnceItsRowHasBeenSelected() throws {
+        let host = WarrenDomain.Host(name: "Agent Host")
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "feature",
+            path: "/tmp/api-feature"
+        )
+        let finished = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Migrate",
+            kind: .claude,
+            activity: .ready
+        )
+        let awaiting = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Rename",
+            kind: .codex,
+            agentStatus: AgentStatus(
+                activity: .blocked,
+                attention: AgentAttention(kind: .approval, reason: "Run the migration?")
+            )
+        )
+        var acknowledgments = WarrenDesktopActivityAcknowledgments()
+        acknowledgments.acknowledge(finished)
+
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [
+                finished.acknowledgingActivity(acknowledgments[finished.id]),
+                awaiting,
+            ]
+        )
+        let recorder = WarrenSemanticRecorder()
+        var actions: [WarrenDesktopAction] = []
+        let rows = WarrenDesktopSidebarRows(
+            taskGroups: [],
+            groups: projection.groups,
+            terminalGroups: [],
+            workspaceActivitySummaries: projection.workspaceActivitySummaries,
+            activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
+            workspaceDisplayMode: .rich,
+            tree: .constant(WarrenDesktopSidebarTreeState(
+                expandedProjectIDs: [project.id]
+            )),
+            isCollapsed: false,
+            selection: .workspace(workspace.id),
+            selectedTabID: nil,
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
+            isInteractionDisabled: false,
+            onAddProject: {},
+            onRequestTaskCreate: {},
+            onFocusTask: { _ in },
+            onRequestTerminalGroupCreate: {},
+            onRequestTerminalGroupEdit: { _ in },
+            onAction: { actions.append($0) },
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in }
+        )
+        .frame(width: 420, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: rows)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        // The read completion says nothing; the unanswered request still does.
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: recorder.snapshot().nodes.filter {
+                $0.id.hasPrefix("workspace-session.project-list.")
+            }.map { ($0.label, $0.value) }),
+            [
+                "Claude Code Session Migrate": "API · feature",
+                "Codex Session Rename": "Approval needed · Run the migration? · API · feature",
+            ]
+        )
+        // The Workspace rollup follows what is drawn, so it names the request
+        // rather than the read completion.
+        XCTAssertEqual(projection.mark(in: workspace.id), .approvalNeeded)
+    }
+
+    /// Two Sessions that both read as "blocked" to the Host ask a person for
+    /// different things. The tree used to name them identically — one shared
+    /// "Needs attention" — and draw them identically, so the row could not be
+    /// acted on without opening it first.
+    @MainActor
+    func testARowNamesWhichRequestIsWaiting() throws {
+        let host = WarrenDomain.Host(name: "Agent Host")
+        let project = Project(hostID: host.id, name: "API", rootPath: "/tmp/api")
+        let workspace = Workspace(
+            projectID: project.id,
+            name: "feature",
+            path: "/tmp/api-feature"
+        )
+        let approval = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Migrate",
+            kind: .claude,
+            agentStatus: AgentStatus(
+                activity: .blocked,
+                attention: AgentAttention(kind: .approval, reason: "Run the migration?")
+            )
+        )
+        let question = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Rename",
+            kind: .codex,
+            agentStatus: AgentStatus(
+                activity: .blocked,
+                attention: AgentAttention(kind: .input, reason: "Which branch?")
+            )
+        )
+        // No payload to explain it, so the row must not name a request.
+        let unexplained = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspace.id,
+            title: "Stalled",
+            kind: .codex,
+            activity: .blocked
+        )
+        let projection = WarrenDesktopProjection(
+            host: host,
+            projects: [project],
+            workspaces: [workspace],
+            sessions: [approval, question, unexplained]
+        )
+        let recorder = WarrenSemanticRecorder()
+        let rows = WarrenDesktopSidebarRows(
+            taskGroups: [],
+            groups: projection.groups,
+            terminalGroups: [],
+            workspaceActivitySummaries: projection.workspaceActivitySummaries,
+            activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
+            workspaceDisplayMode: .rich,
+            tree: .constant(WarrenDesktopSidebarTreeState(
+                expandedProjectIDs: [project.id]
+            )),
+            isCollapsed: false,
+            selection: .workspace(workspace.id),
+            selectedTabID: nil,
+            deletingProjectIDs: [],
+            deletingWorkspaceIDs: [],
+            endpointCapabilities: .local,
+            isInteractionDisabled: false,
+            onAddProject: {},
+            onRequestTaskCreate: {},
+            onFocusTask: { _ in },
+            onRequestTerminalGroupCreate: {},
+            onRequestTerminalGroupEdit: { _ in },
+            onAction: { _ in },
+            onRequestRename: { _ in },
+            onRequestDeletion: { _ in }
+        )
+        .frame(width: 420, height: 500)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: rows)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let leaves = recorder.snapshot().nodes.filter {
+            $0.id.hasPrefix("workspace-session.project-list.")
+        }
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: leaves.map { ($0.label, $0.value) }),
+            [
+                "Claude Code Session Migrate": "Approval needed · Run the migration? · API · feature",
+                "Codex Session Rename": "Input needed · Which branch? · API · feature",
+                "Codex Session Stalled": "Needs attention · API · feature",
+            ]
+        )
     }
 
     @MainActor
@@ -4701,7 +4963,7 @@ final class WarrenDesktopTests: XCTestCase {
             title: "Implement API",
             fullTitle: "Implement API · codex · feature",
             providerPresetID: "codex",
-            activity: .working,
+            mark: .working,
             canClose: true
         )
         let recorder = WarrenSemanticRecorder()
@@ -5333,6 +5595,45 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(allocator.assignments["dev"], initial["dev"])
         XCTAssertEqual(allocator.assignments["prod"], initial["prod"])
         XCTAssertNotNil(allocator.assignments["staging"])
+    }
+
+    func testCollapsedHostSummaryCountsProjectsAndKeepsTheMostActionableMark() {
+        let host = Host(name: "vps-01")
+        let project = Project(hostID: host.id, name: "api", rootPath: "/tmp/api")
+        let other = Project(hostID: host.id, name: "web", rootPath: "/tmp/web")
+        let working = Workspace(projectID: project.id, name: "main", path: "/tmp/api")
+        let waiting = Workspace(projectID: other.id, name: "main", path: "/tmp/web")
+        let exited = Workspace(projectID: other.id, name: "old", path: "/tmp/web-old")
+        let projection = WarrenDesktopSidebarHostProjection(
+            endpointID: "prod",
+            endpointLabel: "Production",
+            host: host,
+            connectionState: .attached,
+            projectGroups: [
+                .init(project: project, workspaces: [working]),
+                .init(project: other, workspaces: [waiting, exited]),
+            ],
+            workspaceActivitySummaries: [
+                working.id: .init(mark: .working, activeTabCount: 1),
+                waiting.id: .init(mark: .approvalNeeded),
+                exited.id: .init(mark: .exited),
+            ]
+        )
+
+        let summary = WarrenDesktopSidebarHostSummary(projection)
+        XCTAssertEqual(summary.countLabel, "2 projects")
+        XCTAssertEqual(summary.mark, .approvalNeeded)
+
+        let quiet = WarrenDesktopSidebarHostSummary(WarrenDesktopSidebarHostProjection(
+            endpointID: "prod",
+            endpointLabel: "Production",
+            host: host,
+            connectionState: .attached,
+            projectGroups: [.init(project: other, workspaces: [exited])],
+            workspaceActivitySummaries: [exited.id: .init(mark: .exited)]
+        ))
+        XCTAssertEqual(quiet.countLabel, "1 project")
+        XCTAssertNil(quiet.mark)
     }
 
     func testSidebarTreePersistenceIsPerScopeAndRoundTrips() throws {
