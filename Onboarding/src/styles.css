@@ -1122,3 +1122,73 @@ html[lang="zh-CN"] .principle blockquote {
   font-weight: 400;
   letter-spacing: 0.015em;
 }
+
+.film .section-head {
+  margin-bottom: 40px;
+}
+
+.film-frame {
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: #151110;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.42);
+  aspect-ratio: 16 / 9;
+}
+
+.film-frame video,
+.film-poster img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.film-poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.film-poster img {
+  filter: brightness(0.62);
+  transition: filter 240ms ease;
+}
+
+.film-poster:hover img,
+.film-poster:focus-visible img {
+  filter: brightness(0.75);
+}
+
+.film-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 76px;
+  height: 76px;
+  margin: -38px 0 0 -38px;
+  border-radius: 50%;
+  background: rgba(234, 232, 230, 0.95);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  transition: transform 240ms ease;
+}
+
+.film-play::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin: -13px 0 0 -8px;
+  border-style: solid;
+  border-width: 13px 0 13px 22px;
+  border-color: transparent transparent transparent #151110;
+}
+
+.film-poster:hover .film-play {
+  transform: scale(1.06);
+}

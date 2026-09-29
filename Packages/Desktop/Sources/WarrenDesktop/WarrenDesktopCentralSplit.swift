@@ -24,7 +24,13 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
     var defaultRatio: Double = WarrenLayoutMetrics.editorSplitDefaultRatio
     var accessibilityName = "Terminal and editor split"
     let terminal: Terminal
-    let editor: Editor
+    /// The region beside the Terminal, or nil for the Terminal alone.
+    ///
+    /// Optional rather than a separate layout so the Terminal keeps one place
+    /// in the view tree: switching between a bare Terminal and a split used to
+    /// swap SwiftUI branches, which tore the Terminal down and rebuilt it,
+    /// blanking it for seconds and dropping its keyboard focus.
+    let editor: Editor?
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var dragStartWidth: CGFloat?
@@ -37,10 +43,12 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
             )
             HStack(spacing: 0) {
                 terminal
-                    .frame(width: layout.terminalWidth)
-                divider(totalWidth: proxy.size.width)
-                editor
-                    .frame(maxWidth: .infinity)
+                    .frame(width: editor == nil ? proxy.size.width : layout.terminalWidth)
+                if let editor {
+                    divider(totalWidth: proxy.size.width)
+                    editor
+                        .frame(maxWidth: .infinity)
+                }
             }
         }
     }

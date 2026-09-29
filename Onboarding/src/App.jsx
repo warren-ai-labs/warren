@@ -179,6 +179,31 @@ function Ticker() {
   );
 }
 
+function Film() {
+  const { t } = useI18n();
+  const [playing, setPlaying] = useState(false);
+  return (
+    <section id="film" className="section film">
+      <Reveal className="section-head">
+        <p className="kicker">{t("film.kicker")}</p>
+        <h2>{t("film.title")}</h2>
+        <p className="section-lede">{t("film.lede")}</p>
+      </Reveal>
+      <Reveal className="film-frame">
+        {playing ? (
+          <video src="/warren-promo.mp4" poster="/warren-promo-poster.jpg" controls autoPlay playsInline />
+        ) : (
+          // The film has sound, so it waits for a click rather than autoplaying.
+          <button type="button" className="film-poster" onClick={() => setPlaying(true)} aria-label={t("film.play")}>
+            <img src="/warren-promo-poster.jpg" alt="" loading="lazy" />
+            <span className="film-play" aria-hidden="true" />
+          </button>
+        )}
+      </Reveal>
+    </section>
+  );
+}
+
 const productShots = [
   { src: "/screenshot-desktop.png", className: "product-card-desktop" },
   { src: "/screenshot-web-agent.png", className: "product-card-web" },
@@ -446,6 +471,7 @@ function HomePage() {
       <main>
         <Hero />
         <Ticker />
+        <Film />
         <ProductShot />
         <TerminalDemo />
         <Features />

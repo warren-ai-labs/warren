@@ -95,11 +95,11 @@ private actor WarrenRemoteSocket {
     /// They remain correlated with the response but must not be failed by the
     /// short interactive RPC deadline.
     private static let requestsWithoutTimeout: Set<String> = ["usage.rebuild"]
-    private static let heartbeatInterval: Duration = .seconds(20)
+    static let defaultHeartbeatInterval: Duration = .seconds(20)
     /// How long an app-level ping may go unanswered. Generous relative to the
     /// interval because the Host answers control frames one at a time per
     /// stream, so a slow request can legitimately delay a pong.
-    private static let heartbeatTimeout: Duration = .seconds(10)
+    static let defaultHeartbeatTimeout: Duration = .seconds(10)
     /// How long a probe triggered by wake, a network change, or a return to the
     /// foreground may go unanswered. Long enough for a Relay round trip on a
     /// slow mobile link, short enough that a half-open socket is replaced
@@ -143,24 +143,34 @@ private actor WarrenRemoteSocket {
     /// The latest app ping and when it left, kept apart from
     /// `pendingHeartbeatID` because any inbound frame clears that one.
     private var lastHeartbeatSent: (id: String, at: ContinuousClock.Instant)?
+    /// The id a doubt probe is waiting for. Set only by `probeNow`, so ordinary
+    /// inbound frames (including stale ones buffered while the app was
+    /// suspended) cannot satisfy it; only this ping's pong can.
+    private var strictProbeID: String?
     private var recentRoundTrips: [Duration] = []
     private var protocolPingInFlight = false
     private var livenessDeadline: ContinuousClock.Instant?
     private var livenessDeadlineTask: Task<Void, Never>?
     private let probeTimeout: Duration
+    private let heartbeatInterval: Duration
+    private let heartbeatTimeout: Duration
 
     init(
         adapter: any WarrenWebSocketTaskAdapter,
         codec: WarrenWireCodec = WarrenWireCodec(),
         terminalStateFormats: Set<String>,
         welcomeTimeout: Duration = WarrenRemoteNetworking.defaultWelcomeTimeout,
-        probeTimeout: Duration = WarrenRemoteSocket.defaultProbeTimeout
+        probeTimeout: Duration = WarrenRemoteSocket.defaultProbeTimeout,
+        heartbeatInterval: Duration = WarrenRemoteSocket.defaultHeartbeatInterval,
+        heartbeatTimeout: Duration = WarrenRemoteSocket.defaultHeartbeatTimeout
     ) {
         self.adapter = adapter
         self.codec = codec
         self.terminalStateFormats = terminalStateFormats
         self.welcomeTimeout = welcomeTimeout
         self.probeTimeout = probeTimeout
+        self.heartbeatInterval = heartbeatInterval
+        self.heartbeatTimeout = heartbeatTimeout
         // A peer can stream terminal bytes and Agent deltas faster than a
         // suspended iOS consumer can drain them. Bound the socket queue so a
         // stalled scene cannot retain an unbounded transcript; the model's
@@ -281,15 +291,17 @@ private actor WarrenRemoteSocket {
     /// client↔Relay hop and as the only liveness signal from an older Host.
     func startHeartbeat() {
         guard heartbeatTask == nil, !isClosed else { return }
+        let interval = heartbeatInterval
+        let timeout = heartbeatTimeout
         heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
-                    try await Task.sleep(for: Self.heartbeatInterval)
+                    try await Task.sleep(for: interval)
                 } catch {
                     return
                 }
                 guard !Task.isCancelled else { return }
-                await self?.probe(within: Self.heartbeatTimeout)
+                await self?.probe(within: timeout)
             }
         }
     }
@@ -302,8 +314,16 @@ private actor WarrenRemoteSocket {
     ///
     /// The deadline is shorter than the periodic one because the caller already
     /// has a reason to doubt the socket.
+    ///
+    /// When the Host negotiated app-heartbeat-v1 this is a strict probe: a
+    /// fresh app ping is sent and only its own pong satisfies the deadline. The
+    /// socket may still be holding frames buffered before the app was
+    /// suspended, so treating any inbound frame as proof would let a dead
+    /// socket pass (the Session page streams terminal output, which does exactly
+    /// that). Without app-heartbeat-v1 the protocol pong / inbound activity
+    /// remains the only signal, as before.
     func probeNow(within timeout: Duration? = nil) {
-        probe(within: timeout ?? probeTimeout)
+        probe(within: timeout ?? probeTimeout, strict: true)
     }
 
     /// The deadline for a probe after the app was away: a few of the slowest
@@ -322,6 +342,9 @@ private actor WarrenRemoteSocket {
         if recentRoundTrips.count > Self.roundTripSampleLimit {
             recentRoundTrips.removeFirst(recentRoundTrips.count - Self.roundTripSampleLimit)
         }
+        // A strict probe is only satisfied here, by its own pong. For a periodic
+        // heartbeat this is a no-op after `noteInboundActivity` already cleared.
+        clearLivenessDeadline()
     }
 
     /// Arms one deadline that covers both pings. Neither send is awaited here:
@@ -329,11 +352,11 @@ private actor WarrenRemoteSocket {
     /// completion only fires once TCP gives up, minutes later. Waiting for it
     /// before arming the deadline left the connection looking healthy for that
     /// whole time.
-    private func probe(within timeout: Duration) {
+    private func probe(within timeout: Duration, strict: Bool = false) {
         guard !isClosed else { return }
         armLivenessDeadline(at: .now + timeout)
         sendProtocolPing()
-        sendApplicationHeartbeat()
+        sendApplicationHeartbeat(strict: strict)
     }
 
     private func sendProtocolPing() {
@@ -359,12 +382,18 @@ private actor WarrenRemoteSocket {
     }
 
     /// Sends one app-level ping, keeping at most a single probe outstanding.
-    private func sendApplicationHeartbeat() {
-        guard supportsAppHeartbeat, !isClosed, pendingHeartbeatID == nil else { return }
+    ///
+    /// A strict (doubt) probe sends a fresh ping even when an older one is still
+    /// pending: a pong for a ping sent before the app was suspended may itself
+    /// be a stale buffered frame, so it cannot prove the Host is reachable now.
+    private func sendApplicationHeartbeat(strict: Bool = false) {
+        guard supportsAppHeartbeat, !isClosed else { return }
+        guard strict || pendingHeartbeatID == nil else { return }
         heartbeatSequence += 1
         let id = "ios-ping-\(heartbeatSequence)"
         pendingHeartbeatID = id
         lastHeartbeatSent = (id, .now)
+        if strict { strictProbeID = id }
         let adapter = adapter
         Task { [weak self] in
             do {
@@ -398,15 +427,22 @@ private actor WarrenRemoteSocket {
 
     private func clearLivenessDeadline() {
         pendingHeartbeatID = nil
+        strictProbeID = nil
         livenessDeadline = nil
         livenessDeadlineTask?.cancel()
         livenessDeadlineTask = nil
     }
 
-    /// Any inbound frame proves the far end is alive, so it satisfies the probe
-    /// in flight. Requiring the matching pong would close healthy sockets
-    /// whenever a slow control request delayed it behind streaming output.
+    /// A periodic heartbeat accepts any inbound frame: the Host answers control
+    /// requests one at a time per stream, so a slow request can delay a pong
+    /// behind streaming output and closing a healthy socket would be wrong.
+    ///
+    /// A strict (doubt) probe does not: frames buffered while the app was
+    /// suspended are delivered right after resume and would otherwise satisfy
+    /// the probe even though the socket is dead. Only the matching pong clears
+    /// that deadline, in `recordPong`.
     private func noteInboundActivity() {
+        guard strictProbeID == nil else { return }
         guard pendingHeartbeatID != nil || livenessDeadline != nil else { return }
         clearLivenessDeadline()
     }
@@ -533,6 +569,7 @@ private actor WarrenRemoteSocket {
         livenessDeadlineTask = nil
         livenessDeadline = nil
         pendingHeartbeatID = nil
+        strictProbeID = nil
         requestTimeoutTasks.values.forEach { $0.cancel() }
         requestTimeoutTasks.removeAll()
         welcomeContinuation?.resume(throwing: WarrenRemoteClientError.closed)
@@ -555,6 +592,7 @@ private actor WarrenRemoteSocket {
         livenessDeadlineTask = nil
         livenessDeadline = nil
         pendingHeartbeatID = nil
+        strictProbeID = nil
         requestTimeoutTasks.values.forEach { $0.cancel() }
         requestTimeoutTasks.removeAll()
         welcomeContinuation?.resume(throwing: error)
@@ -948,6 +986,8 @@ public actor WarrenRemoteClient {
     /// to one of them. Connection states alone cannot tell them apart.
     private var connectionPhaseObserver: (@Sendable (String) -> Void)?
     private var probeTimeout: Duration = WarrenRemoteSocket.defaultProbeTimeout
+    private var heartbeatInterval: Duration = WarrenRemoteSocket.defaultHeartbeatInterval
+    private var heartbeatTimeout: Duration = WarrenRemoteSocket.defaultHeartbeatTimeout
     private var reconnectDelay: @Sendable (Int) -> Int = { attempt in
         WarrenRemoteClient.reconnectDelayMilliseconds(attempt: attempt)
     }
@@ -1061,9 +1101,13 @@ public actor WarrenRemoteClient {
     /// Shortens the liveness and backoff timings so tests do not wait them out.
     func overrideTimingForTesting(
         probeTimeout: Duration? = nil,
+        heartbeatInterval: Duration? = nil,
+        heartbeatTimeout: Duration? = nil,
         reconnectDelay: (@Sendable (Int) -> Int)? = nil
     ) {
         if let probeTimeout { self.probeTimeout = probeTimeout }
+        if let heartbeatInterval { self.heartbeatInterval = heartbeatInterval }
+        if let heartbeatTimeout { self.heartbeatTimeout = heartbeatTimeout }
         if let reconnectDelay { self.reconnectDelay = reconnectDelay }
     }
 
@@ -1132,6 +1176,12 @@ public actor WarrenRemoteClient {
     /// to the round trips this socket has measured instead of the fixed
     /// wake-up deadline. A socket that survived answers in one round trip and
     /// is kept; a dead one is replaced as soon as that is evident.
+    ///
+    /// When the Host supports app-heartbeat-v1 this is a strict probe: frames
+    /// already buffered when the app returns (terminal output on a Session
+    /// page, roster deltas elsewhere) must not count as an answer, because a
+    /// dead socket still delivers them. Only the pong for the ping this probe
+    /// sends proves the Host is reachable.
     public func probeConnectionAfterResume() async {
         guard running else { return }
         guard let socket else {
@@ -2014,7 +2064,9 @@ public actor WarrenRemoteClient {
                 codec: codec,
                 terminalStateFormats: terminalStateFormats,
                 welcomeTimeout: welcomeTimeout,
-                probeTimeout: probeTimeout
+                probeTimeout: probeTimeout,
+                heartbeatInterval: heartbeatInterval,
+                heartbeatTimeout: heartbeatTimeout
             )
             self.socket = socket
             negotiatedCapabilities = []

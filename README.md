@@ -6,6 +6,15 @@
 
 Warren is a **headless-first workbench that stays running on your machine**. Terminals, Agent views, and an embedded editor sit on one Host — your own Mac or VPS, not a vendor cloud — and that Host, not the client window, stays in charge of Tasks, Projects, Workspaces, Sessions, and Runtimes. Run Codex, Claude Code, OpenCode, a shell, or another interactive program, then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, network change, or closed laptop. Every client talks to the same Host through one versioned protocol.
 
+## Watch
+
+[<img src="docs/warren-promo-poster.jpg" width="800" alt="Play the 100-second Warren film">](https://warrenai.xyz/warren-promo.mp4)
+
+A 100-second tour, recorded in the real apps: agents side by side, four agents
+messaging each other in one pane, chat or terminal, quitting and coming back, a
+question from the phone, two Hosts in one sidebar, the Inspector, and a browser
+an agent drives.
+
 ## Screenshots
 
 <img src="docs/warren-desktop.png" width="800" alt="Warren desktop">
@@ -42,6 +51,7 @@ them.
 - **Local and remote** — The desktop connects to the local `warren-headless` daemon by default, or to a VPS through an embedded SSH client. Choose an alias from `~/.ssh/config` in the execution-server menu; Warren bootstraps the remote daemon and forwards a loopback port while using the same versioned WebSocket API everywhere.
 - **Real terminal fidelity** — Ghostty on macOS and xterm.js on the Web preserve ANSI, OSC, Unicode, and colors from shells, Codex, Claude, and TUIs.
 - **Structured agent views** — Codex, Claude, and OpenCode activity is projected as normalized events on the Web, so agent sessions can render as a conversation without losing the terminal fallback.
+- **An Inspector beside the terminal** — ⌥⌘B opens a native column with the Workspace's changes and inline diffs, its commit history, and its files, so you can see what an Agent changed without leaving the Session.
 - **An editor beside the terminal** — The macOS client can mount a workspace-scoped, VS Code-compatible editor as a region next to the Terminal rather than a page that replaces it, so reading code does not cost you the session you were watching.
 - **Workspace-first Git support** — Projects, main checkouts, and Git worktrees are first-class resources; one-time onboarding can import your existing Superset metadata.
 - **Cross-repository tasks** — A Host-owned Task can group Workspaces from several Git repositories and optionally retain a provider-neutral external work-item identity such as TAPD or GitHub.

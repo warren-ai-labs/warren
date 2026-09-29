@@ -1223,43 +1223,54 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         launchSession(request, in: presentation)
                     }
                 )
-                if showsEditorRegion, let workspace = presentation.workspace {
-                    WarrenDesktopCentralSplit(
-                        terminalRatio: $terminalRatio,
-                        terminal: terminalRegion(
-                            presentation: presentation,
-                            currentTree: currentTree,
-                            currentPaneID: currentPaneID
-                        ),
-                        editor: WarrenDesktopEmbeddedEditorPane(
-                            workspace: workspace,
-                            surface: editorSurface(workspace)
-                        )
-                    )
-                } else if let workspace = presentation.workspace,
-                          let inspectorSurface,
-                          showsInspector(for: workspace) {
-                    WarrenDesktopCentralSplit(
-                        terminalRatio: $inspectorTerminalRatio,
-                        trailingMinimumWidth: WarrenLayoutMetrics.inspectorMinimumWidth,
-                        defaultRatio: WarrenLayoutMetrics.inspectorSplitDefaultRatio,
-                        accessibilityName: "Terminal and Inspector split",
-                        terminal: terminalRegion(
-                            presentation: presentation,
-                            currentTree: currentTree,
-                            currentPaneID: currentPaneID
-                        ),
-                        editor: inspectorSurface(workspace)
-                    )
-                } else {
-                    terminalRegion(
+                // One split whether or not a region is beside the Terminal, so
+                // opening or closing the editor or the Inspector only changes
+                // widths and never re-creates the Terminal.
+                let inspectorShown = !showsEditorRegion
+                    && inspectorSurface != nil
+                    && showsInspector(for: presentation.workspace)
+                WarrenDesktopCentralSplit(
+                    terminalRatio: inspectorShown ? $inspectorTerminalRatio : $terminalRatio,
+                    trailingMinimumWidth: inspectorShown
+                        ? WarrenLayoutMetrics.inspectorMinimumWidth
+                        : WarrenLayoutMetrics.editorRegionMinimumWidth,
+                    defaultRatio: inspectorShown
+                        ? WarrenLayoutMetrics.inspectorSplitDefaultRatio
+                        : WarrenLayoutMetrics.editorSplitDefaultRatio,
+                    accessibilityName: inspectorShown
+                        ? "Terminal and Inspector split"
+                        : "Terminal and editor split",
+                    terminal: terminalRegion(
                         presentation: presentation,
                         currentTree: currentTree,
                         currentPaneID: currentPaneID
+                    ),
+                    editor: trailingRegion(
+                        workspace: presentation.workspace,
+                        showsEditorRegion: showsEditorRegion,
+                        inspectorShown: inspectorShown
                     )
-                }
+                )
             }
         )
+    }
+
+    private func trailingRegion(
+        workspace: Workspace?,
+        showsEditorRegion: Bool,
+        inspectorShown: Bool
+    ) -> AnyView? {
+        guard let workspace else { return nil }
+        if showsEditorRegion {
+            return AnyView(WarrenDesktopEmbeddedEditorPane(
+                workspace: workspace,
+                surface: editorSurface(workspace)
+            ))
+        }
+        if inspectorShown, let inspectorSurface {
+            return inspectorSurface(workspace)
+        }
+        return nil
     }
 
     /// The Terminal half of the central area.

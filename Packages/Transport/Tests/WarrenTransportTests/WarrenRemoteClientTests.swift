@@ -1100,6 +1100,186 @@ final class WarrenRemoteClientTests: XCTestCase {
         await client.stop()
     }
 
+    // A dead socket still delivers frames that were buffered before the app was
+    // suspended. On a Session page that is a stream of terminal output, so any
+    // inbound frame must not count as an answer to a resume probe. Only the pong
+    // for the ping the probe itself sent proves the Host is reachable.
+    func testResumeProbeIgnoresBufferedFramesWhenTheHostSupportsAppHeartbeat() async throws {
+        let first = ScriptedWebSocketTask()
+        let second = ScriptedWebSocketTask()
+        for task in [first, second] {
+            await task.enqueue(.text(appHeartbeatWelcomeJSON()))
+            await task.enqueue(.text(rosterJSON(revision: 1)))
+        }
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            tasks: [first, second],
+            capabilities: ["roster-delta", WarrenRemoteCapability.appHeartbeat]
+        )
+        await client.overrideTimingForTesting(reconnectDelay: { _ in 0 })
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        await client.probeConnectionAfterResume()
+        // Terminal output and roster deltas buffered before the suspension.
+        await first.enqueue(.text(rosterJSON(revision: 2)))
+        await first.enqueue(.text(rosterJSON(revision: 3)))
+
+        try await waitUntil(timeout: .seconds(4)) { await second.resumeCallCount == 1 }
+        await client.stop()
+    }
+
+    // The probe's own pong is a real answer, so a healthy socket is kept.
+    func testResumeProbeKeepsASocketWhoseOwnPongReturns() async throws {
+        let first = ScriptedWebSocketTask()
+        let second = ScriptedWebSocketTask()
+        for task in [first, second] {
+            await task.enqueue(.text(appHeartbeatWelcomeJSON()))
+            await task.enqueue(.text(rosterJSON(revision: 1)))
+        }
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            tasks: [first, second],
+            capabilities: ["roster-delta", WarrenRemoteCapability.appHeartbeat]
+        )
+        await client.overrideTimingForTesting(probeTimeout: .milliseconds(300), reconnectDelay: { _ in 0 })
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        await client.probeConnection()
+        try await waitUntil { await self.applicationPingIDs(in: first).count >= 1 }
+        let pings = await applicationPingIDs(in: first)
+        let pingID = try XCTUnwrap(pings.first)
+        await first.enqueue(.text("{\"t\":\"pong\",\"id\":\"\(pingID)\"}"))
+
+        // Outlive the probe deadline: a pong was received, so no reconnect.
+        try await Task.sleep(for: .milliseconds(600))
+        let resumed = await second.resumeCallCount
+        XCTAssertEqual(resumed, 0, "the probe's own pong keeps the socket")
+        let state = await client.state()
+        XCTAssertEqual(state, .connected)
+        await client.stop()
+    }
+
+    // A stale pong for a ping sent before the suspension is not proof. The
+    // doubt probe always sends a fresh ping and waits for that one.
+    func testResumeProbeIgnoresAPongForAnOlderPing() async throws {
+        let first = ScriptedWebSocketTask()
+        let second = ScriptedWebSocketTask()
+        for task in [first, second] {
+            await task.enqueue(.text(appHeartbeatWelcomeJSON()))
+            await task.enqueue(.text(rosterJSON(revision: 1)))
+        }
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            tasks: [first, second],
+            capabilities: ["roster-delta", WarrenRemoteCapability.appHeartbeat]
+        )
+        await client.overrideTimingForTesting(probeTimeout: .milliseconds(300), reconnectDelay: { _ in 0 })
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        await client.probeConnection()
+        await client.probeConnection()
+        try await waitUntil { await self.applicationPingIDs(in: first).count >= 2 }
+        let pings = await applicationPingIDs(in: first)
+        let older = pings[0]
+        let newest = pings[1]
+        XCTAssertNotEqual(older, newest, "a doubt probe sends a fresh ping even while one is pending")
+        await first.enqueue(.text("{\"t\":\"pong\",\"id\":\"\(older)\"}"))
+
+        try await waitUntil(timeout: .seconds(3)) { await second.resumeCallCount == 1 }
+        await client.stop()
+    }
+
+    // The periodic heartbeat keeps its rule: any inbound frame proves the far
+    // end is alive, so a slow control request cannot make a healthy socket look
+    // dead. A short timeout here means a strict rule would fail the socket.
+    func testPeriodicHeartbeatAcceptsAnyInboundFrame() async throws {
+        let first = ScriptedWebSocketTask()
+        let second = ScriptedWebSocketTask()
+        for task in [first, second] {
+            await task.enqueue(.text(appHeartbeatWelcomeJSON()))
+            await task.enqueue(.text(rosterJSON(revision: 1)))
+        }
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            tasks: [first, second],
+            capabilities: ["roster-delta", WarrenRemoteCapability.appHeartbeat]
+        )
+        await client.overrideTimingForTesting(
+            heartbeatInterval: .milliseconds(100),
+            heartbeatTimeout: .milliseconds(200),
+            reconnectDelay: { _ in 0 }
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        // Answer every periodic probe with ordinary output, never a pong.
+        let deadline = ContinuousClock.now + .milliseconds(700)
+        while ContinuousClock.now < deadline {
+            await first.enqueue(.text(rosterJSON(revision: 2)))
+            try await Task.sleep(for: .milliseconds(40))
+        }
+
+        let resumed = await second.resumeCallCount
+        XCTAssertEqual(resumed, 0, "an inbound frame still satisfies the periodic heartbeat")
+        let state = await client.state()
+        XCTAssertEqual(state, .connected)
+        await client.stop()
+    }
+
+    // A periodic heartbeat that fires while a doubt probe is outstanding must
+    // neither downgrade it to "any frame" nor postpone its deadline.
+    func testPeriodicHeartbeatDoesNotDowngradeAStrictProbe() async throws {
+        let first = ScriptedWebSocketTask()
+        let second = ScriptedWebSocketTask()
+        for task in [first, second] {
+            await task.enqueue(.text(appHeartbeatWelcomeJSON()))
+            await task.enqueue(.text(rosterJSON(revision: 1)))
+        }
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            tasks: [first, second],
+            capabilities: ["roster-delta", WarrenRemoteCapability.appHeartbeat]
+        )
+        await client.overrideTimingForTesting(
+            probeTimeout: .milliseconds(250),
+            heartbeatInterval: .milliseconds(60),
+            heartbeatTimeout: .seconds(5),
+            reconnectDelay: { _ in 0 }
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        await client.probeConnection()
+        // Output arrives while periodic heartbeats fire. If one downgraded the
+        // strict probe, these frames would satisfy it and the socket would live.
+        let window = ContinuousClock.now + .milliseconds(150)
+        while ContinuousClock.now < window {
+            await first.enqueue(.text(rosterJSON(revision: 2)))
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        try await waitUntil(timeout: .seconds(3)) { await second.resumeCallCount == 1 }
+        await client.stop()
+    }
+
     // A probe that finds no socket means the loop is sleeping out a delay chosen
     // before the environment changed. Waking must not wait for it.
     func testProbeWithoutASocketEndsTheBackoffWait() async throws {
@@ -1159,6 +1339,24 @@ final class WarrenRemoteClientTests: XCTestCase {
 
     private func rosterJSON(revision: Int = 1) -> String {
         "{\"t\":\"roster\",\"state\":\(rosterJSONValue(revision: revision))}"
+    }
+
+    /// A welcome from a Host that negotiated app-heartbeat-v1, so probes must
+    /// wait for their own pong instead of any inbound frame.
+    private func appHeartbeatWelcomeJSON() -> String {
+        "{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\",\"app-heartbeat-v1\"]}"
+    }
+
+    private func applicationPingIDs(in task: ScriptedWebSocketTask) async -> [String] {
+        var ids: [String] = []
+        for message in await task.sentMessages {
+            guard case .text(let text) = message,
+                  let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+                  object["t"] as? String == "ping",
+                  let id = object["id"] as? String else { continue }
+            ids.append(id)
+        }
+        return ids
     }
 
     private func rosterJSONValue(revision: Int = 1) -> String {

@@ -21,6 +21,11 @@ const messages = {
     "hero.status": "Open source · phase one",
     "hero.platform": "macOS · Web · CLI",
     "ticker.items": ["Terminals", "Agents", "Editor", "Detach", "Reconnect", "Resume"],
+    "film.kicker": "In 100 seconds",
+    "film.title": "Watch the work keep running.",
+    "film.lede":
+      "Agents side by side, four of them messaging each other in one pane, chat or terminal, a quit and a return, a question from the phone, two Hosts in one sidebar, the Inspector, and a browser an agent drives. Recorded in the real apps.",
+    "film.play": "Play the film",
     "product.kicker": "Across every screen",
     "product.title": "One workspace: terminal, agent, editor.",
     "product.lede":
@@ -1309,6 +1314,11 @@ const messages = {
     "hero.status": "Phase one · 开源",
     "hero.platform": "macOS · Web · CLI",
     "ticker.items": ["终端", "Agent", "编辑器", "断开", "重连", "接着做"],
+    "film.kicker": "100 秒看完",
+    "film.title": "看活儿一直在跑。",
+    "film.lede":
+      "几个 agent 并排干活，四个 agent 在一个分屏里互相发消息，对话和终端随时切换，退出再回来，从手机上问一句，两台 Host 同一个侧边栏，Inspector 就在活儿旁边，agent 自己操作浏览器。全部在真实 App 里录制。",
+    "film.play": "播放影片",
     "product.kicker": "每一块屏幕",
     "product.title": "一个 Workspace，装下终端、Agent 和编辑器。",
     "product.lede":
