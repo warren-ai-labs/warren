@@ -65,17 +65,6 @@ func (open streamOpen) encode() ([]byte, error) {
 	return json.Marshal(open)
 }
 
-func decodeStreamOpen(payload []byte) (streamOpen, error) {
-	if len(payload) == 0 || len(payload) > 64*1024 {
-		return streamOpen{}, errors.New("invalid stream open metadata")
-	}
-	var open streamOpen
-	if err := json.Unmarshal(payload, &open); err != nil || open.Class == "" {
-		return streamOpen{}, errors.New("invalid stream open metadata")
-	}
-	return open, nil
-}
-
 type connectionID [16]byte
 
 func newConnectionID() (connectionID, error) {

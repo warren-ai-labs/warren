@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/abcdlsj/ghostline"
+	"github.com/abcdlsj/warren/Headless/internal/acp"
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/discovery"
@@ -86,6 +87,7 @@ func main() {
 	runtimeMode := flag.String("runtime", env("WARREN_RUNTIME", ""), "runtime kind (ghostline only; overrides settings.json)")
 	ghostlineSocket := flag.String("ghostline-socket", env("WARREN_GHOSTLINE_SOCKET", filepath.Join(configDir, "ghostline.sock")), "ghostline server socket path")
 	ghostlineServe := flag.Bool("ghostline-serve", false, "internal: run the ghostline session server (spawned by the daemon)")
+	acpHold := flag.Bool("acp-hold", false, "internal: hold one ACP agent, reading its spec from stdin (spawned by the daemon)")
 	ghostlineAdoptFrom := flag.String("adopt-from", "", "internal: adopt sessions from this old server admin socket")
 	ghostlineProbeForeground := flag.Bool("ghostline-probe-foreground", envBool("WARREN_GHOSTLINE_PROBE_FOREGROUND", true), "probe OS-level foreground process metadata in ghostline (default on)")
 	settingsFile := flag.String("settings-file", env("WARREN_SETTINGS_FILE", filepath.Join(configDir, "settings.json")), "headless settings file")
@@ -99,6 +101,12 @@ func main() {
 	if *showVersion {
 		fmt.Println(version)
 		return
+	}
+	// Internal subprocess mode: the daemon spawns this binary with --acp-hold
+	// so an ACP agent is owned by a process that outlives daemon restarts. The
+	// agent's environment arrives in the spec, so the holder's own is unused.
+	if *acpHold {
+		os.Exit(acp.ServeHold())
 	}
 	// Capture all flag values before replacing the process environment. Warren
 	// is often launched from mise/direnv-aware terminals; those task variables
@@ -206,6 +214,8 @@ func main() {
 		WorktreeRoot:    *worktreeRoot,
 		AgentStorePath:  filepath.Join(configDir, "agent-journal.db"),
 		AgentFinder:     agent.DefaultFinder{},
+		ACPHoldCommand:  acpHoldCommand(),
+		ACPHoldDir:      filepath.Join(filepath.Dir(*statePath), "acp"),
 		AgentHooks: func() error {
 			if _, err := agent.EnsureCodexBindHook(agent.CodexHome()); err != nil {
 				return err
@@ -703,6 +713,16 @@ func listenerPort(listener net.Listener) string {
 		return strconv.Itoa(address.Port)
 	}
 	return "8789"
+}
+
+// acpHoldCommand runs this binary as an ACP agent holder. Without a
+// resolvable executable, holders run inside the daemon and agents end with it.
+func acpHoldCommand() []string {
+	executable, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	return []string{executable, "--acp-hold"}
 }
 
 // runGhostlineServe owns PTY sessions in a child process. The daemon spawns

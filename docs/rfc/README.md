@@ -43,6 +43,7 @@ first, but they describe no current behavior.
 | [0020](0020-host-owned-pane-groups.md) | Host-owned Pane Groups for split terminal layouts | Draft | 2026-09-16 |
 | [0021](0021-embedded-editor-sidebar.md) | Embedded editor sidebar and Workspace pane integration | Draft | 2026-09-16 |
 | [0022](0022-warren-browser.md) | Warren Browser: an embedded Chromium runtime with an agent action surface | Draft | 2026-09-20 |
+| [0023](0023-acp-agent-sessions.md) | ACP Agent Sessions and the attention-first Conversation surface | Implemented | 2026-09-28 |
 
 ¹ Amended 2026-09-16: the `stalled` activity and the `warning` attention kind were removed.
 ² Layout ownership and persistence are superseded by [RFC 0020](0020-host-owned-pane-groups.md).

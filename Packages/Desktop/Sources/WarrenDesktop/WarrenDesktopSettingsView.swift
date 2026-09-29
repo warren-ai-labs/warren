@@ -93,7 +93,7 @@ private extension WarrenDesktopSettingsSection {
         case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
         case .splits: [rawValue, detail, "split", "pane", "emacs", "chord", "C-x", "keyboard", "shortcut"]
         case .aiTitles: [rawValue, detail, "openai", "api", "model", "base", "key", "summary", "automatic"]
-        case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "opencode", "pi", "trae", "agent", "visible", "hidden"]
+        case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "opencode", "pi", "trae", "agent", "visible", "hidden", "acp", "chat", "cli", "interface"]
         case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "setup", "script", "environment", "env", "variables", "WARREN", "shell", "AI", "Claude", "Codex", "sidebar", "tasks", "visibility"]
         case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
         case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
@@ -180,6 +180,8 @@ struct WarrenDesktopSettingsView: View {
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
     private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
+    @AppStorage(WarrenPreferenceKey.agentInterface)
+    private var agentInterfaceRawValue = WarrenAgentInterface.defaultValue.rawValue
     @AppStorage(WarrenPreferenceKey.embeddedEditorDefaultIDE)
     private var embeddedEditorDefaultIDE = false
     @AppStorage(WarrenPreferenceKey.embeddedEditorOpenLinks)
@@ -1035,6 +1037,29 @@ struct WarrenDesktopSettingsView: View {
                         }
                         .padding(.horizontal, WarrenSpacing.standard)
                         .padding(.vertical, 10)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
+                WarrenSettingsSectionHeader("Agent Interface", description: "Claude, Codex, and OpenCode can run as their terminal CLI or as a Chat over ACP.", tokens: tokens)
+
+                WarrenSettingsCard(tokens: tokens) {
+                    WarrenSettingsRow(
+                        title: "Launch As",
+                        subtitle: "Ask each time shows Terminal and Chat under the clicked preset.",
+                        tokens: tokens
+                    ) {
+                        Picker("Launch as", selection: agentInterfaceSelection) {
+                            ForEach(WarrenAgentInterface.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .font(WarrenTypography.settingsControl)
+                        .frame(width: 320)
+                        .accessibilityIdentifier("settings.agent-interface.picker")
                     }
                 }
             }
@@ -2653,6 +2678,13 @@ struct WarrenDesktopSettingsView: View {
         Binding(
             get: { defaultRuntime ?? "ghostline" },
             set: { onSetRuntime($0) }
+        )
+    }
+
+    private var agentInterfaceSelection: Binding<WarrenAgentInterface> {
+        Binding(
+            get: { WarrenAgentInterface(storedValue: agentInterfaceRawValue) },
+            set: { agentInterfaceRawValue = $0.rawValue }
         )
     }
 

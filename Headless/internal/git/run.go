@@ -86,18 +86,6 @@ func runTruncated(ctx context.Context, dir string, limit int, args ...string) (s
 	return runGit(ctx, dir, args, false, limit)
 }
 
-// runAllowExit is like run but treats exit code 1 as success, which
-// git diff --no-index uses to report that the compared paths differ.
-func runAllowExit(ctx context.Context, dir string, args ...string) (string, error) {
-	output, exceeded, err := runGit(ctx, dir, args, true, defaultCommandOutputLimit)
-	return requireCompleteOutput(output, exceeded, err, args, defaultCommandOutputLimit)
-}
-
-func runAllowExitLimited(ctx context.Context, dir string, limit int, args ...string) (string, error) {
-	output, exceeded, err := runGit(ctx, dir, args, true, limit)
-	return requireCompleteOutput(output, exceeded, err, args, limit)
-}
-
 func runAllowExitTruncated(ctx context.Context, dir string, limit int, args ...string) (string, bool, error) {
 	return runGit(ctx, dir, args, true, limit)
 }

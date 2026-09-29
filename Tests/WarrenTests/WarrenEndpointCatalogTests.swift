@@ -7,6 +7,15 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         XCTAssertEqual(WarrenRemoteEndpointConfiguration.localDaemon().name, "local")
     }
 
+    func testLocalDaemonFollowsTheListenAddressItIsLaunchedWith() {
+        XCTAssertEqual(WarrenRemoteEndpointConfiguration.localDaemonURL(listen: nil), "http://127.0.0.1:8789")
+        XCTAssertEqual(WarrenRemoteEndpointConfiguration.localDaemonURL(listen: "0.0.0.0:8789"), "http://127.0.0.1:8789")
+        XCTAssertEqual(WarrenRemoteEndpointConfiguration.localDaemonURL(listen: "127.0.0.1:18789"), "http://127.0.0.1:18789")
+        XCTAssertEqual(WarrenRemoteEndpointConfiguration.localDaemonURL(listen: ":9000"), "http://127.0.0.1:9000")
+        XCTAssertEqual(WarrenRemoteEndpointConfiguration.localDaemonURL(listen: "[::]:9000"), "http://127.0.0.1:9000")
+        XCTAssertEqual(WarrenRemoteEndpointConfiguration.localDaemonURL(listen: "not-an-address"), "http://127.0.0.1:8789")
+    }
+
     func testRejectsRemovedSSHRuntimeFields() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)

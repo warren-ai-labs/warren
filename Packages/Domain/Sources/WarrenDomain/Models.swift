@@ -468,20 +468,30 @@ public struct TerminalSessionLaunchRequest: Hashable, Sendable {
     /// suppress automatic AI title generation. Only a real user naming action
     /// (CLI `--title`, an input field, a future user-defined preset) sets it.
     public let title: String?
+    /// `"acp"` drives the Agent over the Agent Client Protocol with no
+    /// terminal (RFC 0023); nil runs the provider's TUI in a terminal. The Host
+    /// picks the ACP server itself, so an ACP request carries no command.
+    public let agentHandler: String?
 
     public init(
         requestID: UUID? = nil,
         kind: TerminalSessionKind,
         command: String? = nil,
-        title: String? = nil
+        title: String? = nil,
+        agentHandler: String? = nil
     ) {
         let normalizedCommand = command?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedHandler = agentHandler?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.requestID = requestID
         self.kind = kind
         self.command = normalizedCommand?.isEmpty == false ? normalizedCommand : nil
         self.title = normalizedTitle?.isEmpty == false ? normalizedTitle : nil
+        self.agentHandler = normalizedHandler?.isEmpty == false ? normalizedHandler : nil
     }
+
+    /// Whether this request creates an ACP Session, which has no terminal.
+    public var isConversation: Bool { agentHandler == "acp" }
 
     public static let shell = Self(kind: .shell)
     public static let claude = Self(kind: .claude, command: "claude")

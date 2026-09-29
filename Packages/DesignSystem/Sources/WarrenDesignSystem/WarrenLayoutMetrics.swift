@@ -45,20 +45,27 @@ public enum WarrenLayoutMetrics {
     /// floor clips its Explorer, while a narrow Terminal is merely cramped.
     public static func editorSplitTerminalWidth(
         proposedTerminalWidth: CGFloat,
-        availableWidth: CGFloat
+        availableWidth: CGFloat,
+        trailingMinimumWidth: CGFloat = editorRegionMinimumWidth,
+        defaultRatio: Double = editorSplitDefaultRatio
     ) -> CGFloat? {
         let usableWidth = availableWidth - editorSplitDividerWidth
-        guard usableWidth >= paneMinimumWidth + editorRegionMinimumWidth else {
+        guard usableWidth >= paneMinimumWidth + trailingMinimumWidth else {
             return nil
         }
         guard proposedTerminalWidth.isFinite else {
-            return usableWidth * editorSplitDefaultRatio
+            return usableWidth * defaultRatio
         }
         return min(
             max(proposedTerminalWidth, paneMinimumWidth),
-            usableWidth - editorRegionMinimumWidth
+            usableWidth - trailingMinimumWidth
         )
     }
+
+    /// The Inspector beside the terminal: a single column, so its floor is
+    /// narrower than the editor region's, and it opens as the smaller side.
+    public static let inspectorMinimumWidth: CGFloat = 320
+    public static let inspectorSplitDefaultRatio: Double = 0.62
 
     // Superset chrome and pane measurements.
     /// The desktop workspace chrome is a 48pt row above the session tabs.

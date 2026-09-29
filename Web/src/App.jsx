@@ -12,7 +12,6 @@ import {
   buildCatalog,
   moveInCatalog,
   rosterFromMessage,
-  updateSessionAgentStatus,
   workspaceTabs,
 } from "./catalog.js";
 import {
@@ -22,8 +21,6 @@ import {
   agentCapabilities,
   agentCausationCapability,
   connectionErrorDetail,
-  connectionInterrupted,
-  connectionLive,
   connectionSettling,
   hostOfflineDetail,
   hostWaitCopyDelayMs,
@@ -75,6 +72,7 @@ import {
   AgentMessageQueue,
   agentAttachmentReference,
   agentLaunchCommand,
+  defaultAgentLaunchCommand,
   agentQueueKey,
   encodeAgentAttachmentChunk,
   loadAgentQueue,
@@ -94,6 +92,7 @@ import {
   getAgentSyncState,
 } from "./agent-store.js";
 import { AgentView } from "./agent.jsx";
+import { isACPSession } from "./conversation.js";
 import {
   AgentCompletionEventChannel,
   AgentCompletionSound,
@@ -348,6 +347,10 @@ export default function App() {
   const maintenanceTimeoutRef = useRef(null);
   const feedbackTimerRef = useRef(null);
   const pendingSessionRef = useRef(null);
+  // Sessions known to have no terminal before the roster says so: a just
+  // created ACP Session, or one whose subscribe answered without a terminal.
+  const terminalFreeSessionsRef = useRef(new Set());
+  const attachSessionRef = useRef(null);
   const pendingSessionFeedbackRef = useRef(false);
   const creatingSessionKindRef = useRef(null);
   const renamePendingRef = useRef(false);
@@ -1158,6 +1161,7 @@ export default function App() {
                 executionId: result?.executionId || current.executionId || streamID,
                 headSequence: Math.max(current.headSequence || 0, headSequence),
                 events: mergeAgentEvents(current.events || [], events, { cap: before === 0 }),
+                stateEvents: Array.isArray(result?.stateEvents) && result.stateEvents.length ? result.stateEvents : current.stateEvents || [],
                 status: current.status || null,
                 historyCursor: cursor,
                 historyHasMore: hasMore,
@@ -1389,6 +1393,15 @@ export default function App() {
       const sent = request(message.method, message.params, result => {
         if (subscriptionRef.current !== state
           || appStateRef.current.activeSession !== sessionID) return;
+        if (result?.terminal === false) {
+          // The Session has no terminal (an ACP Agent the roster had not
+          // described yet). Switch to its Conversation surface.
+          state.status = "synced";
+          clearRecoveryTimeout();
+          terminalFreeSessionsRef.current.add(sessionID);
+          attachSessionRef.current?.(sessionID, true);
+          return;
+        }
         state.attachmentID = String(result?.attachmentId || "").trim() || null;
         if (!state.attachmentID) {
           state.status = "failed";
@@ -1494,7 +1507,7 @@ export default function App() {
   // whose outcome the reload destroyed came back as an indeterminate failure
   // that waits for the user rather than resending itself.
   useEffect(() => {
-    const sessionID = state.activeSession;
+    const sessionID = activeSession;
     if (!sessionID) return;
     const queueKey = agentQueueKey(webSocketURL(), sessionID);
     if (agentQueueRef.current[queueKey]) return;
@@ -1503,7 +1516,7 @@ export default function App() {
     agentQueueRef.current[queueKey] = queue;
     publishAgentQueue(sessionID, queue);
     drainAgentQueueRef.current?.(sessionID);
-  }, [state.activeSession, publishAgentQueue]);
+  }, [activeSession, publishAgentQueue]);
 
   // Retires local bubbles the Host has now echoed into the canonical timeline.
   // Called wherever agent events land, so one message is represented by exactly
@@ -1565,14 +1578,18 @@ export default function App() {
   const drainAgentQueueRef = useRef(null);
 
   const drainAgentQueue = useCallback(sessionID => {
-    // A queue belongs to both its endpoint and Session. Only the focused
-    // Session owns the PTY/control lease, so a ready event from an old tab
-    // must never drain another Session's local messages.
-    if (appStateRef.current.activeSession !== sessionID
-      || focusedSessionRef.current !== sessionID) return;
-    const state = agentStateBySession[sessionID];
-    const activity = String(state?.status?.activity || "").toLowerCase();
-    const inputAttention = state?.status?.attention?.kind === "input";
+    // A queue belongs to both its endpoint and Session. Turns are structured
+    // Host commands that need no terminal lease, so a message queued in a
+    // Session the person has since left still goes out when its Agent is
+    // ready. Only the open Session's live stream is current; any other Session
+    // reads its status from the roster.
+    const isActive = appStateRef.current.activeSession === sessionID;
+    const catalogStatus = appStateRef.current.catalog?.sessions?.get?.(sessionID)?.agentStatus;
+    const status = (isActive ? agentStateBySession[sessionID]?.status : null) || catalogStatus;
+    const activity = String(status?.activity || "").toLowerCase();
+    // Answering a question with a queued message stays with the open Session,
+    // where the person can see what it answers.
+    const inputAttention = isActive && status?.attention?.kind === "input";
     if (activity !== "ready" && !(activity === "blocked" && inputAttention)) return;
     const queueKey = agentQueueKey(webSocketURL(), sessionID);
     const queue = agentQueueRef.current[queueKey];
@@ -1605,8 +1622,6 @@ export default function App() {
     const isCurrentRequest = () => (
       agentMessageRequestRef.current.get(queueKey) === requestToken
       && requestToken.generation === agentQueueGenerationRef.current
-      && appStateRef.current.activeSession === sessionID
-      && focusedSessionRef.current === sessionID
     );
     const delivered = () => {
       if (agentMessageRequestRef.current.get(queueKey) !== requestToken) return;
@@ -1637,12 +1652,10 @@ export default function App() {
         return;
       }
       agentMessageRequestRef.current.delete(queueKey);
-      const stillFocused = appStateRef.current.activeSession === sessionID
-        && focusedSessionRef.current === sessionID;
       const requeue = Boolean(metadata?.requeue);
       const indeterminate = Boolean(metadata?.indeterminate)
         || metadata?.code === "command_indeterminate";
-      if (stillFocused && !requeue && !indeterminate) {
+      if (!requeue && !indeterminate) {
         queue.markFailed(item.id, detail, {
           code: metadata?.code || "",
           indeterminate: false,
@@ -1651,7 +1664,7 @@ export default function App() {
         // A disconnect/timeout means the command may already have reached the
         // Host. Keep its stable commandId for an idempotent reconnect retry.
         queue.markQueued(item.id);
-        if (stillFocused && indeterminate && !requeue) {
+        if (indeterminate && !requeue) {
           // The Host explicitly could not determine whether it ran. This is
           // terminal for the current identity; queue.retry() will mint a new
           // commandId before the user retries it.
@@ -1762,6 +1775,17 @@ export default function App() {
       }
     }
   }, [agentStateBySession, drainAgentQueue]);
+
+  useEffect(() => {
+    // Live events only reach the open Session; the roster is what reports that
+    // an Agent in another Session became ready.
+    const endpoint = webSocketURL();
+    for (const [key, queue] of Object.entries(agentQueueRef.current)) {
+      if (!queue?.items?.some(item => item.status === "queued")) continue;
+      const [queueEndpoint, sessionID] = JSON.parse(key);
+      if (queueEndpoint === endpoint && catalog.sessions?.has?.(sessionID)) drainAgentQueue(sessionID);
+    }
+  }, [catalog, drainAgentQueue]);
 
   // Retire echoed bubbles from the projected transcript rather than from each
   // arrival path. Events reach this state live, from history, from a replay,
@@ -2041,6 +2065,12 @@ export default function App() {
     const state = appStateRef.current;
     const sessionID = state.activeSession;
     if (!sessionID || state.attachedSession !== sessionID) return false;
+    if (isACPSession(state.catalog.sessions.get(sessionID)) || terminalFreeSessionsRef.current.has(sessionID)) {
+      // No terminal lease exists for an ACP Session; keep its Agent-only
+      // lease across window focus changes.
+      if (focused && focusedSessionRef.current !== sessionID) claimSessionFocus(sessionID, true);
+      return focused;
+    }
     const generation = ++focusRequestGenerationRef.current;
     // A passive Web subscription deliberately does not claim control during
     // background/hidden-page attach. Carry the session id so the Host can
@@ -2082,7 +2112,7 @@ export default function App() {
       setFocusedSessionID(null);
     }
     return true;
-  }, [request]);
+  }, [claimSessionFocus, request]);
 
   const respondAgentInteraction = useCallback(async (sessionID, value) => {
     if (!supportsSessionAgentCapability(appStateRef.current.catalog, agentCapabilitiesRef.current, sessionID, "agent-interactions-v1")) {
@@ -2134,6 +2164,21 @@ export default function App() {
     });
   }, [claimSessionFocus, request]);
 
+  // Changes one agent selector (model, mode) of a chat Session (RFC 0023
+  // §6.11). The agent's answer arrives as the next config.updated.
+  const setAgentConfig = useCallback(async (sessionID, configID, value) => {
+    const executionID = appStateRef.current.catalog?.sessions?.get?.(sessionID)?.agentExecutionId || "";
+    if (!executionID) throw new Error("Agent execution is not available");
+    if (focusedSessionRef.current !== sessionID) await claimSessionFocus(sessionID, true);
+    const nonce = Math.random().toString(36).slice(2, 10);
+    return requestAgent("agent.config.set", {
+      executionId: executionID,
+      commandId: `config-${executionID}-${configID}-${nonce}`,
+      configId: configID,
+      value,
+    });
+  }, [claimSessionFocus, requestAgent]);
+
   const toggleAgentView = useCallback(view => {
     setAgentViewOverride(view);
     if (view !== "terminal") return;
@@ -2166,6 +2211,39 @@ export default function App() {
     const workspaceID = state.catalog.sessions.get(sessionID)?.workspace;
     if (workspaceID) recordNavigation(state.catalog, workspaceID, sessionID);
     autoFocusOnAttachRef.current = autoFocus;
+    if (isACPSession(state.catalog.sessions.get(sessionID)) || terminalFreeSessionsRef.current.has(sessionID)) {
+      if (!force && sessionID === state.attachedSession) {
+        if (focusedSessionRef.current !== sessionID) claimSessionFocus(sessionID, true);
+        return;
+      }
+      // An ACP Session has no terminal to attach. Release any terminal
+      // subscription, show the Conversation surface at once, and take the
+      // Agent-only lease its commands need.
+      const changed = sessionID !== state.activeSession;
+      cancelSubscription(true);
+      clearPendingSession();
+      state.activeSession = sessionID;
+      state.attachedSession = sessionID;
+      if (changed) {
+        agentQueueGenerationRef.current += 1;
+        agentInterruptGenerationRef.current += 1;
+        agentInterruptInFlightRef.current.clear();
+        inputQueueRef.current.clear();
+        terminalRef.current?.clear();
+        clearTerminalSearch();
+        recoveryAnchorRef.current = null;
+        setAgentViewOverride(null);
+      }
+      focusedSessionRef.current = null;
+      setFocusedSessionID(null);
+      setActiveSession(sessionID);
+      setAttachedSession(sessionID);
+      setEmptyOverride(null);
+      setHasNewTerminalOutput(false);
+      setTerminalReadySession(sessionID);
+      claimSessionFocus(sessionID, true);
+      return;
+    }
     if (!force && sessionID === state.attachedSession) {
       // Roster broadcasts re-enter this branch too, but the session is
       // already attached and streaming. Only an explicit entry (tab click)
@@ -2216,7 +2294,21 @@ export default function App() {
       setAgentViewOverride(null);
     }
     beginSubscription(sessionID, terminalRef.current);
-  }, [announceFeedback, beginSubscription, clearTerminalSearch, recordNavigation, refreshTerminal]);
+  }, [announceFeedback, beginSubscription, cancelSubscription, claimSessionFocus, clearPendingSession, clearTerminalSearch, recordNavigation, refreshTerminal]);
+
+  // Replaces a chat Session with a terminal Session that resumes the same
+  // provider conversation (RFC 0023 §6.12), launched with this device's
+  // terminal preset for the provider.
+  const handoffChatSession = useCallback(async sessionID => {
+    const session = appStateRef.current.catalog?.sessions?.get?.(sessionID);
+    const kind = String(session?.agentProvider || session?.kind || "").toLowerCase();
+    const command = String(presetCommands[kind] || "").trim() || defaultAgentLaunchCommand(kind);
+    const result = await requestAgent("session.handoff", { id: sessionID, command });
+    terminalFreeSessionsRef.current.delete(sessionID);
+    if (result?.id && appStateRef.current.activeSession === sessionID) attachSession(result.id);
+    return result;
+  }, [attachSession, presetCommands, requestAgent]);
+  attachSessionRef.current = attachSession;
 
   const createSession = useCallback((kind, targetWorkspaceID = null, settings = {}) => {
     const workspaceID = targetWorkspaceID
@@ -2244,11 +2336,16 @@ export default function App() {
     // message; it must not become the session's user-set custom title, which
     // would suppress automatic AI title generation. The Host derives the
     // default display title from the kind when no explicit title is given.
-    const sent = request("session.create", {
-      workspace: workspaceID,
-      kind: preset.kind,
-      command: agentLaunchCommand(presetCommands[preset.kind] || "", preset.kind, settings),
-    }, result => {
+    // A Chat session is the same provider driven over ACP: the Host picks the
+    // provider's ACP server, so no terminal launch command is sent.
+    const createParams = settings?.handler === "acp"
+      ? { workspace: workspaceID, kind: preset.kind, agentHandler: "acp" }
+      : {
+        workspace: workspaceID,
+        kind: preset.kind,
+        command: agentLaunchCommand(presetCommands[preset.kind] || "", preset.kind, settings),
+      };
+    const sent = request("session.create", createParams, result => {
       finish();
       const isCurrentWorkspace = appStateRef.current.activeWorkspace === workspaceID;
       if (isCurrentWorkspace) {
@@ -2257,6 +2354,7 @@ export default function App() {
         announceFeedback(`${preset.title} session created`, "success");
       }
       const sessionID = result?.id;
+      if (sessionID && isACPSession(result)) terminalFreeSessionsRef.current.add(sessionID);
       if (sessionID && shouldAttachCreatedSession(
         appStateRef.current.activeWorkspace,
         workspaceID,
@@ -4140,6 +4238,9 @@ export default function App() {
     ? agentStateBySession[selectedSession.id]?.events || []
     : [];
   const isAgentSession = isSupportedAgentSession(selectedSession);
+  // An ACP Session has no terminal: the Conversation surface is all there is.
+  const isConversationSession = isACPSession(selectedSession)
+    || Boolean(selectedSession && terminalFreeSessionsRef.current.has(selectedSession.id));
   // An integrated Codex/Claude session is only safe to message once its CLI
   // has actually started. Before the binding/transcript exists, the TUI may
   // still be on a first-run trust or resume prompt, where typed text is dropped
@@ -4147,7 +4248,7 @@ export default function App() {
   const agentViewReady = Boolean(
     selectedSession?.agentSessionId || selectedAgentEvents.length > 0,
   );
-  const agentViewActive = Boolean(
+  const agentViewActive = isConversationSession || Boolean(
     isAgentSession
       && (agentViewOverride === "agent" || agentViewReady)
       && agentViewOverride !== "terminal",
@@ -4230,6 +4331,9 @@ export default function App() {
                 streamId: streamID,
                 executionId: result?.executionId || cur.executionId || streamID,
                 events: mergeAgentEvents(cur.events || [], replay),
+                // The Session's selectors, plan, and context from before the
+                // replayed window; the conversation projection reads them.
+                stateEvents: Array.isArray(result?.stateEvents) ? result.stateEvents : cur.stateEvents || [],
                 ...projectAgentControlState(mergeAgentEvents(cur.events || [], replay), cur, result.checkpoint),
                 headSequence: Math.max(cur.headSequence || 0, Number(result?.checkpoint?.sequence) || 0),
               },
@@ -4357,7 +4461,7 @@ export default function App() {
               tabs={tabs}
               activeSession={activeSession}
               connection={connectionView}
-              agentSession={isAgentSession ? selectedSession : null}
+              agentSession={isAgentSession && !isConversationSession ? selectedSession : null}
               agentViewActive={agentViewActive}
               onAttachSession={attachSession}
               onToggleAgentView={toggleAgentView}
@@ -4405,7 +4509,7 @@ export default function App() {
                 >
                   {paneDisplayTitle}
                 </span>
-                {isAgentSession && (agentViewActive ? (
+                {isAgentSession && !isConversationSession && (agentViewActive ? (
                   <button type="button" className="pane-action" onClick={() => toggleAgentView("terminal")}>
                     Terminal
                   </button>
@@ -4452,17 +4556,25 @@ export default function App() {
                 />
               </Suspense>
             )}
-            {agentViewActive && (
+            {(agentViewActive || isConversationSession) && (
+              // One view for every Agent. A chat (ACP) Session has no
+              // terminal behind it, so it is always ready and in control.
               <AgentView
                 session={selectedSession}
                 turn={agentStateBySession[selectedSession.id]?.turn || selectedSession.agentTurn || null}
                 events={selectedAgentEvents}
-                status={agentStateBySession[selectedSession.id]?.status || null}
+                stateEvents={agentStateBySession[selectedSession.id]?.stateEvents || []}
+                status={agentStateBySession[selectedSession.id]?.status || selectedSession.agentStatus || null}
                 onSend={sendAgentMessageFromView}
                 onRequestControl={() => requestSessionFocus(true)}
-                onOpenTerminal={() => toggleAgentView("terminal")}
-                ready={agentViewReady}
-                hasControl={focusedSessionID === selectedSession.id}
+                onOpenTerminal={isConversationSession ? undefined : () => toggleAgentView("terminal")}
+                ready={isConversationSession || agentViewReady}
+                hasControl={isConversationSession || focusedSessionID === selectedSession.id}
+                onSetConfig={(configID, value) => setAgentConfig(selectedSession.id, configID, value)}
+                canHandoff={isConversationSession && Boolean(selectedSession.agentSessionId)}
+                onHandoff={() => handoffChatSession(selectedSession.id)}
+                onOpenSession={sessionID => attachSession(sessionID)}
+                sessionExists={sessionID => Boolean(catalog?.sessions?.get?.(sessionID))}
                 endpointIdentity={webSocketURL()}
                 capabilities={sessionAgentCapabilities(catalog, agentCapabilitiesRef.current, selectedSession.id)}
                 actionError={agentActionError}
@@ -4690,10 +4802,6 @@ function loadPresetOrder() {
 
 function loadHiddenPresets() {
   return loadHiddenSessionPresetKinds(localStorage, storageKeys.hiddenPresets);
-}
-
-function shortSessionID(id) {
-  return id.length > 18 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id;
 }
 
 function clamp(value, minimum, maximum) {

@@ -1404,3 +1404,120 @@ func TestAntigravitySessionIsolationInSameWorkspace(t *testing.T) {
 		t.Fatal("handle does not implement BindingMetadata")
 	}
 }
+
+// perSessionAgentFinder resolves each Agent thread to its own transcript, so
+// two Sessions in one test do not contend for the same file.
+type perSessionAgentFinder map[string]string
+
+func (f perSessionAgentFinder) Find(_ context.Context, first, second string, _ time.Time) (string, error) {
+	if path, ok := f[first]; ok {
+		return path, nil
+	}
+	return f[second], nil
+}
+
+func TestAgentStreamsCapabilityKeepsEverySessionSubscribed(t *testing.T) {
+	directory := t.TempDir()
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := store.NewID()
+	workspaceID := store.NewID()
+	finder := perSessionAgentFinder{}
+	var sessions []api.Session
+	for _, name := range []string{"first", "second"} {
+		transcriptPath := filepath.Join(directory, "rollout-"+name+".jsonl")
+		if err := os.WriteFile(transcriptPath, []byte(`{"timestamp":"2026-08-16T10:00:00Z","type":"session_meta","payload":{}}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		finder["thread-"+name] = transcriptPath
+		sessions = append(sessions, api.Session{
+			ID: "session-" + name, WorkspaceID: workspaceID, Kind: "codex", AgentSessionID: "thread-" + name,
+			Runtime: "runtime-" + name, Lifecycle: "running", CreatedAt: time.Now().UTC(),
+		})
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Projects = []api.Project{{ID: projectID, Path: directory, CreatedAt: time.Now().UTC()}}
+		value.Workspaces = []api.Workspace{{ID: workspaceID, ProjectID: projectID, Path: directory, CreatedAt: time.Now().UTC()}}
+		value.Sessions = sessions
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newMemoryOutputRuntime(t)
+	for _, session := range sessions {
+		if err := runtime.Create(context.Background(), session.Runtime, directory, "", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := &Service{Store: state, Runtime: runtime, AgentFinder: finder}
+	service.lazyInit()
+	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
+	defer httpServer.Close()
+
+	streams := make([]string, len(sessions))
+	for index, session := range sessions {
+		execution, ok := service.canonicalExecutionForSession(session.ID)
+		if !ok || execution.StreamID == "" {
+			t.Fatalf("agent execution identity was not created for %s", session.ID)
+		}
+		streams[index] = execution.StreamID
+	}
+	agentPeers := func() (int, int) {
+		service.outputMu.Lock()
+		defer service.outputMu.Unlock()
+		return len(service.agentPeers[sessions[0].ID]), len(service.agentPeers[sessions[1].ID])
+	}
+
+	// Without the capability a subscribe replaces the connection's stream, as
+	// Desktop and Web rely on.
+	legacy := openAuthenticatedConnectionWithCapabilities(t, httpServer.URL, "/v1/ws", []string{api.CapabilityAgentTimeline})
+	for _, stream := range streams {
+		requestResult[api.AgentEventsSubscriptionResult](t, legacy, "agent.events.subscribe", map[string]any{"streamId": stream})
+	}
+	if first, second := agentPeers(); first != 0 || second != 1 {
+		t.Fatalf("legacy peers = %d, %d; want only the last Session subscribed", first, second)
+	}
+	legacy.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if first, second := agentPeers(); first == 0 && second == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	connection := openAuthenticatedConnectionWithCapabilities(t, httpServer.URL, "/v1/ws", []string{
+		api.CapabilityAgentTimeline, api.CapabilityAgentStreams,
+	})
+	defer connection.Close()
+	for _, stream := range streams {
+		requestResult[api.AgentEventsSubscriptionResult](t, connection, "agent.events.subscribe", map[string]any{"streamId": stream})
+	}
+	if first, second := agentPeers(); first != 1 || second != 1 {
+		t.Fatalf("multi-stream peers = %d, %d; want both Sessions subscribed", first, second)
+	}
+
+	// Events for the Session subscribed first still arrive.
+	service.recordAgentTurns(sessions[0].ID, []api.AgentTurn{{ID: 1, Status: api.AgentTurnStarted}}, true)
+	var received bool
+	for attempts := 0; attempts < 3 && !received; attempts++ {
+		for _, event := range readCanonicalEvents(t, connection) {
+			if event.Type == "turn.started" && event.StreamID == streams[0] {
+				received = true
+			}
+		}
+	}
+	if !received {
+		t.Fatal("the first Session's stream stopped delivering after the second subscribe")
+	}
+
+	result := requestResult[map[string]any](t, connection, "agent.events.unsubscribe", map[string]any{"streamId": streams[0]})
+	if result["unsubscribed"] != true {
+		t.Fatalf("unsubscribe result = %#v, want unsubscribed", result)
+	}
+	if first, second := agentPeers(); first != 0 || second != 1 {
+		t.Fatalf("after unsubscribe peers = %d, %d; want only the second Session", first, second)
+	}
+}

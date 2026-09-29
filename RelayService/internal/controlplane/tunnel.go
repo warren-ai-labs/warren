@@ -290,10 +290,6 @@ func newHostTunnel(
 	}
 }
 
-func (tunnel *hostTunnel) openClient() (connectionID, *clientRoute, error) {
-	return tunnel.openStream(nil)
-}
-
 func (tunnel *hostTunnel) openStream(metadata *streamOpen) (connectionID, *clientRoute, error) {
 	id, err := newConnectionID()
 	if err != nil {

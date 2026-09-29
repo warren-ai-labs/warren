@@ -454,10 +454,6 @@ func defaultIdentityFiles() []string {
 	}
 }
 
-func defaultKnownHostsFiles() []string {
-	return append(defaultUserKnownHostsFiles(), defaultGlobalKnownHostsFiles()...)
-}
-
 func defaultGlobalKnownHostsFiles() []string {
 	return []string{
 		"/etc/ssh/ssh_known_hosts",

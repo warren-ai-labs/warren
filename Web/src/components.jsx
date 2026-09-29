@@ -5,6 +5,7 @@ import { terminalTabTitle } from "./title.js";
 import { shouldDismissOnBackdrop } from "./presentation.js";
 import { connectionSettling } from "./connection.js";
 import { createSearch, fieldRole, highlightSegments } from "./search.js";
+import { acpProviders } from "./conversation.js";
 import {
   activityMarkIsAnimated,
   activityMarkLabel,
@@ -1173,6 +1174,11 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedReasoning, setSelectedReasoning] = useState("default");
   const [customModel, setCustomModel] = useState("");
+  // Chat drives the provider over ACP; Terminal runs its TUI. The last choice
+  // is remembered on this device.
+  const [sessionInterface, setSessionInterface] = useState(() => {
+    try { return localStorage.getItem("warren.session.interface") === "terminal" ? "terminal" : "chat"; } catch { return "chat"; }
+  });
   useFocusRestore(open);
   useFocusTrap(open, sheetRef);
   useBodyScrollLock(open);
@@ -1208,9 +1214,15 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
   const isAgentPreset = Boolean(selectedPreset && !["shell", "trae"].includes(selectedPreset.kind));
   const availableModels = selectedPreset ? getAvailableAgentModels(selectedPreset.kind) : [];
   const hasCustomModel = selectedModel && !availableModels.some(model => model.id === selectedModel);
+  const offersChat = Boolean(selectedPreset && acpProviders.has(selectedPreset.kind));
+  const chat = offersChat && sessionInterface === "chat";
+  const chooseInterface = value => {
+    setSessionInterface(value);
+    try { localStorage.setItem("warren.session.interface", value); } catch { /* optional */ }
+  };
   const submitSelection = () => {
     if (!selectedKind || pendingKind) return;
-    onChoose(selectedKind, {
+    onChoose(selectedKind, chat ? { handler: "acp" } : {
       model: selectedModel,
       reasoning: selectedReasoning,
     });
@@ -1273,7 +1285,25 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
               <SessionPresetIcon kind={selectedPreset.kind} />
               <span>{selectedPreset.label}</span>
             </div>
-            {isAgentPreset && (
+            {offersChat && (
+              <div className="session-sheet-interface" role="radiogroup" aria-label="Interface">
+                {[["chat", "Chat", "A conversation view with approvals, no terminal"], ["terminal", "Terminal", "The provider's own terminal UI"]].map(([value, label, hint]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={sessionInterface === value}
+                    className={sessionInterface === value ? "active" : undefined}
+                    disabled={Boolean(pendingKind)}
+                    onClick={() => chooseInterface(value)}
+                  >
+                    <span>{label}</span>
+                    <small>{hint}</small>
+                  </button>
+                ))}
+              </div>
+            )}
+            {isAgentPreset && !chat && (
               <div className="session-sheet-options" aria-label="Optional agent settings">
                 <label className="session-sheet-field">
                   <span>Model <small>optional</small></span>

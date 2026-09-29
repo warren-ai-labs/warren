@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -277,16 +276,4 @@ func terminate(cmd *exec.Cmd) {
 		_ = cmd.Process.Kill()
 		<-done
 	}
-}
-
-// debuggerPathURL rewrites the debugger URL's path, which is how a browser-level
-// endpoint becomes a per-target one.
-func debuggerPathURL(wsURL, path string) string {
-	parsed, err := url.Parse(wsURL)
-	if err != nil {
-		return wsURL
-	}
-	parsed.Path = path
-	parsed.RawQuery = ""
-	return parsed.String()
 }

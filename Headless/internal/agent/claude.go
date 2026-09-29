@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,6 +23,27 @@ type claudeParser struct {
 	// counts the same billable call repeatedly; across local transcripts 1168 of
 	// 2623 usage rows were such repeats, inflating totals by 1.765x.
 	claudeCountedUsage map[string]struct{}
+	// claudeTasks is the session task list rebuilt from TaskCreate/TaskUpdate.
+	// Unlike TodoWrite, those tools send one change at a time and TaskCreate's
+	// id exists only in its result, so the parser keeps the list and applies
+	// each change once the result confirms it.
+	claudeTasks     []claudeTask
+	claudeTaskCalls map[string]claudeTaskCall
+	// claudeProposals holds each ExitPlanMode card until its result says
+	// whether the user approved or rejected the plan.
+	claudeProposals map[string]api.AgentEvent
+}
+
+type claudeTask struct {
+	ID         string
+	Subject    string
+	ActiveForm string
+	Status     string
+}
+
+type claudeTaskCall struct {
+	Name  string
+	Input map[string]any
 }
 
 func newClaudeParser(contentLimit int) *claudeParser {
@@ -30,6 +52,8 @@ func newClaudeParser(contentLimit int) *claudeParser {
 		claudeCallTool:     make(map[string]string),
 		claudeInteractions: make(map[string]string),
 		claudeCountedUsage: make(map[string]struct{}),
+		claudeTaskCalls:    make(map[string]claudeTaskCall),
+		claudeProposals:    make(map[string]api.AgentEvent),
 	}
 }
 
@@ -78,6 +102,9 @@ type claudeToolUseResult struct {
 	FilePath        string          `json:"filePath"`
 	StructuredPatch json.RawMessage `json:"structuredPatch"`
 	Interrupted     bool            `json:"interrupted"`
+	Task            struct {
+		ID string `json:"id"`
+	} `json:"task"`
 }
 
 // UnmarshalJSON accepts the tool metadata Claude attaches to a tool_result.
@@ -176,6 +203,18 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 				sawToolResult = true
 				if kind := p.claudeInteractions[block.ToolUseID]; kind != "" {
 					delete(p.claudeInteractions, block.ToolUseID)
+					if kind == "proposal" {
+						if proposal, ok := p.resolveClaudeProposal(block, record.ToolUseResult.Interrupted, timestamp); ok {
+							events = append(events, proposal)
+						}
+						continue
+					}
+					if kind == "task" {
+						if todo, ok := p.applyClaudeTaskResult(block, record.ToolUseResult.Task.ID, timestamp); ok {
+							events = append(events, todo)
+						}
+						continue
+					}
 					if kind == "question" || kind == "permission" {
 						p.tracker.MarkAttention("", "", "", time.Time{})
 						state := "resolved"
@@ -355,10 +394,24 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 					event.Content = p.clip(block.Text)
 				}
 			case "thinking", "redacted_thinking":
+				// Claude Code persists thinking as a signature with no text. An
+				// empty block has nothing to show, so it is dropped by the emit
+				// filter below like every other provider's empty thinking.
 				event.Type = "reasoning"
-				event.Content = p.clip(firstNonEmpty(block.Thinking, "…"))
+				event.Content = p.clip(block.Thinking)
 			case "tool_use":
 				canonicalName := canonicalToolName("claude", block.Name)
+				if canonicalName == "exitplanmode" {
+					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)
+					if proposal, ok := proposedPlanEvent(event, "claude", stringValue(input["plan"])); ok {
+						event = proposal
+						if block.ID != "" {
+							p.claudeProposals[block.ID] = proposal
+							p.claudeInteractions[block.ID] = "proposal"
+						}
+						break
+					}
+				}
 				switch canonicalName {
 				case "ask_user_question":
 					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)
@@ -384,6 +437,14 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 					event.Content = stringValue(event.Payload["summary"])
 					if block.ID != "" {
 						p.claudeInteractions[block.ID] = "todo"
+					}
+				case "taskcreate", "taskupdate":
+					// Recorded now, projected when the result arrives. The call
+					// row itself is bookkeeping, like TodoWrite's.
+					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)
+					if block.ID != "" {
+						p.claudeTaskCalls[block.ID] = claudeTaskCall{Name: canonicalName, Input: input}
+						p.claudeInteractions[block.ID] = "task"
 					}
 				case "update_plan", "plan":
 					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)
@@ -717,8 +778,118 @@ func claudePermissionPayload(requestID string, input map[string]any) map[string]
 	}
 }
 
-func claudeTodoPayload(input map[string]any) map[string]any {
-	return claudeTodoPayloadWithLimit(input, maxEventContent)
+const claudePlanFeedbackMarker = "the user said:"
+
+// resolveClaudeProposal settles an ExitPlanMode card from its result. Claude
+// records approval as a plain result and rejection as an error whose text
+// ends with the user's feedback; that feedback is the only place the user's
+// reply to the plan exists, so it travels on the card.
+func (p *claudeParser) resolveClaudeProposal(block claudeBlock, interrupted bool, timestamp time.Time) (api.AgentEvent, bool) {
+	proposal, ok := p.claudeProposals[block.ToolUseID]
+	delete(p.claudeProposals, block.ToolUseID)
+	if !ok {
+		return api.AgentEvent{}, false
+	}
+	payload := make(map[string]any, len(proposal.Payload)+1)
+	for key, value := range proposal.Payload {
+		payload[key] = value
+	}
+	switch {
+	case interrupted:
+		payload["state"] = "cancelled"
+	case block.IsError:
+		payload["state"] = "rejected"
+		output := p.content(block.Content)
+		if index := strings.Index(output, claudePlanFeedbackMarker); index >= 0 {
+			if feedback := strings.TrimSpace(output[index+len(claudePlanFeedbackMarker):]); feedback != "" {
+				payload["feedback"] = p.clip(feedback)
+			}
+		}
+	default:
+		payload["state"] = "approved"
+	}
+	proposal.Payload = payload
+	proposal.Timestamp = timestamp
+	return proposal, true
+}
+
+var claudeTaskCreatedPattern = regexp.MustCompile(`Task #(\S+) created`)
+
+// applyClaudeTaskResult applies a confirmed TaskCreate/TaskUpdate to the
+// session task list and returns the resulting Todo snapshot. Failed calls and
+// updates to tasks this transcript never created leave the list unchanged.
+func (p *claudeParser) applyClaudeTaskResult(block claudeBlock, createdID string, timestamp time.Time) (api.AgentEvent, bool) {
+	call, ok := p.claudeTaskCalls[block.ToolUseID]
+	delete(p.claudeTaskCalls, block.ToolUseID)
+	if !ok || block.IsError {
+		return api.AgentEvent{}, false
+	}
+	switch call.Name {
+	case "taskcreate":
+		id := strings.TrimSpace(createdID)
+		if id == "" {
+			if match := claudeTaskCreatedPattern.FindStringSubmatch(p.content(block.Content)); match != nil {
+				id = match[1]
+			}
+		}
+		subject := stringValue(call.Input["subject"])
+		if id == "" || subject == "" {
+			return api.AgentEvent{}, false
+		}
+		p.claudeTasks = append(p.claudeTasks, claudeTask{
+			ID:         id,
+			Subject:    subject,
+			ActiveForm: stringValue(call.Input["activeForm"]),
+			Status:     "pending",
+		})
+	case "taskupdate":
+		id := stringValue(call.Input["taskId"])
+		index := -1
+		for candidate := range p.claudeTasks {
+			if p.claudeTasks[candidate].ID == id {
+				index = candidate
+				break
+			}
+		}
+		if index < 0 {
+			return api.AgentEvent{}, false
+		}
+		status := stringValue(call.Input["status"])
+		if status == "deleted" {
+			p.claudeTasks = append(p.claudeTasks[:index], p.claudeTasks[index+1:]...)
+			break
+		}
+		task := &p.claudeTasks[index]
+		if status != "" {
+			task.Status = status
+		}
+		if subject := stringValue(call.Input["subject"]); subject != "" {
+			task.Subject = subject
+		}
+		if activeForm := stringValue(call.Input["activeForm"]); activeForm != "" {
+			task.ActiveForm = activeForm
+		}
+	default:
+		return api.AgentEvent{}, false
+	}
+	todos := make([]any, 0, len(p.claudeTasks))
+	for _, task := range p.claudeTasks {
+		todos = append(todos, map[string]any{
+			"id":         task.ID,
+			"content":    task.Subject,
+			"activeForm": task.ActiveForm,
+			"status":     task.Status,
+		})
+	}
+	payload := claudeTodoPayloadWithLimit(map[string]any{"todos": todos}, p.contentLimit)
+	return api.AgentEvent{
+		Provider:  "claude",
+		ID:        "claude-todos",
+		Type:      "todo",
+		Content:   stringValue(payload["summary"]),
+		Payload:   payload,
+		Timestamp: timestamp,
+	}, true
 }
 
 func claudeTodoPayloadWithLimit(input map[string]any, limit int) map[string]any {

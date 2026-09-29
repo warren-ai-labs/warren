@@ -178,6 +178,9 @@ public enum WarrenPreferenceKey {
     public static let presetCommandTrae = "terminal.presetCommand.trae"
     public static let sessionPresetOrder = "terminal.presetOrder"
     public static let hiddenSessionPresets = "terminal.hiddenPresets"
+    /// How an Agent preset that can speak ACP launches: its terminal CLI, a
+    /// Conversation over ACP, or an inline choice on every click.
+    public static let agentInterface = "terminal.agentInterface"
     public static let noticeMuted = "notifications.muted"
     public static let embeddedEditorDefaultIDE = "editor.openByDefault"
     public static let embeddedEditorOpenLinks = "editor.openLinksByDefault"
@@ -224,6 +227,31 @@ public enum WarrenAppearanceMode: String, CaseIterable, Sendable {
         case .system: "System"
         case .light: "Light"
         case .dark: "Dark"
+        }
+    }
+}
+
+/// How a preset whose provider supports the Agent Client Protocol launches.
+public enum WarrenAgentInterface: String, CaseIterable, Sendable {
+    /// Every click offers Terminal or Chat inline before launching.
+    case ask
+    /// The provider's own terminal CLI.
+    case cli
+    /// A Conversation driven over ACP, with no terminal.
+    case acp
+
+    public static let defaultValue = Self.ask
+
+    /// Tolerates an unwritten or hand-edited preference rather than trapping.
+    public init(storedValue: String?) {
+        self = storedValue.flatMap(Self.init(rawValue:)) ?? .defaultValue
+    }
+
+    public var displayName: String {
+        switch self {
+        case .ask: "Ask each time"
+        case .cli: "Terminal (CLI)"
+        case .acp: "Chat (ACP)"
         }
     }
 }

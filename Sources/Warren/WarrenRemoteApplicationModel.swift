@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Network
 import Combine
 import Darwin
 import GhosttyAdapter
@@ -10,1235 +11,6 @@ import WarrenProtocol
 import WarrenStateStore
 import WarrenTransport
 
-// Keep the desktop module's historical internal name while sharing the
-// cross-platform endpoint value with native clients.
-typealias WarrenRemoteEndpointConfiguration = WarrenTransport.WarrenRemoteEndpointConfiguration
-
-extension WarrenRemoteEndpointConfiguration {
-    static func localDaemon() -> Self {
-        let environment = ProcessInfo.processInfo.environment
-        let tokenURL: URL
-        if let configured = environment["WARREN_TOKEN_FILE"], !configured.isEmpty {
-            tokenURL = URL(fileURLWithPath: configured)
-        } else {
-            tokenURL = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".warren/token")
-        }
-        let token = (try? String(contentsOf: tokenURL, encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return Self(name: "local", url: "http://127.0.0.1:8789", token: token, ssh: nil)
-    }
-
-    /// The daemon records the Ghostline handoff phase before it starts the
-    /// replacement runtime. Reading this small projection lets the Desktop
-    /// explain the expected startup gap without probing a listener that is
-    /// intentionally unavailable until migration completes.
-    static func localDaemonMigrationInProgress() -> Bool {
-        let environment = ProcessInfo.processInfo.environment
-        let stateURL: URL
-        if let configured = environment["WARREN_STATE"], !configured.isEmpty {
-            stateURL = URL(fileURLWithPath: configured)
-        } else {
-            stateURL = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".warren/state.json")
-        }
-        guard let data = try? Data(contentsOf: stateURL),
-              let state = try? JSONDecoder().decode(WarrenLocalDaemonState.self, from: data),
-              let migration = state.ghostlineMigration else {
-            return false
-        }
-        return migration.phase != "retired"
-    }
-}
-
-private struct WarrenLocalDaemonState: Decodable {
-    let ghostlineMigration: WarrenLocalGhostlineMigration?
-}
-
-private struct WarrenLocalGhostlineMigration: Decodable {
-    let phase: String?
-}
-
-public struct WarrenDisplayConfiguration: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
-
-    public var version: Int
-    public var endpoints: [String]
-    /// Optional client-local labels keyed by canonical endpoint alias. The
-    /// alias remains the routing identity; this map only changes presentation.
-    public var names: [String: String]
-
-    private enum CodingKeys: String, CodingKey {
-        case version
-        case endpoints
-        case names
-    }
-
-    public init(
-        version: Int = Self.currentVersion,
-        endpoints: [String],
-        names: [String: String] = [:]
-    ) {
-        self.version = version
-        self.endpoints = endpoints
-        self.names = names
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        version = try container.decode(Int.self, forKey: .version)
-        endpoints = try container.decode([String].self, forKey: .endpoints)
-        names = try container.decodeIfPresent([String: String].self, forKey: .names) ?? [:]
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(version, forKey: .version)
-        try container.encode(endpoints, forKey: .endpoints)
-        if !names.isEmpty {
-            try container.encode(names, forKey: .names)
-        }
-    }
-
-    /// Resolves the user-facing label without changing the endpoint alias.
-    public func displayName(for endpointID: String, fallback: String) -> String {
-        if let value = names[endpointID]?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !value.isEmpty {
-            return value
-        }
-        return fallback
-    }
-}
-
-private struct WarrenEndpointConfigurationFile: Codable {
-    let current: String?
-    let endpoints: [String: WarrenRemoteEndpointConfiguration]
-    let display: WarrenDisplayConfiguration?
-
-    private enum CodingKeys: String, CodingKey {
-        case current
-        case endpoints
-        case display
-        case legacySidebar = "sidebar"
-    }
-
-    init(
-        current: String?,
-        endpoints: [String: WarrenRemoteEndpointConfiguration],
-        display: WarrenDisplayConfiguration? = nil
-    ) {
-        self.current = current
-        self.endpoints = endpoints
-        self.display = display
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        current = try container.decodeIfPresent(String.self, forKey: .current)
-        endpoints = try container.decode(
-            [String: WarrenRemoteEndpointConfiguration].self,
-            forKey: .endpoints
-        )
-        let configuredDisplay = try container.decodeIfPresent(
-            WarrenDisplayConfiguration.self,
-            forKey: .display
-        )
-        if let configuredDisplay {
-            display = configuredDisplay
-        } else {
-            display = try container.decodeIfPresent(
-                WarrenDisplayConfiguration.self,
-                forKey: .legacySidebar
-            )
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encodeIfPresent(current, forKey: .current)
-        try container.encode(endpoints, forKey: .endpoints)
-        try container.encodeIfPresent(display, forKey: .display)
-    }
-}
-
-private struct WarrenLoadedEndpointConfiguration {
-    let catalog: (
-        current: String?,
-        endpoints: [WarrenRemoteEndpointConfiguration],
-        display: WarrenDisplayConfiguration?
-    )
-}
-
-enum WarrenEndpointCatalog {
-    // fcntl record locks coordinate separate processes, but are associated
-    // with the process on Darwin. The UI and detached catalog monitor can
-    // therefore still race when they open independent descriptors; serialize
-    // Swift callers before taking the shared sidecar lock.
-    private static let processLock = NSLock()
-
-    static func configurationURL() -> URL {
-        let environment = ProcessInfo.processInfo.environment
-        if let value = environment["WARREN_CONFIG"], !value.isEmpty {
-            return URL(fileURLWithPath: value)
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".warren/config.json")
-    }
-
-    static func load() -> (
-        current: String?,
-        endpoints: [WarrenRemoteEndpointConfiguration],
-        display: WarrenDisplayConfiguration?
-    ) {
-        load(from: configurationURL())
-    }
-
-    static func load(
-        from configURL: URL
-    ) -> (
-        current: String?,
-        endpoints: [WarrenRemoteEndpointConfiguration],
-        display: WarrenDisplayConfiguration?
-    ) {
-        (try? loadThrowing(from: configURL)) ?? (nil, [], nil)
-    }
-
-    static func loadThrowing(
-        from configURL: URL
-    ) throws -> (
-        current: String?,
-        endpoints: [WarrenRemoteEndpointConfiguration],
-        display: WarrenDisplayConfiguration?
-    ) {
-        try withLock(configURL) {
-            let loaded = try loadUnlocked(from: configURL)
-            return loaded.catalog
-        }
-    }
-
-    static func save(
-        endpoints: [WarrenRemoteEndpointConfiguration],
-        current: String?,
-        display: WarrenDisplayConfiguration? = nil,
-        to configURL: URL = configurationURL()
-    ) throws {
-        try withLock(configURL) {
-            let existing = try? loadUnlocked(from: configURL).catalog
-            let endpointValues = endpointDictionary(endpoints)
-            let requestedDisplay = display ?? existing?.display
-            let normalized = try normalizedCatalogDisplay(
-                requestedDisplay,
-                endpointNames: Set(endpointValues.keys).union(["local"]),
-                current: current
-            )
-            let file = WarrenEndpointConfigurationFile(
-                current: normalized.current,
-                endpoints: endpointValues,
-                display: normalized.display
-            )
-            try writeUnlocked(file, to: configURL)
-        }
-    }
-
-    static func setCurrent(
-        _ current: String?,
-        to configURL: URL = configurationURL()
-    ) throws {
-        try withLock(configURL) {
-            let existing = try loadUnlocked(from: configURL).catalog
-            let normalized = try normalizedCatalogDisplay(
-                existing.display,
-                endpointNames: Set(existing.endpoints.map(\.name)).union(["local"]),
-                current: current
-            )
-            try writeUnlocked(
-                WarrenEndpointConfigurationFile(
-                    current: normalized.current,
-                    endpoints: endpointDictionary(existing.endpoints),
-                    display: normalized.display
-                ),
-                to: configURL
-            )
-        }
-    }
-
-    static func upsert(
-        _ endpoint: WarrenRemoteEndpointConfiguration,
-        current: String? = nil,
-        to configURL: URL = configurationURL()
-    ) throws {
-        try withLock(configURL) {
-            let existing = try loadUnlocked(from: configURL).catalog
-            var endpoints = endpointDictionary(existing.endpoints)
-            endpoints[endpoint.name] = endpoint
-            let requestedCurrent = current ?? existing.current
-            let normalized = try normalizedCatalogDisplay(
-                existing.display,
-                endpointNames: Set(endpoints.keys).union(["local"]),
-                current: requestedCurrent
-            )
-            try writeUnlocked(
-                WarrenEndpointConfigurationFile(
-                    current: normalized.current,
-                    endpoints: endpoints,
-                    display: normalized.display
-                ),
-                to: configURL
-            )
-        }
-    }
-
-    /// Returns the ordered endpoint aliases visible in the Desktop sidebar.
-    /// A missing section intentionally preserves the legacy single-current
-    /// behavior and falls back to the synthetic local endpoint.
-    static func effectiveDisplay(
-        from catalog: (
-            current: String?,
-            endpoints: [WarrenRemoteEndpointConfiguration],
-            display: WarrenDisplayConfiguration?
-        )
-    ) throws -> [String] {
-        if catalog.display == nil {
-            if let current = catalog.current?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               !current.isEmpty {
-                return [current]
-            }
-            return ["local"]
-        }
-        let normalized = try normalizedCatalogDisplay(
-            catalog.display,
-            endpointNames: Set(catalog.endpoints.map(\.name)).union(["local"]),
-            current: catalog.current
-        )
-        return normalized.aliases
-    }
-
-    static func setDisplay(
-        _ aliases: [String],
-        to configURL: URL = configurationURL()
-    ) throws {
-        try withLock(configURL) {
-            let existing = try loadUnlocked(from: configURL).catalog
-            let normalized = try normalizedDisplay(
-                aliases,
-                knownEndpointNames: Set(existing.endpoints.map(\.name)).union(["local"]),
-                current: existing.current,
-                names: existing.display?.names ?? [:]
-            )
-            try writeUnlocked(WarrenEndpointConfigurationFile(
-                current: normalized.current,
-                endpoints: endpointDictionary(existing.endpoints),
-                display: WarrenDisplayConfiguration(
-                    endpoints: normalized.aliases,
-                    names: normalized.names
-                )
-            ), to: configURL)
-        }
-    }
-
-    /// Persists a client-local label for one endpoint without changing its
-    /// canonical alias, connection route, or sidebar membership.
-    static func setDisplayName(
-        _ endpointID: String,
-        name: String?,
-        to configURL: URL = configurationURL()
-    ) throws {
-        try withLock(configURL) {
-            let existing = try loadUnlocked(from: configURL).catalog
-            let endpointNames = Set(existing.endpoints.map(\.name)).union(["local"])
-            guard endpointNames.contains(endpointID) else {
-                throw NSError(
-                    domain: "WarrenEndpointCatalog",
-                    code: 5,
-                    userInfo: [NSLocalizedDescriptionKey: "Endpoint not found: \(endpointID)"]
-                )
-            }
-
-            let aliases: [String]
-            if let display = existing.display {
-                aliases = try normalizedCatalogDisplay(
-                    display,
-                    endpointNames: endpointNames,
-                    current: existing.current
-                ).aliases
-            } else {
-                aliases = [
-                    try normalizedCurrent(
-                        existing.current,
-                        endpointNames: endpointNames
-                    ) ?? "local",
-                ]
-            }
-
-            var names = existing.display?.names ?? [:]
-            if let name {
-                let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !normalizedName.isEmpty,
-                      normalizedName == name,
-                      !name.contains("\r"),
-                      !name.contains("\n"),
-                      !name.contains("\0") else {
-                    throw NSError(
-                        domain: "WarrenEndpointCatalog",
-                        code: 6,
-                        userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint display name: \(name)"]
-                    )
-                }
-                names[endpointID] = normalizedName
-            } else {
-                names.removeValue(forKey: endpointID)
-            }
-
-            let normalized = try normalizedDisplay(
-                aliases,
-                knownEndpointNames: endpointNames,
-                current: existing.current,
-                names: names
-            )
-            try writeUnlocked(WarrenEndpointConfigurationFile(
-                current: normalized.current,
-                endpoints: endpointDictionary(existing.endpoints),
-                display: WarrenDisplayConfiguration(
-                    endpoints: normalized.aliases,
-                    names: normalized.names
-                )
-            ), to: configURL)
-        }
-    }
-
-    /// Atomically changes one endpoint's explicit sidebar membership without
-    /// selecting it as the foreground endpoint. Removing the final explicit
-    /// alias restores the legacy single-current representation.
-    static func setDisplayMembership(
-        _ endpointID: String,
-        isDisplayed: Bool,
-        to configURL: URL = configurationURL()
-    ) throws {
-        try withLock(configURL) {
-            let existing = try loadUnlocked(from: configURL).catalog
-            let endpointNames = Set(existing.endpoints.map(\.name)).union(["local"])
-            guard endpointNames.contains(endpointID) else {
-                throw NSError(
-                    domain: "WarrenEndpointCatalog",
-                    code: 5,
-                    userInfo: [NSLocalizedDescriptionKey: "Endpoint not found: \(endpointID)"]
-                )
-            }
-
-            // A missing display section means the legacy current endpoint is
-            // already visible. The first menu "Add" must retain that Host,
-            // rather than silently replacing it with the newly added one.
-            var aliases = existing.display?.endpoints ?? []
-            if isDisplayed, existing.display == nil {
-                aliases = [
-                    try normalizedCurrent(
-                        existing.current,
-                        endpointNames: endpointNames
-                    ) ?? "local",
-                ]
-            }
-            if isDisplayed {
-                if !aliases.contains(endpointID) {
-                    aliases.append(endpointID)
-                }
-            } else {
-                aliases.removeAll { $0 == endpointID }
-            }
-
-            let display: WarrenDisplayConfiguration?
-            if aliases.isEmpty {
-                display = nil
-            } else {
-                let normalized = try normalizedDisplay(
-                    aliases,
-                    knownEndpointNames: endpointNames,
-                    current: existing.current,
-                    names: existing.display?.names ?? [:]
-                )
-                display = WarrenDisplayConfiguration(
-                    endpoints: normalized.aliases,
-                    names: normalized.names
-                )
-            }
-            try writeUnlocked(WarrenEndpointConfigurationFile(
-                current: try normalizedCurrent(existing.current, endpointNames: endpointNames),
-                endpoints: endpointDictionary(existing.endpoints),
-                display: display
-            ), to: configURL)
-        }
-    }
-
-    static func resetDisplay(to configURL: URL = configurationURL()) throws {
-        try withLock(configURL) {
-            let existing = try loadUnlocked(from: configURL).catalog
-            try writeUnlocked(WarrenEndpointConfigurationFile(
-                current: existing.current,
-                endpoints: endpointDictionary(existing.endpoints),
-                display: nil
-            ), to: configURL)
-        }
-    }
-
-    private static func normalizeDisplayAliases(_ values: [String]) throws -> [String] {
-        var seen = Set<String>()
-        var result: [String] = []
-        for value in values {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, trimmed == value,
-                  !value.contains("\r"), !value.contains("\n"), !value.contains("\0") else {
-                throw NSError(
-                    domain: "WarrenEndpointCatalog",
-                    code: 6,
-                    userInfo: [NSLocalizedDescriptionKey: "Invalid display endpoint name: \(value)"]
-                )
-            }
-            guard seen.insert(value).inserted else { continue }
-            result.append(value)
-        }
-        return result
-    }
-
-    private static func normalizedDisplay(
-        _ aliases: [String],
-        knownEndpointNames: Set<String>,
-        current: String?,
-        names: [String: String] = [:]
-    ) throws -> (aliases: [String], current: String?, names: [String: String]) {
-        let normalized = try normalizeDisplayAliases(aliases)
-        guard !normalized.isEmpty else {
-            throw NSError(
-                domain: "WarrenEndpointCatalog",
-                code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "Display endpoint set cannot be empty"]
-            )
-        }
-        if let unknown = normalized.first(where: { !knownEndpointNames.contains($0) }) {
-            throw NSError(
-                domain: "WarrenEndpointCatalog",
-                code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "Display endpoint not found: \(unknown)"]
-            )
-        }
-        return (
-            normalized,
-            try normalizedCurrent(current, endpointNames: knownEndpointNames),
-            try normalizeDisplayNames(names, knownEndpointNames: knownEndpointNames)
-        )
-    }
-
-    /// Normalizes an optional persisted display while preserving the
-    /// pre-display nil representation. The foreground endpoint remains
-    /// independent from the explicitly chosen sidebar aliases.
-    private static func normalizedCatalogDisplay(
-        _ display: WarrenDisplayConfiguration?,
-        endpointNames: Set<String>,
-        current: String?
-    ) throws -> (
-        display: WarrenDisplayConfiguration?,
-        aliases: [String],
-        current: String?
-    ) {
-        guard let display else {
-            return (
-                nil,
-                [],
-                try normalizedCurrent(current, endpointNames: endpointNames)
-            )
-        }
-        guard display.version == 0 || display.version == WarrenDisplayConfiguration.currentVersion else {
-            throw NSError(
-                domain: "WarrenEndpointCatalog",
-                code: 7,
-                userInfo: [NSLocalizedDescriptionKey: "Unsupported display config version: \(display.version)"]
-            )
-        }
-        let aliases = try normalizeDisplayAliases(display.endpoints)
-        guard !aliases.isEmpty else {
-            throw NSError(
-                domain: "WarrenEndpointCatalog",
-                code: 4,
-                userInfo: [NSLocalizedDescriptionKey: "Display endpoint set cannot be empty"]
-            )
-        }
-        if let unknown = aliases.first(where: { !endpointNames.contains($0) }) {
-            throw NSError(
-                domain: "WarrenEndpointCatalog",
-                code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "Display endpoint not found: \(unknown)"]
-            )
-        }
-        let names = try normalizeDisplayNames(
-            display.names,
-            knownEndpointNames: endpointNames
-        )
-        return (
-            WarrenDisplayConfiguration(
-                version: WarrenDisplayConfiguration.currentVersion,
-                endpoints: aliases,
-                names: names
-            ),
-            aliases,
-            try normalizedCurrent(current, endpointNames: endpointNames)
-        )
-    }
-
-    private static func normalizeDisplayNames(
-        _ names: [String: String],
-        knownEndpointNames: Set<String>
-    ) throws -> [String: String] {
-        var normalized: [String: String] = [:]
-        for (endpointID, rawName) in names {
-            // A removed endpoint may leave stale presentation metadata behind;
-            // dropping that entry keeps the catalog usable and avoids making a
-            // display-only field block unrelated endpoint operations.
-            guard knownEndpointNames.contains(endpointID) else { continue }
-            let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty,
-                  name == rawName,
-                  !rawName.contains("\r"),
-                  !rawName.contains("\n"),
-                  !rawName.contains("\0") else {
-                throw NSError(
-                    domain: "WarrenEndpointCatalog",
-                    code: 6,
-                    userInfo: [NSLocalizedDescriptionKey: "Invalid endpoint display name: \(rawName)"]
-                )
-            }
-            normalized[endpointID] = name
-        }
-        return normalized
-    }
-
-    private static func normalizedCurrent(
-        _ current: String?,
-        endpointNames: Set<String>
-    ) throws -> String? {
-        guard let current else { return nil }
-        let normalized = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return nil }
-        guard endpointNames.contains(normalized) else {
-            throw NSError(
-                domain: "WarrenEndpointCatalog",
-                code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "Endpoint not found: \(normalized)"]
-            )
-        }
-        return normalized
-    }
-
-    private static func loadUnlocked(
-        from configURL: URL
-    ) throws -> WarrenLoadedEndpointConfiguration {
-        let data: Data
-        do {
-            data = try Data(contentsOf: configURL)
-        } catch {
-            let nsError = error as NSError
-            if nsError.code == NSFileReadNoSuchFileError || nsError.code == NSFileNoSuchFileError {
-                return WarrenLoadedEndpointConfiguration(catalog: (nil, [], nil))
-            }
-            throw error
-        }
-        let file: WarrenEndpointConfigurationFile
-        do {
-            file = try JSONDecoder().decode(WarrenEndpointConfigurationFile.self, from: data)
-        } catch {
-            throw NSError(
-                domain: "WarrenEndpointCatalog",
-                code: 1,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "Unable to decode endpoint catalog: \(error.localizedDescription)",
-                    NSUnderlyingErrorKey: error,
-                ]
-            )
-        }
-        for endpoint in file.endpoints.values {
-            if endpoint.ssh?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
-               !endpoint.url.isEmpty || !endpoint.token.isEmpty {
-                throw NSError(
-                    domain: "WarrenEndpointCatalog",
-                    code: 2,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: "state_reset_required: SSH endpoint \(endpoint.name) contains removed runtime fields"
-                    ]
-                )
-            }
-        }
-        return WarrenLoadedEndpointConfiguration(
-            catalog: (file.current, file.endpoints.values.sorted { $0.name < $1.name }, file.display)
-        )
-    }
-
-    private static func writeUnlocked(
-        _ file: WarrenEndpointConfigurationFile,
-        to configURL: URL
-    ) throws {
-        let endpoints = file.endpoints.values.map { endpoint in
-            guard endpoint.ssh?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
-                return endpoint
-            }
-            return WarrenRemoteEndpointConfiguration(
-                name: endpoint.name,
-                url: "",
-                token: "",
-                ssh: endpoint.ssh,
-                sshRemote: endpoint.sshRemote,
-                type: endpoint.type,
-                hostID: endpoint.hostID,
-                routeID: endpoint.routeID,
-                clientID: endpoint.clientID,
-                refreshToken: endpoint.refreshToken,
-                directURL: endpoint.directURL,
-                relayURL: endpoint.relayURL,
-                routePreference: endpoint.routePreference
-            )
-        }
-        let normalizedFile = WarrenEndpointConfigurationFile(
-            current: file.current,
-            endpoints: endpointDictionary(endpoints),
-            display: file.display
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(normalizedFile)
-        let directory = configURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        let temporaryURL = directory.appendingPathComponent(
-            ".\(configURL.lastPathComponent).tmp-\(UUID().uuidString)"
-        )
-        var output = data
-        output.append(0x0A)
-        try output.write(to: temporaryURL, options: [])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporaryURL.path)
-        defer { try? FileManager.default.removeItem(at: temporaryURL) }
-        if FileManager.default.fileExists(atPath: configURL.path) {
-            _ = try FileManager.default.replaceItemAt(configURL, withItemAt: temporaryURL)
-        } else {
-            try FileManager.default.moveItem(at: temporaryURL, to: configURL)
-        }
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
-    }
-
-    private static func endpointDictionary(
-        _ endpoints: [WarrenRemoteEndpointConfiguration]
-    ) -> [String: WarrenRemoteEndpointConfiguration] {
-        endpoints.reduce(into: [:]) { result, endpoint in
-            // Keep the last value for duplicate names instead of trapping on
-            // malformed or concurrently edited catalogs.
-            result[endpoint.name] = endpoint
-        }
-    }
-
-    private static func withLock<Value>(
-        _ configURL: URL,
-        _ body: () throws -> Value
-    ) throws -> Value {
-        processLock.lock()
-        defer { processLock.unlock() }
-        let directory = configURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        let lockURL = configURL.appendingPathExtension("lock")
-        let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
-        guard descriptor >= 0 else {
-            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: lockURL.path])
-        }
-        guard Darwin.fchmod(descriptor, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
-            Darwin.close(descriptor)
-            throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: lockURL.path])
-        }
-        var exclusive = flock(
-            l_start: 0,
-            l_len: 0,
-            l_pid: 0,
-            l_type: Int16(F_WRLCK),
-            l_whence: Int16(SEEK_SET)
-        )
-        guard Darwin.fcntl(descriptor, F_SETLKW, &exclusive) == 0 else {
-            Darwin.close(descriptor)
-            throw CocoaError(.fileLocking, userInfo: [NSFilePathErrorKey: lockURL.path])
-        }
-        defer {
-            var unlocked = flock(
-                l_start: 0,
-                l_len: 0,
-                l_pid: 0,
-                l_type: Int16(F_UNLCK),
-                l_whence: Int16(SEEK_SET)
-            )
-            _ = Darwin.fcntl(descriptor, F_SETLK, &unlocked)
-            Darwin.close(descriptor)
-        }
-        return try body()
-    }
-}
-
-struct RemoteRoster: Decodable, Sendable, Equatable {
-    struct Host: Decodable, Sendable, Equatable { let id: String; let name: String }
-    struct Task: Decodable, Sendable, Equatable {
-        let id: String
-        let name: String
-        let source: String?
-        let externalID: String?
-        let url: String?
-        let pinned: Bool?
-        let order: Int?
-    }
-    struct Project: Decodable, Sendable, Equatable {
-        let id: String
-        let name: String
-        let path: String
-        let setupScript: String?
-        let autoImportGitWorktrees: Bool?
-        let pinned: Bool?
-    }
-    struct WorktreeCandidate: Decodable, Sendable {
-        let path: String
-        let name: String
-        let branch: String?
-        let locked: Bool?
-        let imported: Bool
-        let workspace: String?
-    }
-    struct Workspace: Decodable, Sendable, Equatable {
-        let id: String
-        let project: String
-        let task: String?
-        let name: String
-        let path: String
-        let branch: String?
-        let managedWorktree: Bool?
-        let worktreeLocked: Bool?
-        let pinned: Bool?
-        // Keep the wire value raw so a future Host state cannot invalidate
-        // the entire roster; the projection maps known values below.
-        let mergeState: String?
-    }
-    struct TerminalGroup: Decodable, Sendable, Equatable {
-        let id: String
-        let name: String
-        let home: String?
-        let order: Int?
-        let createdAt: String?
-    }
-    /// The Host's pane tree. The wire shape is flat: a leaf carries pane and
-    /// session identity, a split carries geometry. Recursion needs an indirect
-    /// enum, and a leaf without a resolvable Session is dropped by the mapping
-    /// into the projection rather than by the decoder.
-    indirect enum PaneNode: Decodable, Sendable, Equatable {
-        case leaf(paneID: String?, sessionID: String?)
-        case split(axis: String, ratio: Double, first: PaneNode, second: PaneNode)
-
-        private enum CodingKeys: String, CodingKey {
-            case paneId, sessionId, axis, ratio, first, second
-        }
-
-        init(from decoder: Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            if let axis = try values.decodeIfPresent(String.self, forKey: .axis), !axis.isEmpty {
-                self = .split(
-                    axis: axis,
-                    ratio: try values.decodeIfPresent(Double.self, forKey: .ratio) ?? 0.5,
-                    first: try values.decode(PaneNode.self, forKey: .first),
-                    second: try values.decode(PaneNode.self, forKey: .second)
-                )
-                return
-            }
-            self = .leaf(
-                paneID: try values.decodeIfPresent(String.self, forKey: .paneId),
-                sessionID: try values.decodeIfPresent(String.self, forKey: .sessionId)
-            )
-        }
-    }
-
-    struct PaneGroup: Decodable, Sendable, Equatable {
-        let id: String
-        let workspace: String?
-        let terminalGroup: String?
-        let scope: String?
-        let name: String?
-        let order: Int?
-        let tree: PaneNode
-        let revision: UInt64?
-    }
-
-    struct Session: Decodable, Sendable, Equatable {
-        let id: String
-        let workspace: String?
-        let terminalGroup: String?
-        let scope: String?
-        let title: String
-        let customTitle: String?
-        let kind: String
-        /// The provider family the Host bound to a shell or custom Session.
-        /// Dropping it made every Agent started inside a shell render as a
-        /// plain terminal.
-        var agentProvider: String? = nil
-        let command: String?
-        var process: String?
-        var commandLine: String?
-        var directory: String?
-        let lifecycle: String
-        let pinned: Bool?
-        let agentStatus: AgentStatus?
-        let agentTurn: AgentTurn?
-        var agentExecutionId: String? = nil
-    }
-    struct AgentTurn: Decodable, Sendable, Equatable {
-        let id: UInt64
-        let status: String
-    }
-    struct AgentStatus: Decodable, Sendable, Equatable {
-        let activity: String
-        let attention: Attention?
-
-        struct Attention: Decodable, Sendable, Equatable {
-            let kind: String
-            let reason: String
-            let requestID: String?
-            let since: String?
-
-            private enum CodingKeys: String, CodingKey {
-                case kind
-                case reason
-                case requestID = "requestId"
-                case since
-            }
-        }
-    }
-
-    struct Delta: Decodable, Sendable {
-        struct SessionMetadata: Decodable, Sendable, Equatable {
-            let id: String
-            let process: String?
-            let commandLine: String?
-            let directory: String?
-        }
-
-        struct SessionMetadataChanges: Decodable, Sendable {
-            let upsert: [SessionMetadata]
-
-            private enum CodingKeys: String, CodingKey {
-                case upsert
-            }
-
-            init(from decoder: Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                upsert = try container.decodeIfPresent([SessionMetadata].self, forKey: .upsert) ?? []
-            }
-        }
-
-        struct EntityChanges<Value: Decodable & Sendable>: Decodable, Sendable {
-            let upsert: [Value]
-            let remove: [String]
-            let order: [String]?
-
-            private enum CodingKeys: String, CodingKey {
-                case upsert
-                case remove
-                case order
-            }
-
-            init(from decoder: Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                upsert = try container.decodeIfPresent([Value].self, forKey: .upsert) ?? []
-                remove = try container.decodeIfPresent([String].self, forKey: .remove) ?? []
-                order = try container.decodeIfPresent([String].self, forKey: .order)
-            }
-        }
-
-        let baseRevision: UInt64
-        let revision: UInt64
-        let host: Host?
-        let tasks: EntityChanges<Task>?
-        let projects: EntityChanges<Project>?
-        let workspaces: EntityChanges<Workspace>?
-        let terminalGroups: EntityChanges<TerminalGroup>?
-        let paneGroups: EntityChanges<PaneGroup>?
-        let sessions: EntityChanges<Session>?
-        let sessionMetadata: SessionMetadataChanges?
-    }
-
-    struct StreamMessage: Decodable, Sendable {
-        let type: String
-        let state: RemoteRoster?
-        let delta: Delta?
-
-        private enum CodingKeys: String, CodingKey {
-            case type = "t"
-            case state
-        }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            type = try container.decode(String.self, forKey: .type)
-            state = try container.decodeIfPresent(RemoteRoster.self, forKey: .state)
-            delta = type == "roster.delta" ? try Delta(from: decoder) : nil
-        }
-    }
-
-    let revision: UInt64?
-    let host: Host
-    let tasks: [Task]
-    let projects: [Project]
-    let workspaces: [Workspace]
-    let terminalGroups: [TerminalGroup]
-    let paneGroups: [PaneGroup]
-    let sessions: [Session]
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        revision = try container.decodeIfPresent(UInt64.self, forKey: .revision)
-        host = try container.decode(Host.self, forKey: .host)
-        tasks = try container.decodeIfPresent([Task].self, forKey: .tasks) ?? []
-        projects = try container.decodeIfPresent([Project].self, forKey: .projects) ?? []
-        workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
-        terminalGroups = try container.decodeIfPresent([TerminalGroup].self, forKey: .terminalGroups) ?? []
-        paneGroups = try container.decodeIfPresent([PaneGroup].self, forKey: .paneGroups) ?? []
-        sessions = try container.decodeIfPresent([Session].self, forKey: .sessions) ?? []
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case revision
-        case host
-        case tasks
-        case projects
-        case workspaces
-        case terminalGroups
-        case paneGroups
-        case sessions
-    }
-
-    private init(
-        revision: UInt64?,
-        host: Host,
-        tasks: [Task],
-        projects: [Project],
-        workspaces: [Workspace],
-        terminalGroups: [TerminalGroup],
-        paneGroups: [PaneGroup],
-        sessions: [Session]
-    ) {
-        self.revision = revision
-        self.host = host
-        self.tasks = tasks
-        self.projects = projects
-        self.workspaces = workspaces
-        self.terminalGroups = terminalGroups
-        self.paneGroups = paneGroups
-        self.sessions = sessions
-    }
-
-    func applying(_ delta: Delta) -> RemoteRoster? {
-        guard let revision,
-              revision == delta.baseRevision,
-              delta.revision >= delta.baseRevision else {
-            return nil
-        }
-        return RemoteRoster(
-            revision: delta.revision,
-            host: delta.host ?? host,
-            tasks: Self.applying(tasks, changes: delta.tasks, id: \.id),
-            projects: Self.applying(projects, changes: delta.projects, id: \.id),
-            workspaces: Self.applying(workspaces, changes: delta.workspaces, id: \.id),
-            terminalGroups: Self.applying(terminalGroups, changes: delta.terminalGroups, id: \.id),
-            paneGroups: Self.applying(paneGroups, changes: delta.paneGroups, id: \.id),
-            // Metadata travels separately from the Session entity, so apply it
-            // first and let an entity upsert override it with the full record.
-            sessions: Self.applying(
-                Self.applyingMetadata(sessions, changes: delta.sessionMetadata),
-                changes: delta.sessions,
-                id: \.id
-            )
-        )
-    }
-
-    private static func applyingMetadata(
-        _ current: [Session],
-        changes: Delta.SessionMetadataChanges?
-    ) -> [Session] {
-        guard let changes, !changes.upsert.isEmpty else { return current }
-        var byID: [String: Delta.SessionMetadata] = [:]
-        for change in changes.upsert {
-            byID[change.id] = change
-        }
-        return current.map { session in
-            guard let change = byID[session.id] else { return session }
-            var updated = session
-            updated.process = change.process
-            updated.commandLine = change.commandLine
-            updated.directory = change.directory
-            return updated
-        }
-    }
-
-    private static func applying<Value: Decodable & Sendable>(
-        _ current: [Value],
-        changes: Delta.EntityChanges<Value>?,
-        id: (Value) -> String
-    ) -> [Value] {
-        guard let changes else { return current }
-        var valuesByID: [String: Value] = [:]
-        for value in current {
-            valuesByID[id(value)] = value
-        }
-        for value in changes.upsert {
-            valuesByID[id(value)] = value
-        }
-        for value in changes.remove {
-            valuesByID.removeValue(forKey: value)
-        }
-
-        var result: [Value] = []
-        var emitted: Set<String> = []
-        if let order = changes.order {
-            for valueID in order {
-                guard let value = valuesByID[valueID], emitted.insert(valueID).inserted else { continue }
-                result.append(value)
-            }
-        }
-        for value in current {
-            let valueID = id(value)
-            guard let latest = valuesByID[valueID], emitted.insert(valueID).inserted else { continue }
-            result.append(latest)
-        }
-        for value in changes.upsert {
-            let valueID = id(value)
-            guard let latest = valuesByID[valueID], emitted.insert(valueID).inserted else { continue }
-            result.append(latest)
-        }
-        return result
-    }
-}
-
-/// Keeps the newest value while exposing at most one pending wake-up.
-struct WarrenLatestValueSignal<Value: Sendable>: Sendable {
-    private var latestValue: Value?
-    private var signalPending = false
-
-    mutating func offer(_ value: Value) -> Bool {
-        latestValue = value
-        guard !signalPending else { return false }
-        signalPending = true
-        return true
-    }
-
-    mutating func take() -> Value? {
-        let value = latestValue
-        latestValue = nil
-        signalPending = false
-        return value
-    }
-
-    mutating func reset() {
-        latestValue = nil
-        signalPending = false
-    }
-}
-
-/// A completed Agent turn detected from the remote roster.
-///
-/// The remote model publishes this transport-neutral event. Platform clients
-/// decide whether and how to present it (for example, with a sound).
-struct WarrenAgentCompletionEvent: Equatable, Sendable {
-    let sessionID: TerminalSessionID
-    let turnID: UInt64
-}
-
-/// Converts the latest Agent turn from each roster snapshot into exactly one
-/// notification per successful completion. A first snapshot and a transcript
-/// reset are baselines, never historical notifications.
-///
-/// A Host that restarts reports its Sessions before it has replayed their
-/// transcripts, so a Session can first appear without a turn and only gain a
-/// terminal turn in a later snapshot. That first observation is restored
-/// Host state, not a completion: it rings only when the Session was unknown
-/// at the time of the snapshot, or when an already observed turn transitions
-/// to a terminal status.
-struct WarrenAgentCompletionTracker {
-    private var initialized = false
-    private var turns: [TerminalSessionID: RemoteRoster.AgentTurn] = [:]
-    private var knownSessionIDs: Set<TerminalSessionID> = []
-
-    mutating func observe(
-        sessions: Set<TerminalSessionID>,
-        turns nextTurns: [TerminalSessionID: RemoteRoster.AgentTurn]
-    ) -> [TerminalSessionID] {
-        let previouslyKnownSessionIDs = knownSessionIDs
-        knownSessionIDs.formUnion(sessions)
-
-        guard initialized else {
-            initialized = true
-            turns = nextTurns
-            return []
-        }
-
-        var completed: [TerminalSessionID] = []
-        for (sessionID, turn) in nextTurns {
-            guard turn.status == "completed" else { continue }
-            guard let previous = turns[sessionID] else {
-                // A Session the client has never seen is a live completion
-                // whose start the snapshot missed. A Session first observed
-                // without a turn is still restoring Host Agent state.
-                if !previouslyKnownSessionIDs.contains(sessionID) {
-                    completed.append(sessionID)
-                }
-                continue
-            }
-            // Turn ids restart when a transcript projection is rebound. Do
-            // not ring for the new snapshot's old terminal state.
-            guard turn.id >= previous.id else { continue }
-            if turn.id > previous.id || previous.status != "completed" {
-                completed.append(sessionID)
-            }
-        }
-        turns = nextTurns
-        return completed
-    }
-}
-
-/// Keeps at most one unsent terminal viewport. A window drag can produce more
-/// resize callbacks than the daemon can process; intermediate dimensions have
-/// no value once a newer one exists.
-struct WarrenResizeRequestBuffer: Sendable {
-    private(set) var pending: TerminalSize?
-    private(set) var lastSent: TerminalSize?
-
-    /// Returns true when the caller needs to start a drain task.
-    mutating func offer(_ size: TerminalSize) -> Bool {
-        guard size != lastSent || pending != nil else { return false }
-        let shouldStart = pending == nil
-        pending = size
-        return shouldStart
-    }
-
-    mutating func take() -> TerminalSize? {
-        guard let pending else { return nil }
-        self.pending = nil
-        guard pending != lastSent else { return nil }
-        return pending
-    }
-
-    mutating func markSent(_ size: TerminalSize) {
-        lastSent = size
-    }
-
-    mutating func reset() {
-        pending = nil
-        lastSent = nil
-    }
-}
-
-
 private enum WarrenRemoteErrorInfoKey {
     static let method = "WarrenRemoteMethod"
     static let params = "WarrenRemoteParams"
@@ -1247,158 +19,12 @@ private enum WarrenRemoteErrorInfoKey {
     static let daemonProtocol = "WarrenRemoteDaemonProtocol"
 }
 
-struct TerminalOutputAnchor: Equatable, Sendable {
-    let epoch: UInt64
-    let sequence: UInt64
-}
-
 private struct PendingAtomicRecovery: Sendable {
     let epoch: UInt64
     let sequence: UInt64
     let format: String
     let payload: Data
 }
-
-enum WarrenRemoteTabOrdering {
-    static func moving(
-        _ tabID: String,
-        before destinationTabID: String?,
-        in tabIDs: [String]
-    ) -> [String] {
-        guard let sourceIndex = tabIDs.firstIndex(of: tabID) else { return tabIDs }
-        if let destinationTabID {
-            guard destinationTabID != tabID, tabIDs.contains(destinationTabID) else {
-                return tabIDs
-            }
-        }
-        var result = tabIDs
-        let moved = result.remove(at: sourceIndex)
-        if let destinationTabID,
-           let destinationIndex = result.firstIndex(of: destinationTabID) {
-            result.insert(moved, at: destinationIndex)
-        } else {
-            result.append(moved)
-        }
-        return result
-    }
-
-    static func reconciling(
-        preferredOrder: [String],
-        availableTabIDs: [String]
-    ) -> [String] {
-        let available = Set(availableTabIDs)
-        var seen: Set<String> = []
-        let retained = preferredOrder.filter {
-            available.contains($0) && seen.insert($0).inserted
-        }
-        return retained + availableTabIDs.filter { seen.insert($0).inserted }
-    }
-}
-
-/// Parameters shared by the desktop terminal protocol and its tests.
-enum WarrenRemoteTerminalProtocol {
-    /// Parameters for a session output subscription. Passive subscribers do
-    /// not claim focus; a selected cold attach opts into a control claim so
-    /// the measured viewport is applied before the atomic checkpoint.
-    static func subscribeParameters(
-        sessionID: TerminalSessionID,
-        size: TerminalSize?,
-        anchor: TerminalOutputAnchor? = nil,
-        claimControl: Bool = false
-    ) -> [String: String] {
-        var params = ["id": sessionID.description]
-        if claimControl {
-            params["claim"] = "true"
-        }
-        if let size {
-            params["cols"] = String(size.columns)
-            params["rows"] = String(size.rows)
-        }
-        if let anchor {
-            params["epoch"] = String(anchor.epoch)
-            params["sequence"] = String(anchor.sequence)
-        }
-        return params
-    }
-
-    /// Parameters for swapping the control lease without any output work.
-    /// Tab promotion sends this instead of a replay-carrying attach so an
-    /// ordinary switch performs zero recovery on the daemon.
-    static func controlClaimParameters(sessionID: TerminalSessionID) -> [String: String] {
-        ["id": sessionID.description, "output": "false"]
-    }
-
-    static func shouldAttach(
-        previousTabID: String?,
-        nextTabID: String?,
-        mountedSurfaceCount: Int
-    ) -> Bool {
-        guard nextTabID != nil else { return false }
-        return previousTabID != nextTabID || mountedSurfaceCount == 0
-    }
-}
-
-enum WarrenRemoteTaskProtocol {
-    private struct CreateResult: Decodable {
-        let id: String
-    }
-
-    static func createRequest(
-        _ creation: WarrenDesktopTaskCreationRequest
-    ) -> (method: String, params: [String: String]) {
-        var params = [
-            "name": creation.name,
-            "requestId": creation.requestID.uuidString.lowercased(),
-        ]
-        if let source = creation.source { params["source"] = source }
-        if let externalID = creation.externalID { params["externalID"] = externalID }
-        if let url = creation.url { params["url"] = url }
-        return ("task.create", params)
-    }
-
-    static func taskID(from data: Data) throws -> TaskID {
-        let result = try JSONDecoder().decode(CreateResult.self, from: data)
-        guard let taskID = TaskID(uuidString: result.id) else {
-            throw WarrenRemoteTaskProtocolError.invalidTaskID
-        }
-        return taskID
-    }
-}
-
-private enum WarrenRemoteTaskProtocolError: LocalizedError {
-    case invalidTaskID
-
-    var errorDescription: String? {
-        "The Host returned an invalid Task ID."
-    }
-}
-
-enum WarrenRemoteWorkspaceProtocol {
-    static func createParameters(
-        projectID: ProjectID,
-        taskID: TaskID?,
-        creation: WorkspaceCreationRequest
-    ) -> [String: String] {
-        var params = [
-            "project": projectID.description,
-            "branch": creation.branch,
-            "name": creation.displayName,
-            "path": creation.path,
-            "requestId": creation.requestID.uuidString.lowercased(),
-            "runSetupScript": creation.runSetupScript ? "true" : "false",
-        ]
-        if let taskID {
-            params["task"] = taskID.description
-        }
-        if !creation.setupArguments.isEmpty,
-           let data = try? JSONSerialization.data(withJSONObject: creation.setupArguments),
-           let value = String(data: data, encoding: .utf8) {
-            params["setupArgs"] = value
-        }
-        return params
-    }
-}
-
 
 private enum WarrenRemoteDiagnostics {
     private static let sensitiveParameterNames = [
@@ -1666,6 +292,20 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var agentProjectionSequenceByStreamID: [String: UInt64] = [:]
     private var agentPendingProjectionByStreamID: [String: [UInt64: WarrenRemoteAgentEvent]] = [:]
     private var agentSubscriptionTasks: [String: Task<Void, Never>] = [:]
+    /// ACP Sessions own no terminal (RFC 0023): no surface, no subscribe, no
+    /// resize. The Conversation surface renders them from their Agent stream.
+    private(set) var conversationSessionIDs: Set<TerminalSessionID> = []
+    /// Chat Sessions whose agent publishes selectors (`agent-config-v1`), and
+    /// those with a provider conversation to hand off (RFC 0023 §6.11, §6.12).
+    private var conversationConfigSessionIDs: Set<TerminalSessionID> = []
+    /// Each stream's latest state events older than its replica window,
+    /// from the last subscription, for feeds created after it.
+    private var conversationStateEventsByStreamID: [String: [WarrenRemoteAgentEvent]] = [:]
+    private var conversationHandoffSessionIDs: Set<TerminalSessionID> = []
+    /// One feed per Conversation surface on screen, fed from the same replica
+    /// the activity projection reads. Created on demand so a Host with many
+    /// idle ACP Sessions keeps no transcripts in memory.
+    private var conversationFeeds: [TerminalSessionID: WarrenConversationFeed] = [:]
     /// Client-observed activity history used by the desktop switcher to
     /// prioritize sessions that have just become ready. The daemon status
     /// payload has no transition timestamp, so this is intentionally kept
@@ -1716,6 +356,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// the app, and a nonisolated deinit cannot touch these tokens.
     private var wakeObserver: NSObjectProtocol?
     private var activationObserver: NSObjectProtocol?
+    private let pathMonitor = NWPathMonitor()
+    private var hasSeenNetworkPath = false
+    /// Background Host connections live in another model; the composition
+    /// root routes the same resume signal to them.
+    var onResumeConnection: (() -> Void)?
     private var retainedSurfaceRebindTask: Task<Void, Never>?
     private var tabOrderByWorkspaceID: [WorkspaceID: [String]] = [:]
     private var tabOrderByTerminalGroupID: [TerminalGroupID: [String]] = [:]
@@ -1771,6 +416,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.resumeConnectionNow() }
         }
+        // A new route (Wi-Fi to Ethernet, another network, VPN up or down)
+        // strands a socket bound to the old one. The monitor reports the
+        // current path once on start; that report is not a change.
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let isSatisfied = path.status == .satisfied
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.handleNetworkPathUpdate(isSatisfied: isSatisfied) }
+            }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "app.warren.desktop.network-monitor"))
         let tabOrders = WarrenDesktopNavigationPersistence.restoreTabOrders(scope: scope)
         self.tabOrderByWorkspaceID = tabOrders.workspace.reduce(into: [:]) { result, entry in
             guard let id = WorkspaceID(uuidString: entry.key) else { return }
@@ -1791,6 +446,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
         navigationPersistenceTask?.cancel()
         hostProbeTask?.cancel()
+        pathMonitor.cancel()
     }
 
     private func scheduleNavigationPersistence() {
@@ -2002,8 +658,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// backoff computed before the environment changed: a Mac that slept for an
     /// hour would otherwise sit out the full ceiling, and its socket usually
     /// reports connected until the first write fails.
+    private func handleNetworkPathUpdate(isSatisfied: Bool) {
+        let isChange = hasSeenNetworkPath
+        hasSeenNetworkPath = true
+        guard isChange, isSatisfied else { return }
+        resumeConnectionNow()
+    }
+
     func resumeConnectionNow() {
         reconnectResumeRequested = true
+        onResumeConnection?()
         guard let wire else { return }
         Task { await wire.probeConnection() }
     }
@@ -2165,6 +829,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             let wire = WarrenRemoteClient(
                 configuration: wireConfiguration,
                 terminalStateFormats: [WarrenRemoteClient.snapshotTerminalStateFormat],
+                // The Desktop subscribes every roster stream at once. Without
+                // this each subscribe replaced the last, so only one Agent's
+                // events stayed live on the connection.
+                additionalCapabilities: [WarrenRemoteAgentCapability.streams],
                 tokenUpdateHandler: { accessToken, refreshToken in
                     guard !isSyntheticLocal else { return }
                     let updated = persistedConfiguration.withTokens(
@@ -3123,9 +1791,226 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         guard launch.kind != .browser else {
             return ("browser.session.create", params)
         }
-        params["command"] = launch.command ?? ""
         params["kind"] = launch.kind.rawValue
+        if let handler = launch.agentHandler {
+            // The Host resolves the provider's ACP server; a terminal launch
+            // command would be meaningless here.
+            params["agentHandler"] = handler
+            return ("session.create", params)
+        }
+        params["command"] = launch.command ?? ""
         return ("session.create", params)
+    }
+
+    // MARK: Inspector
+
+    private var inspectors: [WorkspaceID: WarrenInspectorModel] = [:]
+
+    /// The Inspector state for one Workspace, kept across visits so a diff the
+    /// person opened is still open when they come back.
+    func inspector(for workspace: Workspace) -> WarrenInspectorModel {
+        if let inspector = inspectors[workspace.id] {
+            inspector.path = workspace.path
+            return inspector
+        }
+        let inspector = WarrenInspectorModel(
+            workspaceID: workspace.id.description,
+            path: workspace.path,
+            client: { [weak self] in
+                guard let wire = self?.wire else { throw WarrenRemoteClientError.notConnected }
+                return wire
+            }
+        )
+        inspectors[workspace.id] = inspector
+        return inspector
+    }
+
+    /// Files are read from disk, so the Files tab needs the Workspace's
+    /// checkout on this Mac.
+    var inspectorReadsLocalFiles: Bool { isLocalEndpoint }
+
+    // MARK: Conversation (RFC 0023)
+
+    /// The feed a Conversation surface renders. It is seeded from the local
+    /// replica, then kept current by the same batches that drive activity.
+    func conversationFeed(for sessionID: TerminalSessionID) -> WarrenConversationFeed {
+        if let feed = conversationFeeds[sessionID] { return feed }
+        let feed = WarrenConversationFeed(sessionID: sessionID)
+        feed.status = projection.session(id: sessionID)?.agentStatus
+        conversationFeeds[sessionID] = feed
+        seedConversationFeed(feed)
+        return feed
+    }
+
+    /// Loads a feed's history from the local replica once its stream is known.
+    /// A feed created before the roster names its stream is seeded again when
+    /// the stream appears; merging is idempotent by sequence.
+    private func seedConversationFeed(_ feed: WarrenConversationFeed) {
+        guard let namespace = agentNamespace,
+              let streamID = conversationStreamID(feed.sessionID),
+              feed.seededStreamID != streamID else { return }
+        feed.seededStreamID = streamID
+        Task { @MainActor [weak feed] in
+            let cached = await WarrenAgentEventStore.shared.loadRecentEvents(
+                namespace: namespace,
+                streamID: streamID,
+                limit: 2000
+            )
+            feed?.merge(cached, streamID: streamID)
+            if let state = self.conversationStateEventsByStreamID[streamID] {
+                feed?.merge(state, streamID: streamID)
+            }
+            feed?.markLoaded()
+        }
+    }
+
+    private func conversationStreamID(_ sessionID: TerminalSessionID) -> String? {
+        agentSessionByStreamID.first { $0.value == sessionID }?.key
+    }
+
+    private func conversationCommandContext(_ sessionID: TerminalSessionID) throws -> (WarrenRemoteClient, String) {
+        guard let wire else { throw URLError(.notConnectedToInternet) }
+        guard let executionID = conversationStreamID(sessionID) else {
+            throw WarrenRemoteClientError.requestFailed("This Agent's conversation is not available yet.")
+        }
+        return (wire, executionID)
+    }
+
+    /// Starts a turn. The command ID doubles as the causation the Host echoes
+    /// on the user message, so the surface can retire its pending prompt.
+    /// Sends a prompt now, showing it as pending until the Host echoes it.
+    func submitConversationPrompt(_ text: String, in feed: WarrenConversationFeed) {
+        let placeholderID = "local-\(UUID().uuidString)"
+        feed.pendingPrompts.append(.init(id: placeholderID, text: text))
+        Task { @MainActor in
+            do {
+                let commandID = try await self.sendConversationMessage(text, to: feed.sessionID)
+                if let index = feed.pendingPrompts.firstIndex(where: { $0.id == placeholderID }) {
+                    // Re-key the placeholder by the command so the echo retires it.
+                    feed.pendingPrompts[index] = .init(id: commandID, text: text)
+                    if feed.conversation.turns.contains(where: { $0.promptCausedBy == commandID }) {
+                        feed.pendingPrompts.remove(at: index)
+                    }
+                }
+            } catch {
+                if let index = feed.pendingPrompts.firstIndex(where: { $0.id == placeholderID }) {
+                    feed.pendingPrompts[index].failure = "Not sent: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// Holds a prompt until the Agent is ready for it (after Synara's queued
+    /// follow-ups). The queue lives with the feed, not the view, so it keeps
+    /// draining while another Session is on screen.
+    func queueConversationPrompt(_ text: String, in feed: WarrenConversationFeed) {
+        feed.queuedPrompts.append(.init(id: "queued-\(UUID().uuidString)", text: text))
+        drainConversationQueue(feed.sessionID)
+    }
+
+    /// Sends the next queued prompt once the Agent is ready, no decision is
+    /// waiting, and the previous prompt has been echoed.
+    func drainConversationQueue(_ sessionID: TerminalSessionID) {
+        guard let feed = conversationFeeds[sessionID],
+              !feed.queuedPrompts.isEmpty,
+              feed.status?.activity == .ready,
+              feed.conversation.decisions.isEmpty,
+              feed.pendingPrompts.allSatisfy({ $0.failure != nil }) else { return }
+        let next = feed.queuedPrompts.removeFirst()
+        submitConversationPrompt(next.text, in: feed)
+    }
+
+    func sendConversationMessage(_ text: String, to sessionID: TerminalSessionID) async throws -> String {
+        let (wire, executionID) = try conversationCommandContext(sessionID)
+        let commandID = "desktop-\(UUID().uuidString.lowercased())"
+        let receipt = try await wire.startAgentTurn(executionID: executionID, commandID: commandID, text: text)
+        guard receipt.accepted else {
+            throw WarrenRemoteClientError.requestFailed("The Host did not accept the message.")
+        }
+        return commandID
+    }
+
+    func cancelConversationTurn(_ sessionID: TerminalSessionID, turnID: String) async throws {
+        let (wire, executionID) = try conversationCommandContext(sessionID)
+        _ = try await wire.cancelAgentTurn(
+            executionID: executionID,
+            commandID: "cancel-\(executionID)-\(turnID)",
+            turnID: turnID,
+            reason: "cancel"
+        )
+    }
+
+    func resolveConversationDecision(
+        _ decision: WarrenConversation.Decision,
+        optionID: String,
+        in sessionID: TerminalSessionID
+    ) async throws {
+        let (wire, executionID) = try conversationCommandContext(sessionID)
+        _ = try await wire.resolveAgentInteraction(
+            executionID: executionID,
+            commandID: "resolve-\(executionID)-\(decision.id)-\(decision.version)",
+            interactionID: decision.id,
+            version: decision.version,
+            resolution: ["decision": .string(optionID)]
+        )
+    }
+
+    /// Changes one agent selector (model, mode) of a chat Session
+    /// (RFC 0023 §6.11). The agent's answer arrives as the next config.updated.
+    func setConversationConfig(_ configID: String, value: String, in sessionID: TerminalSessionID) async throws {
+        let (wire, executionID) = try conversationCommandContext(sessionID)
+        _ = try await wire.setAgentConfig(
+            executionID: executionID,
+            commandID: "desktop-config-\(UUID().uuidString.lowercased())",
+            configID: configID,
+            value: value
+        )
+    }
+
+    /// Replaces a chat Session with a terminal Session that resumes the same
+    /// provider conversation (RFC 0023 §6.12), launched with this Mac's
+    /// terminal preset for the provider, and selects it.
+    func handoffConversation(_ sessionID: TerminalSessionID) async throws {
+        guard let wire else { throw URLError(.notConnectedToInternet) }
+        let session = projection.session(id: sessionID)
+        let kind = (session?.agentProvider ?? session?.kind)?.rawValue ?? ""
+        let created = try await wire.handoffSession(sessionID: sessionID.description, command: Self.terminalPresetCommand(for: kind))
+        try await refreshRoster(using: wire)
+        guard let replacement = TerminalSessionID(uuidString: created.id) else { return }
+        selectSession(replacement)
+    }
+
+    /// The terminal preset command Settings holds for a provider.
+    static func terminalPresetCommand(for kind: String) -> String? {
+        let key: String
+        switch kind {
+        case "claude": key = WarrenPreferenceKey.presetCommandClaude
+        case "codex": key = WarrenPreferenceKey.presetCommandCodex
+        case "opencode": key = WarrenPreferenceKey.presetCommandOpenCode
+        default: return nil
+        }
+        let stored = UserDefaults.standard.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !stored.isEmpty { return stored }
+        return kind == "codex" ? "codex --dangerously-bypass-hook-trust" : kind
+    }
+
+    func supportsConversationConfig(_ sessionID: TerminalSessionID) -> Bool {
+        conversationConfigSessionIDs.contains(sessionID)
+    }
+
+    func conversationHasConversation(_ sessionID: TerminalSessionID) -> Bool {
+        conversationHandoffSessionIDs.contains(sessionID)
+    }
+
+    /// Opens a Session named by an event payload, such as an agent terminal.
+    func openSession(named id: String) {
+        guard let sessionID = TerminalSessionID(uuidString: id) else { return }
+        selectSession(sessionID)
+    }
+
+    func sessionIsOpen(named id: String) -> Bool {
+        guard let sessionID = TerminalSessionID(uuidString: id) else { return false }
+        return projection.session(id: sessionID)?.state.isActive == true
     }
 
     func createSession(workspaceID: WorkspaceID, request launch: TerminalSessionLaunchRequest) {
@@ -5218,6 +4103,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     private func applyAgentProjection(_ status: AgentStatus, for sessionID: TerminalSessionID) {
+            conversationFeeds[sessionID]?.status = status
+            drainConversationQueue(sessionID)
             let previousActivity = lastObservedActivityBySessionID[sessionID]
             lastObservedActivityBySessionID[sessionID] = status.activity
             if status.activity == .ready, previousActivity != .ready {
@@ -5430,6 +4317,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                   let sessionID = TerminalSessionID(uuidString: session.id) else { return nil }
             return (streamID, sessionID)
         })
+        for feed in conversationFeeds.values { seedConversationFeed(feed) }
         let activeStreamIDs = Set(agentSessionByStreamID.keys)
         await WarrenAgentEventStore.shared.purgeOrphanStreams(
             namespace: namespace,
@@ -5560,6 +4448,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 retainedFromSequence: result.retainedFromSequence
             )
             await projectAgentEvents(result.events, streamID: streamID)
+            // State older than the replica's window: the selectors, plan,
+            // and context the Conversation shows however far back they were set.
+            conversationStateEventsByStreamID[streamID] = result.stateEvents
+            if let sessionID = agentSessionByStreamID[streamID] {
+                conversationFeeds[sessionID]?.merge(result.stateEvents, streamID: streamID)
+                drainConversationQueue(sessionID)
+            }
             applyAgentCheckpoint(
                 sequence: result.checkpoint.sequence,
                 state: result.checkpoint.state,
@@ -5637,7 +4532,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         _ events: [WarrenRemoteAgentEvent],
         streamID: String
     ) async {
-        guard agentSessionByStreamID[streamID] != nil else { return }
+        guard let projectedSessionID = agentSessionByStreamID[streamID] else { return }
+        conversationFeeds[projectedSessionID]?.merge(events, streamID: streamID)
+        drainConversationQueue(projectedSessionID)
         let baseline = agentProjectionSequenceByStreamID[streamID] ?? 0
         let statusEvents = events.filter {
             $0.type == "status.changed" && $0.sequence > baseline
@@ -5886,6 +4783,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             guard (workspaceID == nil) != (terminalGroupID == nil) else { return nil }
             return (value, id, workspaceID, terminalGroupID)
         }
+        conversationSessionIDs = Set(remoteSessions.compactMap { value, id, _, _ in
+            value.lifecycle == "running" && value.runtimeKind == "acp" ? id : nil
+        })
+        conversationConfigSessionIDs = Set(remoteSessions.compactMap { value, id, _, _ in
+            value.agentCapabilities?.contains(WarrenRemoteAgentCapability.config) == true ? id : nil
+        })
+        conversationHandoffSessionIDs = Set(remoteSessions.compactMap { value, id, _, _ in
+            value.agentSessionId?.isEmpty == false ? id : nil
+        })
+        conversationFeeds = conversationFeeds.filter { conversationSessionIDs.contains($0.key) }
         let agentTurns = Dictionary(uniqueKeysWithValues: remoteSessions.compactMap {
             value, sessionID, _, _ in
             value.agentTurn.map { (sessionID, $0) }
@@ -6154,7 +5061,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         // subscribe, or resize. Only the browser region renders it (RFC 0022 §3).
         let live = Set(
             projection.sessions
-                .filter { $0.state.isActive && $0.kind != .browser }
+                .filter { $0.state.isActive && $0.kind != .browser && !conversationSessionIDs.contains($0.id) }
                 .map(\.id)
         )
         let visible = sessionIDs.intersection(live)
@@ -6289,12 +5196,22 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         projection.session(id: sessionID)?.kind == .browser
     }
 
+    /// Whether this Session is an ACP Agent, which has no terminal.
+    func isConversationSession(_ sessionID: TerminalSessionID) -> Bool {
+        conversationSessionIDs.contains(sessionID)
+    }
+
     private func presentSelectedSession() async {
         guard let tabID = navigation.selectedTabID,
               let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID else { return }
         // A browser Session is presented by the browser region, not here. Leaving
         // the Terminal attached to its previous Session is what keeps that
         // Session on screen beside the viewer.
+        guard !isConversationSession(sessionID) else {
+            // The Conversation surface owns the pane and its keyboard focus.
+            relinquishTerminalFocus()
+            return
+        }
         guard !isBrowserSession(sessionID) else {
             TerminalDiagnostics.log("present_skipped_browser", [
                 "session": sessionID.description,
@@ -7069,58 +5986,4 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
         }
     }
-}
-
-extension WarrenDesktopProjection {
-    /// A copy with the scope's Tabs in a new order.
-    ///
-    /// These builders spell out every stored property, so a field added to the
-    /// projection has to be added here too. `paneGroups` and `unreadNoticeCount`
-    /// were each lost this way; the tests next to this helper are what keep the
-    /// next field from joining them.
-    func reorderingTabs(tabID: String, accordingTo orderedIDs: [String]) -> Self {
-        let tabsByID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
-        var orderedTabs = orderedIDs.compactMap { tabsByID[$0] }.makeIterator()
-        let reorderedTabs = tabs.map { tab in
-            let sameScope = tabWorkspaceIDs[tab.id] != nil
-                ? tabWorkspaceIDs[tab.id] == tabWorkspaceIDs[tabID]
-                : tabTerminalGroupIDs[tab.id] == tabTerminalGroupIDs[tabID]
-            return sameScope ? (orderedTabs.next() ?? tab) : tab
-        }
-        return Self(
-            host: host,
-            groups: groups,
-            tasks: taskGroups.map(\.task),
-            sessions: sessions,
-            tabs: reorderedTabs,
-            sessionWorkspaceIDs: sessionWorkspaceIDs,
-            tabWorkspaceIDs: tabWorkspaceIDs,
-            connectionState: connectionState,
-            terminalGroups: terminalGroups,
-            sessionTerminalGroupIDs: sessionTerminalGroupIDs,
-            tabTerminalGroupIDs: tabTerminalGroupIDs,
-            paneGroups: paneGroups,
-            unreadNoticeCount: unreadNoticeCount
-        )
-    }
-
-    /// A copy that reports a different connection state.
-    func withConnectionState(_ state: WarrenDesktopConnectionState) -> Self {
-        Self(
-            host: host,
-            groups: groups,
-            tasks: taskGroups.map(\.task),
-            sessions: sessions,
-            tabs: tabs,
-            sessionWorkspaceIDs: sessionWorkspaceIDs,
-            tabWorkspaceIDs: tabWorkspaceIDs,
-            connectionState: state,
-            terminalGroups: terminalGroups,
-            sessionTerminalGroupIDs: sessionTerminalGroupIDs,
-            tabTerminalGroupIDs: tabTerminalGroupIDs,
-            paneGroups: paneGroups,
-            unreadNoticeCount: unreadNoticeCount
-        )
-    }
-
 }

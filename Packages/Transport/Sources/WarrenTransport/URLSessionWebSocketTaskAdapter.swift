@@ -60,3 +60,22 @@ public actor URLSessionWebSocketTaskAdapter: WarrenWebSocketTaskAdapter {
         }
     }
 }
+
+/// Reports the moment the WebSocket upgrade completes, which separates the
+/// network's share of a slow connection (DNS, TCP, TLS, upgrade) from the
+/// Host's share (the authenticated welcome).
+final class WarrenWebSocketOpenObserver: NSObject, URLSessionWebSocketDelegate, Sendable {
+    private let onOpen: @Sendable () -> Void
+
+    init(onOpen: @escaping @Sendable () -> Void) {
+        self.onOpen = onOpen
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didOpenWithProtocol protocol: String?
+    ) {
+        onOpen()
+    }
+}

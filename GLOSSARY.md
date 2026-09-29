@@ -78,6 +78,23 @@ _Avoid_: Codex Session, Claude Session
 The currently observed work state of an external Agent Conversation. It is
 optional and does not represent terminal lifecycle or client connectivity.
 
+**ACP Session**:
+A Warren Session whose Agent is driven over the Agent Client Protocol instead of
+a terminal. It has a Session Scope, a Tab, and an Agent Execution like any Agent
+Session, but owns no Ghostline runtime; its primary surface is the Conversation
+surface. Its handler is fixed at creation.
+_Avoid_: Chat Session, headless Agent
+
+**ACP agent process**:
+The subprocess that serves ACP on stdio for one ACP Session. It is a disposable
+worker: the Host restarts it and resumes the same provider conversation, so its
+exit never ends the Session.
+
+**Conversation surface**:
+The attention-first structured view of an Agent Execution: turns, collapsed work
+trails, a decision dock for pending approvals, and a composer. It is the only
+surface of an ACP Session.
+
 **Tab**:
 A device-local window entry that references one Warren Terminal Session within a
 Workspace View or Terminal Group View. Tab projection and tab order are client

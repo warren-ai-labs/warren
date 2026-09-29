@@ -8,6 +8,7 @@ export const agentCapabilities = [
   "agent-interrupt-v1",
   "agent-attachments-v1",
   "agent-goals-v1",
+  "agent-config-v1",
 ];
 export const appHeartbeatCapability = "app-heartbeat-v1";
 // Host-wide, not per-Session: a user message echoed by the provider carries the

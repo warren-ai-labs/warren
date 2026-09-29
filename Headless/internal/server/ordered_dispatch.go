@@ -80,10 +80,3 @@ func (dispatcher *orderedDispatcher) drain(key string) {
 		work()
 	}
 }
-
-// depth reports one domain's pending backlog, for tests and diagnostics.
-func (dispatcher *orderedDispatcher) depth(key string) int {
-	dispatcher.mu.Lock()
-	defer dispatcher.mu.Unlock()
-	return len(dispatcher.queues[key])
-}

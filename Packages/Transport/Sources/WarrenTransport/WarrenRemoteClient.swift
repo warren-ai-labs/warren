@@ -100,6 +100,20 @@ private actor WarrenRemoteSocket {
     /// interval because the Host answers control frames one at a time per
     /// stream, so a slow request can legitimately delay a pong.
     private static let heartbeatTimeout: Duration = .seconds(10)
+    /// How long a probe triggered by wake, a network change, or a return to the
+    /// foreground may go unanswered. Long enough for a Relay round trip on a
+    /// slow mobile link, short enough that a half-open socket is replaced
+    /// before the user starts typing into it.
+    static let defaultProbeTimeout: Duration = .seconds(5)
+    /// Bounds for the probe sent on return to the foreground. The deadline is
+    /// a multiple of the round trips this socket has actually measured, so a
+    /// dead LAN socket is replaced in half a second instead of five, while a
+    /// slow Relay link still gets room to answer. A false failure costs one
+    /// ordinary reconnect.
+    static let resumeProbeFloor: Duration = .milliseconds(500)
+    static let resumeProbeCeiling: Duration = .milliseconds(1500)
+    private static let resumeProbeRoundTrips = 4
+    private static let roundTripSampleLimit = 4
     private let terminalStateFormats: Set<String>
     /// Hard deadline for the authenticated welcome. Mobile networks may spend
     /// several seconds on DNS, TLS, and proxy negotiation before it arrives,
@@ -126,18 +140,27 @@ private actor WarrenRemoteSocket {
     private var supportsAppHeartbeat = false
     private var heartbeatSequence = 0
     private var pendingHeartbeatID: String?
-    private var heartbeatDeadlineTask: Task<Void, Never>?
+    /// The latest app ping and when it left, kept apart from
+    /// `pendingHeartbeatID` because any inbound frame clears that one.
+    private var lastHeartbeatSent: (id: String, at: ContinuousClock.Instant)?
+    private var recentRoundTrips: [Duration] = []
+    private var protocolPingInFlight = false
+    private var livenessDeadline: ContinuousClock.Instant?
+    private var livenessDeadlineTask: Task<Void, Never>?
+    private let probeTimeout: Duration
 
     init(
         adapter: any WarrenWebSocketTaskAdapter,
         codec: WarrenWireCodec = WarrenWireCodec(),
         terminalStateFormats: Set<String>,
-        welcomeTimeout: Duration = WarrenRemoteNetworking.defaultWelcomeTimeout
+        welcomeTimeout: Duration = WarrenRemoteNetworking.defaultWelcomeTimeout,
+        probeTimeout: Duration = WarrenRemoteSocket.defaultProbeTimeout
     ) {
         self.adapter = adapter
         self.codec = codec
         self.terminalStateFormats = terminalStateFormats
         self.welcomeTimeout = welcomeTimeout
+        self.probeTimeout = probeTimeout
         // A peer can stream terminal bytes and Agent deltas faster than a
         // suspended iOS consumer can drain them. Bound the socket queue so a
         // stalled scene cannot retain an unbounded transcript; the model's
@@ -152,10 +175,12 @@ private actor WarrenRemoteSocket {
     static func adapter(
         url: URL,
         session: URLSession,
-        maximumMessageSize: Int
+        maximumMessageSize: Int,
+        onOpen: (@Sendable () -> Void)? = nil
     ) -> any WarrenWebSocketTaskAdapter {
         let task = session.webSocketTask(with: url)
         task.maximumMessageSize = maximumMessageSize
+        if let onOpen { task.delegate = WarrenWebSocketOpenObserver(onOpen: onOpen) }
         return URLSessionWebSocketTaskAdapter(task: task)
     }
 
@@ -171,6 +196,7 @@ private actor WarrenRemoteSocket {
             WarrenRemoteAgentCapability.interrupt,
             WarrenRemoteAgentCapability.attachments,
             WarrenRemoteAgentCapability.goals,
+            WarrenRemoteAgentCapability.config,
             WarrenRemoteCapability.appHeartbeat,
             WarrenRemoteCapability.agentCausation,
         ]
@@ -250,9 +276,9 @@ private actor WarrenRemoteSocket {
     /// The protocol-level ping only reaches whatever terminates the WebSocket,
     /// which over Relay is Relay itself; on its own it reports a healthy
     /// connection while the Host is unreachable. When the Host negotiated
-    /// app-heartbeat-v1 an application ping is sent too, and it is the one with
-    /// a deadline. The protocol ping stays as the check for the client↔Relay hop
-    /// and as the only liveness signal available from an older Host.
+    /// app-heartbeat-v1 an application ping is sent too, and only an inbound
+    /// frame satisfies the probe. The protocol ping stays as the check for the
+    /// client↔Relay hop and as the only liveness signal from an older Host.
     func startHeartbeat() {
         guard heartbeatTask == nil, !isClosed else { return }
         heartbeatTask = Task { [weak self] in
@@ -263,56 +289,9 @@ private actor WarrenRemoteSocket {
                     return
                 }
                 guard !Task.isCancelled else { return }
-                do {
-                    try await self?.adapter.ping()
-                } catch {
-                    await self?.fail(error)
-                    return
-                }
-                await self?.sendApplicationHeartbeat()
+                await self?.probe(within: Self.heartbeatTimeout)
             }
         }
-    }
-
-    /// Sends one app-level ping, keeping at most a single probe outstanding. A
-    /// probe already in flight means the deadline is already running.
-    private func sendApplicationHeartbeat() async {
-        guard supportsAppHeartbeat, !isClosed, pendingHeartbeatID == nil else { return }
-        heartbeatSequence += 1
-        let id = "ios-ping-\(heartbeatSequence)"
-        pendingHeartbeatID = id
-        do {
-            try await adapter.send(.text(#"{"t":"ping","id":"\#(id)"}"#))
-        } catch {
-            pendingHeartbeatID = nil
-            fail(error)
-            return
-        }
-        armHeartbeatDeadline(for: id)
-    }
-
-    private func armHeartbeatDeadline(for id: String) {
-        heartbeatDeadlineTask?.cancel()
-        heartbeatDeadlineTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.heartbeatTimeout)
-            guard !Task.isCancelled else { return }
-            await self?.failUnansweredHeartbeat(id)
-        }
-    }
-
-    private func failUnansweredHeartbeat(_ id: String) {
-        guard pendingHeartbeatID == id, !isClosed else { return }
-        fail(WarrenRemoteClientError.requestFailed("The Host stopped answering heartbeats."))
-    }
-
-    /// Any inbound frame proves the far end is alive, so it satisfies the probe
-    /// in flight. Requiring the matching pong would close healthy sockets
-    /// whenever a slow control request delayed it behind streaming output.
-    private func noteInboundActivity() {
-        guard pendingHeartbeatID != nil || heartbeatDeadlineTask != nil else { return }
-        pendingHeartbeatID = nil
-        heartbeatDeadlineTask?.cancel()
-        heartbeatDeadlineTask = nil
     }
 
     /// Probes the transport now instead of waiting out the remaining heartbeat
@@ -320,18 +299,116 @@ private actor WarrenRemoteSocket {
     /// changed underneath it, usually holds a socket that still looks alive
     /// until the first write fails; discovering that immediately turns a
     /// minutes-long silent stall into a normal reconnect.
-    func probeNow() async {
-        guard !isClosed else { return }
-        do {
-            try await adapter.ping()
-        } catch {
-            fail(error)
-            return
+    ///
+    /// The deadline is shorter than the periodic one because the caller already
+    /// has a reason to doubt the socket.
+    func probeNow(within timeout: Duration? = nil) {
+        probe(within: timeout ?? probeTimeout)
+    }
+
+    /// The deadline for a probe after the app was away: a few of the slowest
+    /// recent round trips, bounded. Without a measurement (a Host with no app
+    /// heartbeat, or a socket younger than one heartbeat) the ceiling applies.
+    var resumeProbeTimeout: Duration {
+        guard let slowest = recentRoundTrips.max() else { return Self.resumeProbeCeiling }
+        let scaled = slowest * Self.resumeProbeRoundTrips
+        return min(max(scaled, Self.resumeProbeFloor), Self.resumeProbeCeiling)
+    }
+
+    private func recordPong(id: String?) {
+        guard let id, let sent = lastHeartbeatSent, sent.id == id else { return }
+        lastHeartbeatSent = nil
+        recentRoundTrips.append(ContinuousClock.now - sent.at)
+        if recentRoundTrips.count > Self.roundTripSampleLimit {
+            recentRoundTrips.removeFirst(recentRoundTrips.count - Self.roundTripSampleLimit)
         }
-        // The protocol ping above only reached Relay. Ask the Host too, so a
-        // foreground probe cannot report a healthy connection to a Host that
-        // stopped answering.
-        await sendApplicationHeartbeat()
+    }
+
+    /// Arms one deadline that covers both pings. Neither send is awaited here:
+    /// on a half-open socket a protocol ping's pong never arrives and its
+    /// completion only fires once TCP gives up, minutes later. Waiting for it
+    /// before arming the deadline left the connection looking healthy for that
+    /// whole time.
+    private func probe(within timeout: Duration) {
+        guard !isClosed else { return }
+        armLivenessDeadline(at: .now + timeout)
+        sendProtocolPing()
+        sendApplicationHeartbeat()
+    }
+
+    private func sendProtocolPing() {
+        guard !protocolPingInFlight else { return }
+        protocolPingInFlight = true
+        let adapter = adapter
+        Task { [weak self] in
+            do {
+                try await adapter.ping()
+                await self?.protocolPingAnswered()
+            } catch {
+                await self?.fail(error)
+            }
+        }
+    }
+
+    private func protocolPingAnswered() {
+        protocolPingInFlight = false
+        // An older Host has no application pong, so the protocol pong is the
+        // only proof available. With app-heartbeat-v1 it only proves Relay.
+        guard !supportsAppHeartbeat else { return }
+        clearLivenessDeadline()
+    }
+
+    /// Sends one app-level ping, keeping at most a single probe outstanding.
+    private func sendApplicationHeartbeat() {
+        guard supportsAppHeartbeat, !isClosed, pendingHeartbeatID == nil else { return }
+        heartbeatSequence += 1
+        let id = "ios-ping-\(heartbeatSequence)"
+        pendingHeartbeatID = id
+        lastHeartbeatSent = (id, .now)
+        let adapter = adapter
+        Task { [weak self] in
+            do {
+                try await adapter.send(.text(#"{"t":"ping","id":"\#(id)"}"#))
+            } catch {
+                await self?.fail(error)
+            }
+        }
+    }
+
+    /// Keeps the earliest deadline, so a periodic heartbeat cannot postpone a
+    /// shorter probe that is already running.
+    private func armLivenessDeadline(at deadline: ContinuousClock.Instant) {
+        if let current = livenessDeadline, current <= deadline { return }
+        livenessDeadline = deadline
+        livenessDeadlineTask?.cancel()
+        livenessDeadlineTask = Task { [weak self] in
+            try? await Task.sleep(until: deadline, clock: .continuous)
+            guard !Task.isCancelled else { return }
+            await self?.failUnansweredProbe(deadline)
+        }
+    }
+
+    private func failUnansweredProbe(_ deadline: ContinuousClock.Instant) {
+        guard livenessDeadline == deadline, !isClosed else { return }
+        let message = supportsAppHeartbeat
+            ? "The Host stopped answering heartbeats."
+            : "The connection stopped responding."
+        fail(WarrenRemoteClientError.requestFailed(message))
+    }
+
+    private func clearLivenessDeadline() {
+        pendingHeartbeatID = nil
+        livenessDeadline = nil
+        livenessDeadlineTask?.cancel()
+        livenessDeadlineTask = nil
+    }
+
+    /// Any inbound frame proves the far end is alive, so it satisfies the probe
+    /// in flight. Requiring the matching pong would close healthy sockets
+    /// whenever a slow control request delayed it behind streaming output.
+    private func noteInboundActivity() {
+        guard pendingHeartbeatID != nil || livenessDeadline != nil else { return }
+        clearLivenessDeadline()
     }
 
     private func waitForWelcome() async throws -> String {
@@ -452,8 +529,9 @@ private actor WarrenRemoteSocket {
         receiveTask = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
-        heartbeatDeadlineTask?.cancel()
-        heartbeatDeadlineTask = nil
+        livenessDeadlineTask?.cancel()
+        livenessDeadlineTask = nil
+        livenessDeadline = nil
         pendingHeartbeatID = nil
         requestTimeoutTasks.values.forEach { $0.cancel() }
         requestTimeoutTasks.removeAll()
@@ -473,8 +551,9 @@ private actor WarrenRemoteSocket {
         receiveTask = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
-        heartbeatDeadlineTask?.cancel()
-        heartbeatDeadlineTask = nil
+        livenessDeadlineTask?.cancel()
+        livenessDeadlineTask = nil
+        livenessDeadline = nil
         pendingHeartbeatID = nil
         requestTimeoutTasks.values.forEach { $0.cancel() }
         requestTimeoutTasks.removeAll()
@@ -594,6 +673,7 @@ private actor WarrenRemoteSocket {
         }
         // Heartbeats are transport bookkeeping and never reach the model.
         if type == "pong" {
+            recordPong(id: object["id"] as? String)
             return
         }
         switch type {
@@ -859,6 +939,18 @@ public actor WarrenRemoteClient {
     /// authoritative lease transition, so track it separately and restore only
     /// the claim that is still live.
     private var controlSessionID: String?
+    /// The sleep between connection attempts, held so an environment change can
+    /// end it early.
+    private var backoffWaitTask: Task<Void, Never>?
+    private var backoffResumeRequested = false
+    /// Receives the steps of each connection attempt (credential refresh, TCP
+    /// and TLS open, failures, backoff) so a slow reconnect can be attributed
+    /// to one of them. Connection states alone cannot tell them apart.
+    private var connectionPhaseObserver: (@Sendable (String) -> Void)?
+    private var probeTimeout: Duration = WarrenRemoteSocket.defaultProbeTimeout
+    private var reconnectDelay: @Sendable (Int) -> Int = { attempt in
+        WarrenRemoteClient.reconnectDelayMilliseconds(attempt: attempt)
+    }
 
     public init(
         configuration: WarrenRemoteEndpointConfiguration,
@@ -866,6 +958,7 @@ public actor WarrenRemoteClient {
         codec: WarrenWireCodec = WarrenWireCodec(),
         terminalStateFormats: [String] = [WarrenRemoteClient.replayTerminalStateFormat],
         clientID: String? = nil,
+        additionalCapabilities: [String] = [],
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
         tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil,
         relayHostIDCorrectionHandler: (@Sendable (String) -> Void)? = nil
@@ -887,9 +980,10 @@ public actor WarrenRemoteClient {
             WarrenRemoteAgentCapability.interrupt,
             WarrenRemoteAgentCapability.attachments,
             WarrenRemoteAgentCapability.goals,
+            WarrenRemoteAgentCapability.config,
             WarrenRemoteCapability.appHeartbeat,
             WarrenRemoteCapability.agentCausation,
-        ]
+        ] + additionalCapabilities
         self.clientID = clientID ?? configuration.clientID
         self.codec = codec
         self.terminalStateFormats = Set(terminalStateFormats.filter { !$0.isEmpty })
@@ -964,6 +1058,23 @@ public actor WarrenRemoteClient {
 
     public nonisolated func events() -> AsyncStream<WarrenRemoteEvent> { eventStream }
 
+    /// Shortens the liveness and backoff timings so tests do not wait them out.
+    func overrideTimingForTesting(
+        probeTimeout: Duration? = nil,
+        reconnectDelay: (@Sendable (Int) -> Int)? = nil
+    ) {
+        if let probeTimeout { self.probeTimeout = probeTimeout }
+        if let reconnectDelay { self.reconnectDelay = reconnectDelay }
+    }
+
+    public func observeConnectionPhases(_ observer: @escaping @Sendable (String) -> Void) {
+        connectionPhaseObserver = observer
+    }
+
+    private func notePhase(_ phase: String) {
+        connectionPhaseObserver?(phase)
+    }
+
     public func start() {
         guard !running else { return }
         running = true
@@ -975,6 +1086,8 @@ public actor WarrenRemoteClient {
         running = false
         connectionTask?.cancel()
         connectionTask = nil
+        backoffWaitTask?.cancel()
+        backoffWaitTask = nil
         let socket = socket
         self.socket = nil
         Task { await socket?.close() }
@@ -987,6 +1100,7 @@ public actor WarrenRemoteClient {
         self.socket = nil
         Task { await socket?.close() }
         setConnectionState(.reconnecting)
+        resumeBackoff()
     }
 
     /// Verifies the current socket instead of waiting out the remaining
@@ -994,9 +1108,46 @@ public actor WarrenRemoteClient {
     /// the connection (wake from sleep, network change, window reactivated): a
     /// healthy socket answers and nothing else happens, a dead one fails now
     /// and the connection loop reconnects.
-    public func probeConnection() async {
-        guard running, let socket else { return }
-        await socket.probeNow()
+    ///
+    /// With no socket the loop is waiting out a backoff delay that was computed
+    /// before the environment changed. That wait is cut short: the change is a
+    /// new opportunity, not the next failure in the old sequence.
+    ///
+    /// `timeout` overrides the probe deadline for a caller that knows how
+    /// likely the socket is to be dead.
+    public func probeConnection(timeout: Duration? = nil) async {
+        guard running else { return }
+        guard let socket else {
+            resumeBackoff()
+            return
+        }
+        await socket.probeNow(within: timeout)
+    }
+
+    /// The longest a resume probe waits before failing the socket. Callers
+    /// that must act on the probe's verdict wait this long at most.
+    public static let resumeProbeCeiling = WarrenRemoteSocket.resumeProbeCeiling
+
+    /// Probes the socket after the app was suspended, with a deadline scaled
+    /// to the round trips this socket has measured instead of the fixed
+    /// wake-up deadline. A socket that survived answers in one round trip and
+    /// is kept; a dead one is replaced as soon as that is evident.
+    public func probeConnectionAfterResume() async {
+        guard running else { return }
+        guard let socket else {
+            resumeBackoff()
+            return
+        }
+        let timeout = await socket.resumeProbeTimeout
+        await socket.probeNow(within: timeout)
+    }
+
+    /// Ends a pending backoff wait and restarts the delay sequence. A request
+    /// that arrives while an attempt is in flight is kept, so a failure of that
+    /// attempt retries at once instead of sleeping.
+    private func resumeBackoff() {
+        backoffResumeRequested = true
+        backoffWaitTask?.cancel()
     }
 
     public func state() -> WarrenRemoteConnectionState { connectionState }
@@ -1143,6 +1294,16 @@ public actor WarrenRemoteClient {
         if let title { params["title"] = title }
         if let runtimeKind { params["runtimeKind"] = runtimeKind }
         return try await request("session.create", params: params, decoding: WarrenRemoteSession.self)
+    }
+
+    /// Replaces a chat (ACP) Session with a terminal Session that resumes the
+    /// same provider conversation (RFC 0023 §6.12). `command` is the
+    /// provider's terminal command without resume arguments; nil uses the
+    /// provider's executable.
+    public func handoffSession(sessionID: String, command: String? = nil) async throws -> WarrenRemoteSession {
+        var params: [String: String] = ["id": sessionID]
+        if let command, !command.isEmpty { params["command"] = command }
+        return try await request("session.handoff", params: params, decoding: WarrenRemoteSession.self)
     }
 
     @discardableResult
@@ -1717,6 +1878,25 @@ public actor WarrenRemoteClient {
         return try await request("agent.goal.set", jsonParams: params, decoding: WarrenRemoteAgentCommandReceipt.self)
     }
 
+    /// Changes one agent selector published in `config.updated`
+    /// (RFC 0023 §6.11).
+    public func setAgentConfig(
+        executionID: String,
+        commandID: String,
+        configID: String,
+        value: String
+    ) async throws -> WarrenRemoteAgentCommandReceipt {
+        var params = canonicalCommandParams(
+            commandID: commandID,
+            executionID: executionID,
+            expectedVersion: nil,
+            leaseID: nil
+        )
+        params["configId"] = configID
+        params["value"] = value
+        return try await request("agent.config.set", jsonParams: params, decoding: WarrenRemoteAgentCommandReceipt.self)
+    }
+
     public func clearAgentGoal(
         executionID: String,
         commandID: String,
@@ -1793,6 +1973,8 @@ public actor WarrenRemoteClient {
 
     private func runConnectionLoop() async {
         var attempt = 0
+        var isFirstAttempt = true
+        backoffResumeRequested = false
         while running, !Task.isCancelled {
             guard let url = configuration.webSocketURL else {
                 setConnectionState(.disconnected)
@@ -1805,28 +1987,34 @@ public actor WarrenRemoteClient {
                 return
             }
             if configuration.isRelay, accessToken.isEmpty {
-                _ = await refreshRelayAccessToken()
+                notePhase("token")
+                notePhase(await refreshRelayAccessToken() ? "token-ok" : "token-failed")
                 if relayIdentityCorrectionRequested {
                     setConnectionState(.disconnected)
                     return
                 }
             }
-            setConnectionState(attempt == 0 ? .connecting : .reconnecting)
+            setConnectionState(isFirstAttempt ? .connecting : .reconnecting)
+            isFirstAttempt = false
             let adapter: any WarrenWebSocketTaskAdapter
             if !injectedTasks.isEmpty {
                 adapter = injectedTasks.removeFirst()
             } else {
+                let observer = connectionPhaseObserver
                 adapter = WarrenRemoteSocket.adapter(
                     url: url,
                     session: urlSession,
-                    maximumMessageSize: max(codec.maximumEnvelopeBytes, Self.maximumJSONMessageBytes)
+                    maximumMessageSize: max(codec.maximumEnvelopeBytes, Self.maximumJSONMessageBytes),
+                    onOpen: observer.map(Self.openReporter)
                 )
             }
+            notePhase("dial")
             let socket = WarrenRemoteSocket(
                 adapter: adapter,
                 codec: codec,
                 terminalStateFormats: terminalStateFormats,
-                welcomeTimeout: welcomeTimeout
+                welcomeTimeout: welcomeTimeout,
+                probeTimeout: probeTimeout
             )
             self.socket = socket
             negotiatedCapabilities = []
@@ -1847,6 +2035,7 @@ public actor WarrenRemoteClient {
                 for try await event in socket.events {
                     guard running, !Task.isCancelled else { return }
                     if case .disconnected(let reason) = event {
+                        notePhase("dropped")
                         emit(.disconnected(reason: reason))
                         break
                     }
@@ -1854,6 +2043,7 @@ public actor WarrenRemoteClient {
                 }
             } catch {
                 guard running, !Task.isCancelled else { return }
+                notePhase("failed(\(Self.phaseLabel(for: error)))")
                 if let error = error as? WarrenRemoteClientError,
                    error.requiresClientUpgrade {
                     if self.socket === socket { self.socket = nil }
@@ -1869,7 +2059,9 @@ public actor WarrenRemoteClient {
                 // rotate once before surfacing a reconnect error.
                 if configuration.isRelay,
                    Self.isAuthenticationFailure(error) {
+                    notePhase("token")
                     refreshedAfterAuthenticationFailure = await refreshRelayAccessToken()
+                    notePhase(refreshedAfterAuthenticationFailure ? "token-ok" : "token-failed")
                     if relayIdentityCorrectionRequested {
                         // The stored Relay identity disagreed with the Relay's own
                         // record. The owner rewrites the endpoint and restarts this
@@ -1905,10 +2097,45 @@ public actor WarrenRemoteClient {
                 attempt = 0
             }
             setConnectionState(.reconnecting)
-            let delay = Self.reconnectDelayMilliseconds(attempt: attempt)
+            if backoffResumeRequested {
+                backoffResumeRequested = false
+                attempt = 0
+                continue
+            }
+            let delay = reconnectDelay(attempt)
             attempt += 1
-            try? await Task.sleep(for: .milliseconds(delay))
+            notePhase("backoff(\(delay)ms)")
+            let wait = Task { _ = try? await Task.sleep(for: .milliseconds(delay)) }
+            backoffWaitTask = wait
+            await wait.value
+            backoffWaitTask = nil
+            if backoffResumeRequested {
+                backoffResumeRequested = false
+                attempt = 0
+            }
         }
+    }
+
+    private static func openReporter(
+        _ observe: @escaping @Sendable (String) -> Void
+    ) -> @Sendable () -> Void {
+        { observe("open") }
+    }
+
+    /// A short, log-safe name for why an attempt ended. Error descriptions can
+    /// carry URLs and Host names, so only the kind is kept.
+    private static func phaseLabel(for error: Error) -> String {
+        if let error = error as? WarrenRemoteClientError {
+            switch error {
+            case .authenticationFailed: return "auth"
+            case .hostOffline: return "host-offline"
+            case .requestTimedOut(let method): return "timeout-\(method)"
+            case .closed: return "closed"
+            default: return "client"
+            }
+        }
+        let nsError = error as NSError
+        return "\(nsError.domain == NSURLErrorDomain ? "url" : nsError.domain)\(nsError.code)"
     }
 
     private static func isAuthenticationFailure(_ error: Error) -> Bool {

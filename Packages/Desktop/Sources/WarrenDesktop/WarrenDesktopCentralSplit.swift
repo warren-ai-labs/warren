@@ -20,6 +20,9 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
     /// the user's balance instead of pinning the Terminal and giving every new
     /// point to the editor.
     @Binding var terminalRatio: Double
+    var trailingMinimumWidth: CGFloat = WarrenLayoutMetrics.editorRegionMinimumWidth
+    var defaultRatio: Double = WarrenLayoutMetrics.editorSplitDefaultRatio
+    var accessibilityName = "Terminal and editor split"
     let terminal: Terminal
     let editor: Editor
 
@@ -28,7 +31,7 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let layout = Self.layout(
+            let layout = layout(
                 terminalRatio: terminalRatio,
                 availableWidth: proxy.size.width
             )
@@ -54,17 +57,19 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
     /// Terminal is only uncomfortable. In practice the window's own minimum
     /// width grows while the region is open, so this branch is a backstop for
     /// transient layout passes rather than a state a user can sit in.
-    private static func layout(
+    private func layout(
         terminalRatio: Double,
         availableWidth: CGFloat
     ) -> Layout {
         let usableWidth = availableWidth - WarrenLayoutMetrics.editorSplitDividerWidth
         guard let clamped = WarrenLayoutMetrics.editorSplitTerminalWidth(
             proposedTerminalWidth: usableWidth * terminalRatio,
-            availableWidth: availableWidth
+            availableWidth: availableWidth,
+            trailingMinimumWidth: trailingMinimumWidth,
+            defaultRatio: defaultRatio
         ) else {
             return Layout(
-                terminalWidth: max(0, usableWidth - WarrenLayoutMetrics.editorRegionMinimumWidth)
+                terminalWidth: max(0, usableWidth - trailingMinimumWidth)
             )
         }
         return Layout(terminalWidth: clamped)
@@ -101,7 +106,7 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
                             // the raw ratio: a ratio that was clamped by the
                             // region's floor would otherwise make the first
                             // drag jump by the difference.
-                            dragStartWidth = Self.layout(
+                            dragStartWidth = layout(
                                 terminalRatio: terminalRatio,
                                 availableWidth: totalWidth
                             ).terminalWidth
@@ -109,7 +114,9 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
                         guard let dragStartWidth, usableWidth > 0 else { return }
                         guard let clamped = WarrenLayoutMetrics.editorSplitTerminalWidth(
                             proposedTerminalWidth: dragStartWidth + value.translation.width,
-                            availableWidth: totalWidth
+                            availableWidth: totalWidth,
+                            trailingMinimumWidth: trailingMinimumWidth,
+                            defaultRatio: defaultRatio
                         ) else { return }
                         terminalRatio = clamped / usableWidth
                     }
@@ -118,10 +125,10 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
                     }
             )
             .onTapGesture(count: 2) {
-                terminalRatio = WarrenLayoutMetrics.editorSplitDefaultRatio
+                terminalRatio = defaultRatio
             }
             .accessibilityElement()
-            .accessibilityLabel("Terminal and editor split")
+            .accessibilityLabel(accessibilityName)
             .accessibilityValue("\(Int((terminalRatio * 100).rounded()))% terminal")
             .accessibilityHint("Drag to resize, or double-click to reset")
             .accessibilityAdjustableAction { direction in
@@ -138,10 +145,10 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
             .warrenSemanticElement(
                 id: "central-split.resize",
                 role: .button,
-                label: "Terminal and editor split",
+                label: accessibilityName,
                 value: "\(Int((terminalRatio * 100).rounded()))% terminal",
                 action: {
-                    terminalRatio = WarrenLayoutMetrics.editorSplitDefaultRatio
+                    terminalRatio = defaultRatio
                 }
             )
     }

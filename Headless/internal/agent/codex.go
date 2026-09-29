@@ -12,12 +12,18 @@ import (
 
 type codexParser struct {
 	baseParser
-	codexModel           string
-	codexEffort          string
-	codexCallTool        map[string]string
-	codexGoalCalls       map[string]string
-	codexInteractions    map[string]string
-	codexTurnFailed      bool
+	codexModel        string
+	codexEffort       string
+	codexCallTool     map[string]string
+	codexGoalCalls    map[string]string
+	codexInteractions map[string]string
+	codexPlanCalls    map[string]struct{}
+	codexTurnFailed   bool
+	// codexTurnPlanMode and codexTurnProposal describe the running turn;
+	// codexPlanPrompt is the "Implement this plan?" picker they opened.
+	codexTurnPlanMode    bool
+	codexTurnProposal    *api.AgentEvent
+	codexPlanPrompt      *codexPlanPrompt
 	lastUserContent      string
 	lastAssistantContent string
 	lastReasoningContent string
@@ -54,6 +60,7 @@ func newCodexParser(contentLimit int) *codexParser {
 		codexCallTool:          make(map[string]string),
 		codexGoalCalls:         make(map[string]string),
 		codexInteractions:      make(map[string]string),
+		codexPlanCalls:         make(map[string]struct{}),
 		lastQueuedItemIDs:      make(map[string]struct{}),
 		lastQueuedFingerprints: make(map[string]string),
 	}
@@ -209,8 +216,11 @@ type codexPayload struct {
 	Text    string          `json:"text"`
 	Message string          `json:"message"`
 	Error   json.RawMessage `json:"error"`
-	Status  string          `json:"status"`
-	Item    struct {
+	// TurnID and CollaborationModeKind are carried by task lifecycle events.
+	TurnID                string `json:"turn_id"`
+	CollaborationModeKind string `json:"collaboration_mode_kind"`
+	Status                string `json:"status"`
+	Item                  struct {
 		Type    string          `json:"type"`
 		Content json.RawMessage `json:"content"`
 	} `json:"item"`
@@ -325,6 +335,21 @@ func codexPlanEvent(payload codexPayload, raw json.RawMessage, event api.AgentEv
 	projected.Payload["state"] = state
 
 	return projected
+}
+
+// codexUpdatePlanEvent is the Plan snapshot for one update_plan call. Codex
+// keeps a single plan per thread, so every call replaces the same identity.
+func codexUpdatePlanEvent(event api.AgentEvent, steps []codexPlanStep) api.AgentEvent {
+	items := codexPlanItemsFromSteps(steps)
+	event.ID = "codex-plan"
+	event.Type = "plan"
+	event.Payload = map[string]any{
+		"planId": "codex-plan",
+		"title":  "Plan",
+		"state":  calculatePlanState(items),
+		"items":  items,
+	}
+	return event
 }
 
 func codexPlanItemsFromSteps(steps []codexPlanStep) []map[string]any {
@@ -553,6 +578,12 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 				return nil
 			}
 			p.lastEventType = event.Type
+			if event.Type == "assistant" {
+				return p.noteCodexProposal(codexAssistantEvents(event, event.Content))
+			}
+			if event.Type == "user" {
+				return append(p.settleCodexPlanPrompt(event), event)
+			}
 			return []api.AgentEvent{event}
 		case "reasoning":
 			event.ID = payload.ID
@@ -606,16 +637,7 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 					Plan []codexPlanStep `json:"plan"`
 				}
 				if json.Unmarshal([]byte(payload.Arguments), &planArgs) == nil && len(planArgs.Plan) > 0 {
-					items := codexPlanItemsFromSteps(planArgs.Plan)
-					event.ID = "codex-plan"
-					event.Type = "plan"
-					event.Payload = map[string]any{
-						"planId": "codex-plan",
-						"title":  "Plan",
-						"state":  calculatePlanState(items),
-						"items":  items,
-					}
-					return []api.AgentEvent{event}
+					return []api.AgentEvent{codexUpdatePlanEvent(event, planArgs.Plan)}
 				}
 			}
 			if payload.Name == "spawn_agent" {
@@ -666,6 +688,10 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			p.lastEventType = "tool_call"
 			return []api.AgentEvent{event}
 		case "function_call_output", "custom_tool_call_output":
+			if _, planCall := p.codexPlanCalls[payload.CallID]; planCall {
+				delete(p.codexPlanCalls, payload.CallID)
+				return nil
+			}
 			if kind := p.codexInteractions[payload.CallID]; kind != "" {
 				output, _, outputError := codexOutputDetails(payload.Output, p.contentLimit)
 				if kind == "question" && codexUnavailableUserInput(output, outputError) {
@@ -756,6 +782,18 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 				p.tracker.MarkAttention(api.AgentAttentionInput, "question", callID, event.Timestamp)
 				return []api.AgentEvent{event}
 			}
+			var planEvents []api.AgentEvent
+			if steps, planOnly, ok := codexExecUpdatePlan(payload.Name, payload.Input); ok {
+				planEvents = append(planEvents, codexUpdatePlanEvent(event, steps))
+				if planOnly {
+					// The script's only output is update_plan's empty `{}`
+					// acknowledgement; the Plan card is the whole row.
+					if payload.CallID != "" {
+						p.codexPlanCalls[payload.CallID] = struct{}{}
+					}
+					return planEvents
+				}
+			}
 			event.ID = payload.ID
 			event.Type = "tool_call"
 			event.ToolName = canonical
@@ -773,7 +811,7 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 				}
 			}
 			p.lastEventType = "tool_call"
-			return []api.AgentEvent{event}
+			return append(planEvents, event)
 		default:
 			event.Type = "unknown"
 			event.ID = payload.ID
@@ -896,7 +934,8 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 		case "turn_aborted":
 			p.tracker.TurnInterrupted()
 			p.codexTurnFailed = false
-			return nil
+			p.codexTurnProposal = nil
+			return p.expireCodexPlanPrompt(event.Timestamp)
 		case "error":
 			message := codexErrorMessage(payload, p.contentLimit)
 			if message == "" {
@@ -919,9 +958,8 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 			p.lastAssistantContent = content
 			event.Type = "assistant"
 			event.Model = p.codexModel
-			event.Content = content
 			p.lastEventType = "assistant"
-			return []api.AgentEvent{event}
+			return p.noteCodexProposal(codexAssistantEvents(event, content))
 		case "agent_reasoning":
 			content := p.clip(firstNonEmpty(payload.Text, p.content(payload.Summary), p.content(payload.Content)))
 			if content == "" {
@@ -938,23 +976,33 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 		case "task_started":
 			p.codexTurnFailed = false
 			p.tracker.TurnStarted()
+			p.codexTurnPlanMode = strings.EqualFold(strings.TrimSpace(payload.CollaborationModeKind), codexCollaborationModePlanValue)
+			p.codexTurnProposal = nil
+			if p.codexPlanPrompt != nil {
+				p.codexPlanPrompt.closing = true
+			}
 			return nil
 		case "task_complete":
 			if p.codexTurnFailed {
 				p.codexTurnFailed = false
+				p.codexTurnProposal = nil
 				p.tracker.TurnFailed()
-				return nil
+				return p.expireCodexPlanPrompt(event.Timestamp)
 			}
 			if message := codexErrorMessage(payload, p.contentLimit); message != "" {
 				p.codexTurnFailed = true
+				p.codexTurnProposal = nil
 				p.tracker.TurnFailed()
 				event.Type = "error"
 				event.Content = p.clip(message)
 				event.Error = event.Content
-				return []api.AgentEvent{event}
+				return append(p.expireCodexPlanPrompt(event.Timestamp), event)
 			}
 			p.tracker.TurnComplete()
-			return nil
+			expired := p.expireCodexPlanPrompt(event.Timestamp)
+			// The TUI raises the picker after the turn is marked complete, so
+			// the attention is applied after TurnComplete clears it.
+			return append(expired, p.openCodexPlanPrompt(event, payload.TurnID)...)
 		case "thread_settings_applied":
 			return nil
 		default:
@@ -982,7 +1030,7 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 				event.Type = "user"
 				event.Content = content
 				p.lastEventType = "user"
-				return []api.AgentEvent{event}
+				return append(p.settleCodexPlanPrompt(event), event)
 			}
 			return nil
 		}
@@ -1297,17 +1345,6 @@ func codexReasoningContent(payload codexPayload, limit int) string {
 		return value
 	}
 	return truncate(payload.Text, limit)
-}
-
-func codexOutputString(value json.RawMessage, limit int) string {
-	var text string
-	if json.Unmarshal(value, &text) == nil {
-		return truncate(text, limit)
-	}
-	if value := contentStringLimit(value, limit); value != "" {
-		return value
-	}
-	return truncate(string(value), limit)
 }
 
 func codexOutputDetails(value json.RawMessage, limit int) (output, status, errorMessage string) {

@@ -229,6 +229,7 @@ Warren bifurcates terminal execution into two first-class tracks:
 - **Codex**: Hooks managed by Warren report `SessionStart` into `~/.warren/agent-bind/`; transcripts (JSONL) are tailed and normalized.
 - **Claude Code**: Launched with `--session-id` for deterministic transcript binding; lifecycle hooks report activity state.
 - **OpenCode**: Bound via SQLite session identity discovered after launch.
+- **ACP (Claude Code, Codex, OpenCode)**: A Session created with `agentHandler: "acp"` has no PTY. The Host is the Agent Client Protocol client of a disposable agent process launched through the login shell; the ACP stream is the only source of the timeline, turns, and approvals, the agent runs in a detached holder process that outlives Host restarts, and the Session survives agent restarts through `session/resume` or `session/load`. See [RFC 0023](docs/rfc/0023-acp-agent-sessions.md).
 
 ### 8.2 Invariants for Agent Views
 
@@ -242,7 +243,9 @@ Warren bifurcates terminal execution into two first-class tracks:
 ## 9. Session and Runtime Design
 
 A Session names a long-running Host resource. Most Sessions own a Ghostline PTY;
-a Warren Browser Session owns a Chromium instead. It is the same resource
+a Warren Browser Session owns a Chromium instead, and an ACP Session owns only
+an Agent conversation whose agent process runs in a detached holder
+(`runtimeKind: "acp"`). It is the same resource
 lifecycle, the same Tab, the same pane arrangement — only the runtime behind it
 differs, and the output is screencast frames rather than PTY bytes.
 
@@ -294,6 +297,7 @@ Window
     ├── Preset Bar (Terminal / Editor modes, Agent activity indicators)
     └── Active Workspace Content
         ├── Terminal (Ghostty Native Surface)
+        ├── Conversation (ACP Sessions; RFC 0023 §9)
         ├── Embedded Editor (code-server WebView)
         └── Browser (Chromium viewer, beside the Terminal)
 ```
@@ -305,7 +309,25 @@ Window
 - Starts a managed `code-server` process bound to a random loopback port on demand, isolated to `~/Library/Application Support/Warren/EmbeddedEditor`.
 - Uses Warren Ember dark palette, positions File Explorer on the right, and suppresses duplicate global chrome.
 
-### 10.2 Warren Browser (embedded Chromium)
+### 10.2 Inspector
+
+The Inspector is a native column beside the terminal (⌥⌘B, or the trailing
+control of the tab bar) that shows what the work in a Workspace changed. It
+takes the editor region's place in the central split; when both are asked for,
+the editor wins and the Inspector returns when the editor closes.
+
+- **Changes** and **History** read the Host's Git panel (`git.panel`,
+  `git.diff`), so they work for any Host. Changes lists the working tree with
+  inline diffs, commits everything with one message, and pulls or pushes;
+  History separates commits not yet on the main line from earlier ones and
+  opens each commit's files.
+- **Files** reads the checkout on disk, so it is offered for a local Host only.
+  The tree is what `git ls-files` lists (ignored files stay out); a file opens
+  in a light native editor that saves with ⌘S. Heavy editing stays in the
+  person's IDE.
+- The open state is one switch for every Workspace, like the sidebar.
+
+### 10.3 Warren Browser (embedded Chromium)
 
 The browser is a **Session**, not a client region. It is created with
 `browser.session.create`, has a durable record, an action API, and a screencast —
@@ -332,7 +354,7 @@ resource.
   is selected. Closing it takes the viewer off screen; the browser keeps running
   and stays reachable as an ordinary Tab.
 
-### 10.3 Raycast Integration
+### 10.4 Raycast Integration
 
 - Warren registers the `warren://terminal?group=Inbox` URI protocol and provides a dedicated Raycast extension and Script Command fallback.
 - External launchers can trigger immediate terminal opening without bringing up window chrome manually.

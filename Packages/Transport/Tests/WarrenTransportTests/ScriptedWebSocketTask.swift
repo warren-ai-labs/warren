@@ -22,6 +22,8 @@ actor ScriptedWebSocketTask: WarrenWebSocketTaskAdapter {
     private var activeReceiveCount = 0
     private var maximumConcurrentReceives = 0
     private var receiveStartedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var pingsHang = false
+    private var pingWaiters: [CheckedContinuation<Void, Error>] = []
 
     func resume() async {
         guard !cancelled else { return }
@@ -34,6 +36,21 @@ actor ScriptedWebSocketTask: WarrenWebSocketTaskAdapter {
         cancelled = true
         cancelCount += 1
         resumeWaiter(throwing: ScriptedWebSocketTaskError.cancelled)
+        let pings = pingWaiters
+        pingWaiters.removeAll()
+        pings.forEach { $0.resume(throwing: ScriptedWebSocketTaskError.cancelled) }
+    }
+
+    /// Models a half-open socket: the pong never arrives, and the ping only
+    /// completes once the task is torn down.
+    func ping() async throws {
+        guard pingsHang else { return }
+        guard !cancelled else { throw ScriptedWebSocketTaskError.cancelled }
+        try await withCheckedThrowingContinuation { pingWaiters.append($0) }
+    }
+
+    func hangPings() {
+        pingsHang = true
     }
 
     func send(_ message: WarrenWebSocketMessage) async throws {

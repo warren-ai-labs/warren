@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -139,6 +140,14 @@ type AgentGoalClearCommand struct {
 	AgentCommand
 }
 
+// AgentConfigSetCommand changes one session selector an agent published in
+// config.updated, such as the model or the permission mode (RFC 0023 §6.11).
+type AgentConfigSetCommand struct {
+	AgentCommand
+	ConfigID string `json:"configId"`
+	Value    string `json:"value"`
+}
+
 type AgentAttachmentPrepareCommand struct {
 	AgentCommand
 	Name   string `json:"name"`
@@ -221,6 +230,56 @@ type AgentEventsHistoryResult struct {
 	HeadSequence      uint64                `json:"headSequence"`
 	HasMore           bool                  `json:"hasMore"`
 	RetainedFrom      uint64                `json:"retainedFromSequence,omitempty"`
+	// StateEvents carries, for each type in CanonicalStateEventTypes, the
+	// latest event older than the page. A page of recent history then still
+	// knows the Session's selectors, plan, and context, however far back
+	// they were last published. Clients merge them by sequence like any
+	// other event.
+	StateEvents []CanonicalAgentEvent `json:"stateEvents,omitempty"`
+}
+
+// CanonicalStateEventTypes are the events whose latest value is the
+// Session's current state rather than a moment in its history.
+var CanonicalStateEventTypes = []string{"config.updated", "plan.updated", "context.updated", "commands.updated"}
+
+// LatestCanonicalStateEvents picks, from events in sequence order, the latest
+// event of each state type with a sequence below `before` (all when 0).
+func LatestCanonicalStateEvents(events []CanonicalAgentEvent, before uint64) []CanonicalAgentEvent {
+	latest := map[string]CanonicalAgentEvent{}
+	for _, event := range events {
+		if before > 0 && event.Sequence >= before {
+			break
+		}
+		for _, stateType := range CanonicalStateEventTypes {
+			if event.Type == stateType {
+				latest[stateType] = event
+			}
+		}
+	}
+	return orderedStateEvents(latest)
+}
+
+func orderedStateEvents(latest map[string]CanonicalAgentEvent) []CanonicalAgentEvent {
+	var result []CanonicalAgentEvent
+	for _, stateType := range CanonicalStateEventTypes {
+		if event, ok := latest[stateType]; ok {
+			result = append(result, event)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Sequence < result[j].Sequence })
+	return result
+}
+
+// StateEventsBound is the sequence a page's state events must precede: the
+// page's first event, or just past the cursor an empty page started from.
+func StateEventsBound(page []CanonicalAgentEvent, after, head uint64) uint64 {
+	if len(page) > 0 {
+		return page[0].Sequence
+	}
+	if after > 0 {
+		return after + 1
+	}
+	return head + 1
 }
 
 type AgentEventsSubscriptionRequest struct {
@@ -247,6 +306,8 @@ type AgentEventsSubscriptionResult struct {
 	HeadSequence      uint64 `json:"headSequence"`
 	HasMore           bool   `json:"hasMore"`
 	RetainedFrom      uint64 `json:"retainedFromSequence,omitempty"`
+	// StateEvents: see AgentEventsHistoryResult.StateEvents.
+	StateEvents []CanonicalAgentEvent `json:"stateEvents,omitempty"`
 }
 
 // CanonicalAgentEventFromObservation is the sole adapter from a provider
@@ -452,10 +513,6 @@ func putAgentPayload(payload map[string]any, key string, value any) {
 		}
 	}
 	payload[key] = value
-}
-
-func canonicalAgentEventType(value string, delta bool, roles ...string) string {
-	return canonicalAgentEventTypeForPayload(value, delta, nil, roles...)
 }
 
 // canonicalAgentEventTypeForPayload is the only place where legacy provider

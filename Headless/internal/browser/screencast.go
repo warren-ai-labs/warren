@@ -74,13 +74,6 @@ func (s *Session) dropSubscribers() {
 	}
 }
 
-// sequenceNow returns the current frame sequence.
-func (s *Session) sequenceNow() uint64 {
-	s.subscriberMu.Lock()
-	defer s.subscriberMu.Unlock()
-	return s.sequence
-}
-
 // acceptScreencastFrame reports whether a screencast frame carries a change.
 //
 // Chrome re-captures the surface for a still, and that capture comes back as a

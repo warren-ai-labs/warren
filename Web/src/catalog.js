@@ -224,6 +224,9 @@ function sessionToTab(session = {}) {
     process: session.process || session.command || "",
     commandLine: session.commandLine || "",
     directory: session.directory || "",
+    // An ACP Session has no terminal; the runtime kind says so before any
+    // Agent event has arrived.
+    runtimeKind: session.runtimeKind || "",
     agentSessionId: session.agentSessionId || "",
     agentExecutionId: session.agentExecutionId || "",
     transcriptPath: session.transcriptPath || "",

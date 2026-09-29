@@ -187,7 +187,9 @@ func TestGitPanelReportsBackgroundRefresh(t *testing.T) {
 	cache := service.panelCacheFor()
 	cache.mu.Lock()
 	element := cache.index[workspaceID]
-	element.Value.(*panelCacheEntry).loadedAt = time.Now().Add(-panelRevalidateAfter - time.Minute)
+	stale := time.Now().Add(-panelRevalidateAfter - time.Minute)
+	element.Value.(*panelCacheEntry).loadedAt = stale
+	element.Value.(*panelCacheEntry).remoteLoadedAt = stale
 	cache.mu.Unlock()
 
 	panel, err := service.GitPanel(ctx, workspaceID, false, false)
@@ -240,5 +242,30 @@ func TestGitPanelAheadOfMain(t *testing.T) {
 	}
 	if panel.AheadOfMain != 2 {
 		t.Fatalf("ahead of main = %d, want 2", panel.AheadOfMain)
+	}
+}
+
+func TestPanelCacheRevalidatesLocalStateSoonAndRemoteStateLater(t *testing.T) {
+	cache := newPanelCache(4)
+	pr := &api.GitPullRequest{Number: 7, Title: "Open"}
+	cache.Set("a", api.GitPanel{WorkspaceID: "a", PullRequest: pr})
+	if got := cache.Revalidation("a", time.Hour, time.Hour); got != panelRevalidateNone {
+		t.Fatalf("fresh entry = %v, want none", got)
+	}
+	// Edits made outside Warren only need the local part re-read.
+	if got := cache.Revalidation("a", time.Hour, 0); got != panelRevalidateLocal {
+		t.Fatalf("stale local state = %v, want local", got)
+	}
+	cache.FinishRevalidate("a")
+	version := cache.Version("a")
+	if !cache.SetLocalIfVersion("a", api.GitPanel{WorkspaceID: "a", Changes: []api.GitChange{{Path: "README.md", Status: "M"}}}, version) {
+		t.Fatal("local refresh was rejected")
+	}
+	panel, _ := cache.Get("a")
+	if len(panel.Changes) != 1 || panel.PullRequest == nil || panel.PullRequest.Number != 7 {
+		t.Fatalf("local refresh must add the change and keep the pull request: %+v", panel)
+	}
+	if got := cache.Revalidation("a", 0, time.Hour); got != panelRevalidateFull {
+		t.Fatalf("stale remote state = %v, want full", got)
 	}
 }

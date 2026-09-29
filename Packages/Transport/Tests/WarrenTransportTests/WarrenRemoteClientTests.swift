@@ -1014,6 +1014,120 @@ final class WarrenRemoteClientTests: XCTestCase {
         await client.stop()
     }
 
+    // After sleep or a network switch the socket is often half-open: the pong
+    // never arrives and URLSession only completes the ping once TCP gives up.
+    // The probe must still fail the socket on its own deadline.
+    func testProbeReplacesAHalfOpenSocketWhosePingNeverReturns() async throws {
+        let welcome = "{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\",\"app-heartbeat-v1\"]}"
+        let first = ScriptedWebSocketTask()
+        let second = ScriptedWebSocketTask()
+        for task in [first, second] {
+            await task.enqueue(.text(welcome))
+            await task.enqueue(.text(rosterJSON(revision: 1)))
+        }
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            tasks: [first, second],
+            capabilities: ["roster-delta", WarrenRemoteCapability.appHeartbeat]
+        )
+        await client.overrideTimingForTesting(probeTimeout: .milliseconds(200), reconnectDelay: { _ in 0 })
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        await first.hangPings()
+        await client.probeConnection()
+        try await waitUntil { await second.resumeCallCount == 1 }
+        try await waitUntil { await client.state() == .connected }
+        let firstCancelled = await first.cancelCallCount
+        XCTAssertEqual(firstCancelled, 1)
+        await client.stop()
+    }
+
+    // A caller that expects a dead socket passes its own, shorter deadline.
+    func testProbeTimeoutOverridesTheDefaultDeadline() async throws {
+        let first = ScriptedWebSocketTask()
+        let second = ScriptedWebSocketTask()
+        for task in [first, second] {
+            await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
+            await task.enqueue(.text(rosterJSON(revision: 1)))
+        }
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            tasks: [first, second]
+        )
+        await client.overrideTimingForTesting(probeTimeout: .seconds(60), reconnectDelay: { _ in 0 })
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        await first.hangPings()
+        await client.probeConnection(timeout: .milliseconds(200))
+        try await waitUntil { await second.resumeCallCount == 1 }
+        await client.stop()
+    }
+
+    // Returning to the foreground must not wait out the wake-up deadline: with
+    // no round trip measured yet the resume probe is bounded by its ceiling,
+    // so a dead socket is replaced in well under two seconds.
+    func testResumeProbeReplacesADeadSocketWithinItsCeiling() async throws {
+        let first = ScriptedWebSocketTask()
+        let second = ScriptedWebSocketTask()
+        for task in [first, second] {
+            await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
+            await task.enqueue(.text(rosterJSON(revision: 1)))
+        }
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            tasks: [first, second]
+        )
+        await client.overrideTimingForTesting(probeTimeout: .seconds(60), reconnectDelay: { _ in 0 })
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        await first.hangPings()
+        let started = ContinuousClock.now
+        await client.probeConnectionAfterResume()
+        try await waitUntil(timeout: .seconds(3)) { await second.resumeCallCount == 1 }
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(2))
+        await client.stop()
+    }
+
+    // A probe that finds no socket means the loop is sleeping out a delay chosen
+    // before the environment changed. Waking must not wait for it.
+    func testProbeWithoutASocketEndsTheBackoffWait() async throws {
+        let failing = ScriptedWebSocketTask()
+        await failing.failReceive()
+        let healthy = ScriptedWebSocketTask()
+        await healthy.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\"]}"))
+        await healthy.enqueue(.text(rosterJSON(revision: 1)))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            tasks: [failing, healthy]
+        )
+        await client.overrideTimingForTesting(reconnectDelay: { _ in 60_000 })
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .reconnecting }
+        // Let the loop reach its sleep.
+        try await Task.sleep(for: .milliseconds(50))
+        let resumedBeforeProbe = await healthy.resumeCallCount
+        XCTAssertEqual(resumedBeforeProbe, 0)
+
+        await client.probeConnection()
+        try await waitUntil { await client.state() == .connected }
+        await client.stop()
+    }
+
     private func connectedClient() async throws -> (
         WarrenRemoteClient,
         ScriptedWebSocketTask,

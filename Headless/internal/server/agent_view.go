@@ -100,7 +100,7 @@ func (s *Service) AgentViewCapabilities() []string {
 	}
 	registry := s.agentProviderRegistry()
 	if nonNilInterface(s.AgentFinder) || (registry != nil && len(registry.Kinds()) > 0) {
-		capabilities = append(capabilities, api.CapabilityAgentTimeline)
+		capabilities = append(capabilities, api.CapabilityAgentTimeline, api.CapabilityAgentStreams)
 	}
 	if nonNilInterface(s.AgentController) || s.hasRuntimeAdapter() {
 		capabilities = append(capabilities,
@@ -121,6 +121,11 @@ func (s *Service) AgentViewCapabilities() []string {
 	// Host-local file and includes its path in the provider prompt.
 	if nonNilInterface(s.AgentController) || s.hasRuntimeAdapter() || (registry != nil && len(registry.Kinds()) > 0) {
 		capabilities = append(capabilities, api.CapabilityAgentAttachments)
+	}
+	// ACP Sessions publish selectors and accept agent.config.set (RFC 0023
+	// §6.11); Session projection narrows this to them.
+	if registry != nil && registryHasHandler(registry, AgentHandlerACP) {
+		capabilities = append(capabilities, api.CapabilityAgentConfig)
 	}
 	seen := make(map[string]struct{}, len(capabilities))
 	result := make([]string, 0, len(capabilities))
@@ -417,21 +422,6 @@ func agentActionFingerprint(value any) (string, error) {
 	}
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:]), nil
-}
-
-func (s *Service) cachedAgentActionFingerprint(key string) (string, bool) {
-	s.ensureAgentViewState()
-	s.agentViewMu.Lock()
-	defer s.agentViewMu.Unlock()
-	fingerprint, ok := s.agentActionFingerprints[key]
-	return fingerprint, ok
-}
-
-func (s *Service) rememberAgentActionFingerprint(key, fingerprint string) {
-	s.ensureAgentViewState()
-	s.agentViewMu.Lock()
-	s.agentActionFingerprints[key] = fingerprint
-	s.agentViewMu.Unlock()
 }
 
 func (s *Service) finishAgentAction(key string, call *agentActionCall, result any, err error) {
@@ -782,18 +772,6 @@ func (s *Service) cleanupAgentAttachments() {
 	}
 }
 
-func (s *Service) attachmentReady(sessionID, attachmentID string) bool {
-	s.ensureAgentViewState()
-	s.agentViewMu.Lock()
-	defer s.agentViewMu.Unlock()
-	for _, upload := range s.agentUploads {
-		if upload.sessionID == sessionID && upload.attachmentID == attachmentID && upload.state == "ready" && time.Now().Before(upload.expiresAt) {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *Service) attachmentReferenceReady(sessionID string, reference api.AgentAttachmentRef) error {
 	sessionID = strings.TrimSpace(sessionID)
 	attachmentID := strings.TrimSpace(reference.AttachmentID)
@@ -1006,10 +984,17 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 	// not always request.Text: the legacy path rewrites the body for
 	// attachments. Correlation matches against this value, not the client's.
 	injectedText := request.Text
+	correlated := false
 	if handle := s.currentAgentHandle(request.Session); handle != nil {
 		if err := handle.SendMessage(ctx, request); err != nil {
 			s.finishAgentAction(actionKey, call, nil, err)
 			return api.AgentMessageSendResult{}, err
+		}
+		// A handle that reports the user message itself records the
+		// correlation before that report; recording it again here would leave
+		// a stale entry that could claim a later identical message.
+		if self, ok := handle.(interface{ correlatesOwnMessages() bool }); ok && self.correlatesOwnMessages() {
+			correlated = true
 		}
 	} else if controller := s.AgentController; nonNilInterface(controller) {
 		if err := controller.SendMessage(ctx, request); err != nil {
@@ -1036,7 +1021,10 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 				return api.AgentMessageSendResult{}, err
 			}
 		}
-		err = sendAgentMessageInput(ctx, runtime, session.Runtime, text)
+		err = dismissCodexPlanPrompt(ctx, runtime, session.Runtime, status)
+		if err == nil {
+			err = sendAgentMessageInput(ctx, runtime, session.Runtime, text)
+		}
 		unlock()
 		if err != nil {
 			s.finishAgentAction(actionKey, call, nil, err)
@@ -1046,7 +1034,9 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 	}
 	// Registered only after the provider accepted the injection, so a failed
 	// send cannot claim a later message's transcript echo.
-	s.recordAgentMessageCorrelation(request.Session, request.ClientMessageID, injectedText)
+	if !correlated {
+		s.recordAgentMessageCorrelation(request.Session, request.ClientMessageID, injectedText)
+	}
 	result := api.AgentMessageSendResult{Accepted: true, Session: request.Session, ClientMessageID: request.ClientMessageID}
 	s.agentViewMu.Lock()
 	s.agentMessageResults[cacheKey] = result
@@ -1573,8 +1563,8 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 		}
 	} else {
 		// Legacy transcript watchers do not have a lifecycle handle, but Codex
-		// still has a bounded PTY interaction adapter. Keep other providers
-		// read-only until their prompt protocol is explicitly implemented.
+		// and Claude still have bounded PTY interaction adapters. Keep other
+		// providers read-only until their prompt protocol is implemented.
 		session, _ := s.Session(request.Session)
 		family := normalizeProviderKind(session.AgentProvider)
 		if family == "" {
@@ -1591,8 +1581,9 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 			s.finishAgentAction(actionKey, call, nil, err)
 			return api.AgentInteractionResult{}, err
 		}
+		payload := s.agentInteractionPayload(request.Session, request.RequestID, request.Kind)
 		unlock := s.lockAgentSessionAction(request.Session)
-		err := sendAgentInteractionInput(ctx, runtime, session.Runtime, request)
+		err := sendProviderInteractionInput(ctx, runtime, session.Runtime, family, request, payload)
 		unlock()
 		if err != nil {
 			s.finishAgentAction(actionKey, call, nil, err)
@@ -1600,8 +1591,15 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 		}
 		shouldRecordResolved = false
 	}
+	planPrompt := isCodexPlanPrompt(request.Kind, s.agentInteractionPayload(request.Session, request.RequestID, request.Kind))
+	if planPrompt && codexPlanPromptSettledByHost(request) {
+		shouldRecordResolved = true
+	}
 	if shouldRecordResolved {
 		s.recordAgentInteractionResolved(request)
+	}
+	if planPrompt {
+		s.settleCodexPlanPromptAttention(request.Session)
 	}
 	result := api.AgentInteractionResult{Accepted: true, Session: request.Session, RequestID: request.RequestID, Kind: request.Kind}
 	s.agentViewMu.Lock()
@@ -1665,7 +1663,7 @@ func (s *Service) setAgentGoal(ctx context.Context, request api.AgentGoalSetRequ
 		}
 	} else {
 		session, _ := s.Session(request.Session)
-		if !tuiSupportsAgentInteractions(session.AgentProvider) && !tuiSupportsAgentInteractions(session.Kind) {
+		if !tuiSupportsAgentGoals(session.AgentProvider) && !tuiSupportsAgentGoals(session.Kind) {
 			return api.AgentGoalResult{}, errors.New("agent goal transport is unavailable for this provider")
 		}
 		runtime := s.runtimeFor(session)
@@ -1710,7 +1708,7 @@ func (s *Service) clearAgentGoal(ctx context.Context, request api.AgentGoalClear
 		}
 	} else {
 		session, _ := s.Session(request.Session)
-		if !tuiSupportsAgentInteractions(session.AgentProvider) && !tuiSupportsAgentInteractions(session.Kind) {
+		if !tuiSupportsAgentGoals(session.AgentProvider) && !tuiSupportsAgentGoals(session.Kind) {
 			return api.AgentGoalResult{}, errors.New("agent goal transport is unavailable for this provider")
 		}
 		runtime := s.runtimeFor(session)
@@ -1728,11 +1726,18 @@ func (s *Service) clearAgentGoal(ctx context.Context, request api.AgentGoalClear
 }
 
 func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionResponse) {
+	s.recordAgentInteractionTerminal(request, "resolved")
+}
+
+// recordAgentInteractionTerminal records a Host-observed end of an
+// interaction: `resolved` for an answer, `expired` for a request withdrawn
+// without one.
+func (s *Service) recordAgentInteractionTerminal(request api.AgentInteractionResponse, state string) {
 	s.lazyInit()
 	// A provider-native bridge can emit interaction.resolved after the Host
-	// accepted this response. If the durable projection already contains that
+	// accepted this response. If the durable projection already contains a
 	// terminal state, the client must see one resolution row, not two cards.
-	if projection, found := s.canonicalInteraction(request.Session, request.RequestID); found && projection.state == "resolved" {
+	if projection, found := s.canonicalInteraction(request.Session, request.RequestID); found && (projection.state == "resolved" || projection.state == "expired") {
 		return
 	}
 	s.agentsMu.Lock()
@@ -1742,15 +1747,10 @@ func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionRes
 		return
 	}
 	entry.mu.Lock()
-	for _, existing := range entry.canonicalEvents {
-		if existing.Type != "interaction.resolved" {
-			continue
-		}
-		if canonicalInteractionEventMatchesID(existing, request.RequestID) {
-			entry.mu.Unlock()
-			s.agentsMu.Unlock()
-			return
-		}
+	if canonicalEntryHasTerminalInteraction(entry, request.RequestID) {
+		entry.mu.Unlock()
+		s.agentsMu.Unlock()
+		return
 	}
 	streamID := strings.TrimSpace(entry.executionID)
 	if streamID == "" {
@@ -1765,17 +1765,22 @@ func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionRes
 		"interactionId": request.RequestID,
 		"requestId":     request.RequestID,
 		"kind":          request.Kind,
-		"state":         "resolved",
+		"state":         state,
 		"response":      request.Response,
 	}
 	now := time.Now().UTC()
 	canonicalEvent := api.CanonicalAgentEvent{
-		EventID:    store.NewID(),
-		Type:       "interaction.resolved",
-		OccurredAt: now,
-		RecordedAt: now,
-		StreamID:   streamID,
-		Payload:    payload,
+		EventID:     store.NewID(),
+		Type:        "interaction." + state,
+		OccurredAt:  now,
+		RecordedAt:  now,
+		StreamID:    streamID,
+		ExecutionID: streamID,
+		// The Host itself observed this end of the interaction: it relayed the
+		// answer, or withdrew the request. Clients reject an envelope without
+		// an origin, which dropped the whole history page containing it.
+		Origin:  api.AgentEventOrigin{Kind: "host", Confidence: "native"},
+		Payload: payload,
 	}
 	// Native controllers resolve an interaction locally and therefore bypass
 	// the provider-observation path that normally inherits the request schema.
@@ -1796,7 +1801,7 @@ func (s *Service) recordAgentInteractionResolved(request api.AgentInteractionRes
 	entry.mu.Unlock()
 	s.agentsMu.Unlock()
 	if appendErr != nil {
-		s.logWarn("append canonical interaction.resolved", "session", request.Session, "error", appendErr)
+		s.logWarn("append canonical interaction terminal", "session", request.Session, "state", state, "error", appendErr)
 		return
 	}
 	s.broadcastCanonicalAgentIncrements(request.Session, canonical, streamID, streamID)
@@ -2045,4 +2050,15 @@ func (s *Service) agentInteractionState(sessionID, requestID, kind string) (stri
 		return state, true
 	}
 	return "", false
+}
+
+func registryHasHandler(registry *AgentProviderRegistry, handler string) bool {
+	for _, kind := range registry.Kinds() {
+		for _, candidate := range registry.HandlerKinds(kind) {
+			if candidate == handler {
+				return true
+			}
+		}
+	}
+	return false
 }

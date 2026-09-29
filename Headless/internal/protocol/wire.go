@@ -58,6 +58,8 @@ var Capabilities = []string{
 	"agent-interrupt-v1",
 	"agent-attachments-v1",
 	"agent-goals-v1",
+	"agent-config-v1",
+	"agent-streams-v1",
 	"browser-v1",
 }
 

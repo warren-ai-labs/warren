@@ -285,7 +285,7 @@ view/PTY size agreement after warm reattach rather than history replay.
 
 - **Open — not yet reproduced on demand.** Diagnostics added in
   `Headless/internal/server/http.go` (`subscribe: step`) and the join bounds
-  in `service.go` (`stopCursorOutputWithin`) help rule out a subscribe stall
+  in `output_cursor.go` (`stopCursorOutputWithin`) help rule out a subscribe stall
   as the trigger; the misalignment itself is a rendering/size agreement issue,
   not a stall.
 - Candidate fix (deferred until repro): after `attach_complete`, forward the

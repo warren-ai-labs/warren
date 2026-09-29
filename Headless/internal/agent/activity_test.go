@@ -113,6 +113,25 @@ func TestActivityTrackerTurnFailedStaysFailed(t *testing.T) {
 	}
 }
 
+func TestActivityTrackerToolErrorKeepsTurnWorking(t *testing.T) {
+	tracker := NewActivityTracker()
+
+	tracker.Observe(api.AgentEvent{Type: "user"})
+	tracker.Observe(api.AgentEvent{Type: "tool_call"})
+	tracker.Observe(api.AgentEvent{Type: "tool_output", ToolStatus: "error"})
+	if got := tracker.Activity(); got != api.AgentActivityWorking {
+		t.Fatalf("after tool error = %q, want working", got)
+	}
+	if turns := tracker.DrainTurns(); len(turns) != 1 || turns[0].Status != api.AgentTurnStarted {
+		t.Fatalf("turns after tool error = %#v, want only the start", turns)
+	}
+
+	tracker.Observe(api.AgentEvent{Type: "assistant", StopReason: "end_turn"})
+	if got := tracker.Activity(); got != api.AgentActivityReady {
+		t.Fatalf("after end_turn = %q, want ready", got)
+	}
+}
+
 func TestActivityTrackerIgnoresSidechains(t *testing.T) {
 	tracker := NewActivityTracker()
 

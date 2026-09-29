@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -322,3 +323,82 @@ func hasEnvValue(env []string, key, value string) bool {
 	}
 	return false
 }
+
+// CreateProcess starts a PTY whose process is argv itself rather than an
+// interactive shell, so its output is only the command's and its exit status
+// is the command's (RFC 0023 §6.6).
+func (r *GhostlineRuntime) CreateProcess(ctx context.Context, name, directory string, argv, env []string) error {
+	if len(argv) == 0 {
+		return errors.New("process argv is required")
+	}
+	sessionEnv := append([]string(nil), env...)
+	if !hasEnv(sessionEnv, "TERM") || hasEnvValue(sessionEnv, "TERM", "dumb") {
+		sessionEnv = append(sessionEnv, "TERM="+runtime.DefaultTerm)
+	}
+	if terminfoDir := runtime.BundledTerminfoDir(); terminfoDir != "" && !hasEnv(sessionEnv, "TERMINFO") {
+		sessionEnv = append(sessionEnv, "TERMINFO="+terminfoDir)
+	}
+	session, err := r.client.Start(ctx, ghostline.SessionOptions{
+		Name:    name,
+		Process: ghostline.ProcessSpec{Path: argv[0], Args: argv[1:], Directory: directory, Environment: sessionEnv},
+	})
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.sessions[name] = session
+	r.mu.Unlock()
+	return nil
+}
+
+// ProcessOutput reads the process's raw output from its first retained byte
+// until the process ends.
+func (r *GhostlineRuntime) ProcessOutput(ctx context.Context, name string) (io.ReadCloser, error) {
+	session, err := r.session(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("ghostline session %s: %w", name, err)
+	}
+	return session.Output(ctx, ghostline.Cursor{})
+}
+
+// WaitProcess blocks until the process ends and reports how.
+func (r *GhostlineRuntime) WaitProcess(ctx context.Context, name string) (RuntimeExit, error) {
+	session, err := r.session(ctx, name)
+	if err != nil {
+		return RuntimeExit{}, fmt.Errorf("ghostline session %s: %w", name, err)
+	}
+	waitErr := session.Wait(ctx)
+	if ctx.Err() != nil {
+		return RuntimeExit{}, ctx.Err()
+	}
+	status, statusErr := session.Status(ctx)
+	if statusErr != nil {
+		return RuntimeExit{}, statusErr
+	}
+	if status.Exit == nil {
+		var exitErr *ghostline.ExitError
+		if errors.As(waitErr, &exitErr) {
+			status.Exit = exitErr
+		} else {
+			return RuntimeExit{Code: 0}, nil
+		}
+	}
+	if status.Exit.Unknown {
+		return RuntimeExit{Code: -1}, nil
+	}
+	return RuntimeExit{Code: status.Exit.Code, Signal: status.Exit.Signal}, nil
+}
+
+// TerminateProcess ends the process but keeps its session and output.
+func (r *GhostlineRuntime) TerminateProcess(ctx context.Context, name string) error {
+	session, err := r.session(ctx, name)
+	if errors.Is(err, ghostline.ErrSessionNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return session.Terminate(ctx)
+}
+
+var _ ProcessRuntime = (*GhostlineRuntime)(nil)

@@ -479,7 +479,9 @@ public enum WarrenRelayPairingClient {
         request.httpMethod = "POST"
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: String] = ["invite_id": pairing.inviteID]
+        // The invite travels in the path. Relay decodes this body strictly, so
+        // repeating it here fails the exchange with "invalid request".
+        var body: [String: String] = [:]
         if let clientID, !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             body["client_id"] = clientID
         }
@@ -1009,6 +1011,13 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         /// Agent activity belongs only to Sessions backed by a Warren Agent.
         /// Dedicated Agent Sessions identify their provider by kind, while a
         /// shell can become Agent-backed after Warren records its binding.
+        /// An ACP Session: an Agent driven over the Agent Client Protocol
+        /// with no terminal. Its only surface is the Conversation view.
+        public var isConversation: Bool {
+            runtimeKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "acp"
+                || agentHandler?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "acp"
+        }
+
         public var isAgentBacked: Bool {
             if let agentProvider,
                !agentProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -1645,6 +1654,13 @@ public enum WarrenRemoteAgentCapability {
     public static let interrupt = "agent-interrupt-v1"
     public static let attachments = "agent-attachments-v1"
     public static let goals = "agent-goals-v1"
+    /// The Session's agent publishes selectors (model, mode) in
+    /// `config.updated` and accepts `agent.config.set`.
+    public static let config = "agent-config-v1"
+    /// One connection keeps an Agent stream for every Session it subscribes
+    /// to. Connection-level, and opt-in: a client that assumes each subscribe
+    /// replaces the last must not advertise it.
+    public static let streams = "agent-streams-v1"
 }
 
 public enum WarrenRemoteCapability {
@@ -2088,6 +2104,10 @@ public struct WarrenRemoteAgentEventsHistoryResult: Codable, Equatable, Sendable
     public let headSequence: UInt64
     public let hasMore: Bool
     public let retainedFromSequence: UInt64?
+    /// The latest selectors, plan, and context older than the page, so a
+    /// page of recent history still knows the Session's current state.
+    /// They belong to the conversation projection, not to the page's range.
+    public let stateEvents: [WarrenRemoteAgentEvent]
 
     public init(
         streamID: String,
@@ -2096,7 +2116,8 @@ public struct WarrenRemoteAgentEventsHistoryResult: Codable, Equatable, Sendable
         nextAfterSequence: UInt64? = nil,
         headSequence: UInt64 = 0,
         hasMore: Bool = false,
-        retainedFromSequence: UInt64? = nil
+        retainedFromSequence: UInt64? = nil,
+        stateEvents: [WarrenRemoteAgentEvent] = []
     ) {
         self.streamID = streamID
         self.executionID = executionID
@@ -2105,6 +2126,19 @@ public struct WarrenRemoteAgentEventsHistoryResult: Codable, Equatable, Sendable
         self.headSequence = headSequence
         self.hasMore = hasMore
         self.retainedFromSequence = retainedFromSequence
+        self.stateEvents = stateEvents
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        streamID = try container.decode(String.self, forKey: .streamID)
+        executionID = try container.decodeIfPresent(String.self, forKey: .executionID)
+        events = try container.decodeIfPresent([WarrenRemoteAgentEvent].self, forKey: .events) ?? []
+        nextAfterSequence = try container.decodeIfPresent(UInt64.self, forKey: .nextAfterSequence)
+        headSequence = try container.decodeIfPresent(UInt64.self, forKey: .headSequence) ?? 0
+        hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
+        retainedFromSequence = try container.decodeIfPresent(UInt64.self, forKey: .retainedFromSequence)
+        stateEvents = try container.decodeIfPresent([WarrenRemoteAgentEvent].self, forKey: .stateEvents) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2115,6 +2149,7 @@ public struct WarrenRemoteAgentEventsHistoryResult: Codable, Equatable, Sendable
         case headSequence
         case hasMore
         case retainedFromSequence
+        case stateEvents
     }
 }
 
@@ -2130,6 +2165,8 @@ public struct WarrenRemoteAgentEventsSubscriptionResult: Codable, Equatable, Sen
     public let headSequence: UInt64
     public let hasMore: Bool
     public let retainedFromSequence: UInt64?
+    /// See `WarrenRemoteAgentEventsHistoryResult.stateEvents`.
+    public let stateEvents: [WarrenRemoteAgentEvent]
 
     public init(
         streamID: String,
@@ -2140,7 +2177,8 @@ public struct WarrenRemoteAgentEventsSubscriptionResult: Codable, Equatable, Sen
         nextAfterSequence: UInt64? = nil,
         headSequence: UInt64 = 0,
         hasMore: Bool = false,
-        retainedFromSequence: UInt64? = nil
+        retainedFromSequence: UInt64? = nil,
+        stateEvents: [WarrenRemoteAgentEvent] = []
     ) {
         self.streamID = streamID
         self.executionID = executionID
@@ -2151,6 +2189,7 @@ public struct WarrenRemoteAgentEventsSubscriptionResult: Codable, Equatable, Sen
         self.headSequence = headSequence
         self.hasMore = hasMore
         self.retainedFromSequence = retainedFromSequence
+        self.stateEvents = stateEvents
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2161,6 +2200,7 @@ public struct WarrenRemoteAgentEventsSubscriptionResult: Codable, Equatable, Sen
         case headSequence
         case hasMore
         case retainedFromSequence = "retainedFromSequence"
+        case stateEvents
     }
 
     public init(from decoder: Decoder) throws {
@@ -2174,6 +2214,7 @@ public struct WarrenRemoteAgentEventsSubscriptionResult: Codable, Equatable, Sen
         headSequence = try values.decodeIfPresent(UInt64.self, forKey: .headSequence) ?? 0
         hasMore = try values.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
         retainedFromSequence = try values.decodeIfPresent(UInt64.self, forKey: .retainedFromSequence)
+        stateEvents = try values.decodeIfPresent([WarrenRemoteAgentEvent].self, forKey: .stateEvents) ?? []
     }
 }
 

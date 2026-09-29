@@ -81,6 +81,8 @@ struct WarrenCompositionRoot: View {
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
     private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
+    @AppStorage(WarrenPreferenceKey.agentInterface)
+    private var agentInterfaceRawValue = WarrenAgentInterface.defaultValue.rawValue
     @State private var selectedEndpointID: String
     @State private var endpointCatalog: [WarrenRemoteEndpointConfiguration]
     @State private var displayConfiguration: WarrenDisplayConfiguration?
@@ -110,6 +112,9 @@ struct WarrenCompositionRoot: View {
         )
         let multiHostSidebar = WarrenMultiHostSidebarModel()
         let embeddedEditorModel = WarrenEmbeddedEditorModel()
+        remoteModel.onResumeConnection = { [weak multiHostSidebar] in
+            multiHostSidebar?.resumeConnections()
+        }
 
         remoteModel.onOpenTerminalURL = { [weak remoteModel, weak embeddedEditorModel] sessionID, urlString, kind, workingDirectory in
             guard UserDefaults.standard.bool(forKey: WarrenPreferenceKey.embeddedEditorOpenLinks) else {
@@ -320,6 +325,12 @@ struct WarrenCompositionRoot: View {
                     line: document.line,
                     column: document.column
                 )
+            },
+            inspectorSurface: { workspace in
+                AnyView(WarrenInspectorSurface(
+                    inspector: remoteModel.inspector(for: workspace),
+                    readsLocalFiles: remoteModel.inspectorReadsLocalFiles
+                ))
             }
         ) { context in
             WarrenTerminalSurfaceView(
@@ -337,6 +348,10 @@ struct WarrenCompositionRoot: View {
                 browserSurface: { sessionID in
                     guard selectedEndpointCapabilities.canUseEmbeddedBrowser else { return nil }
                     return AnyView(WarrenBrowserSurface(sessionID: sessionID, model: remoteModel))
+                },
+                conversationSurface: { sessionID in
+                    guard remoteModel.isConversationSession(sessionID) else { return nil }
+                    return AnyView(WarrenConversationSurface(sessionID: sessionID, model: remoteModel))
                 },
                 searchPresented: Binding(
                     get: {
@@ -706,7 +721,10 @@ struct WarrenCompositionRoot: View {
                     ) {
                         remoteModel.createSession(
                             workspaceID: workspaceID,
-                            request: preset.resolvedRequest(commandOverride: command(for: preset.id))
+                            request: preset.resolvedRequest(
+                                commandOverride: command(for: preset.id),
+                                conversation: autoStartsConversation
+                            )
                         )
                     } else if remoteModel.autoOpenShell {
                         remoteModel.createSession(workspaceID: workspaceID, request: .shell)
@@ -721,12 +739,21 @@ struct WarrenCompositionRoot: View {
                 ) else { return }
                 remoteModel.createSession(
                     workspaceID: workspaceID,
-                    request: preset.resolvedRequest(commandOverride: command(for: preset.id))
+                    request: preset.resolvedRequest(
+                        commandOverride: command(for: preset.id),
+                        conversation: autoStartsConversation
+                    )
                 )
             default:
                 break
             }
         }
+    }
+
+    /// An automatic launch has no click to answer "Ask each time", so only an
+    /// explicit Chat preference starts a Conversation; otherwise it is the CLI.
+    private var autoStartsConversation: Bool {
+        WarrenAgentInterface(storedValue: agentInterfaceRawValue) == .acp
     }
 
     private func command(for presetID: String) -> String {
@@ -1589,6 +1616,9 @@ private struct WarrenTerminalSurfaceView: View {
     /// Builds the Host's viewer page for a browser Session, or `nil` when the
     /// selected Host cannot run one.
     let browserSurface: @MainActor (String) -> AnyView?
+    /// Builds the Conversation surface for an ACP Session, or `nil` for a
+    /// Session that has a terminal (RFC 0023).
+    let conversationSurface: @MainActor (TerminalSessionID) -> AnyView?
     @Binding var searchPresented: Bool
     @State private var searchQuery = ""
     @FocusState private var searchFieldFocused: Bool
@@ -1609,6 +1639,10 @@ private struct WarrenTerminalSurfaceView: View {
            let sessionID = context.tab.sessionID,
            let viewer = browserSurface(sessionID.description) {
             viewer
+        } else if let sessionID = context.tab.sessionID,
+                  let conversation = conversationSurface(sessionID) {
+            // An ACP Session has no terminal: the conversation is the pane.
+            conversation
         } else {
             terminalBody
         }

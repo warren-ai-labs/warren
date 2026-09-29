@@ -46,7 +46,7 @@ Do not mark a change ready for review while loading, error, empty, retry, keyboa
 
 ## Scope and ownership
 
-Warren is local-first. Host-owned resources, client projections, and transport boundaries should remain explicit. New code must not turn a cache, UI projection, or relay into a second authority for Projects, Workspaces, Sessions, or terminal output.
+The Host is the single authority. Host-owned resources, client projections, and transport boundaries should remain explicit. New code must not turn a cache, UI projection, or relay into a second authority for Projects, Workspaces, Sessions, or terminal output.
 
 ## Vetted Contributor Model
 

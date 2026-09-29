@@ -56,9 +56,11 @@ func (t *ActivityTracker) Observe(event api.AgentEvent) {
 	case "tool_call":
 		t.toolStarted()
 	case "tool_output":
-		failed := event.ToolStatus == "error"
-		t.toolFinished(failed)
-		if !failed && event.StopReason == "stop" {
+		// A failed tool is a result the Agent reads and answers, not the end
+		// of its turn. Only an error event or an error stop reason fails the
+		// turn; failing it here marked every rejected command as Failed until
+		// the Agent's next step.
+		if event.ToolStatus != "error" && event.StopReason == "stop" {
 			t.TurnComplete()
 		}
 	case "error":
@@ -172,6 +174,21 @@ func (t *ActivityTracker) MarkAttention(kind api.AgentAttentionKind, reason, req
 	t.setActivity(api.AgentActivityBlocked)
 }
 
+// MarkIdleAttention records a request the provider raises between turns,
+// such as Codex's plan implementation picker. The turn has already ended, so
+// the Agent stays ready: there is no running turn for a client to stop.
+func (t *ActivityTracker) MarkIdleAttention(kind api.AgentAttentionKind, reason, requestID string, since time.Time) {
+	if since.IsZero() {
+		since = time.Now()
+	}
+	t.status.Attention = &api.AgentAttention{
+		Kind:      kind,
+		Reason:    reason,
+		RequestID: requestID,
+		Since:     since,
+	}
+}
+
 // ClearAttention removes a pending human-facing condition without changing
 // the current lifecycle state unless it was blocked by the attention.
 func (t *ActivityTracker) ClearAttention() {
@@ -215,12 +232,6 @@ func (t *ActivityTracker) working() {
 func (t *ActivityTracker) toolStarted() {
 	t.clearAttention()
 	t.working()
-}
-
-func (t *ActivityTracker) toolFinished(failed bool) {
-	if failed {
-		t.TurnFailed()
-	}
 }
 
 func (t *ActivityTracker) clearAttention() {

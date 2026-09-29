@@ -5,52 +5,25 @@ import remarkGfm from "remark-gfm";
 import {
   agentDraftMaximumBytes,
   agentEchoWaitMs,
-  displayToolName,
-  extractExecCommands,
-  basename,
-  formatFileList,
-  groupAgentEvents,
-  isCommandTool,
   isUserAgentEvent,
-  latestAgentAction,
   loadAgentDraft,
-  isHiddenAgentEvent,
   agentInteractionIdentity,
   latestPendingAgentInteraction,
-  normalizeAgentEventType,
-  projectAgentEvents,
   removeAgentDraft,
   saveAgentDraft,
-  toolSummary,
-  truncatePreview,
   validateAgentAttachment,
 } from "./agent.js";
 import { useFocusTrap } from "./components.jsx";
+import { composerChips, projectConversation, withStateEvents } from "./conversation.js";
+import { ContextMeter, ConversationRoot, ModeIcon, PlanStrip, SelectorChip, Turn } from "./conversation.jsx";
 
-// Keep the active-work cue light and human. The phrase is deliberately
-// provider-neutral so the composer never grows a second Session/Model rail.
-const AGENT_WORKING_PHRASES = [
-  "Fermenting…",
-  "Fiddle-faddling…",
-  "Booping…",
-  "Pondering…",
-  "Whirring…",
-  "Tinkering…",
-  "Conjuring…",
-  "Mulling…",
-  "Warming up…",
-  "Plotting…",
-  "Wiggling…",
-  "Riffing…",
-  "Hatching…",
-  "Stirring…",
-  "Percolating…",
-  "Polishing…",
-];
+const PROVIDER_NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", pi: "Pi", qoder: "Qoder", antigravity: "Antigravity" };
+
 export function AgentView({
   session,
   turn = null,
   events = [],
+  stateEvents = [],
   status = null,
   onSend,
   onRequestControl = () => {},
@@ -68,13 +41,18 @@ export function AgentView({
   onSendNow = () => {},
   onInteraction = () => {},
   onUploadAttachments = async () => { throw new Error("Attachments are unavailable"); },
-  onEditResend = null,
   queueItems = [],
   onQueueEdit = () => {},
   onQueueDelete = () => {},
   onQueueMoveToFront = () => {},
   onQueueReorder = () => {},
   onQueueRetry = () => {},
+  // Chat (ACP) Sessions: selectors, hand-off, and agent terminals.
+  onSetConfig = async () => {},
+  canHandoff = false,
+  onHandoff = async () => {},
+  onOpenSession = () => {},
+  sessionExists = () => false,
 }) {
   const listRef = useRef(null);
   const inputRef = useRef(null);
@@ -92,8 +70,6 @@ export function AgentView({
   const [submitStatus, setSubmitStatus] = useState("");
   const [cancelPending, setCancelPending] = useState(false);
   const [draftWarning, setDraftWarning] = useState("");
-  const [workingPhraseIndex, setWorkingPhraseIndex] = useState(0);
-  const workingTurnKeyRef = useRef(null);
   const sessionIdentity = `${endpointIdentity}:${session?.id || ""}`;
   const sessionIdentityRef = useRef(sessionIdentity);
   const uploadGenerationRef = useRef(0);
@@ -106,10 +82,11 @@ export function AgentView({
     sessionIdentityRef.current = sessionIdentity;
     uploadGenerationRef.current += 1;
   }
-  const blocks = useMemo(
-    () => projectAgentEvents(events.filter(event => !isHiddenAgentEvent(event))),
-    [events]
-  );
+  const conversation = useMemo(() => projectConversation(withStateEvents(events, stateEvents)), [events, stateEvents]);
+  const turns = conversation.turns;
+  const chips = useMemo(() => composerChips(conversation.config), [conversation.config]);
+  const canConfigure = capabilities.includes("agent-config-v1");
+  const provider = PROVIDER_NAMES[String(session?.agentProvider || session?.kind || "").toLowerCase()] || "the Agent";
   const agentStatus = status || session?.agentStatus || null;
   const attention = agentStatus?.attention || null;
   const activePendingInteraction = useMemo(
@@ -123,25 +100,8 @@ export function AgentView({
   const canInterrupt = agentStatus?.activity === "working" && capabilities.includes("agent-interrupt-v1");
   const canInteract = capabilities.includes("agent-interactions-v1");
   const canUpload = capabilities.includes("agent-attachments-v1");
-  const showWorking = shouldShowWorking(agentStatus, events);
   const staleAcceptedIDs = useStaleAcceptedMessages(queueItems);
-  const latestAction = useMemo(() => latestAgentAction(events), [events]);
-  const workingTurnKey = `${session?.id || ""}:${agentTurnKey(turn || session?.agentTurn, events)}`;
   const showInputMeta = Boolean(disabledReason || queueItems.length > 0);
-  const lastUserEvent = useMemo(() => {
-    for (let i = events.length - 1; i >= 0; i -= 1) {
-      if (isUserAgentEvent(events[i])) return events[i];
-    }
-    return null;
-  }, [events]);
-  const lastUserEventKey = lastUserEvent ? `${lastUserEvent.id || ""}:${lastUserEvent.sequence || ""}` : "";
-
-  const editAndResend = value => {
-    if (onEditResend) onEditResend(value);
-    else setDraft(value);
-    inputRef.current?.focus();
-  };
-
   // Let short drafts breathe while keeping long prompts inside the raised
   // surface. Reset before measuring so deleting text shrinks the field again;
   // once the cap is reached, the textarea—not the page—owns the scroll.
@@ -171,25 +131,11 @@ export function AgentView({
     setSubmitStatus("");
     setCancelPending(false);
     setDraftWarning("");
-    setWorkingPhraseIndex(0);
-    workingTurnKeyRef.current = null;
   }, [endpointIdentity, session?.id]);
 
   useEffect(() => () => {
     if (submitStatusTimerRef.current !== null) clearTimeout(submitStatusTimerRef.current);
   }, []);
-
-  useEffect(() => {
-    if (workingTurnKeyRef.current === null) {
-      workingTurnKeyRef.current = workingTurnKey;
-      return;
-    }
-    if (workingTurnKeyRef.current === workingTurnKey) return;
-    workingTurnKeyRef.current = workingTurnKey;
-    // Change the copy at a turn boundary only. A continuously changing label
-    // competes with the transcript and makes one turn feel like many.
-    setWorkingPhraseIndex(index => (index + 1) % AGENT_WORKING_PHRASES.length);
-  }, [workingTurnKey]);
 
   useEffect(() => {
     const value = String(draft || "");
@@ -454,6 +400,7 @@ export function AgentView({
   };
 
   return (
+    <ConversationRoot.Provider value={session?.directory || session?.cwd || ""}>
     <div
       className="agent-view"
       onPointerDown={event => event.stopPropagation()}
@@ -488,7 +435,7 @@ export function AgentView({
                 : "Load earlier messages"}
           </button>
         )}
-        {blocks.length === 0 && queueItems.length === 0 ? (
+        {turns.length === 0 && queueItems.length === 0 ? (
           <div className="agent-empty">
             <div className="agent-empty-mark" aria-hidden="true">✦</div>
             <div className="agent-empty-title">What can I help you with?</div>
@@ -496,23 +443,16 @@ export function AgentView({
           </div>
         ) : (
           <>
-            {blocks.map((block, index) => {
-              if (block.kind === "usage") return null;
-              if (activePendingInteractionID && block.event) {
-                const eventID = agentInteractionIdentity(block.event);
-                if (eventID === activePendingInteractionID) return null;
-              }
-              return (
-                <AgentBlock
-                  key={blockKindKey(block, index)}
-                  block={block}
-                  onInteraction={onInteraction}
-                  canInteract={canInteract}
-                  onEditResend={editAndResend}
-                  isLastUser={Boolean(lastUserEventKey && block.event && `${block.event.id || ""}:${block.event.sequence || ""}` === lastUserEventKey)}
-                />
-              );
-            })}
+            {turns.map((turn, index) => (
+              <Turn
+                key={turn.id}
+                turn={turn}
+                live={index === turns.length - 1}
+                waiting={index === turns.length - 1 && Boolean(activePendingInteraction)}
+                onOpenSession={onOpenSession}
+                sessionExists={sessionExists}
+              />
+            ))}
             {queueItems.map(item => (
               <PendingAgentMessage
                 key={item.id}
@@ -526,12 +466,6 @@ export function AgentView({
         )}
       </div>
       {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} onFocusComposer={() => inputRef.current?.focus()} />}
-      {showWorking && (
-        <div className="agent-working" role="status" aria-live="polite">
-          <span className="agent-working-shimmer">{AGENT_WORKING_PHRASES[workingPhraseIndex]}</span>
-          {latestAction && <span className="agent-working-action">{latestAction}</span>}
-        </div>
-      )}
       {(actionError || submitError) && (
         <div className="agent-action-error" role="alert">{actionError || submitError}</div>
       )}
@@ -598,6 +532,7 @@ export function AgentView({
             </div>
           )}
           <div className="agent-input-surface">
+            <PlanStrip plan={conversation.plan} />
             <div className="agent-input-row">
               <textarea
                 ref={inputRef}
@@ -624,7 +559,7 @@ export function AgentView({
                 onFocus={() => {
                   if (!hasControl && ready && canSendForStatus(agentStatus)) onRequestControl();
                 }}
-                placeholder="Message…"
+                placeholder={`Message ${provider}…`}
                 aria-label="Message"
                 rows={1}
                 enterKeyHint="send"
@@ -650,6 +585,28 @@ export function AgentView({
                   disabled={!canUpload || uploadingAttachments || submitStatus === "sending"}
                 />
               </label>
+              {canConfigure && chips.mode && (
+                <SelectorChip
+                  label={chips.mode.currentName.replace(/ \(.*\)$/, "")}
+                  icon={<ModeIcon value={chips.mode.currentValue} />}
+                  config={[chips.mode]}
+                  onSetConfig={onSetConfig}
+                />
+              )}
+              <span className="agent-input-spacer" />
+              <ContextMeter context={conversation.context} />
+              {canConfigure && chips.modelOptions.length > 0 ? (
+                <SelectorChip
+                  label={chips.modelSummary || "Model"}
+                  config={chips.modelOptions}
+                  onSetConfig={onSetConfig}
+                  canHandoff={canHandoff}
+                  handoffBlocked={agentStatus?.activity === "working" ? "Stop the turn first" : ""}
+                  onHandoff={onHandoff}
+                />
+              ) : canHandoff ? (
+                <SelectorChip label="Session" config={[]} canHandoff onHandoff={onHandoff} onSetConfig={onSetConfig} />
+              ) : null}
               <div className="agent-submit-controls">
                 {canInterrupt && (draft.trim() || attachments.length > 0) && (
                   <button
@@ -706,6 +663,7 @@ export function AgentView({
         </div>
       )}
     </div>
+    </ConversationRoot.Provider>
   );
 }
 
@@ -755,50 +713,6 @@ function canSendForStatus(status) {
   return !status.attention || status.attention.kind === "input";
 }
 
-function shouldShowWorking(status, events) {
-  if (status?.activity !== "working") return false;
-  const visible = (events || []).filter(event => !isHiddenAgentEvent(event));
-  const last = visible.at(-1);
-  if (!last) return true;
-  // A completed assistant message is the stronger visual signal. Hosts can
-  // publish a trailing working status while the final transcript event is
-  // still settling, so do not leave a cue under already-finished prose.
-  const type = normalizeAgentEventType(last.type);
-  const role = normalizeAgentEventType(last.role);
-  const assistant = type === "assistant" || role === "assistant";
-  return !(assistant && String(last.content || "").trim());
-}
-
-function agentTurnID(turn, events) {
-  const explicit = typeof turn === "object" ? turn?.id : turn;
-  const explicitID = Number(explicit);
-  if (Number.isSafeInteger(explicitID) && explicitID > 0) return explicitID;
-  for (const event of [...(events || [])].reverse()) {
-    const eventID = Number(event?.turn);
-    if (Number.isSafeInteger(eventID) && eventID > 0) return eventID;
-  }
-  return 0;
-}
-
-// A few older Hosts publish agent events without a turn field. Use the
-// explicit turn when available, then the latest user event as the stable
-// boundary for a new turn. Do not use the latest arbitrary event: reasoning
-// and tool deltas would make the working copy change several times per turn.
-function agentTurnKey(turn, events) {
-  const explicit = agentTurnID(turn, []);
-  if (explicit) return `turn:${explicit}`;
-  const values = Array.isArray(events) ? events : [];
-  const latestUser = [...values].reverse().find(isUserAgentEvent);
-  if (latestUser) {
-    const eventTurn = Number(latestUser.turn);
-    if (Number.isSafeInteger(eventTurn) && eventTurn > 0) return `turn:${eventTurn}`;
-    const identity = String(latestUser.id || latestUser.sequence || latestUser.timestamp || "").trim();
-    if (identity) return `user:${identity}`;
-  }
-  const eventTurn = agentTurnID(null, values);
-  return eventTurn ? `turn:${eventTurn}` : "unknown";
-}
-
 function agentInputDisabledReason({ ready, hasControl, status }) {
   if (!ready) return "Agent is starting in Terminal.";
   if (!hasControl) return "";
@@ -809,11 +723,6 @@ function agentInputDisabledReason({ ready, hasControl, status }) {
   case "exited": return "Agent has exited.";
   default: return "";
   }
-}
-
-function agentModel(session, events = []) {
-  const model = String(session?.agentModel || [...events].reverse().find(event => event.model)?.model || "").trim();
-  return model || "";
 }
 
 /**
@@ -920,109 +829,6 @@ function PendingAgentMessage({ item, stale, onDelete, onOpenTerminal }) {
   );
 }
 
-function blockKindKey(block, index) {
-  const id = block.call?.id || block.event?.id || block.event?.sequence || block.call?.sequence;
-  const sequence = block.call?.sequence || block.event?.sequence;
-  // Provider IDs identify logical parts, not always individual events (an
-  // OpenCode part can emit several deltas). Include the normalized sequence
-  // so a fallback or repeated provider ID can never collide in React.
-  return `${block.kind}-${id || "event"}-${sequence || index}`;
-}
-
-function AgentBlock({ block, onInteraction = () => {}, onEditResend = () => {}, isLastUser = false, canInteract = false }) {
-  switch (block.kind) {
-  case "structured":
-    return <StructuredAgentBlock event={block.event} onInteraction={onInteraction} canInteract={canInteract} />;
-  case "user":
-  case "assistant": {
-    const event = block.event;
-    const interrupted = isInterrupted(event);
-    if (isUserAgentEvent(event)) {
-      return (
-        <div className={`agent-message user${interrupted ? " interrupted" : ""}`}>
-          <div className="agent-bubble">
-            <MarkdownContent value={event.content || ""} />
-          </div>
-          {isLastUser && (
-            <div className="agent-message-actions">
-              <button type="button" onClick={() => onEditResend(event.content || "")} aria-label="Edit and resend message" title="Edit and resend message">
-                <EditIcon />
-              </button>
-            </div>
-          )}
-          <div className="agent-message-meta">
-            {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
-            {formatMessageTime(event.timestamp)}
-          </div>
-        </div>
-      );
-    }
-    return (
-      <div className={`agent-message assistant${interrupted ? " interrupted" : ""}`}>
-        <MarkdownContent value={event.content || ""} />
-        <div className="agent-message-meta">
-          {interrupted && <span className="agent-interrupted-tag">Interrupted</span>}
-          {event.durationMs ? formatDuration(event.durationMs) : ""}
-          {event.durationMs && event.timestamp ? " · " : ""}
-          {formatMessageTime(event.timestamp)}
-        </div>
-      </div>
-    );
-  }
-  case "activity_group":
-    return <ActivityGroup block={block} />;
-  case "tool_output": {
-    const event = block.event;
-    return (
-      <div className={`agent-tool-card ${event.toolStatus || "success"}`}>
-        <div className="agent-tool-head">
-          <span className="agent-tool-chevron open" aria-hidden="true"><ChevronRightIcon /></span>
-          <span className="agent-tool-name">{displayToolName(event.toolName)}</span>
-          <span className="agent-tool-status">{statusText(event.toolStatus)}</span>
-        </div>
-        <ToolOutputBody event={event} />
-      </div>
-    );
-  }
-  case "system_instructions":
-    return null;
-  case "usage":
-    return null;
-  case "status":
-  case "status_changed":
-  case "status.changed":
-  case "turn":
-  case "execution":
-    return null;
-  case "error":
-    return (
-      <div className="agent-error">
-        <pre className="agent-body">{block.event.error || block.event.content || ""}</pre>
-      </div>
-    );
-  case "attachment":
-    return (
-      <div className="agent-attachment">
-        <pre className="agent-body">{block.event.content || ""}</pre>
-      </div>
-    );
-  case "system":
-    return (
-      <div className="agent-system">
-        {block.event.content || "System"}
-        {block.event.durationMs ? ` · ${formatDuration(block.event.durationMs)}` : ""}
-      </div>
-    );
-  default:
-    return (
-      <details className="agent-unknown">
-        <summary>Unknown event</summary>
-        <pre className="agent-body">{JSON.stringify(block.event, null, 2)}</pre>
-      </details>
-    );
-  }
-}
-
 function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = false, isDocked = false }) {
   const type = String(event?.type || "").trim().toLowerCase().replaceAll("-", "_");
   const payload = event?.payload && typeof event.payload === "object" ? event.payload : {};
@@ -1079,6 +885,9 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
     ? payload.options.map(normalizeOption).filter(Boolean)
     : [];
   const isProgressMetadata = type === "plan" || type === "todo" || type === "goal";
+  // A plan the Agent proposed for review is a Markdown document, not steps to
+  // count; it keeps that shape after the user approves or rejects it.
+  const isProposedPlan = type === "plan" && (payload.proposal === true || state === "proposed");
   const progressItems = isProgressMetadata
     ? (Array.isArray(payload.items) ? payload.items : Array.isArray(payload.steps) ? payload.steps : [])
       .map((item, index) => {
@@ -1111,9 +920,11 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
     : type === "goal" && tokenBudget > 0 && Number.isFinite(tokensUsed)
       ? `${Math.min(Math.max(tokensUsed, 0), tokenBudget)}/${tokenBudget}`
       : "";
-  const progressPreview = progressObjective
-    ? progressObjective.split(/\r?\n/, 1)[0]
-    : progressItems[0]?.label || "";
+  const progressPreview = isProposedPlan
+    ? progressObjective.split(/\r?\n/).map(line => line.trim()).find(line => line && !line.startsWith("#")) || ""
+    : progressObjective
+      ? progressObjective.split(/\r?\n/, 1)[0]
+      : progressItems[0]?.label || "";
   // Progress metadata stays compact in the transcript and expands on demand.
   // This mirrors the native client while keeping the full objective and item
   // list available to keyboard and screen-reader users.
@@ -1127,7 +938,7 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
           onClick={() => setExpanded(previous => !previous)}
           aria-expanded={expanded}
         >
-          <span className="agent-progress-icon" aria-hidden="true">{structuredIcon(type)}</span>
+          <span className="agent-progress-icon" aria-hidden="true">{isProposedPlan ? "▤" : structuredIcon(type)}</span>
           <strong>{title}</strong>
           {!expanded && progressPreview && <span className="agent-progress-preview">{progressPreview}</span>}
           <span className="agent-progress-spacer" />
@@ -1137,7 +948,11 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
         </button>
         {expanded && (
           <div className="agent-progress-details">
-            {progressObjective && <p className="agent-structured-description">{progressObjective}</p>}
+            {isProposedPlan && payload.feedback && (
+              <p className="agent-structured-description"><strong>Feedback</strong> {String(payload.feedback)}</p>
+            )}
+            {isProposedPlan && progressObjective && <MarkdownContent value={progressObjective} />}
+            {!isProposedPlan && progressObjective && <p className="agent-structured-description">{progressObjective}</p>}
             {progressItems.length > 0 && (
               <ul className="agent-structured-items">
                 {progressItems.map(item => (
@@ -1429,6 +1244,9 @@ function structuredStateLabel(state) {
     canceled: "Cancelled",
     failed: "Failed",
     in_progress: "In progress",
+    proposed: "Proposed",
+    approved: "Approved",
+    rejected: "Rejected",
     queued: "Queued",
     dequeued: "Dispatched",
   }[state] || (state ? state.replaceAll("_", " ") : "Details");
@@ -1554,278 +1372,6 @@ function AgentQueuePanel({ items, onClose, onEdit, onDelete, onMoveToFront, onRe
   );
 }
 
-function ActivityGroup({ block }) {
-  const { reasoning, tools, order } = block;
-  const [open, setOpen] = useState(false);
-  const status = groupStatus(tools);
-  let step = 0;
-  const toolItems = order.filter(item => item.kind === "tool");
-  // A lone tool has nothing to disclose: the collapsed header already carries
-  // the command, so keep that row and drop the chevron and expand body instead
-  // of repeating the same line.
-  const singleTool = reasoning.length === 0 && toolItems.length === 1;
-  if (singleTool) {
-    return (
-      <div className={`agent-activity-group ${status}`}>
-        <div className="agent-activity-head is-static">
-          <span className="agent-activity-title">{activityTitle(reasoning.length, tools.length, tools)}</span>
-          {toolGroupSummary(tools) && <code className="agent-tool-summary">{toolGroupSummary(tools)}</code>}
-          <span className="agent-tool-status">{statusText(status)}</span>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className={`agent-activity-group ${status}`}>
-      <button type="button" className="agent-activity-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className={`agent-tool-chevron${open ? " open" : ""}`} aria-hidden="true"><ChevronRightIcon /></span>
-        <span className="agent-activity-title">{activityTitle(reasoning.length, tools.length, tools)}</span>
-        {!open && toolGroupSummary(tools) && <code className="agent-tool-summary">{toolGroupSummary(tools)}</code>}
-        <span className="agent-tool-status">{statusText(status)}</span>
-      </button>
-      {open && (
-        <div className="agent-activity-body">
-          {order.map((item, index) => {
-            if (item.kind === "reasoning") {
-              step += 1;
-              return (
-                <div className="agent-reasoning-item" key={item.event.sequence ?? index}>
-                  {reasoning.length > 1 && (
-                    <div className="agent-reasoning-item-label">Step {step}</div>
-                  )}
-                  <MarkdownContent value={item.event.content || ""} />
-                </div>
-              );
-            }
-            return null;
-          })}
-          {toolItems.length > 0 && (
-            <div className="agent-tool-group">
-              {coalesceToolBlocks(toolItems).map((group, index) => {
-                if (group.blocks.length === 1) {
-                  return <ToolCard key={blockKindKey(group.blocks[0], index)} block={group.blocks[0]} />;
-                }
-                return <CoalescedToolCard key={`coalesced-${group.toolName}-${index}`} group={group} />;
-              })}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function coalesceToolBlocks(toolItems = []) {
-  const groups = [];
-  for (const item of toolItems) {
-    const block = item.block;
-    const name = (block.call?.toolName || "").toLowerCase();
-    const prev = groups.at(-1);
-    if (prev && prev.toolName === name) {
-      prev.blocks.push(block);
-    } else {
-      groups.push({ toolName: name, blocks: [block] });
-    }
-  }
-  return groups;
-}
-
-function CoalescedToolCard({ group, defaultOpen = false }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const status = groupStatus(group.blocks);
-  const count = group.blocks.length;
-  const isCommand = isCommandTool(group.toolName);
-  const name = isCommand ? `$ × ${count}` : `${displayToolName(group.toolName)} × ${count}`;
-  const summaries = group.blocks
-    .map(b => toolSummary(b.call))
-    .filter(Boolean);
-  const unique = [...new Set(summaries)];
-  const preview = unique.join(", ");
-
-  return (
-    <div className={`agent-tool-card ${status}`}>
-      <button type="button" className="agent-tool-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className={`agent-tool-chevron${open ? " open" : ""}`} aria-hidden="true"><ChevronRightIcon /></span>
-        <span className="agent-tool-name">{name}</span>
-        {preview && <code className="agent-tool-summary">{preview}</code>}
-        <span className="agent-tool-status">{statusText(status)}</span>
-      </button>
-      {open && (
-        <div className="agent-tool-detail">
-          <div className="agent-tool-sublist">
-            {group.blocks.map((block, idx) => {
-              const summary = toolSummary(block.call);
-              const bStatus = block.call.toolStatus || (block.outputs.length ? "success" : "running");
-              return (
-                <div key={blockKindKey(block, idx)} className="agent-tool-subitem">
-                  <div className="agent-tool-subitem-head">
-                    {isCommand ? (
-                      <span className="agent-tool-prompt">$ </span>
-                    ) : (
-                      <span className="agent-tool-bullet">•</span>
-                    )}
-                    {summary && <code className="agent-tool-summary">{summary}</code>}
-                    <span className="agent-tool-status">{statusText(bStatus)}</span>
-                  </div>
-                  {!isCommand && (
-                    <>
-                      {block.outputs.map((out, oIdx) => (
-                        <ToolOutputBody key={out.sequence ?? oIdx} event={out} />
-                      ))}
-                      {block.call.files?.length > 0 && <FileList files={block.call.files} />}
-                    </>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ToolCard({ block, defaultOpen = false }) {
-  const call = block.call;
-  const status = call.toolStatus || (block.outputs.length ? "success" : "running");
-  const [open, setOpen] = useState(defaultOpen);
-  const summary = toolDisplay(call, status);
-  const isWebSearch = call.toolName === "web_search";
-  const isCommand = isCommandTool(call.toolName, call.toolInput);
-  const preview = summary || "exec";
-  if (isCommand) {
-    return (
-      <div className={`agent-tool-card command ${status}`}>
-        <code className="agent-tool-command">
-          <span className="agent-tool-prompt">$ </span>
-          {preview}
-        </code>
-        {call.files?.length > 0 && (
-          <span className="agent-tool-files-preview">({formatFileList(call.files)})</span>
-        )}
-        {!isWebSearch && <span className="agent-tool-status">{statusText(status)}</span>}
-      </div>
-    );
-  }
-  return (
-    <div className={`agent-tool-card ${status}`}>
-      <button type="button" className="agent-tool-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <span className={`agent-tool-chevron${open ? " open" : ""}`} aria-hidden="true"><ChevronRightIcon /></span>
-        <span className="agent-tool-name">{displayToolName(call.toolName)}</span>
-        {summary && <code className="agent-tool-summary">{summary}</code>}
-        {!isWebSearch && <span className="agent-tool-status">{statusText(status)}</span>}
-      </button>
-      {open && (
-        <div className="agent-tool-detail">
-          {summary && (
-            <pre className="agent-tool-code">{summary}</pre>
-          )}
-          {status === "running" && block.outputs.length === 0 && !summary && (
-            <span className="agent-tool-waiting">Running…</span>
-          )}
-          {block.outputs.map((output, idx) => (
-            <ToolOutputBody key={output.sequence ?? idx} event={output} />
-          ))}
-          {call.files?.length > 0 && <FileList files={call.files} />}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function activityTitle(reasoningCount, toolsCount, tools = []) {
-  const parts = [];
-  if (reasoningCount > 0) parts.push(reasoningCount === 1 ? "Thinking" : `Thinking × ${reasoningCount}`);
-  if (toolsCount > 0) {
-    if (toolsCount === 1) {
-      parts.push(displayToolName(tools[0]?.call?.toolName));
-    } else {
-      const toolNames = new Set(tools.map(t => (t.call?.toolName || "").toLowerCase()));
-      if (toolNames.size === 1) {
-        const [singleType] = toolNames;
-        switch (singleType) {
-        case "read":
-        case "view_file":
-        case "viewfile":
-          parts.push(`Read ${toolsCount} files`);
-          break;
-        case "edit":
-        case "write":
-        case "apply_patch":
-        case "replace_file_content":
-        case "write_to_file":
-          parts.push(`Edited ${toolsCount} files`);
-          break;
-        case "grep":
-        case "glob":
-        case "find_by_name":
-        case "grep_search":
-        case "web_search":
-          parts.push(`Searched ${toolsCount} times`);
-          break;
-        case "shell":
-        case "exec":
-        case "run_command":
-          parts.push(`Ran ${toolsCount} commands`);
-          break;
-        default:
-          parts.push(`${displayToolName(singleType)} × ${toolsCount}`);
-        }
-      } else {
-        parts.push(`Tools × ${toolsCount}`);
-      }
-    }
-  }
-  return parts.join(" · ") || "Activity";
-}
-
-function toolGroupSummary(items) {
-  if (!Array.isArray(items) || items.length === 0) return "";
-  const summaries = items
-    .map(item => toolSummary(item?.call))
-    .filter(Boolean);
-  if (summaries.length === 0) return "";
-  const unique = [...new Set(summaries)];
-  return truncatePreview(unique.join(" · "), 140);
-}
-
-function groupStatus(items) {
-  const statuses = new Set(items.map(item => {
-    const lastOutput = item.outputs.at(-1);
-    return lastOutput?.toolStatus || item.call?.toolStatus || (item.outputs.length ? "success" : "running");
-  }));
-  if (statuses.has("error")) return "error";
-  if (statuses.has("interrupted")) return "interrupted";
-  if (statuses.has("running")) return "running";
-  return "success";
-}
-
-function ToolOutputBody({ event }) {
-  return (
-    <div className="agent-tool-output">
-      {event.error && <div className="agent-tool-error">{event.error}</div>}
-      {event.files?.length > 0 && <FileList files={event.files} />}
-    </div>
-  );
-}
-
-function statusText(status) {
-  switch (status) {
-  case "error": return "Failed";
-  case "interrupted": return "Interrupted";
-  case "running": return "Running…";
-  default: return "Completed";
-  }
-}
-
-// A message was cut short by a user interruption. All providers surface
-// this through event.stopReason; the parser normalizes provider-specific
-// sentinels (e.g. Claude's "[Request interrupted..." user message) into
-// the same shape.
-function isInterrupted(event) {
-  return Boolean(event) && event.stopReason === "interrupted";
-}
-
 function EditIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1868,16 +1414,6 @@ function ChevronRightIcon() {
   );
 }
 
-function toolDisplay(call, status) {
-  if (call.toolName !== "web_search") return toolSummary(call);
-  const target = toolSummary(call);
-  if (status === "running") return `Searching the web${target ? ` for ${target}` : ""}…`;
-  if (status === "success") return `Searched the web for ${target || "results"}`;
-  if (status === "error") return `Web search failed${target ? ` · ${target}` : ""}`;
-  if (status === "interrupted") return `Web search interrupted${target ? ` · ${target}` : ""}`;
-  return target || "Web search";
-}
-
 const REMARK_PLUGINS = [remarkGfm];
 
 const MarkdownContent = memo(function MarkdownContent({ value }) {
@@ -1887,27 +1423,3 @@ const MarkdownContent = memo(function MarkdownContent({ value }) {
     </div>
   );
 });
-
-function FileList({ files }) {
-  return (
-    <div className="agent-files">
-      {files.map((file, index) => (
-        <span className="agent-file" key={`${file}-${index}`}>{basename(file)}</span>
-      ))}
-    </div>
-  );
-}
-
-function formatDuration(milliseconds) {
-  const seconds = Math.round(milliseconds / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${seconds % 60}s`;
-}
-
-function formatMessageTime(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}

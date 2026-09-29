@@ -34,6 +34,7 @@ const (
 	CapabilityInterrupt    Capability = api.CapabilityAgentInterrupt
 	CapabilityAttachments  Capability = api.CapabilityAgentAttachments
 	CapabilityGoals        Capability = api.CapabilityAgentGoals
+	CapabilityConfig       Capability = api.CapabilityAgentConfig
 )
 
 // Well-known handler names are intentionally transport-oriented. They are
@@ -372,6 +373,12 @@ func normalizeProviderKind(kind string) string {
 // PTY. Keep this allow-list narrow: a generic terminal prompt is not proof that
 // an arbitrary string is a safe interaction response.
 func tuiSupportsAgentInteractions(kind string) bool {
+	family, _ := splitAgentKey(kind)
+	return family == "codex" || family == "claude"
+}
+
+// tuiSupportsAgentGoals identifies the provider TUIs with a `/goal` command.
+func tuiSupportsAgentGoals(kind string) bool {
 	family, _ := splitAgentKey(kind)
 	return family == "codex"
 }
@@ -1309,23 +1316,6 @@ type serviceAgentEventSink struct {
 	handle    AgentHandle
 }
 
-func (sink serviceAgentEventSink) current() bool {
-	if sink.service == nil || sink.handle == nil {
-		return false
-	}
-	sink.service.agentsMu.Lock()
-	entry := sink.service.agents[sink.sessionID]
-	if entry == nil {
-		sink.service.agentsMu.Unlock()
-		return false
-	}
-	entry.mu.Lock()
-	current := entry.handle == sink.handle
-	entry.mu.Unlock()
-	sink.service.agentsMu.Unlock()
-	return current
-}
-
 func (sink serviceAgentEventSink) OnEvents(events []api.AgentEvent, status api.AgentStatus) {
 	if sink.service != nil {
 		sink.service.recordAgentEventsForHandle(sink.sessionID, sink.handle, events, status)
@@ -1727,6 +1717,9 @@ func (handle *tuiAgentHandle) SendMessage(ctx context.Context, message api.Agent
 			return err
 		}
 	}
+	if err := dismissCodexPlanPrompt(ctx, runtime, handle.runtimeName, status); err != nil {
+		return err
+	}
 	return sendAgentMessageInput(ctx, runtime, handle.runtimeName, text)
 }
 
@@ -1777,9 +1770,10 @@ func (handle *tuiAgentHandle) RespondInteraction(ctx context.Context, response a
 	if runtime == nil {
 		return errors.New("agent interaction transport is unavailable")
 	}
+	payload := handle.service.agentInteractionPayload(handle.sessionID, strings.TrimSpace(response.RequestID), response.Kind)
 	unlock := handle.service.lockAgentSessionAction(handle.sessionID)
 	defer unlock()
-	return sendAgentInteractionInput(ctx, runtime, handle.runtimeName, response)
+	return sendProviderInteractionInput(ctx, runtime, handle.runtimeName, handle.provider, response, payload)
 }
 
 func (handle *tuiAgentHandle) SetGoal(ctx context.Context, request api.AgentGoalSetRequest) error {
@@ -1789,7 +1783,7 @@ func (handle *tuiAgentHandle) SetGoal(ctx context.Context, request api.AgentGoal
 	if controller, ok := handle.service.AgentController.(AgentViewGoalController); ok && nonNilInterface(controller) {
 		return controller.SetGoal(ctx, request)
 	}
-	if !tuiSupportsAgentInteractions(handle.provider) {
+	if !tuiSupportsAgentGoals(handle.provider) {
 		return errors.New("agent goal transport is unavailable for this provider")
 	}
 	runtime := handle.service.runtimeForKind(handle.runtimeKind)
@@ -1811,7 +1805,7 @@ func (handle *tuiAgentHandle) ClearGoal(ctx context.Context, request api.AgentGo
 	if controller, ok := handle.service.AgentController.(AgentViewGoalController); ok && nonNilInterface(controller) {
 		return controller.ClearGoal(ctx, request)
 	}
-	if !tuiSupportsAgentInteractions(handle.provider) {
+	if !tuiSupportsAgentGoals(handle.provider) {
 		return errors.New("agent goal transport is unavailable for this provider")
 	}
 	runtime := handle.service.runtimeForKind(handle.runtimeKind)
@@ -1862,85 +1856,3 @@ func (handle *tuiAgentHandle) Close() error {
 
 var _ AgentProvider = (*TUIAgentProvider)(nil)
 var _ AgentHandle = (*tuiAgentHandle)(nil)
-
-// ACPAgentProvider is a stub for the standardized bidirectional Agent Client Protocol (ACP).
-// It implements AgentProvider and AgentProviderCapabilities for the "acp" handler kind.
-type ACPAgentProvider struct {
-	kind    string
-	service *Service
-}
-
-func NewACPAgentProvider(kind string, service *Service) *ACPAgentProvider {
-	return &ACPAgentProvider{
-		kind:    normalizeProviderKind(kind),
-		service: service,
-	}
-}
-
-func (provider *ACPAgentProvider) Kind() string {
-	if provider == nil {
-		return ""
-	}
-	return provider.kind
-}
-
-func (provider *ACPAgentProvider) HandlerKind() string { return AgentHandlerACP }
-
-// Capabilities advertises Track 2 native bidirectional capabilities.
-func (provider *ACPAgentProvider) Capabilities() CapabilitySet {
-	// The ACP transport is intentionally not advertised until its bidirectional
-	// stream and mutation methods are implemented. Advertising a capability
-	// whose handle returns "not implemented" creates an unusable client card.
-	return NewCapabilitySet()
-}
-
-func (provider *ACPAgentProvider) Ensure(ctx context.Context, value AgentSessionContext) (AgentHandle, error) {
-	if provider == nil || provider.service == nil {
-		return nil, ErrAgentNotReady
-	}
-	return nil, ErrAgentNotReady
-}
-
-type acpAgentHandle struct {
-	provider *ACPAgentProvider
-	value    AgentSessionContext
-}
-
-func (handle *acpAgentHandle) Start(ctx context.Context, sink AgentEventSink) error {
-	// ACP wire transport connection is stubbed and will be implemented when the protocol adapter is ready.
-	return nil
-}
-
-func (handle *acpAgentHandle) Capabilities() CapabilitySet {
-	if handle == nil || handle.provider == nil {
-		return NewCapabilitySet()
-	}
-	return handle.provider.Capabilities()
-}
-
-func (handle *acpAgentHandle) SendMessage(ctx context.Context, message api.AgentMessageSendRequest) error {
-	return errors.New("acp message transport is not implemented yet")
-}
-
-func (handle *acpAgentHandle) Interrupt(ctx context.Context, request api.AgentTurnInterruptRequest) error {
-	return errors.New("acp interrupt transport is not implemented yet")
-}
-
-func (handle *acpAgentHandle) RespondInteraction(ctx context.Context, response api.AgentInteractionResponse) error {
-	return errors.New("acp interaction transport is not implemented yet")
-}
-
-func (handle *acpAgentHandle) BindingKey() string {
-	if handle == nil {
-		return ""
-	}
-	return handle.value.SessionID
-}
-
-func (handle *acpAgentHandle) Close() error {
-	return nil
-}
-
-var _ AgentProvider = (*ACPAgentProvider)(nil)
-var _ AgentProviderCapabilities = (*ACPAgentProvider)(nil)
-var _ AgentHandle = (*acpAgentHandle)(nil)

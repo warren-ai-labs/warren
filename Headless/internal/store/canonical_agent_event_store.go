@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -603,6 +604,38 @@ func (s *AgentEventStore) QueryCanonicalEvents(
 	if len(result.Events) > 0 {
 		result.NextAfterSequence = result.Events[len(result.Events)-1].Sequence
 	}
+	stateEvents, err := s.latestStateEventsLocked(ctx, streamID, api.StateEventsBound(result.Events, afterSequence, state.head))
+	if err != nil {
+		return api.AgentEventsHistoryResult{}, err
+	}
+	result.StateEvents = stateEvents
+	return result, nil
+}
+
+// latestStateEventsLocked reads the latest event of each state type below
+// `before`. The caller holds s.mu.
+func (s *AgentEventStore) latestStateEventsLocked(ctx context.Context, streamID string, before uint64) ([]api.CanonicalAgentEvent, error) {
+	var result []api.CanonicalAgentEvent
+	for _, stateType := range api.CanonicalStateEventTypes {
+		var raw string
+		err := s.db.QueryRowContext(ctx, `
+			SELECT event_json FROM agent_event_journal
+			WHERE stream_id = ? AND event_type = ? AND sequence < ?
+			ORDER BY sequence DESC LIMIT 1
+		`, streamID, stateType, before).Scan(&raw)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("query canonical state event: %w", err)
+		}
+		var event api.CanonicalAgentEvent
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return nil, fmt.Errorf("decode canonical state event: %w", err)
+		}
+		result = append(result, event)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Sequence < result[j].Sequence })
 	return result, nil
 }
 

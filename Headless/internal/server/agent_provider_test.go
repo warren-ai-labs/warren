@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 
@@ -526,25 +525,39 @@ func TestAgentHandleCloseOnDeleteAndShutdown(t *testing.T) {
 func TestACPAgentProviderRegistrationAndHandle(t *testing.T) {
 	service := &Service{}
 	registry := NewDefaultAgentProviderRegistry(service)
-
-	// The ACP registration is intentionally present for future transport
-	// negotiation, but it must remain not-ready until the wire adapter exists.
 	ctx := context.Background()
-	_, err := registry.Ensure(ctx, AgentSessionContext{
+
+	// The ACP handler serves only Sessions created for it: a Session with a
+	// terminal runtime must never be driven over ACP.
+	if _, err := registry.Ensure(ctx, AgentSessionContext{
 		SessionID: "sess-acp-1",
 		Kind:      "codex",
 		Handler:   AgentHandlerACP,
-	})
-	if !errors.Is(err, ErrAgentNotReady) {
-		t.Fatalf("ACP ensure error = %v, want ErrAgentNotReady", err)
+		Session:   api.Session{ID: "sess-acp-1", Kind: "codex"},
+	}); err == nil {
+		t.Fatal("ACP handle was created for a terminal Session")
 	}
 
-	// Also verify embedded handler syntax "codex-acp"
-	_, err = registry.Ensure(ctx, AgentSessionContext{
+	// The embedded handler syntax "codex-acp" selects the same handler.
+	handle, err := registry.Ensure(ctx, AgentSessionContext{
 		SessionID: "sess-acp-2",
 		Kind:      "codex-acp",
+		Session:   api.Session{ID: "sess-acp-2", Kind: "codex", RuntimeKind: runtimeKindACP},
 	})
-	if !errors.Is(err, ErrAgentNotReady) {
-		t.Fatalf("embedded ACP ensure error = %v, want ErrAgentNotReady", err)
+	if err != nil {
+		t.Fatalf("embedded ACP ensure error = %v", err)
+	}
+	if _, ok := handle.(*acpAgentHandle); !ok || handle.BindingKey() != "acp|sess-acp-2" {
+		t.Fatalf("handle = %#v, want an ACP handle keyed by the Session", handle)
+	}
+
+	// Providers without an ACP server are refused.
+	if _, err := registry.Ensure(ctx, AgentSessionContext{
+		SessionID: "sess-acp-3",
+		Kind:      "pi",
+		Handler:   AgentHandlerACP,
+		Session:   api.Session{ID: "sess-acp-3", Kind: "pi", RuntimeKind: runtimeKindACP},
+	}); err == nil {
+		t.Fatal("ACP handle was created for a provider without an ACP server")
 	}
 }

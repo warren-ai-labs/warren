@@ -37,6 +37,8 @@ struct WarrenDesktopPresetBar: View {
     @FocusState private var focusedPresetID: String?
     @State private var pendingPresetID: String?
     @State private var pendingResetGeneration = 0
+    /// The ACP-capable preset whose inline Terminal/Chat choice is open.
+    @State private var choosingPresetID: String?
     @AppStorage(WarrenPreferenceKey.presetCommandShell)
     private var shellCommand = ""
     @AppStorage(WarrenPreferenceKey.presetCommandClaude)
@@ -57,6 +59,8 @@ struct WarrenDesktopPresetBar: View {
     private var presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
     @AppStorage(WarrenPreferenceKey.hiddenSessionPresets)
     private var hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
+    @AppStorage(WarrenPreferenceKey.agentInterface)
+    private var agentInterfaceRawValue = WarrenAgentInterface.defaultValue.rawValue
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
@@ -71,46 +75,7 @@ struct WarrenDesktopPresetBar: View {
                     hidden: hiddenPresets,
                     embeddedBrowser: canUseEmbeddedBrowser
                 )) { preset in
-                    Button {
-                        guard pendingPresetID == nil, !isBusy else { return }
-                        pendingPresetID = preset.id
-                        pendingResetGeneration &+= 1
-                        let generation = pendingResetGeneration
-                        onLaunch(preset.resolvedRequest(commandOverride: command(for: preset.id)))
-                        // A disconnected client can reject the launch before
-                        // the parent publishes its busy state. Clear only
-                        // that orphaned visual pending state so the preset
-                        // bar cannot remain disabled forever.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                            if pendingResetGeneration == generation {
-                                pendingPresetID = nil
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            WarrenDesktopPresetIcon(preset: preset)
-                                .frame(width: 16, height: 16)
-
-                            Text(preset.presetBarTitle)
-                                .font(.system(size: 13, weight: .light))
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, 6)
-                        .frame(height: 20)
-                        .contentShape(.rect)
-                    }
-                    .buttonStyle(WarrenPresetButtonStyle(isFocused: focusedPresetID == preset.id))
-                    .focused($focusedPresetID, equals: preset.id)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .disabled(WarrenDesktopPresetLaunchFeedback.isDisabled(
-                        hasScope: workspace != nil || terminalGroup != nil,
-                        isBusy: isBusy,
-                        isPending: pendingPresetID != nil
-                    ))
-                    .opacity(pendingPresetID == preset.id ? 0.68 : 1)
-                    .accessibilityValue(WarrenDesktopPresetLaunchFeedback.label(isPending: pendingPresetID == preset.id))
-                    .accessibilityLabel("Start \(preset.title)")
-                    .accessibilityHint("Create a session in \(scopeLabel)")
+                    presetButton(preset, tokens: tokens)
                 }
 
                 if isBusy {
@@ -140,10 +105,15 @@ struct WarrenDesktopPresetBar: View {
         .onChange(of: workspace?.id) { _ in
             pendingResetGeneration &+= 1
             pendingPresetID = nil
+            choosingPresetID = nil
         }
         .onChange(of: terminalGroup?.id) { _ in
             pendingResetGeneration &+= 1
             pendingPresetID = nil
+            choosingPresetID = nil
+        }
+        .onChange(of: agentInterfaceRawValue) { _ in
+            choosingPresetID = nil
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Command presets")
@@ -155,6 +125,127 @@ struct WarrenDesktopPresetBar: View {
             role: .group,
             label: "Command presets"
         )
+    }
+
+    private var isLaunchDisabled: Bool {
+        WarrenDesktopPresetLaunchFeedback.isDisabled(
+            hasScope: workspace != nil || terminalGroup != nil,
+            isBusy: isBusy,
+            isPending: pendingPresetID != nil
+        )
+    }
+
+    private func presetButton(_ preset: WarrenDesktopSessionPreset, tokens: WarrenColorTokens) -> some View {
+        Button {
+            press(preset)
+        } label: {
+            HStack(spacing: 6) {
+                WarrenDesktopPresetIcon(preset: preset)
+                    .frame(width: 16, height: 16)
+
+                Text(preset.presetBarTitle)
+                    .font(.system(size: 13, weight: .light))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 20)
+            .contentShape(.rect)
+        }
+        .buttonStyle(WarrenPresetButtonStyle(isFocused: focusedPresetID == preset.id))
+        .focused($focusedPresetID, equals: preset.id)
+        .foregroundStyle(choosingPresetID == preset.id ? tokens.foreground : tokens.mutedForeground)
+        .disabled(isLaunchDisabled)
+        .opacity(pendingPresetID == preset.id ? 0.68 : 1)
+        .accessibilityValue(WarrenDesktopPresetLaunchFeedback.label(isPending: pendingPresetID == preset.id))
+        .accessibilityLabel("Start \(preset.title)")
+        .accessibilityHint("Create a session in \(scopeLabel)")
+        .popover(
+            isPresented: Binding(
+                get: { choosingPresetID == preset.id },
+                set: { if !$0, choosingPresetID == preset.id { choosingPresetID = nil } }
+            ),
+            arrowEdge: .bottom
+        ) {
+            interfaceChoice(for: preset, tokens: tokens)
+        }
+        .warrenSemanticElement(
+            id: "preset.\(preset.id)",
+            role: .button,
+            label: "Start \(preset.title)",
+            isEnabled: !isLaunchDisabled,
+            isSelected: choosingPresetID == preset.id,
+            action: { press(preset) }
+        )
+    }
+
+    private func press(_ preset: WarrenDesktopSessionPreset) {
+        guard pendingPresetID == nil, !isBusy else { return }
+        let interface = WarrenAgentInterface(storedValue: agentInterfaceRawValue)
+        if preset.supportsConversation, interface == .ask {
+            // A second click on the same preset folds the choice away.
+            choosingPresetID = choosingPresetID == preset.id ? nil : preset.id
+            return
+        }
+        launch(preset, conversation: interface == .acp)
+    }
+
+    /// The second step for "Ask each time": the same preset as its terminal
+    /// CLI or as a Chat over ACP, stacked under the clicked preset.
+    private func interfaceChoice(for preset: WarrenDesktopSessionPreset, tokens: WarrenColorTokens) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach([false, true], id: \.self) { conversation in
+                let label = conversation ? "Chat" : "Terminal"
+                let hint = conversation ? "Conversation over ACP, with approvals" : "The provider's own CLI"
+                let id = "\(preset.id).\(conversation ? "chat" : "terminal")"
+                let choose = {
+                    guard pendingPresetID == nil, !isBusy else { return }
+                    launch(preset, conversation: conversation)
+                }
+                Button(action: choose) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(label)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(tokens.foreground)
+                        Text(hint)
+                            .font(.system(size: 11))
+                            .foregroundStyle(tokens.mutedForeground)
+                    }
+                    .lineLimit(1)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(WarrenPresetButtonStyle(isFocused: focusedPresetID == id))
+                .focused($focusedPresetID, equals: id)
+                .disabled(isLaunchDisabled)
+                .accessibilityLabel("Start \(preset.title) as \(label)")
+            }
+        }
+        .padding(4)
+        .frame(width: 240)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(preset.presetBarTitle) interface")
+    }
+
+    private func launch(_ preset: WarrenDesktopSessionPreset, conversation: Bool) {
+        choosingPresetID = nil
+        pendingPresetID = preset.id
+        pendingResetGeneration &+= 1
+        let generation = pendingResetGeneration
+        onLaunch(preset.resolvedRequest(
+            commandOverride: command(for: preset.id),
+            conversation: conversation
+        ))
+        // A disconnected client can reject the launch before
+        // the parent publishes its busy state. Clear only
+        // that orphaned visual pending state so the preset
+        // bar cannot remain disabled forever.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+            if pendingResetGeneration == generation {
+                pendingPresetID = nil
+            }
+        }
     }
 
     private func command(for presetID: String) -> String {
@@ -186,7 +277,7 @@ struct WarrenDesktopPresetIcon: View {
             let artwork = Image(nsImage: image)
                 .resizable()
                 .scaledToFit()
-                .scaleEffect(preset.id == "codex" ? 1.35 : 1)
+                .scaleEffect(preset.presetBarIconName == "preset-codex" ? 1.35 : 1)
                 .accessibilityHidden(true)
             if preset.presetBarIconIsTintable {
                 // A template image takes the foreground style, so the glyph is

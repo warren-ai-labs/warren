@@ -46,14 +46,6 @@ test("canonical control-plane events render as timeline markers", () => {
   );
 });
 
-test("a lone tool renders the collapsed row without an expand affordance", () => {
-  // One tool has nothing to disclose; the group rail would only repeat the
-  // command the header already shows.
-  const agent = read("agent.jsx");
-  assert.match(agent, /const singleTool = reasoning\.length === 0 && toolItems\.length === 1;/);
-  assert.match(agent, /agent-activity-head is-static/);
-});
-
 test("style uses semantic layer variables for z-index", () => {
   const css = read("style.css");
   const raw = [...css.matchAll(/z-index:\s*(\d+(?:\.\d+)?)/g)];

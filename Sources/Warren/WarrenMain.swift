@@ -667,6 +667,14 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         )
         sidebarItem.target = target
         sidebarItem.representedObject = WarrenDesktopCommand.toggleSidebar.rawValue
+        let inspectorItem = sessionMenu.addItem(
+            withTitle: "Toggle Inspector",
+            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            keyEquivalent: "b"
+        )
+        inspectorItem.keyEquivalentModifierMask = [.command, .option]
+        inspectorItem.target = target
+        inspectorItem.representedObject = WarrenDesktopCommand.toggleInspector.rawValue
         sessionMenuItem.submenu = sessionMenu
 
         let viewMenuItem = NSMenuItem()

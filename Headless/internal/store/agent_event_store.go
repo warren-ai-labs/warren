@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,13 +29,27 @@ const (
 	maxHistoryLimit     = 1000
 )
 
+// journalSizeLimit caps the WAL file left on disk after a checkpoint.
+const journalSizeLimit = 64 << 20
+
 // OpenAgentEventStore opens the canonical Agent journal database.
 func OpenAgentEventStore(dbPath string) (*AgentEventStore, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("create agent store directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	// DSN pragmas run on every pooled connection; db.Exec below reaches only
+	// one of them. A checkpoint resets the WAL but leaves the file at its
+	// high-water mark, which reached 763MB beside a 32MB journal, so each
+	// connection truncates it to journalSizeLimit after a checkpoint. Naming any
+	// _pragma drops the driver's default one-minute busy timeout, so it is kept
+	// explicitly.
+	uri := url.URL{
+		Scheme:   "file",
+		Path:     filepath.ToSlash(dbPath),
+		RawQuery: fmt.Sprintf("_pragma=busy_timeout(60000)&_pragma=journal_size_limit(%d)", journalSizeLimit),
+	}
+	db, err := sql.Open("sqlite3", uri.String())
 	if err != nil {
 		return nil, fmt.Errorf("open agent event sqlite: %w", err)
 	}
@@ -70,8 +85,15 @@ func OpenAgentEventStore(dbPath string) (*AgentEventStore, error) {
 		PRIMARY KEY (stream_id, sequence),
 		UNIQUE (stream_id, event_id)
 	);
-	CREATE INDEX IF NOT EXISTS idx_agent_event_journal_event
-	ON agent_event_journal(stream_id, event_id);
+	-- UNIQUE (stream_id, event_id) already carries an automatic index that the
+	-- planner uses for event-id lookups. An explicit index on the same columns
+	-- only doubled the write and storage cost of every appended event.
+	DROP INDEX IF EXISTS idx_agent_event_journal_event;
+	-- A page of recent history also carries the latest state events (the
+	-- selectors, plan, and context) older than the page; this finds each one
+	-- without walking the stream.
+	CREATE INDEX IF NOT EXISTS idx_agent_event_journal_type
+		ON agent_event_journal (stream_id, event_type, sequence);
 
 	CREATE TABLE IF NOT EXISTS agent_stream_state (
 		stream_id              TEXT NOT NULL PRIMARY KEY,

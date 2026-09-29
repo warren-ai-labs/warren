@@ -9,6 +9,12 @@ import WarrenObservation
 /// Superset v2's workspace chrome is one 40pt row. Leading controls only
 /// appear when the left rail is collapsed; an expanded sidebar owns its own
 /// header controls, so the workspace never gets a duplicate 48pt top bar.
+/// The Inspector's on/off control at the trailing end of the tab bar.
+struct WarrenDesktopInspectorToggle {
+    let isOpen: Bool
+    let toggle: () -> Void
+}
+
 struct WarrenDesktopTabBar: View {
     /// What the bar draws, resolved once from the display mode and the layout.
     ///
@@ -47,6 +53,7 @@ struct WarrenDesktopTabBar: View {
     let onSelectEndpoint: (String) -> Void
     let onRetryConnection: () -> Void
     let onStopConnection: () -> Void
+    let inspector: WarrenDesktopInspectorToggle?
     let onSelectTab: (String) -> Void
     let onMoveTab: (String, String?) -> Void
     let onSplitDrop: (String, String, SplitDropTarget) -> Void
@@ -98,6 +105,7 @@ struct WarrenDesktopTabBar: View {
         onSelectEndpoint: @escaping (String) -> Void,
         onRetryConnection: @escaping () -> Void = {},
         onStopConnection: @escaping () -> Void = {},
+        inspector: WarrenDesktopInspectorToggle? = nil,
         onSelectTab: @escaping (String) -> Void,
         onMoveTab: @escaping (String, String?) -> Void,
         onSplitDrop: @escaping (String, String, SplitDropTarget) -> Void = { _, _, _ in },
@@ -145,6 +153,7 @@ struct WarrenDesktopTabBar: View {
         self.onSelectEndpoint = onSelectEndpoint
         self.onRetryConnection = onRetryConnection
         self.onStopConnection = onStopConnection
+        self.inspector = inspector
         self.onSelectTab = onSelectTab
         self.onMoveTab = onMoveTab
         self.onSplitDrop = onSplitDrop
@@ -281,7 +290,8 @@ struct WarrenDesktopTabBar: View {
                         onCloseEmbeddedEditor: onCloseEmbeddedEditor,
                         onSelectEndpoint: onSelectEndpoint,
                         onRetryConnection: onRetryConnection,
-                        onStopConnection: onStopConnection
+                        onStopConnection: onStopConnection,
+                        inspector: inspector
                     )
                 }
             }
@@ -1096,6 +1106,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     let onSelectEndpoint: (String) -> Void
     let onRetryConnection: () -> Void
     let onStopConnection: () -> Void
+    var inspector: WarrenDesktopInspectorToggle?
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -1109,6 +1120,25 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                 WarrenDesktopOverflowButton(
                     isPresented: isOverflowPresented,
                     action: { onChromePopover(.overflow) }
+                )
+            }
+            if let inspector {
+                // Last, at the window's edge, beside the region it opens
+                // (after Synara's right-dock toggle).
+                WarrenDesktopChromeButton(
+                    systemImage: "sidebar.right",
+                    label: inspector.isOpen ? "Hide Inspector" : "Show Inspector",
+                    hint: "Changes, history, and files beside the terminal (⌥⌘B)",
+                    action: inspector.toggle,
+                    tint: inspector.isOpen ? tokens.foreground : nil,
+                    edgeSpaced: true
+                )
+                .warrenSemanticElement(
+                    id: "workspace-inspector.toggle",
+                    role: .button,
+                    label: inspector.isOpen ? "Hide Inspector" : "Show Inspector",
+                    isSelected: inspector.isOpen,
+                    action: inspector.toggle
                 )
             }
         }

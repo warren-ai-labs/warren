@@ -21,7 +21,10 @@ metal brush stroke on a charcoal rounded tile.
 - `warren-app-icon-16.svg`: native 16 × 16 micro version with flat silver
   tones.
 - `warren-app-icon.png`: 1024 × 1024 preview and general bitmap.
-- `Warren.icns`: macOS app icon.
+- `Warren.icns`: macOS app icon. The sources are full-bleed tiles; the
+  generator places them on the macOS icon grid (an 824 px tile inside a
+  1024 px canvas, margins rounded to whole pixels at 16 and 32 px) so the icon
+  matches other apps in the Dock. Web icons keep the full-bleed tile.
 - `menubar-black.svg` / `menubar-white.svg`: source variants of the W on a
   transparent background. The macOS menu bar uses a single heavier template
   variant (about 1.5× stroke width, still tapered) so the W stays visible at

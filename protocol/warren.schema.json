@@ -212,6 +212,8 @@
           "agent-interrupt-v1",
           "agent-attachments-v1",
           "agent-goals-v1",
+          "agent-config-v1",
+          "agent-streams-v1",
           "browser-v1"
         ]
       },
@@ -246,6 +248,7 @@
         { "method": "agent.execution.get", "paramsRef": "{executionId: string}", "resultRef": "api.AgentExecution" },
         { "method": "agent.events.history", "paramsRef": "{streamId: string, afterSequence?: uint64, beforeSequence?: uint64, limit?: uint32}", "resultRef": "api.AgentEventsHistoryResult" },
         { "method": "agent.events.subscribe", "paramsRef": "{streamId: string, afterSequence?: uint64, limit?: uint32}", "resultRef": "api.AgentEventsSubscriptionResult" },
+        { "method": "agent.events.unsubscribe", "paramsRef": "{streamId: string}", "resultRef": "{streamId: string, unsubscribed: bool}" },
         { "method": "usage.stats", "paramsRef": "api.UsageStatsRequest", "resultRef": "api.UsageStatsResult" },
         { "method": "usage.rebuild", "paramsRef": "free", "resultRef": "api.UsageRebuildResult" },
         { "method": "agent.execution.resume", "paramsRef": "api.AgentCommand", "resultRef": "api.AgentCommandReceipt" },
@@ -255,6 +258,8 @@
         { "method": "agent.interaction.resolve", "paramsRef": "api.AgentInteractionResolveCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.goal.set", "paramsRef": "api.AgentGoalSetCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.goal.clear", "paramsRef": "api.AgentGoalClearCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "agent.config.set", "paramsRef": "api.AgentConfigSetCommand", "resultRef": "api.AgentCommandReceipt" },
+        { "method": "session.handoff", "paramsRef": "{id: string, command?: string}", "resultRef": "api.Session" },
         { "method": "agent.attachment.prepare", "paramsRef": "api.AgentAttachmentPrepareCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.attachment.chunk", "paramsRef": "api.AgentAttachmentChunkCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.attachment.complete", "paramsRef": "api.AgentAttachmentCompleteCommand", "resultRef": "api.AgentCommandReceipt" },
@@ -450,7 +455,7 @@
               "plan.updated", "tasks.updated", "todo.updated", "context.updated", "status.changed",
               "attention.changed", "activity.updated", "plugin.updated", "subagent.updated",
               "attachment.updated", "config.updated", "compaction.updated", "diff.updated",
-              "diagnostics.updated", "queue.updated"
+              "diagnostics.updated", "queue.updated", "commands.updated"
             ]
           },
           "uniqueItems": true

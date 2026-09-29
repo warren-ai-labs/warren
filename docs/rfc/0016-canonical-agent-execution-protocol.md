@@ -208,6 +208,14 @@ agent.events.subscribe establishes a checkpoint before live delivery. Its
 result contains the Host projection checkpoint and every event committed
 after the client cursor before the subscription becomes live.
 
+A Session holds one live stream per connection: subscribing to a Session's new
+execution replaces its old stream. Without the `agent-streams-v1` capability a
+connection holds one stream in total, so each subscribe also drops every other
+Session's. A connection that negotiates `agent-streams-v1` keeps a stream for
+every Session it subscribes to, which lets a client keep every visible
+execution current (8.4), and releases one with agent.events.unsubscribe
+`{streamId}`. Unsubscribing a stream the connection does not hold is a no-op.
+
 ### 6.2 Mutation methods
 
     agent.execution.resume

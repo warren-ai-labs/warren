@@ -415,12 +415,8 @@ func mergeStructuredSource(primary, nested map[string]any) map[string]any {
 	return merged
 }
 
-// projectStructuredAgentEvent turns provider-native structured records into
-// the small, provider-neutral payload understood by Agent View.
-func projectStructuredAgentEvent(provider string, fallbackType string, raw json.RawMessage, timestamp time.Time) *api.AgentEvent {
-	return projectStructuredAgentEventWithLimit(provider, fallbackType, raw, timestamp, maxEventContent)
-}
-
+// projectStructuredAgentEventWithLimit turns provider-native structured
+// records into the small, provider-neutral payload understood by Agent View.
 func projectStructuredAgentEventWithLimit(provider string, fallbackType string, raw json.RawMessage, timestamp time.Time, contentLimit int) *api.AgentEvent {
 	var object map[string]any
 	if len(raw) == 0 || json.Unmarshal(raw, &object) != nil {
@@ -914,10 +910,6 @@ func parseUsage(raw json.RawMessage) *api.AgentUsage {
 		ReasoningOutputTokens:    value.ReasoningOutputTokens,
 		TotalTokens:              value.TotalTokens,
 	}
-}
-
-func contentString(value json.RawMessage) string {
-	return contentStringLimit(value, maxEventContent)
 }
 
 func contentStringLimit(value json.RawMessage, limit int) string {

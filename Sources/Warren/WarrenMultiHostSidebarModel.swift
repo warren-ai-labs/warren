@@ -182,6 +182,15 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
         rebuildProjection()
     }
 
+    /// Verifies every background roster connection after wake, a network
+    /// change, or reactivation, and ends any backoff wait they are sitting in.
+    func resumeConnections() {
+        for connection in connections.values {
+            guard let client = connection.client else { continue }
+            Task { await client.probeConnection() }
+        }
+    }
+
     func stop() {
         for connection in connections.values {
             stop(connection)

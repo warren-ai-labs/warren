@@ -13,6 +13,7 @@ public enum WarrenDesktopCommand {
     public static let selectTabIndexKey = "WarrenDesktopCommand.selectTabIndex"
     public static let findInTerminal = Notification.Name("WarrenDesktopCommand.findInTerminal")
     public static let toggleSidebar = Notification.Name("WarrenDesktopCommand.toggleSidebar")
+    public static let toggleInspector = Notification.Name("WarrenDesktopCommand.toggleInspector")
     /// Posted with a `WarrenDesktopSettingsDeepLink` object to open Settings
     /// at a section and optionally prefill Public Access configuration.
     public static let openSettings = Notification.Name("WarrenDesktopCommand.openSettings")

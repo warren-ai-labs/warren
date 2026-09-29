@@ -296,6 +296,15 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         }
     }
 
+    /// Whether the provider can also run as a Conversation over the Agent
+    /// Client Protocol (RFC 0023), so launching it involves an interface choice.
+    public var supportsConversation: Bool {
+        switch request.kind {
+        case .claude, .codex, .opencode: true
+        default: false
+        }
+    }
+
     /// Returns the launch request with the user's Settings command override
     /// applied. The command override never replaces the launch kind. Built-in
     /// presets carry no user title (the Host derives the display name from the
@@ -304,10 +313,18 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
     /// would populate it.
     /// Commands are typed into a plain shell first, so quitting an agent CLI
     /// leaves the terminal alive; an empty shell command opens a bare shell.
-    public func resolvedRequest(commandOverride: String) -> TerminalSessionLaunchRequest {
+    /// `conversation` drives a provider that supports it over ACP instead; the
+    /// Host picks the ACP server itself, so the command override does not apply.
+    public func resolvedRequest(
+        commandOverride: String,
+        conversation: Bool = false
+    ) -> TerminalSessionLaunchRequest {
         // A browser Session has no command line: the Host launches Chromium
         // itself, so there is nothing a typed command could replace.
         guard request.kind != .browser else { return request }
+        if conversation, supportsConversation {
+            return TerminalSessionLaunchRequest(kind: request.kind, title: request.title, agentHandler: "acp")
+        }
         let override = commandOverride.trimmingCharacters(in: .whitespacesAndNewlines)
         let command = override.isEmpty ? request.command : commandOverride
         return TerminalSessionLaunchRequest(kind: request.kind, command: command, title: request.title)

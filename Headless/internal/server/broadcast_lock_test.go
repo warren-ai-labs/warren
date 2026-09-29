@@ -18,9 +18,8 @@ func closedReason(peer *wsPeer) string {
 // A shared-ring frame for a session whose only subscribers read their own direct
 // Ghostline stream has no recipients. It must not touch the session broadcast
 // lock at all, because a legitimate holder — attach recovery capturing a
-// checkpoint, focus/resize applying a PTY size, or the Agent subsystem reading a
-// canonical history page — would otherwise be misread as a wedged lock and reset
-// every subscription multiplexed onto that WebSocket.
+// checkpoint or focus/resize applying a PTY size — would otherwise be misread as
+// a wedged lock and reset every subscription multiplexed onto that WebSocket.
 func TestBroadcastFrameLeavesDirectSubscribersAloneWhileTheSessionLockIsHeld(t *testing.T) {
 	const sessionID = "session-direct-only"
 	service := &Service{CommandTimeout: 50 * time.Millisecond}
@@ -91,5 +90,45 @@ func TestBroadcastLockTimeoutResetsOnlySharedSubscribers(t *testing.T) {
 	}
 	if !direct.hasOutput(sessionID) {
 		t.Fatal("direct subscriber lost its output subscription")
+	}
+}
+
+// The Agent subsystem orders its canonical history pages against live Agent
+// increments under its own lock. A slow journal query holding that lock must
+// not delay or reset terminal output for the same session.
+func TestBroadcastFrameIsNotBlockedByTheAgentLock(t *testing.T) {
+	const sessionID = "session-agent-busy"
+	service := &Service{CommandTimeout: 50 * time.Millisecond}
+	service.lazyInit()
+	peer := &wsPeer{
+		server:   &HTTPServer{Service: service},
+		closed:   make(chan struct{}),
+		outbound: make(chan outboundMessage, 1),
+	}
+	service.registerPeer(sessionID, peer)
+
+	lock := service.agentLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	started := time.Now()
+	service.broadcastFrame(output.Frame{
+		SessionID: sessionID,
+		Epoch:     1,
+		Sequence:  1,
+		Payload:   []byte("live output"),
+	})
+	elapsed := time.Since(started)
+
+	if reason := closedReason(peer); reason != "" {
+		t.Fatalf("shared subscriber was closed while the Agent lock was held: %s", reason)
+	}
+	if elapsed >= service.CommandTimeout {
+		t.Fatalf("frame waited %s behind the Agent lock", elapsed)
+	}
+	select {
+	case <-peer.outbound:
+	default:
+		t.Fatal("shared subscriber did not receive the frame")
 	}
 }

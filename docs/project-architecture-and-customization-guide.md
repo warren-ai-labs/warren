@@ -830,8 +830,11 @@ Read the repository in this order:
 2. `GLOSSARY.md`
 3. `DESIGN.md`
 4. `Headless/internal/api/types.go`
-5. `Headless/internal/server/http.go`
-6. `Headless/internal/server/service.go`
+5. `Headless/internal/server/http.go` (routes) and `ws_dispatch.go` (WebSocket
+   command dispatch)
+6. `Headless/internal/server/service.go` (Service core) with its per-area
+   files: `roster.go`, `sessions.go`, `workspaces.go`, `output_cursor.go`,
+   `output_broadcast.go`, and `agent_*.go`
 7. `Headless/internal/output/ring.go`
 8. `Headless/internal/output/wire.go`
 9. `Sources/Warren/WarrenCompositionRoot.swift`
@@ -867,8 +870,12 @@ path before studying client presentation details.
 - Shared terminology: `GLOSSARY.md`
 - Daemon flags and composition: `Headless/cmd/warren-headless/main.go`
 - Host resources and wire values: `Headless/internal/api/types.go`
-- WebSocket API and authorization: `Headless/internal/server/http.go`
-- Resource, Runtime, output, and agent service: `Headless/internal/server/service.go`
+- HTTP routes and authorization: `Headless/internal/server/http.go`
+- WebSocket peer, queues, and command dispatch: `Headless/internal/server/ws_peer.go`, `ws_dispatch.go`, `ws_agent_commands.go`
+- Service core and lifecycle: `Headless/internal/server/service.go`
+- Resources: `projects.go`, `workspaces.go`, `terminal_groups.go`, `sessions.go`, `roster.go` in `Headless/internal/server/`
+- Terminal output and peers: `output_cursor.go`, `output_broadcast.go`, `peer_control.go`, `runtime_resize.go` in `Headless/internal/server/`
+- Agent service: `agent_session.go`, `agent_events.go`, `agent_history.go`, `agent_interaction.go`, `agent_state.go` in `Headless/internal/server/`
 - Atomic Host Store: `Headless/internal/store/store.go`
 - Recovery Ring: `Headless/internal/output/ring.go`
 - DENB wire envelope: `Headless/internal/output/wire.go`

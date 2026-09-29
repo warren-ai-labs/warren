@@ -885,6 +885,27 @@ func TestClaudeCountsMessageUsageOnceAcrossLines(t *testing.T) {
 	}
 }
 
+func TestClaudeDropsThinkingWithoutText(t *testing.T) {
+	// Claude Code writes thinking as a signature with an empty text. Such a
+	// block has nothing to read and must not become a placeholder reasoning
+	// row; the response's usage moves to the block that follows it.
+	path := filepath.Join(t.TempDir(), "claude-empty-thinking.jsonl")
+	writeLines(t, path,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-08-16T10:00:00Z","message":{"id":"msg_sig","model":"claude-opus-5","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig"}],"usage":{"input_tokens":120,"output_tokens":40}}}`,
+		`{"type":"assistant","uuid":"a2","timestamp":"2026-08-16T10:00:01Z","message":{"id":"msg_sig","model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":120,"output_tokens":40}}}`,
+	)
+	events, _, err := readNew(path, 0, newParser("claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Type != "assistant" {
+		t.Fatalf("events = %#v, want only the assistant text", events)
+	}
+	if events[0].Usage == nil || events[0].Usage.InputTokens != 120 {
+		t.Fatalf("assistant event must carry the usage: %#v", events[0].Usage)
+	}
+}
+
 func TestClaudeCountsUsageOncePerMultiBlockLine(t *testing.T) {
 	// The same rule within one line: every block shares the response's usage.
 	path := filepath.Join(t.TempDir(), "claude-multi-block.jsonl")

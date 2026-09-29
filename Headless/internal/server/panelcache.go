@@ -9,9 +9,15 @@ import (
 )
 
 const (
-	panelCacheCapacity     = 16
-	panelRevalidateAfter   = 5 * time.Minute
-	panelRevalidateTimeout = 30 * time.Second
+	panelCacheCapacity   = 16
+	panelRevalidateAfter = 5 * time.Minute
+	// The working tree changes under Agents and editors that never go through
+	// Warren's Git commands, so the local part of a panel (status, log,
+	// branches) is re-read after a few seconds. The remote part (fetch and the
+	// pull request lookup, which goes over the network) keeps the longer
+	// panelRevalidateAfter.
+	panelLocalRevalidateAfter = 2 * time.Second
+	panelRevalidateTimeout    = 30 * time.Second
 	// A panel load may include a remote fetch plus several repository scans.
 	// It must outlive the WebSocket request that started it so a reconnect does
 	// not publish a canceled result to the next request.
@@ -19,11 +25,23 @@ const (
 )
 
 type panelCacheEntry struct {
-	key          string
-	panel        api.GitPanel
-	loadedAt     time.Time
-	revalidating bool
+	key      string
+	panel    api.GitPanel
+	loadedAt time.Time
+	// remoteLoadedAt is when the fetch and pull request lookup last ran;
+	// a local-only refresh advances loadedAt but not this.
+	remoteLoadedAt time.Time
+	revalidating   bool
 }
+
+// panelRevalidation says how much of a cached panel to re-read.
+type panelRevalidation int
+
+const (
+	panelRevalidateNone panelRevalidation = iota
+	panelRevalidateLocal
+	panelRevalidateFull
+)
 
 // panelCache is an LRU cache of git panel snapshots keyed by workspace ID.
 // Entries never expire on their own; stale-while-revalidate keeps them fresh:
@@ -75,15 +93,38 @@ func (c *panelCache) SetIfVersion(key string, panel api.GitPanel, version uint64
 	return true
 }
 
+// SetLocalIfVersion stores a panel re-read without its remote part. The
+// pull request state and the remote clock carry over from the cached entry.
+func (c *panelCache) SetLocalIfVersion(key string, panel api.GitPanel, version uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generations[key] != version {
+		return false
+	}
+	element, ok := c.index[key]
+	if !ok {
+		return false
+	}
+	entry := element.Value.(*panelCacheEntry)
+	panel.PullRequest = entry.panel.PullRequest
+	panel.PullRequestError = entry.panel.PullRequestError
+	entry.panel = panel
+	entry.loadedAt = time.Now()
+	c.list.MoveToFront(element)
+	return true
+}
+
 func (c *panelCache) setLocked(key string, panel api.GitPanel) {
+	now := time.Now()
 	if element, ok := c.index[key]; ok {
 		entry := element.Value.(*panelCacheEntry)
 		entry.panel = panel
-		entry.loadedAt = time.Now()
+		entry.loadedAt = now
+		entry.remoteLoadedAt = now
 		c.list.MoveToFront(element)
 		return
 	}
-	entry := &panelCacheEntry{key: key, panel: panel, loadedAt: time.Now()}
+	entry := &panelCacheEntry{key: key, panel: panel, loadedAt: now, remoteLoadedAt: now}
 	element := c.list.PushFront(entry)
 	c.index[key] = element
 	if c.list.Len() > c.cap {
@@ -101,21 +142,35 @@ func (c *panelCache) Version(key string) uint64 {
 // marks it as revalidating so concurrent hits do not start duplicate
 // refreshes. The marker is cleared by FinishRevalidate.
 func (c *panelCache) ShouldRevalidate(key string, after time.Duration) bool {
+	return c.Revalidation(key, after, after) != panelRevalidateNone
+}
+
+// Revalidation reports how much of key needs a background refresh: all of it
+// once the remote part is older than remoteAfter, the local part once the
+// panel is older than localAfter. Like ShouldRevalidate it marks the entry so
+// concurrent hits do not start duplicate refreshes.
+func (c *panelCache) Revalidation(key string, remoteAfter, localAfter time.Duration) panelRevalidation {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	element, ok := c.index[key]
 	if !ok {
-		return false
+		return panelRevalidateNone
 	}
 	entry := element.Value.(*panelCacheEntry)
 	if entry.revalidating {
-		return false
+		return panelRevalidateNone
 	}
-	if time.Since(entry.loadedAt) < after {
-		return false
+	kind := panelRevalidateNone
+	switch {
+	case time.Since(entry.remoteLoadedAt) >= remoteAfter:
+		kind = panelRevalidateFull
+	case time.Since(entry.loadedAt) >= localAfter:
+		kind = panelRevalidateLocal
+	default:
+		return panelRevalidateNone
 	}
 	entry.revalidating = true
-	return true
+	return kind
 }
 
 func (c *panelCache) FinishRevalidate(key string) {

@@ -110,6 +110,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// browser pane (RFC 0022 §8.4).
     private let browserHasKeyboardFocus: Bool
     private let editorSurface: @MainActor (Workspace) -> AnyView
+    /// The Inspector beside the terminal; nil where the host offers none.
+    private let inspectorSurface: (@MainActor (Workspace) -> AnyView)?
     /// Asks the runtime to open one document. Warren drives this exactly once
     /// per editor entry, to restore the Workspace's last document; every other
     /// file selection happens inside code-server and never reaches Warren.
@@ -151,6 +153,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var editorRegionWorkspaceIDs: Set<WorkspaceID>
     /// The Terminal's share of the central width while the editor region is up.
     @State private var terminalRatio = WarrenLayoutMetrics.editorSplitDefaultRatio
+    /// One switch for every Workspace, like the sidebar: the Inspector is a
+    /// way of working, not a property of one checkout.
+    @AppStorage("warren.desktop.inspectorOpen") private var inspectorOpen = false
+    @AppStorage("warren.desktop.inspectorTerminalRatio")
+    private var inspectorTerminalRatio = WarrenLayoutMetrics.inspectorSplitDefaultRatio
     @State private var splitTrees: [String: SplitLayoutTree]
     @State private var activePaneIDs: [String: String]
     /// Which arrangement this window renders for a scope. It is per viewer and
@@ -306,6 +313,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         browserHasKeyboardFocus: Bool = false,
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
         onOpenEditorDocument: @escaping @MainActor (Workspace, WarrenDesktopEditorDocument) -> Void = { _, _ in },
+        inspectorSurface: (@MainActor (Workspace) -> AnyView)? = nil,
         persistenceEnabled: Bool = true,
         @ViewBuilder terminalSurface: @escaping @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     ) {
@@ -395,6 +403,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.browserHasKeyboardFocus = browserHasKeyboardFocus
         self.editorSurface = editorSurface
         self.onOpenEditorDocument = onOpenEditorDocument
+        self.inspectorSurface = inspectorSurface
         self.persistenceEnabled = persistenceEnabled
         _sidebarState = State(
             initialValue: persistenceEnabled
@@ -589,7 +598,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 + (showsEditorRegion
                     ? WarrenLayoutMetrics.editorRegionMinimumWidth
                         + WarrenLayoutMetrics.editorSplitDividerWidth
-                    : 0),
+                    : (showsInspector(for: presentation.workspace)
+                        ? WarrenLayoutMetrics.inspectorMinimumWidth
+                            + WarrenLayoutMetrics.editorSplitDividerWidth
+                        : 0)),
             minHeight: (chromeMode.showsIndependentTopBar ? WarrenLayoutMetrics.topBarHeight : 0)
                 + WarrenLayoutMetrics.tabBarHeight
                 + WarrenLayoutMetrics.presetBarHeight
@@ -656,6 +668,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.toggleSidebar)) { _ in
             toggleSidebar()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.toggleInspector)) { _ in
+            toggleInspector(in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.openSettings)) { note in
             guard let request = note.object as? WarrenDesktopSettingsDeepLink else { return }
@@ -1133,6 +1148,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             onSelectEndpoint: onSelectEndpoint,
             onRetryConnection: onRetryConnection,
             onStopConnection: onStopConnection,
+            inspector: inspectorSurface == nil || presentation.workspace == nil ? nil : WarrenDesktopInspectorToggle(
+                isOpen: showsInspector(for: presentation.workspace),
+                toggle: { toggleInspector(in: presentation) }
+            ),
             onSelectTab: { selectTabFromTabBar($0, in: presentation) },
             onMoveTab: { tabID, destinationTabID in
                 dispatch(.moveTab(tabID, before: destinationTabID))
@@ -1216,6 +1235,21 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             workspace: workspace,
                             surface: editorSurface(workspace)
                         )
+                    )
+                } else if let workspace = presentation.workspace,
+                          let inspectorSurface,
+                          showsInspector(for: workspace) {
+                    WarrenDesktopCentralSplit(
+                        terminalRatio: $inspectorTerminalRatio,
+                        trailingMinimumWidth: WarrenLayoutMetrics.inspectorMinimumWidth,
+                        defaultRatio: WarrenLayoutMetrics.inspectorSplitDefaultRatio,
+                        accessibilityName: "Terminal and Inspector split",
+                        terminal: terminalRegion(
+                            presentation: presentation,
+                            currentTree: currentTree,
+                            currentPaneID: currentPaneID
+                        ),
+                        editor: inspectorSurface(workspace)
                     )
                 } else {
                     terminalRegion(
@@ -1322,6 +1356,23 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     /// Whether the code-server region is beside the Terminal for this Workspace.
+    /// The Inspector shares the editor region's place, so the editor, when it
+    /// is up, takes precedence and the Inspector returns when it closes.
+    private func showsInspector(for workspace: Workspace?) -> Bool {
+        guard inspectorSurface != nil, inspectorOpen, let workspace else { return false }
+        return !showsEditorRegion(for: workspace)
+    }
+
+    private func toggleInspector(in presentation: Presentation) {
+        guard inspectorSurface != nil, let workspace = presentation.workspace else { return }
+        if showsInspector(for: workspace) {
+            inspectorOpen = false
+        } else {
+            inspectorOpen = true
+            if showsEditorRegion(for: workspace) { closeEditorRegion(for: workspace) }
+        }
+    }
+
     private func showsEditorRegion(for workspace: Workspace?) -> Bool {
         guard embeddedEditorAvailable, let workspace else { return false }
         return editorRegionWorkspaceIDs.contains(workspace.id)

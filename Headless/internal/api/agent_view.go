@@ -23,6 +23,15 @@ const (
 	CapabilityAgentInterrupt    = "agent-interrupt-v1"
 	CapabilityAgentAttachments  = "agent-attachments-v1"
 	CapabilityAgentGoals        = "agent-goals-v1"
+	// CapabilityAgentConfig advertises agent.config.set: the Session's agent
+	// publishes selectors (model, mode, ...) in config.updated and accepts a
+	// change to any of them.
+	CapabilityAgentConfig = "agent-config-v1"
+	// CapabilityAgentStreams lets one connection hold an Agent event stream
+	// for every Session it subscribes to, instead of one stream that each
+	// agent.events.subscribe replaces. A Session still holds one stream, so a
+	// rebind to a new execution replaces that Session's old one.
+	CapabilityAgentStreams = "agent-streams-v1"
 	// CapabilityPaneGroups advertises that this Host owns Pane Groups: it stores
 	// the split arrangements, projects them through the roster, and accepts
 	// `pane-group.*` mutations. A client that does not negotiate it must not
@@ -54,6 +63,7 @@ var AgentViewCapabilities = []string{
 	CapabilityAgentInterrupt,
 	CapabilityAgentAttachments,
 	CapabilityAgentGoals,
+	CapabilityAgentConfig,
 }
 
 // HostCapabilities returns the capabilities understood by the Headless
@@ -67,6 +77,7 @@ func HostCapabilities() []string {
 	result = append(result, CapabilityPaneGroups)
 	result = append(result, CapabilityAgentCausation)
 	result = append(result, AgentViewCapabilities...)
+	result = append(result, CapabilityAgentStreams)
 	return result
 }
 

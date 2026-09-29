@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -261,5 +262,42 @@ func TestCanonicalAgentEventStoreTreatsCausationAsLateBound(t *testing.T) {
 	rival.CausedBy = "cmd-other"
 	if _, err := s.AppendCanonicalEvents(ctx, "exec-2", "exec-2", []api.CanonicalAgentEvent{rival}); !errors.Is(err, ErrCanonicalEventConflict) {
 		t.Fatalf("rival causation = %v, want ErrCanonicalEventConflict", err)
+	}
+}
+
+// Pragmas run through db.Exec reach one pooled connection. The WAL size cap
+// and busy timeout must hold on every connection the pool opens.
+func TestAgentEventStoreConfiguresEveryConnection(t *testing.T) {
+	s, err := OpenAgentEventStore(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	first, err := s.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	// Holding the first connection forces the pool to open another.
+	second, err := s.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	for index, conn := range []*sql.Conn{first, second} {
+		var limit, timeout int64
+		if err := conn.QueryRowContext(ctx, "PRAGMA journal_size_limit").Scan(&limit); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&timeout); err != nil {
+			t.Fatal(err)
+		}
+		if limit != journalSizeLimit {
+			t.Errorf("connection %d journal_size_limit = %d, want %d", index, limit, journalSizeLimit)
+		}
+		if timeout <= 0 {
+			t.Errorf("connection %d busy_timeout = %d, want a positive wait", index, timeout)
+		}
 	}
 }

@@ -2830,7 +2830,9 @@ final class WarrenDesktopTests: XCTestCase {
         )
         XCTAssertEqual(
             WarrenDesktopSessionPreset.pinned.map(\.request),
-            [.shell, .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae, TerminalSessionLaunchRequest(kind: .browser)]
+            [
+                .shell, .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae, TerminalSessionLaunchRequest(kind: .browser),
+            ]
         )
         XCTAssertNil(TerminalSessionLaunchRequest.shell.command)
         XCTAssertEqual(TerminalSessionLaunchRequest.claude.command, "claude")
@@ -2862,6 +2864,32 @@ final class WarrenDesktopTests: XCTestCase {
             WarrenDesktopSessionPreset.pinned.first { $0.id == "codex" }?
                 .resolvedRequest(commandOverride: "codex --model gpt-5").title
         )
+    }
+
+    /// Claude, Codex, and OpenCode launch as a Conversation over ACP when the
+    /// interface asks for it; every other preset ignores the choice.
+    func testConversationLaunchUsesACPOnlyForSupportingPresets() {
+        let presets = Dictionary(uniqueKeysWithValues: WarrenDesktopSessionPreset.pinned.map { ($0.id, $0) })
+
+        XCTAssertEqual(
+            WarrenDesktopSessionPreset.pinned.filter(\.supportsConversation).map(\.id),
+            ["claude", "codex", "opencode"]
+        )
+        XCTAssertEqual(
+            presets["claude"]?.resolvedRequest(commandOverride: "claude --model sonnet", conversation: true),
+            TerminalSessionLaunchRequest(kind: .claude, agentHandler: "acp")
+        )
+        XCTAssertEqual(
+            presets["codex"]?.resolvedRequest(commandOverride: "", conversation: false),
+            .codex
+        )
+        XCTAssertEqual(
+            presets["pi"]?.resolvedRequest(commandOverride: "", conversation: true),
+            .pi
+        )
+        XCTAssertEqual(WarrenAgentInterface(storedValue: nil), .ask)
+        XCTAssertEqual(WarrenAgentInterface(storedValue: "bogus"), .ask)
+        XCTAssertEqual(WarrenAgentInterface(storedValue: "acp"), .acp)
     }
 
     func testPresetOrderNormalizesPersistedIdentifiers() {
@@ -2955,7 +2983,8 @@ final class WarrenDesktopTests: XCTestCase {
     }
 
     func testEveryPresetAcceptsItsOwnCommandOverride() {
-        for preset in WarrenDesktopSessionPreset.pinned where preset.request.kind != .browser {
+        // A Chat preset has no command: the Host picks the provider's ACP server.
+        for preset in WarrenDesktopSessionPreset.pinned where preset.request.kind != .browser && !preset.request.isConversation {
             XCTAssertEqual(
                 preset.resolvedRequest(commandOverride: "personal-\(preset.id)").command,
                 "personal-\(preset.id)"
