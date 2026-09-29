@@ -4,61 +4,153 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
-### Changed
+_No changes yet._
 
-- Encode Agent activity as one mark all three clients share, and draw it as a
-  dot everywhere. Motion means exactly one thing — work is progressing — so a
-  halted Session no longer pulses indefinitely while it waits; color says what a
-  state asks of a person, so the actionable tier (`approval`, `input`, `unnamed`,
-  `failed`) takes the attention hue. A glyph badge for that tier was tried and
-  read worse at the size a row actually uses, so the kind of a request rides on
-  the status word and the accessibility label rather than a drawn symbol.
-  `DESIGN.md` §8.2 states the rules, `WarrenActivityMark` implements them, and
-  `Web/src/activity.js` mirrors the table.
-- Report what the Host is asking for, not just the lifecycle value beside it. An
-  attention payload outranks the `activity` it arrives with on every surface, so
-  a stale `ready` no longer draws the quiet idle marker on the one row that needs
-  someone; `failed` still outranks attention. The Desktop dropped attention
-  entirely before this — its marker took a bare lifecycle state — and its
-  Workspace rollup had no rung for it, so collapsing the tree lost the request.
-- Distinguish an `approval` request from an `input` request wherever activity is
-  drawn or named: the sidebar tree, Workspace and Terminal Group rollups, the Tab
-  strip, the solo pane identity, the command palette, the Web session and
-  workspace rows, and the iOS scope rows, search rows, and state chip. The Host
-  has always reported which one it was and no client rendered it. `is:blocked`
-  keeps matching all of them, because that is the lifecycle the Host reports with
-  every request.
-- Roll a Workspace's Sessions up through one ladder instead of four
-  near-copies. The Desktop projection, the Desktop command palette, the iOS
-  search index, and the Web all had their own; search ranking stays deliberately
-  different from visual salience, and that difference is now stated where it
-  lives rather than implied by duplication.
+## [0.23.0] - 2026-09-29
+
+> Minor release: adds ACP (Agent Client Protocol) Sessions and one Conversation
+> surface for every Agent across Desktop, Web, and iOS, an Inspector beside the
+> Desktop terminal for changes, history, and files, and a rebuilt iOS
+> navigation. The JSON control protocol remains at 4.0 and the Host state schema
+> stays at 4; the Host advertises two additive capabilities,
+> `agent-config-v1` and `agent-streams-v1`, and this release migrates no state.
 
 ### Added
 
-- Treat a finished turn as a completion notice rather than a steady state.
-  `ready` now means "this just finished" and stops being drawn once you have
-  looked at it, on both native clients; the acknowledgement is device-local (the
-  Host has no business knowing which screen you read it on) and persists, so a
-  weekend of finished work is still waiting on Monday. It retires itself the
-  moment the Agent works again, so a second completion lights up instead of being
-  swallowed by the first one's acknowledgement. Only `ready` can be retired by
-  being seen: opening a Session that wants an approval does not answer it, and a
-  failure does not un-fail because you visited.
-- Stop drawing an ended Session. `exited` is a permanent state rather than an
-  event, so it no longer carries a grey dot; every Session that ever ended used
-  to keep one, which was background noise that said nothing new. The status is
-  unchanged for search, `is:` filters, and accessibility.
+- Drive Agents over the Agent Client Protocol (RFC 0023). An ACP Session has no
+  PTY: the Host launches the provider's ACP server through the login shell and
+  translates `session/update`, permission requests, and prompt results into the
+  canonical Agent events, and the conversation survives an agent crash or a Host
+  restart through `session/resume` or `session/load`. An agent runs in a
+  detached holder (`warren-headless --acp-hold`) that owns its stdio, so a Host
+  shutdown detaches instead of killing it and the next Host attaches again
+  without `initialize` or `session/resume`, adopting a prompt still running. The
+  CLI creates one with `--agent-handler acp`.
+- Open an ACP Session in one Conversation surface on all three clients: the
+  prompt as a trailing bubble, one collapsed work trail per turn, reasoning on
+  demand, the answer as the only full-contrast text, an edited-files card, and a
+  decision dock above the composer as the one place that asks for attention.
+  Chat and terminal Agents share the view, and the new-session sheet offers Chat
+  or Terminal for Claude, Codex, and OpenCode; Desktop Settings > Launch As sets
+  Terminal, Chat, or Ask each time.
+- Publish the agent's config selectors (model, mode, effort) as one complete
+  snapshot under `agent-config-v1`, and accept `agent.config.set`. A client that
+  negotiates it gets a model and mode menu, and ACP `terminal/create` is backed
+  by a visible terminal Session whose PTY process is the command itself, linked
+  from the tool step and removed on release or when the agent goes away.
+- Hand an ACP conversation off to a resuming terminal Session: `session.handoff`
+  closes the chat's agent process, waits for it to exit, and replaces the Session
+  with a TUI Session that resumes the same provider conversation
+  (`claude --resume`, `codex resume`, `opencode --session`), taking the chat's
+  tab position, panes, and pin. No agent process can start for the chat meanwhile.
+- Keep every running Agent Session current in the background. iOS and Desktop
+  negotiate `agent-streams-v1`, so one connection keeps a stream per Session it
+  subscribes to and can release one with `agent.events.unsubscribe`, instead of
+  each subscribe replacing the last.
+- Draw plan proposals as their own card. Codex `<proposed_plan>` blocks and
+  Claude `ExitPlanMode` project to one proposed Plan whose result settles it as
+  approved or rejected, keeping the user's feedback on the card after a
+  rejection. Codex's "Implement this plan?" picker is mirrored from the rollout
+  as a confirmation with its three rows and answered from a client, and Claude's
+  `AskUserQuestion` picker is driven through the PTY.
+- Add an Inspector beside the Desktop terminal (⌥⌘B) with Changes, History, and
+  Files: the branch against its upstream and main with inline numbered diffs, a
+  commit box, the commits not yet on main, a pull-request creation flow, and the
+  checkout as `git ls-files` sees it with a light native editor. Swift clients
+  get the matching `git.panel`, `git.diff`, `git.commit`, `git.push`, `git.pull`,
+  and `git.pr.create` calls.
+- Notify on iOS when a running Agent Session needs approval or input, fails, or
+  finishes a turn, only while the app is not active. Tapping a notice opens its
+  Session, and the notice carries the request itself or the turn's outcome, the
+  Host-measured duration, and the last reply.
+- Carry the latest config, plan, context, and commands events with every history
+  page through a `stateEvents` field, so a client that opens a long conversation
+  still shows its model, mode, and plan.
 
 ### Changed
 
-- Quiet the working pulse. An Agent that is working now pulses at 2.4s with a
-  0.26 peak instead of 1.2s at 0.75: motion outranks shape and color in
-  peripheral vision, so "busy, leave it alone" was drawing more attention than
-  "halted, waiting on you". Connection and build dots keep the original cadence.
-- Say "Done" instead of "Idle" for a Session whose Agent has finished. The mark
-  is drawn only while the completion is news, so the old word described a state
-  rather than the event that put it on screen.
+- Encode Agent activity as one mark all three clients share, and draw it as a
+  dot everywhere. Motion means work is progressing, so only `working` pulses and
+  a halted Session stops; color says what a state asks of a person, so the
+  actionable tier (`approval`, `input`, `unnamed`, `failed`) takes the attention
+  hue; an attention payload outranks the lifecycle it arrives with, and `failed`
+  outranks attention. Four near-copies of the priority ladder — the Desktop
+  projection, the Desktop command palette, the iOS search index, and the Web —
+  collapse into one table, and `DESIGN.md` §8.2 states the rules.
+- Treat a finished turn as a completion notice rather than a steady state:
+  `ready` means "this just finished" and stops being drawn once you have looked
+  at it, device-locally and persistently, and retires itself the moment the
+  Agent works again. Only `ready` is acknowledgeable. `exited` is no longer
+  drawn at all, and the status is unchanged for search and `is:` filters. The
+  word is "Done" rather than "Idle", and the working pulse is quieter at 2.4s
+  with a 0.26 peak.
+- Rebuild iOS navigation on native chrome: the platform navigation bar and
+  inset-grouped lists replace floating circle buttons and shadowed cards on
+  Home, Projects, Workspaces, Hosts, Settings, and the sheets. Home groups
+  Sessions into Needs You / Working / Recent, and the connection dot alone
+  carries a lost connection instead of an Offline card.
+- Quiet the Conversation: 13 pt type at about 1.6 leading, semibold only where
+  Markdown asks, inline code on a visible wash, tighter headings, wrapping
+  tables, and copy plus time as one small footer. The controls move into the
+  composer, and a message written while the Agent works is queued — and can be
+  taken back — instead of refused.
+- Send a queued Agent message once the Agent is ready even after leaving its
+  Session, read from the roster for Sessions that are not open, instead of
+  holding it until the Session is opened again.
+- Set each Desktop Host on a tinted plate with a hairline where plates meet, and,
+  when a Host is collapsed, report its project count and the most actionable
+  Agent mark so folding never hides a request.
+- Say when an open iOS Session is behind, failed to update, or offline, with a
+  visible catch-up, a retrying subscribe, and a Reconnect action, and pick the
+  route on resume instead of after a failed reconnect.
+
+### Fixed
+
+- Present the local part of the Git panel within seconds: status, log, and
+  branches are re-read in the background after two seconds, so files an Agent or
+  editor changes appear in the Inspector and the Web panel, while the network
+  fetch and pull-request lookup keep the five-minute clock. A fresh branch is
+  reported as having no commits beyond main rather than as merged.
+- Keep the Desktop terminal mounted when the Inspector or the embedded editor
+  opens or closes by holding one split whose trailing region is optional, so the
+  toggle only changes widths and no longer releases focus or blanks the pane.
+- Reach the local daemon at the address it is launched with instead of always
+  `127.0.0.1:8789`.
+- Fail a half-open socket on a probe deadline, let `probeConnection` and
+  `reconnectNow` end a backoff wait, and probe every Host connection — Desktop
+  included — on wake and after a network path change. A resume probe sends a
+  fresh app ping and waits for its own pong, so buffered frames cannot call a
+  dead socket healthy.
+- Fall back from a dead direct route to Relay once it stays down past the settle
+  grace, and dial a new route alongside a live one, taking over only after it
+  authenticates.
+- Keep a turn working when one of its tools fails; only an error event or an
+  error stop reason fails a turn now.
+- Project Claude `TaskCreate`/`TaskUpdate` and Codex `tools.update_plan` inside
+  exec scripts to the Todo and Plan events, drop Claude thinking blocks that
+  carry no text, and give Host-recorded `interaction.resolved` and
+  `interaction.expired` rows a complete envelope so Web does not drop the
+  history page that holds one.
+- Give the Agent history its own per-session lock so a slow journal read cannot
+  delay live terminal frames, cap the Agent journal WAL file at 64MB after each
+  checkpoint, and drop a duplicate agent event journal index.
+- Fix the iOS notice tap that aborted the app (a completion handler called off
+  the main thread), stop Relay from rejecting the iOS invite exchange, and fix
+  the Web blank page on first render from a state read before it existed.
+- Keep the workspace name readable in the Web mobile header, open a conversation
+  at its latest turn, and hide the composer placeholder while an IME composes.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and the Host state schema stays at 4;
+  this release migrates no state. The Host advertises two additive capabilities,
+  `agent-config-v1` and `agent-streams-v1`, and a client that does not negotiate
+  them behaves as before.
+- ACP requires the provider's ACP server reachable through the login shell, and
+  an ACP Session has no PTY, so terminal attach and read are refused on it.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
 
 ## [0.22.0] - 2026-09-23
 

@@ -125,6 +125,54 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.23.0",
+        dateISO: "2026-09-29",
+        date: "September 29, 2026",
+        title: "Warren runs Agents over ACP and opens an Inspector.",
+        summary:
+          "A minor release that adds ACP (Agent Client Protocol) Sessions and one Conversation surface for every Agent across Desktop, Web, and iOS, an Inspector beside the Desktop terminal for changes, history, and files, and a rebuilt iOS navigation. The JSON control protocol remains at 4.0; the Host advertises two additive capabilities, `agent-config-v1` and `agent-streams-v1`, and the Host state schema is unchanged.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Drive Agents over the Agent Client Protocol (RFC 0023). An ACP Session has no PTY: the Host launches the provider's ACP server through the login shell, translates `session/update`, permissions, and prompt results into canonical Agent events, and survives an agent crash or Host restart through `session/resume` or `session/load`. A detached holder keeps the agent alive across a Host restart, and the CLI creates one with `--agent-handler acp`.",
+              "Open an ACP Session in one Conversation surface on all three clients — a trailing prompt bubble, one collapsed work trail, reasoning on demand, an edited-files card, and a decision dock above the composer — shared with terminal Agents. The new-session sheet offers Chat or Terminal for Claude, Codex, and OpenCode.",
+              "Publish the agent's model, mode, and effort selectors under `agent-config-v1` and accept `agent.config.set`; back ACP `terminal/create` with a visible terminal Session; and hand a conversation off to a resuming terminal Session with `session.handoff`.",
+              "Keep every running Agent Session current in the background: iOS and Desktop negotiate `agent-streams-v1` for one stream per subscribed Session, with `agent.events.unsubscribe`.",
+              "Draw plan proposals as their own card (Codex `<proposed_plan>` and Claude `ExitPlanMode`), answer Claude's `AskUserQuestion` from the Agent view, and answer Codex's “Implement this plan?” picker.",
+              "Add an Inspector beside the Desktop terminal (⌥⌘B) for changes, history, and files, with inline diffs and a pull-request flow; Swift clients get `git.panel`, `git.diff`, `git.commit`, `git.push`, `git.pull`, and `git.pr.create`.",
+              "Notify on iOS when a running Agent Session needs approval or input, fails, or finishes a turn, and carry the latest config, plan, and context events with every history page.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Encode Agent activity as one dot all three clients share: motion means work is progressing, color says what a state asks of a person, and an attention payload outranks the lifecycle it arrives with. Four priority ladders collapse into one table.",
+              "Treat a finished turn as a completion notice: `ready` stops being drawn once seen, device-locally and persistently; `exited` is no longer drawn; the word is “Done”, and the working pulse is quieter.",
+              "Rebuild iOS navigation on native chrome and grouped lists, quiet the Conversation type, move its controls into the composer, and queue a message written while the Agent works.",
+              "Set each Desktop Host on a tinted plate, and, when collapsed, report its project count and most actionable Agent mark.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Re-read the Git panel's local status, log, and branches after two seconds so files an Agent changes appear, and report a fresh branch as having no commits beyond main rather than as merged.",
+              "Keep the Desktop terminal mounted when the Inspector or editor opens, reach the local daemon at its launched address, and fail half-open sockets on a probe deadline that a probe can also cut short.",
+              "Fall back from a dead direct route to Relay, keep a turn working when a tool fails, and project Claude and Codex task and plan tools to Todo/Plan.",
+              "Fix the iOS notice tap that aborted the app, the Relay invite rejection, and the Web blank page on first render.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0 and the Host state schema stays at 4; this release migrates no state. The Host adds the `agent-config-v1` and `agent-streams-v1` capabilities, and a client that does not negotiate them behaves as before.",
+              "ACP requires the provider's ACP server reachable through the login shell, and an ACP Session has no PTY, so terminal attach and read are refused on it.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.22.0",
         dateISO: "2026-09-23",
         date: "September 23, 2026",
@@ -1416,6 +1464,54 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.23.0",
+        dateISO: "2026-09-29",
+        date: "2026 年 9 月 29 日",
+        title: "Warren 用 ACP 驱动 Agent，并加入 Inspector。",
+        summary:
+          "次版本：新增 ACP（Agent Client Protocol）Session，以及三个客户端共用的一套 Conversation 界面；Desktop 终端旁新增 Inspector，可看变更、历史与文件；iOS 导航按系统样式重建。JSON 控制协议仍为 4.0；Host 新增 `agent-config-v1` 与 `agent-streams-v1` 两个能力，Host 状态 schema 不变。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "用 Agent Client Protocol（RFC 0023）驱动 Agent。ACP Session 没有 PTY：Host 通过登录 shell 启动 provider 的 ACP server，把 `session/update`、权限请求与 prompt 结果翻译成标准 Agent 事件，并通过 `session/resume` 或 `session/load` 在 agent 崩溃或 Host 重启后继续。独立 holder 让 agent 跨 Host 重启存活，CLI 用 `--agent-handler acp` 创建。",
+              "三个客户端共用一套 Conversation：prompt 为尾部气泡、每轮一条折叠的工作轨迹、按需的 reasoning、变更文件卡片，以及 composer 上方的决策区；终端 Agent 也用同一界面。新建面板为 Claude、Codex、OpenCode 提供 Chat 或 Terminal。",
+              "在 `agent-config-v1` 下发布模型、模式、effort 选择器并接受 `agent.config.set`；用可见的终端 Session 承载 ACP `terminal/create`；用 `session.handoff` 把会话交给可续接的终端 Session。",
+              "让每个运行中的 Agent Session 在后台保持最新：iOS 与 Desktop 协商 `agent-streams-v1`，每个订阅的 Session 各持一条流，并可用 `agent.events.unsubscribe` 释放。",
+              "把计划提议画成独立卡片（Codex `<proposed_plan>`、Claude `ExitPlanMode`），在 Agent 界面回答 Claude 的 `AskUserQuestion`，并回答 Codex 的 “Implement this plan?” 选择框。",
+              "Desktop 终端旁新增 Inspector（⌥⌘B），查看变更、历史与文件，含行内 diff 与创建 pull request；Swift 客户端获得 `git.panel`、`git.diff`、`git.commit`、`git.push`、`git.pull`、`git.pr.create`。",
+              "iOS 在 Agent 需要审批或输入、失败或完成一轮时发通知；每个历史分页都带上最新的 config、plan 与 context 事件。",
+            ],
+          },
+          {
+            title: "变更",
+            items: [
+              "三个客户端共用一种 Agent 活动圆点：动表示正在工作，颜色表示状态对人的要求，attention 载荷优先于随行的 lifecycle。四份优先级表合并为一份。",
+              "把完成的回合当作一次通知：`ready` 看过后不再显示（本地持久化）；`exited` 不再显示；措辞改为 “Done”，工作脉冲更安静。",
+              "iOS 导航按系统样式与分组列表重建，Conversation 排版更安静，控制项移入 composer，Agent 工作时输入的消息进入队列。",
+              "Desktop 每个 Host 放在带底色的托盘上，折叠时显示项目数与最需要处理的 Agent 标记。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "Git 面板的本机状态、日志与分支改为两秒后重读，Agent 改动的文件即时可见；新分支不再被说成已合并，而是“相对 main 没有新提交”。",
+              "打开 Inspector 或编辑器时保持终端挂载；本地 daemon 用启动时的地址连接；半开 socket 按探测超时失败，探测也能中断退避。",
+              "直连路由失效后回退到 Relay；工具失败不再让整轮失败；把 Claude 与 Codex 的任务、计划工具投影为 Todo/Plan。",
+              "修复 iOS 点击通知导致 App 中止、Relay 拒绝邀请交换，以及 Web 首次渲染白屏。",
+            ],
+          },
+          {
+            title: "发行说明",
+            items: [
+              "JSON 控制协议仍为 4.0，Host 状态 schema 仍为 4，本版本不迁移任何状态。Host 新增 `agent-config-v1` 与 `agent-streams-v1` 能力，未协商的客户端行为不变。",
+              "ACP 需要 provider 的 ACP server 能通过登录 shell 启动；ACP Session 没有 PTY，因此拒绝终端 attach 与 read。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该压缩包适合内部或临时测试，不适合公开发布。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.22.0",
         dateISO: "2026-09-23",
