@@ -86,6 +86,9 @@ struct WarrenInspectorFiles: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        // Built once per render: every row reads it, and a directory row scans
+        // its keys, so rebuilding it per read made the tree quadratic.
+        let changed = changed
         Group {
             if let file = inspector.openFile {
                 WarrenFileEditor(root: inspector.path, relativePath: file, status: changed[file]) {
@@ -123,7 +126,7 @@ struct WarrenInspectorFiles: View {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
                                 ForEach(flattened(tree, depth: 0), id: \.node.id) { item in
-                                    row(item.node, depth: item.depth, tokens: tokens)
+                                    row(item.node, depth: item.depth, changed: changed, tokens: tokens)
                                 }
                             }
                             .padding(.bottom, WarrenSpacing.medium)
@@ -155,7 +158,7 @@ struct WarrenInspectorFiles: View {
         }
     }
 
-    private func row(_ node: WarrenFileNode, depth: Int, tokens: WarrenColorTokens) -> some View {
+    private func row(_ node: WarrenFileNode, depth: Int, changed: [String: String], tokens: WarrenColorTokens) -> some View {
         let isOpen = open.contains(node.id)
         let status = node.isDirectory ? nil : changed[node.id]
         let containsChange = node.isDirectory && changed.keys.contains { $0.hasPrefix(node.id + "/") }
@@ -441,6 +444,7 @@ struct WarrenCodeTextView: NSViewRepresentable {
         textView.string = text
         textView.isEditable = editable
         let ruler = WarrenLineNumberRuler(textView: textView)
+        ruler.dark = dark
         scrollView.verticalRulerView = ruler
         scrollView.hasVerticalRuler = true
         scrollView.rulersVisible = true
@@ -452,6 +456,9 @@ struct WarrenCodeTextView: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? NSTextView else { return }
         textView.isEditable = editable
+        if let ruler = scrollView.verticalRulerView as? WarrenLineNumberRuler, ruler.dark != dark {
+            ruler.dark = dark
+        }
         if textView.string != text {
             textView.string = text
             context.coordinator.highlight(textView)
@@ -498,6 +505,12 @@ struct WarrenCodeTextView: NSViewRepresentable {
 /// Line numbers in the gutter, drawn for the visible lines only.
 final class WarrenLineNumberRuler: NSRulerView {
     private weak var codeView: NSTextView?
+    /// Where each line starts, rebuilt only after an edit so a scroll does not
+    /// recount the file from the top on every frame.
+    private var lineStarts: [Int]?
+    var dark = false {
+        didSet { needsDisplay = true }
+    }
 
     init(textView: NSTextView) {
         codeView = textView
@@ -510,16 +523,43 @@ final class WarrenLineNumberRuler: NSRulerView {
             name: NSView.boundsDidChangeNotification,
             object: textView.enclosingScrollView?.contentView
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(textChanged),
+            name: NSText.didChangeNotification,
+            object: textView
+        )
     }
 
     required init(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     @objc private func refresh() { needsDisplay = true }
 
-    /// Numbers only, on the editor's own ground: the default ruler paints a
-    /// light band with a rule that reads as a separate control.
+    @objc private func textChanged() {
+        lineStarts = nil
+        needsDisplay = true
+    }
+
+    /// Numbers on the editor's own ground: the default ruler paints a light
+    /// band with a rule that reads as a separate control. The ground has to be
+    /// opaque, because the clip view runs under the ruler and code scrolled
+    /// sideways passes beneath it.
     override func draw(_ dirtyRect: NSRect) {
+        NSColor(WarrenColorTokens.resolved(for: dark ? .dark : .light).background).setFill()
+        // The ruler does not clip, so a dirty rect can reach past it.
+        bounds.intersection(dirtyRect).fill()
         drawHashMarksAndLabels(in: dirtyRect)
+    }
+
+    private func starts(of string: NSString) -> [Int] {
+        if let lineStarts { return lineStarts }
+        var starts = [0]
+        string.enumerateSubstrings(in: NSRange(location: 0, length: string.length), options: [.byLines, .substringNotRequired]) { _, _, enclosing, _ in
+            let next = NSMaxRange(enclosing)
+            if next < string.length { starts.append(next) }
+        }
+        lineStarts = starts
+        return starts
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
@@ -530,10 +570,15 @@ final class WarrenLineNumberRuler: NSRulerView {
         let visible = textView.visibleRect
         let glyphs = layout.glyphRange(forBoundingRect: visible, in: container)
         let characters = layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
-        var line = 1
-        string.enumerateSubstrings(in: NSRange(location: 0, length: characters.location), options: [.byLines, .substringNotRequired]) { _, _, _, _ in
-            line += 1
+        // The 1-based number of the line holding the first visible character.
+        let starts = starts(of: string)
+        var low = 0
+        var high = starts.count
+        while low < high {
+            let mid = (low + high) / 2
+            if starts[mid] <= characters.location { low = mid + 1 } else { high = mid }
         }
+        var line = max(1, low)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .regular),
             .foregroundColor: NSColor.secondaryLabelColor.withAlphaComponent(0.55),

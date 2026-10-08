@@ -237,7 +237,7 @@ struct WarrenInspectorSurface: View {
             Spacer(minLength: WarrenSpacing.compact)
             if let panel = inspector.panel {
                 HStack(spacing: 4) {
-                    Image(systemName: "arrow.triangle.branch").font(.system(size: 10))
+                    WarrenBranchGlyph(size: 11)
                     Text(panel.branch.isEmpty ? "detached" : panel.branch)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -362,49 +362,34 @@ private struct WarrenInspectorBranchCard: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-            HStack(spacing: WarrenSpacing.compact) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 12, weight: .medium))
+        VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+            HStack(alignment: .center, spacing: WarrenSpacing.small) {
+                WarrenBranchGlyph(size: 13)
                     .foregroundStyle(tokens.mutedForeground)
-                Text(panel.branch.isEmpty ? "Detached HEAD" : panel.branch)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(tokens.foreground)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(panel.branch.isEmpty ? "Detached HEAD" : panel.branch)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(tokens.foreground)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                    meta(standing, tokens: tokens)
+                }
                 Spacer(minLength: 0)
                 syncButton("Pull", symbol: "arrow.down", badge: panel.behind, action: "pull", tokens: tokens) { inspector.pull() }
                     .disabled(panel.upstream == nil)
                 syncButton("Push", symbol: "arrow.up", badge: panel.ahead, action: "push", tokens: tokens) { inspector.push() }
                     .disabled(panel.remote == nil && panel.upstream == nil)
             }
-            HStack(spacing: WarrenSpacing.small) {
-                if let upstream = panel.upstream {
-                    meta("Tracks \(upstream)", tokens: tokens)
-                } else {
-                    meta("Not published", tokens: tokens)
-                }
-                if let main = panel.mainBranchShortName, panel.branch != main {
-                    Text("·").foregroundStyle(tokens.mutedForeground.opacity(0.6))
-                    if panel.merged {
-                        // HEAD is inside main: true of a branch that landed
-                        // and of one that has not started yet, so no badge.
-                        meta("No commits beyond \(main)", tokens: tokens)
-                    } else {
-                        meta(panel.aheadOfMain == 1 ? "1 commit ahead of \(main)" : "\(panel.aheadOfMain) commits ahead of \(main)", tokens: tokens)
-                    }
-                }
-            }
             if let operation = panel.operation, !operation.isEmpty {
                 Label("A \(operation) is in progress", systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(tokens.warning)
             }
             if inspector.canCreatePullRequest {
-                Rectangle().fill(tokens.border).frame(height: WarrenSpacing.hairline)
                 if composingPR {
                     VStack(alignment: .leading, spacing: WarrenSpacing.small) {
+                        Rectangle().fill(tokens.border).frame(height: WarrenSpacing.hairline)
                         TextField("Title", text: $prTitle)
                             .textFieldStyle(.plain)
                             .font(.system(size: 12.5, weight: .medium))
@@ -445,10 +430,11 @@ private struct WarrenInspectorBranchCard: View {
                             if inspector.action == "pr" {
                                 ProgressView().controlSize(.mini).frame(width: 10, height: 10)
                             } else {
-                                Image(systemName: "arrow.triangle.pull").font(.system(size: 11))
+                                Image(systemName: "arrow.triangle.pull").font(.system(size: 10.5))
                             }
                             Text("Create pull request into \(panel.mainBranchShortName ?? "main")")
-                                .font(.system(size: 12))
+                                .font(.system(size: 11.5))
+                                .lineLimit(1)
                             Spacer(minLength: 0)
                         }
                         .foregroundStyle(tokens.link)
@@ -459,42 +445,53 @@ private struct WarrenInspectorBranchCard: View {
                 }
             }
             if let pr = panel.pullRequest {
-                Rectangle().fill(tokens.border).frame(height: WarrenSpacing.hairline)
                 Button {
                     if let url = URL(string: pr.url) { NSWorkspace.shared.open(url) }
                 } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.small) {
+                    HStack(spacing: WarrenSpacing.small) {
                         Image(systemName: "arrow.triangle.pull")
-                            .font(.system(size: 11))
+                            .font(.system(size: 10.5))
                             .foregroundStyle(pr.state.lowercased() == "merged" ? tokens.success : tokens.info)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(pr.title)
-                                .font(.system(size: 12.5, weight: .medium))
-                                .foregroundStyle(tokens.foreground)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                            Text([pr.number > 0 ? "#\(pr.number)" : nil, pr.draft ? "Draft" : pr.state.capitalized, pr.base.isEmpty ? nil : "into \(pr.base)"]
-                                .compactMap { $0 }.joined(separator: " · "))
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(tokens.mutedForeground)
-                        }
+                        Text(pr.title)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(tokens.foreground)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Text([pr.number > 0 ? "#\(pr.number)" : nil, pr.draft ? "Draft" : pr.state.capitalized]
+                            .compactMap { $0 }.joined(separator: " · "))
+                            .font(.system(size: 11))
+                            .foregroundStyle(tokens.mutedForeground)
+                            .lineLimit(1)
+                            .layoutPriority(1)
                         Spacer(minLength: 0)
-                        Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(tokens.mutedForeground)
+                        Image(systemName: "arrow.up.right").font(.system(size: 8.5, weight: .semibold)).foregroundStyle(tokens.mutedForeground)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(pr.url)
+                .help([pr.title, pr.base.isEmpty ? nil : "into \(pr.base)", pr.url].compactMap { $0 }.joined(separator: "\n"))
             }
         }
-        .padding(WarrenSpacing.medium)
-        .background(tokens.inputSurface.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
+        .padding(.horizontal, WarrenSpacing.medium)
+        .padding(.vertical, WarrenSpacing.compact)
+        .background(tokens.inputSurface.opacity(0.45), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
+    }
+
+    /// Upstream and the main line as one quiet line under the branch name.
+    private var standing: String {
+        var parts = [panel.upstream ?? "Not published"]
+        if let main = panel.mainBranchShortName, panel.branch != main {
+            // HEAD inside main is true of a branch that landed and of one that
+            // has not started yet, so neither reads as merged.
+            parts.append(panel.merged ? "even with \(main)" : "\(panel.aheadOfMain) ahead of \(main)")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func meta(_ text: String, tokens: WarrenColorTokens) -> some View {
         Text(text)
-            .font(.system(size: 11.5))
+            .font(.system(size: 11))
             .foregroundStyle(tokens.mutedForeground)
             .lineLimit(1)
             .truncationMode(.middle)
@@ -520,8 +517,8 @@ private struct WarrenInspectorBranchCard: View {
                 }
             }
             .foregroundStyle(badge > 0 ? tokens.foreground : tokens.mutedForeground)
-            .padding(.horizontal, 7)
-            .frame(height: 22)
+            .padding(.horizontal, 6)
+            .frame(height: 20)
             .background(tokens.tertiaryWash, in: Capsule())
             .contentShape(Capsule())
         }
@@ -529,6 +526,38 @@ private struct WarrenInspectorBranchCard: View {
         .disabled(inspector.action != nil)
         .help(title)
         .accessibilityLabel(title)
+    }
+}
+
+/// A Git branch: a trunk with one line bending off it to a second tip, the
+/// mark Git tools share. Strokes in the current foreground style.
+struct WarrenBranchGlyph: View {
+    var size: CGFloat = 12
+
+    var body: some View {
+        Shape().stroke(style: StrokeStyle(lineWidth: max(1, size / 11), lineCap: .round, lineJoin: .round))
+            .frame(width: size, height: size)
+    }
+
+    private struct Shape: SwiftUI.Shape {
+        func path(in rect: CGRect) -> Path {
+            // Laid out on a 24-point grid, then scaled into the frame.
+            let unit = min(rect.width, rect.height) / 24
+            func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                CGPoint(x: rect.minX + x * unit, y: rect.minY + y * unit)
+            }
+            func dot(_ x: CGFloat, _ y: CGFloat) -> CGRect {
+                CGRect(x: rect.minX + (x - 2.75) * unit, y: rect.minY + (y - 2.75) * unit, width: 5.5 * unit, height: 5.5 * unit)
+            }
+            var path = Path()
+            path.move(to: point(6, 3))
+            path.addLine(to: point(6, 15.25))
+            path.addEllipse(in: dot(6, 18))
+            path.addEllipse(in: dot(18, 6))
+            path.move(to: point(18, 8.75))
+            path.addQuadCurve(to: point(8.6, 17.4), control: point(18, 17.4))
+            return path
+        }
     }
 }
 
@@ -919,11 +948,14 @@ private struct WarrenInspectorDiffState: View {
 
 /// A unified diff as a two-number gutter over tinted lines; hunk headers are
 /// quiet separators rather than code.
+///
+/// One AppKit text view draws the whole diff: SwiftUI rows inside the
+/// horizontal scroller could not be lazy, so a large diff laid out every line
+/// at once and left gaps where estimated row heights met real ones.
 struct WarrenDiffView: View {
     let diff: String
     var truncated = false
     @Environment(\.colorScheme) private var colorScheme
-    @State private var viewportWidth: CGFloat = 0
 
     struct Line: Identifiable {
         enum Kind { case context, addition, deletion, hunk }
@@ -976,58 +1008,282 @@ struct WarrenDiffView: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        let lines = Self.parse(diff)
-        let gutter = CGFloat(max(2, String(lines.compactMap { $0.new ?? $0.old }.max() ?? 0).count)) * 7 + 8
-        ScrollView(.horizontal, showsIndicators: false) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(lines) { line in
-                    if line.kind == .hunk {
-                        HStack(spacing: 6) {
-                            Image(systemName: "ellipsis").font(.system(size: 9))
-                            Text(line.text.isEmpty ? " " : line.text).lineLimit(1)
-                        }
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(tokens.mutedForeground.opacity(0.8))
-                        .padding(.horizontal, WarrenSpacing.compact)
-                        .frame(height: 22)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(tokens.info.opacity(0.06))
-                    } else {
-                        HStack(spacing: 0) {
-                            Text(line.old.map(String.init) ?? "")
-                                .frame(width: gutter, alignment: .trailing)
-                            Text(line.new.map(String.init) ?? "")
-                                .frame(width: gutter, alignment: .trailing)
-                            Text(line.kind == .addition ? "+" : line.kind == .deletion ? "−" : " ")
-                                .frame(width: 16)
-                                .foregroundStyle(line.kind == .addition ? tokens.success : line.kind == .deletion ? tokens.destructive : .clear)
-                            Text(line.text.isEmpty ? " " : line.text.replacingOccurrences(of: "\t", with: "    "))
-                                .foregroundStyle(tokens.foreground.opacity(line.kind == .context ? 0.78 : 0.95))
-                                .fixedSize()
-                                .padding(.trailing, WarrenSpacing.medium)
-                        }
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(tokens.mutedForeground.opacity(0.55))
-                        .frame(height: 18)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            line.kind == .addition ? tokens.success.opacity(0.11)
-                                : line.kind == .deletion ? tokens.destructive.opacity(0.11) : Color.clear
-                        )
-                    }
-                }
-                if truncated {
-                    Text("Diff truncated by the Host.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(tokens.mutedForeground)
-                        .padding(WarrenSpacing.compact)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            WarrenDiffTextView(diff: diff, dark: colorScheme == .dark)
+            if truncated {
+                Text("Diff truncated by the Host.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(tokens.mutedForeground)
+                    .padding(WarrenSpacing.compact)
             }
-            .textSelection(.enabled)
-            .padding(.vertical, WarrenSpacing.xs)
-            // Short lines still tint the whole row.
-            .frame(minWidth: viewportWidth, alignment: .leading)
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { viewportWidth = $0 }
+    }
+}
+
+/// The diff's rows laid out once: fixed heights, so the view knows its height
+/// without laying out text, and the text view draws only what is visible.
+@MainActor
+struct WarrenDiffLayout {
+    static let rowHeight: CGFloat = 18
+    static let hunkHeight: CGFloat = 22
+    static let verticalPadding = WarrenSpacing.xs
+    static let markerWidth: CGFloat = 16
+    static let trailingPadding = WarrenSpacing.medium
+    static let codeFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    static let hunkFont = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
+    static let numberFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+
+    let lines: [WarrenDiffView.Line]
+    /// The top of each row, from the top of the text.
+    let offsets: [CGFloat]
+    let numberWidth: CGFloat
+    let contentWidth: CGFloat
+
+    var gutterWidth: CGFloat { numberWidth * 2 + Self.markerWidth }
+    var height: CGFloat { (offsets.last ?? 0) + Self.verticalPadding * 2 }
+
+    init(diff: String) {
+        let lines = WarrenDiffView.parse(diff).map { line in
+            WarrenDiffView.Line(id: line.id, kind: line.kind, old: line.old, new: line.new, text: line.text.replacingOccurrences(of: "\t", with: "    "))
+        }
+        self.lines = lines
+        var offsets: [CGFloat] = [0]
+        offsets.reserveCapacity(lines.count + 1)
+        var widest = 0
+        for line in lines {
+            offsets.append(offsets[offsets.count - 1] + (line.kind == .hunk ? Self.hunkHeight : Self.rowHeight))
+            // Wide characters take about two cells; measuring each line with
+            // TextKit would mean laying out the whole diff up front.
+            let cells = line.text.unicodeScalars.reduce(0) { $0 + ($1.isASCII ? 1 : 2) }
+            widest = max(widest, cells)
+        }
+        self.offsets = offsets
+        let digits = max(2, String(lines.compactMap { $0.new ?? $0.old }.max() ?? 0).count)
+        numberWidth = CGFloat(digits) * 7 + 8
+        let advance = ("0" as NSString).size(withAttributes: [.font: Self.codeFont]).width
+        contentWidth = numberWidth * 2 + Self.markerWidth + CGFloat(widest) * advance + Self.trailingPadding
+    }
+
+    /// The row whose band holds a y measured from the top of the text.
+    func row(at y: CGFloat) -> Int {
+        var low = 0
+        var high = lines.count
+        while low < high {
+            let mid = (low + high) / 2
+            if offsets[mid + 1] <= y { low = mid + 1 } else { high = mid }
+        }
+        return min(low, max(0, lines.count - 1))
+    }
+}
+
+struct WarrenDiffTextView: NSViewRepresentable {
+    let diff: String
+    let dark: Bool
+
+    @MainActor
+    final class Coordinator {
+        var diff: String?
+        var dark: Bool?
+        var layout = WarrenDiffLayout(diff: "")
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> WarrenDiffScrollView {
+        let scrollView = WarrenDiffScrollView()
+        update(scrollView, coordinator: context.coordinator)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: WarrenDiffScrollView, context: Context) {
+        update(scrollView, coordinator: context.coordinator)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: WarrenDiffScrollView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? context.coordinator.layout.contentWidth, height: context.coordinator.layout.height)
+    }
+
+    private func update(_ scrollView: WarrenDiffScrollView, coordinator: Coordinator) {
+        // The Inspector polls every few seconds; an unchanged diff keeps its
+        // text, selection, and scroll position.
+        guard coordinator.diff != diff || coordinator.dark != dark else { return }
+        if coordinator.diff != diff { coordinator.layout = WarrenDiffLayout(diff: diff) }
+        coordinator.diff = diff
+        coordinator.dark = dark
+        scrollView.show(coordinator.layout, tokens: WarrenColorTokens.resolved(for: dark ? .dark : .light))
+    }
+}
+
+/// Scrolls sideways only; a vertical swipe belongs to the Inspector's list.
+final class WarrenDiffScrollView: NSScrollView {
+    let textView = WarrenDiffTextContent()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        drawsBackground = false
+        hasHorizontalScroller = true
+        hasVerticalScroller = false
+        autohidesScrollers = true
+        scrollerStyle = .overlay
+        verticalScrollElasticity = .none
+        horizontalScrollElasticity = .allowed
+        documentView = textView
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func show(_ layout: WarrenDiffLayout, tokens: WarrenColorTokens) {
+        textView.show(layout, tokens: tokens)
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        let size = NSSize(width: max(contentView.bounds.width, textView.layout.contentWidth), height: textView.layout.height)
+        if textView.frame.size != size { textView.setFrameSize(size) }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) {
+            nextResponder?.scrollWheel(with: event)
+        } else {
+            super.scrollWheel(with: event)
+        }
+    }
+}
+
+/// The diff's code as selectable text, with row tints, line numbers, and
+/// +/− marks painted beside it so a copy takes only the code.
+final class WarrenDiffTextContent: NSTextView {
+    private(set) var layout = WarrenDiffLayout(diff: "")
+    private var colors = Colors()
+
+    private struct Colors {
+        var number = NSColor.secondaryLabelColor
+        var addition = NSColor.systemGreen
+        var deletion = NSColor.systemRed
+        var additionGround = NSColor.clear
+        var deletionGround = NSColor.clear
+        var hunkGround = NSColor.clear
+        var hunk = NSColor.secondaryLabelColor
+        var code = NSColor.labelColor
+        var context = NSColor.labelColor
+    }
+
+    init() {
+        let storage = NSTextStorage()
+        let manager = NSLayoutManager()
+        // Contiguous on purpose: non-contiguous layout guesses where text it
+        // has not laid out sits, and the guess drifts off the painted rows.
+        manager.allowsNonContiguousLayout = false
+        storage.addLayoutManager(manager)
+        let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = false
+        container.lineFragmentPadding = 0
+        manager.addTextContainer(container)
+        super.init(frame: .zero, textContainer: container)
+        isEditable = false
+        isSelectable = true
+        isRichText = false
+        drawsBackground = false
+        isHorizontallyResizable = false
+        isVerticallyResizable = false
+        textContainerInset = .zero
+    }
+
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override var textContainerOrigin: NSPoint {
+        NSPoint(x: layout.gutterWidth, y: WarrenDiffLayout.verticalPadding)
+    }
+
+    func show(_ layout: WarrenDiffLayout, tokens: WarrenColorTokens) {
+        self.layout = layout
+        colors = Colors(
+            number: NSColor(tokens.mutedForeground).withAlphaComponent(0.55),
+            addition: NSColor(tokens.success),
+            deletion: NSColor(tokens.destructive),
+            additionGround: NSColor(tokens.success).withAlphaComponent(0.11),
+            deletionGround: NSColor(tokens.destructive).withAlphaComponent(0.11),
+            hunkGround: NSColor(tokens.info).withAlphaComponent(0.06),
+            hunk: NSColor(tokens.mutedForeground).withAlphaComponent(0.8),
+            code: NSColor(tokens.foreground).withAlphaComponent(0.95),
+            context: NSColor(tokens.foreground).withAlphaComponent(0.78)
+        )
+        selectedTextAttributes = [.backgroundColor: NSColor(tokens.info).withAlphaComponent(0.28)]
+        textStorage?.setAttributedString(text(for: layout))
+        needsDisplay = true
+    }
+
+    private func text(for layout: WarrenDiffLayout) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        func paragraph(_ height: CGFloat) -> NSParagraphStyle {
+            let style = NSMutableParagraphStyle()
+            style.minimumLineHeight = height
+            style.maximumLineHeight = height
+            return style
+        }
+        let row = paragraph(WarrenDiffLayout.rowHeight)
+        let hunkRow = paragraph(WarrenDiffLayout.hunkHeight)
+        // A fixed line height sets glyphs on its floor; lift them to the middle.
+        func lift(_ font: NSFont, _ height: CGFloat) -> CGFloat {
+            (height - (font.ascender - font.descender)) / 2
+        }
+        let code: [NSAttributedString.Key: Any] = [.font: WarrenDiffLayout.codeFont, .paragraphStyle: row, .foregroundColor: colors.code,
+                                                   .baselineOffset: lift(WarrenDiffLayout.codeFont, WarrenDiffLayout.rowHeight)]
+        var context = code
+        context[.foregroundColor] = colors.context
+        let hunk: [NSAttributedString.Key: Any] = [.font: WarrenDiffLayout.hunkFont, .paragraphStyle: hunkRow, .foregroundColor: colors.hunk,
+                                                   .baselineOffset: lift(WarrenDiffLayout.hunkFont, WarrenDiffLayout.hunkHeight)]
+        for (index, line) in layout.lines.enumerated() {
+            let attributes = line.kind == .hunk ? hunk : line.kind == .context ? context : code
+            result.append(NSAttributedString(string: line.text + (index == layout.lines.count - 1 ? "" : "\n"), attributes: attributes))
+        }
+        return result
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard !layout.lines.isEmpty else { return }
+        let top = WarrenDiffLayout.verticalPadding
+        let first = layout.row(at: max(0, rect.minY - top))
+        let last = layout.row(at: max(0, rect.maxY - top))
+        let numbers: [NSAttributedString.Key: Any] = [.font: WarrenDiffLayout.numberFont, .foregroundColor: colors.number]
+        for index in first...last {
+            let line = layout.lines[index]
+            let band = NSRect(x: 0, y: top + layout.offsets[index], width: bounds.width, height: layout.offsets[index + 1] - layout.offsets[index])
+            switch line.kind {
+            case .addition: colors.additionGround.setFill(); band.fill()
+            case .deletion: colors.deletionGround.setFill(); band.fill()
+            case .hunk: colors.hunkGround.setFill(); band.fill()
+            case .context: break
+            }
+            if line.kind == .hunk {
+                draw("⋯", attributes: [.font: WarrenDiffLayout.hunkFont, .foregroundColor: colors.hunk], in: band, x: WarrenSpacing.compact, alignRight: false)
+                continue
+            }
+            if let old = line.old {
+                draw("\(old)", attributes: numbers, in: band, x: layout.numberWidth, alignRight: true)
+            }
+            if let new = line.new {
+                draw("\(new)", attributes: numbers, in: band, x: layout.numberWidth * 2, alignRight: true)
+            }
+            if line.kind != .context {
+                let mark = line.kind == .addition ? "+" : "−"
+                let tint = line.kind == .addition ? colors.addition : colors.deletion
+                draw(mark, attributes: [.font: WarrenDiffLayout.codeFont, .foregroundColor: tint], in: band,
+                     x: layout.numberWidth * 2 + (WarrenDiffLayout.markerWidth - 7) / 2, alignRight: false)
+            }
+        }
+    }
+
+    private func draw(_ string: String, attributes: [NSAttributedString.Key: Any], in band: NSRect, x: CGFloat, alignRight: Bool) {
+        let label = string as NSString
+        let size = label.size(withAttributes: attributes)
+        label.draw(at: NSPoint(x: alignRight ? x - size.width : x, y: band.minY + (band.height - size.height) / 2), withAttributes: attributes)
     }
 }

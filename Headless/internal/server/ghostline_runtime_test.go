@@ -165,26 +165,31 @@ func TestGhostlineRuntimeMetadataDisabledByDefault(t *testing.T) {
 	if err := runtime.Create(ctx, "warren_ghost_meta", directory, "sh", nil); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	metadata, err := runtime.Metadata(ctx, "warren_ghost_meta")
-	if err != nil {
-		t.Fatalf("Metadata: %v", err)
-	}
 	// The OSC 7 working directory is collected regardless of ProbeForeground,
-	// so only the OS foreground probe is expected to be empty here.
-	if metadata.Process != "" || metadata.CommandLine != "" {
-		t.Fatalf("Metadata = %+v, want no foreground process when probing is disabled", metadata)
-	}
+	// so only the OS foreground probe is expected to be empty here. The shell
+	// reports the directory with its first prompt, so wait for it instead of
+	// asserting against the session's empty initial metadata.
 	wantDirectory, err := filepath.EvalSymlinks(directory)
 	if err != nil {
 		t.Fatalf("EvalSymlinks: %v", err)
 	}
-	gotDirectory, err := filepath.EvalSymlinks(metadata.Directory)
-	if err != nil {
-		t.Fatalf("EvalSymlinks: %v", err)
+	deadline := time.Now().Add(10 * time.Second)
+	last := ""
+	for time.Now().Before(deadline) {
+		metadata, metadataErr := runtime.Metadata(ctx, "warren_ghost_meta")
+		if metadataErr != nil {
+			t.Fatalf("Metadata: %v", metadataErr)
+		}
+		if metadata.Process != "" || metadata.CommandLine != "" {
+			t.Fatalf("Metadata = %+v, want no foreground process when probing is disabled", metadata)
+		}
+		last = metadata.Directory
+		if got, resolveErr := filepath.EvalSymlinks(metadata.Directory); resolveErr == nil && got == wantDirectory {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	if gotDirectory != wantDirectory {
-		t.Fatalf("Metadata directory = %q, want %q", gotDirectory, wantDirectory)
-	}
+	t.Fatalf("shell integration did not report %q; last directory %q", directory, last)
 }
 
 func TestGhostlineRuntimeMetadataProbesForeground(t *testing.T) {

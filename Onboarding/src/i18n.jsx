@@ -125,6 +125,36 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.24.0",
+        dateISO: "2026-10-08",
+        date: "October 8, 2026",
+        title: "Warren redraws the Inspector's diffs.",
+        summary:
+          "A minor release that redraws the Desktop Inspector's diffs in one text view, so a large diff lays out in one pass instead of drawing every row at once, and tightens the branch card. The JSON control protocol remains at 4.0 and this release migrates no state.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Tighten the Inspector's branch card: upstream and the branch's standing on the main line fold into one quiet line under the branch name, the pull-request row shrinks to a single line, and a drawn branch mark replaces the SF fork arrow in the card and the header.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Draw the Inspector's diffs with one text view at fixed row heights. Rows inside the horizontal scroller could not be lazy, so opening a large diff laid out every row at once (about 820ms for 1,500 lines) and left blank gaps where estimated row heights met real ones. A vertical swipe now goes to the Inspector's list, and Copy takes only the code.",
+              "Keep code from showing through the line-number gutter, index line starts once per edit instead of recounting the file on every scroll frame, and build the Files tree's change map once per render rather than once per row.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0 and this release migrates no state.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.23.0",
         dateISO: "2026-09-29",
         date: "September 29, 2026",
@@ -1464,6 +1494,36 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.24.0",
+        dateISO: "2026-10-08",
+        date: "2026 年 10 月 8 日",
+        title: "Warren 重绘 Inspector 的 diff。",
+        summary:
+          "次版本：Desktop Inspector 的 diff 改用单个文本视图重绘，大 diff 一次完成布局，不再逐行绘制；分支卡片也更紧凑。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "收紧 Inspector 的分支卡片：upstream 与相对主线的位置并为分支名下一行安静的元信息，pull request 行缩为单行，卡片与标题栏中的 SF 分叉箭头换成手绘分支图标。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "Inspector 的 diff 改用单个文本视图、固定行高绘制。水平滚动区内的 SwiftUI 行无法懒加载，打开大 diff 会一次性布局所有行（1,500 行约 820ms），并在估算行高与真实行高相接处留下空白。垂直滑动现在交给 Inspector 列表，复制只取代码。",
+              "代码不再从行号栏下透出；行首索引每次编辑只建一次，不再每帧滚动都重新数文件；Files 树的变更映射每次渲染只建一次，而非每行一次。",
+            ],
+          },
+          {
+            title: "发行说明",
+            items: [
+              "JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该压缩包适合内部或临时测试，不适合公开发布。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.23.0",
         dateISO: "2026-09-29",

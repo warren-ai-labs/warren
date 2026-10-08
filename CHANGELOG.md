@@ -6,6 +6,38 @@ All notable changes to Warren are documented here.
 
 _No changes yet._
 
+## [0.24.0] - 2026-10-08
+
+> Minor release: redraws the Desktop Inspector's diffs in one text view, so a
+> large diff lays out in one pass instead of drawing every row at once, and
+> tightens the branch card. The JSON control protocol remains at 4.0 and this
+> release migrates no state.
+
+### Changed
+
+- Tighten the Inspector's branch card. Upstream and the branch's standing on the
+  main line fold into one quiet line under the branch name, the pull-request row
+  shrinks to a single line, and a drawn branch mark replaces the SF fork arrow in
+  the card and the header.
+
+### Fixed
+
+- Draw the Inspector's diffs with one text view at fixed row heights. SwiftUI
+  rows inside the horizontal scroller could not be lazy, so opening a large diff
+  laid out every row at once (about 820ms for 1,500 lines) and left blank gaps
+  where estimated row heights met real ones. A vertical swipe now goes to the
+  Inspector's list, and Copy takes only the code.
+- Keep code from showing through the line-number gutter, index line starts once
+  per edit instead of recounting the file on every scroll frame, and build the
+  Files tree's change map once per render rather than once per row.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and this release migrates no state.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.23.0] - 2026-09-29
 
 > Minor release: adds ACP (Agent Client Protocol) Sessions and one Conversation
