@@ -84,10 +84,11 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var primaryButtonFocused: Bool
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         if let workspace {
             let resolvedTab = tab ?? ClientTab(
                 id: "workspace-empty-\(workspace.id.rawValue.uuidString)",
@@ -316,9 +317,10 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
     let terminalSurface: TerminalSurface
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(spacing: 0) {
             // The header is chrome, so its presence must not depend on live
             // metadata. Gating it on a rendered title that can transiently be
@@ -418,7 +420,7 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                     // accept the entire proposed content size.
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(WarrenSpacing.compact)
-                    .background(tokens.background)
+                    .background(tokens.canvas)
 
                 WarrenDesktopSplitDropOverlay(paneID: paneID, canSplit: canSplit)
 
@@ -443,7 +445,7 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(tokens.background)
+        .background(tokens.canvas)
         .contentShape(Rectangle())
         // A click in the pane chrome (header, padding) selects the pane. It
         // must stay simultaneous so the click still reaches the terminal:
@@ -539,9 +541,10 @@ struct WarrenDesktopEmbeddedEditorPane<Surface: View>: View {
     let surface: Surface
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         surface
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(tokens.background)
@@ -701,6 +704,7 @@ struct WarrenDesktopSplitDivider: View {
     let onAdjust: (Double) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var isHovered = false
     @State private var dragStartRatio: Double?
     @State private var snappedTarget: Double?
@@ -708,7 +712,7 @@ struct WarrenDesktopSplitDivider: View {
     private var isSnapped: Bool { snappedTarget != nil }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Rectangle()
             .fill(ruleColor(tokens))
             .frame(

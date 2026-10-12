@@ -79,13 +79,14 @@ struct WarrenInspectorFiles: View {
     @State private var filter = ""
     @State private var open: Set<String> = []
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     private var changed: [String: String] {
         Dictionary((inspector.panel?.changes ?? []).map { ($0.path, $0.status) }, uniquingKeysWith: { first, _ in first })
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         // Built once per render: every row reads it, and a directory row scans
         // its keys, so rebuilding it per read made the tree quadratic.
         let changed = changed
@@ -251,10 +252,11 @@ struct WarrenInspectorFiles: View {
 
 private struct WarrenFileRowStyle: ButtonStyle {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         configuration.label
             .background(
                 (configuration.isPressed || hovering) ? tokens.fillHover : Color.clear,
@@ -282,6 +284,7 @@ struct WarrenFileEditor: View {
     @State private var saveError: String?
     @State private var loaded = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     static let editableLimit = 1_000_000
 
@@ -289,7 +292,7 @@ struct WarrenFileEditor: View {
     private var dirty: Bool { loaded && text != saved }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(spacing: 0) {
             HStack(spacing: WarrenSpacing.small) {
                 Button(action: onClose) {

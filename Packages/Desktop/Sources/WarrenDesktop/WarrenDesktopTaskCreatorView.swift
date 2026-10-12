@@ -169,6 +169,7 @@ struct WarrenDesktopTaskCreatorView: View {
 
     @StateObject private var coordinator: WarrenDesktopTaskCreationCoordinator
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     init(
         onCancel: @escaping () -> Void,
@@ -183,7 +184,7 @@ struct WarrenDesktopTaskCreatorView: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
             Text("New Task")
                 .font(WarrenTypography.dialogTitle)

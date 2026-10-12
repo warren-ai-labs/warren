@@ -8,10 +8,11 @@ struct WarrenDesktopNoticeButton: View {
     let action: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let bellColor = isMuted
             ? tokens.mutedForeground
             : (isPresented
@@ -46,9 +47,10 @@ struct WarrenDesktopNoticeTitleActions: View {
     let onMarkAllRead: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: WarrenSpacing.xs) {
             Button("Mark all read", action: onMarkAllRead)
             .buttonStyle(.plain)
@@ -127,6 +129,7 @@ struct WarrenDesktopNoticeContent: View {
     let onDismiss: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     private var selectedNotice: WarrenDesktopNotice? {
         guard let selectedID else { return nil }
@@ -143,7 +146,7 @@ struct WarrenDesktopNoticeContent: View {
     }
 
     private var listView: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return Group {
             if notices.isEmpty {
                 VStack(spacing: WarrenSpacing.compact) {
@@ -211,7 +214,7 @@ struct WarrenDesktopNoticeContent: View {
     }
 
     private func detailView(_ notice: WarrenDesktopNotice) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
             HStack(spacing: WarrenSpacing.compact) {
                 Button {
@@ -295,9 +298,10 @@ private struct WarrenNoticeToneIcon: View {
     let kind: WarrenDesktopNotice.Kind
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Image(systemName: iconName)
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(toneColor(tokens))

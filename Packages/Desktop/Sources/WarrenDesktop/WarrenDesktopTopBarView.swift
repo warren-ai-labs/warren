@@ -9,9 +9,10 @@ struct WarrenDesktopTopBar: View {
     let onToggleSidebar: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: WarrenSpacing.xs) {
             // Superset's traffic-light inset is a non-interactive leaf. Keeping
             // it separate means a future AppKit window-drag bridge cannot steal

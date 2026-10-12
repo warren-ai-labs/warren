@@ -63,6 +63,7 @@ struct WarrenDesktopSplitDropOverlay: View {
     /// only an observed object republishes changes to SwiftUI.
     @EnvironmentObject private var drag: WarrenDesktopTabDrag
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     /// The zone the in-flight tab drag is over for this pane, if any.
     private var activeTarget: SplitDropTarget? {
@@ -73,7 +74,7 @@ struct WarrenDesktopSplitDropOverlay: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         GeometryReader { proxy in
             ZStack {
                 // Marks this pane's drop area for the native drag session.

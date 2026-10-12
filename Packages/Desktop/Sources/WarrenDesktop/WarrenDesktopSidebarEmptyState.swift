@@ -43,10 +43,11 @@ struct WarrenDesktopSidebarEmptyState: View {
     var isNestedUnderHost: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var isActionFocused: Bool
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
             Text(title)
                 .font(WarrenTypography.navigationItem)

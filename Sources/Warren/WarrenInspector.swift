@@ -172,9 +172,10 @@ struct WarrenInspectorSurface: View {
     @ObservedObject var inspector: WarrenInspectorModel
     let readsLocalFiles: Bool
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(spacing: 0) {
             header(tokens: tokens)
             Rectangle().fill(tokens.chromeDivider).frame(height: WarrenSpacing.hairline)
@@ -196,7 +197,7 @@ struct WarrenInspectorSurface: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(tokens.background)
+        .background(tokens.canvas)
         .task(id: inspector.workspaceID) {
             // The Host caches the panel and revalidates it behind a cached
             // answer, so a steady poll costs one small message.
@@ -268,9 +269,10 @@ struct WarrenInspectorSurface: View {
 private struct WarrenInspectorChanges: View {
     @ObservedObject var inspector: WarrenInspectorModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         if let panel = inspector.panel {
             let staged = panel.changes.filter(\.staged)
             let unstaged = panel.changes.filter { !$0.staged }
@@ -356,12 +358,13 @@ private struct WarrenInspectorBranchCard: View {
     @ObservedObject var inspector: WarrenInspectorModel
     let panel: WarrenRemoteGitPanel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var composingPR = false
     @State private var prTitle = ""
     @State private var prBody = ""
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.small) {
             HStack(alignment: .center, spacing: WarrenSpacing.small) {
                 WarrenBranchGlyph(size: 13)
@@ -567,10 +570,11 @@ private struct WarrenInspectorCommitBox: View {
     @ObservedObject var inspector: WarrenInspectorModel
     let count: Int
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var focused: Bool
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let canCommit = !inspector.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && inspector.action == nil
         VStack(alignment: .leading, spacing: 0) {
             TextField("Commit message", text: $inspector.commitMessage, axis: .vertical)
@@ -623,9 +627,10 @@ private struct WarrenInspectorCommitBox: View {
 private struct WarrenInspectorHistory: View {
     @ObservedObject var inspector: WarrenInspectorModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         if let panel = inspector.panel {
             let unmerged = Set(panel.unmergedCommits.map(\.hash))
             let earlier = panel.commits.filter { !unmerged.contains($0.hash) }
@@ -762,9 +767,10 @@ private struct WarrenInspectorFileRow: View {
     var indent: CGFloat = 0
     let action: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let name = (path as NSString).lastPathComponent
         let directory = (path as NSString).deletingLastPathComponent
         Button(action: action) {
@@ -812,9 +818,10 @@ private struct WarrenInspectorFileRow: View {
 private struct WarrenInspectorStatus: View {
     let status: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let letter = status == "?" || status == "??" ? "U" : String(status.prefix(1))
         let tint: Color = switch letter {
         case "A", "U": tokens.success
@@ -833,9 +840,10 @@ private struct WarrenInspectorCounts: View {
     let additions: Int
     let deletions: Int
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         if additions > 0 || deletions > 0 {
             HStack(spacing: 4) {
                 if additions > 0 { Text("+\(additions)").foregroundStyle(tokens.success) }
@@ -848,10 +856,11 @@ private struct WarrenInspectorCounts: View {
 
 private struct WarrenInspectorRowStyle: ButtonStyle {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         configuration.label
             .background(configuration.isPressed ? tokens.fillHover : (hovering ? tokens.fillHover.opacity(0.6) : Color.clear))
             .onHover { hovering = $0 }
@@ -863,9 +872,10 @@ struct WarrenInspectorEmpty: View {
     let title: String
     let detail: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(spacing: WarrenSpacing.compact) {
             Image(systemName: symbol)
                 .font(.system(size: 20, weight: .light))
@@ -891,9 +901,10 @@ struct WarrenFileIcon: View {
     let isDirectory: Bool
     var open = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Group {
             if isDirectory {
                 Image(systemName: open ? "folder" : "folder.fill")
@@ -916,9 +927,10 @@ struct WarrenFileIcon: View {
 private struct WarrenInspectorDiffState: View {
     let state: WarrenInspectorModel.DiffState?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Group {
             switch state {
             case .loaded(let diff):
@@ -956,6 +968,7 @@ struct WarrenDiffView: View {
     let diff: String
     var truncated = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     struct Line: Identifiable {
         enum Kind { case context, addition, deletion, hunk }
@@ -1007,7 +1020,7 @@ struct WarrenDiffView: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: 0) {
             WarrenDiffTextView(diff: diff, dark: colorScheme == .dark)
             if truncated {

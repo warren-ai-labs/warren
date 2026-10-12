@@ -226,6 +226,7 @@ public struct WarrenDesktopWebPanel: View {
     public let onDismiss: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     public init(
         status: WarrenDesktopWebStatus,
@@ -250,7 +251,7 @@ public struct WarrenDesktopWebPanel: View {
     }
 
     public var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let addresses = presentedAddresses
         VStack(alignment: .leading, spacing: 0) {
             header(tokens: tokens, showsDismiss: true, showsTitle: true)
@@ -266,7 +267,7 @@ public struct WarrenDesktopWebPanel: View {
     /// omits the Web panel's second border and duplicate close button.
     @ViewBuilder
     var inlineContent: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let addresses = presentedAddresses
         VStack(alignment: .leading, spacing: 0) {
             header(tokens: tokens, showsDismiss: false, showsTitle: false)
@@ -427,9 +428,10 @@ private struct WarrenDesktopWebAddressRow: View {
     let onCopy: (URL) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let displayURL = address.kind == .publicAccess
             ? endpointWithoutFragment(address.url)
             : address.url
@@ -489,9 +491,10 @@ private struct WarrenDesktopWebPublicAccessRow: View {
     let onStop: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: WarrenSpacing.small) {
             Image(systemName: "globe")
                 .font(WarrenTypography.popoverMeta)
@@ -541,9 +544,10 @@ private struct WarrenDesktopWebCommandButton: View {
     let action: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Button(action: action) {
             Text(title)
                 .font(WarrenTypography.popoverItem)
@@ -569,10 +573,11 @@ private struct WarrenDesktopWebIconButton: View {
     let action: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: glyphSize, weight: .medium))

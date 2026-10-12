@@ -1270,6 +1270,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var isFocused: Bool
 
     private var providerName: String {
@@ -1381,7 +1382,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Button(action: onOpen) {
             // The leaf indent is nudged right so its icon clears the rail, and
             // the glyph-to-title gap gives that width back. The title's origin
@@ -1524,7 +1525,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         } else {
             Image(systemName: session.presentedKind.symbolName)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme).mutedForeground)
+                .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground)
                 .accessibilityHidden(true)
         }
     }
@@ -1550,6 +1551,7 @@ struct WarrenDesktopSidebarSectionHeader: View {
     var additionalActions: [WarrenDesktopSidebarSectionAction]
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     @FocusState private var isActionFocused: Bool
@@ -1557,7 +1559,7 @@ struct WarrenDesktopSidebarSectionHeader: View {
     @FocusState private var focusedAdditionalActionID: String?
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: WarrenSpacing.small) {
             if let onToggle {
                 Button(action: onToggle) {
@@ -1645,9 +1647,10 @@ struct WarrenDesktopDeleteTaskConfirmation: View {
     let validationMessage: String?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
             Text("Delete task?")
                 .font(WarrenTypography.dialogTitle)
@@ -1697,6 +1700,7 @@ struct WarrenDesktopDeleteWorkspaceConfirmation: View {
     let validationMessage: String?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     private var isWorktree: Bool {
         workspaceIsWorktree(workspace, project: project)
@@ -1707,7 +1711,7 @@ struct WarrenDesktopDeleteWorkspaceConfirmation: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
             Text("Delete workspace?")
                 .font(WarrenTypography.dialogTitle)
@@ -1778,9 +1782,10 @@ struct WarrenDesktopDeleteProjectConfirmation: View {
     let validationMessage: String?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
             Text("Delete project?")
                 .font(WarrenTypography.dialogTitle)
@@ -1828,9 +1833,10 @@ struct WarrenDesktopDeleteTerminalGroupConfirmation: View {
     let validationMessage: String?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
             Text("Delete terminal group?")
                 .font(WarrenTypography.dialogTitle)

@@ -111,12 +111,13 @@ private struct WarrenConversationView: View {
     let model: WarrenRemoteApplicationModel
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var pinnedToBottom = true
     @State private var hasNewActivity = false
     @State private var actionError: String?
     @State private var stopping = false
 
-    private var tokens: WarrenColorTokens { WarrenColorTokens.resolved(for: colorScheme) }
+    private var tokens: WarrenColorTokens { WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial) }
     private var lastTurn: WarrenConversation.Turn? { feed.conversation.turns.last }
     private var busy: Bool {
         feed.status?.activity == .working || feed.status?.activity == .blocked
@@ -140,7 +141,7 @@ private struct WarrenConversationView: View {
             }
             bottomDock
         }
-        .background(tokens.background)
+        .background(tokens.canvas)
         .onChange(of: feed.status?.activity) { activity in
             if activity != .working, activity != .blocked { stopping = false }
         }
@@ -322,9 +323,10 @@ private struct WarrenConversationPromptView: View {
     let text: String
     var meta: String?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .trailing, spacing: WarrenSpacing.xs) {
             Text(text)
                 .font(WarrenConversationText.body)
@@ -353,10 +355,11 @@ private struct WarrenConversationQueuedPromptView: View {
     let text: String
     let onRemove: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var hovering = false
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(alignment: .center, spacing: WarrenSpacing.compact) {
             Spacer(minLength: 96)
             Button(action: onRemove) {
@@ -400,9 +403,10 @@ private struct WarrenConversationTurnView: View {
     let openSession: (String) -> Void
     let sessionExists: (String) -> Bool
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let running = live && turn.status == .running
         VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
             if let prompt = turn.prompt {
@@ -471,9 +475,10 @@ private struct WarrenConversationAnswerFooter: View {
     let endedAt: Date?
     @State private var copied = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: WarrenSpacing.small) {
             Button {
                 NSPasteboard.general.clearContents()
@@ -512,6 +517,7 @@ private struct WarrenConversationDisclosure<Content: View, Trailing: View>: View
     @ViewBuilder var content: () -> Content
     @State private var open = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     init(label: String, @ViewBuilder trailing: () -> Trailing, @ViewBuilder content: @escaping () -> Content) {
         self.label = label
@@ -520,7 +526,7 @@ private struct WarrenConversationDisclosure<Content: View, Trailing: View>: View
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
             Button {
                 open.toggle()
@@ -558,9 +564,10 @@ private struct WarrenConversationChangeCount: View {
     let additions: Int
     let deletions: Int
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         if additions > 0 || deletions > 0 {
             HStack(spacing: WarrenSpacing.xs) {
                 Text("+\(additions)").foregroundStyle(additions > 0 ? tokens.success : tokens.mutedForeground.opacity(0.6))
@@ -588,13 +595,14 @@ private struct WarrenConversationWorkTrail: View {
     @State private var lastWindow: [WarrenConversation.Step] = []
     @Environment(\.conversationRoot) private var root
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let windowSize = 3
     private static let settleDuration = 0.42
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let additions = turn.files.reduce(0) { $0 + $1.additions }
         let deletions = turn.files.reduce(0) { $0 + $1.deletions }
         let window = Array(turn.steps.sorted { $0.order < $1.order }.suffix(Self.windowSize))
@@ -766,9 +774,10 @@ private struct WarrenConversationStepRow: View {
     @State private var open = false
     @Environment(\.conversationRoot) private var root
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let line = step.line(relativeTo: root)
         let detail = step.diff?.text.isEmpty == false ? nil : (step.error.isEmpty ? step.output : step.error)
         let expandable = (detail?.isEmpty == false) || step.diff?.text.isEmpty == false
@@ -835,11 +844,12 @@ private struct WarrenConversationFilesCard: View {
     let files: [WarrenConversation.FileChange]
     @State private var showAll = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     private static let collapsedCount = 5
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let additions = files.reduce(0) { $0 + $1.additions }
         let deletions = files.reduce(0) { $0 + $1.deletions }
         let visible = showAll ? files : Array(files.prefix(Self.collapsedCount))
@@ -891,9 +901,10 @@ private struct WarrenConversationFileRow: View {
     @State private var open = false
     @Environment(\.conversationRoot) private var root
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let hasDiff = file.diffs.contains { !$0.isEmpty }
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -938,9 +949,10 @@ private struct WarrenConversationFileRow: View {
 private struct WarrenConversationCodeBlock: View {
     let text: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         WarrenConversationLeadingScroll([.horizontal, .vertical]) {
             Text(text)
                 .font(WarrenTypography.compactCode)
@@ -961,9 +973,10 @@ private struct WarrenConversationCodeFence: View {
     let code: String
     @State private var copied = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: WarrenSpacing.small) {
                 Text((language?.isEmpty == false ? language! : "text").lowercased())
@@ -1008,9 +1021,10 @@ private struct WarrenConversationCodeFence: View {
 private struct WarrenConversationDiffView: View {
     let text: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).prefix(400)
         WarrenConversationLeadingScroll([.horizontal, .vertical]) {
             VStack(alignment: .leading, spacing: 0) {
@@ -1043,9 +1057,10 @@ private struct WarrenConversationDiffView: View {
 struct WarrenConversationMarkdown: View {
     let text: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let blocks = WarrenMarkdownCache.shared.blocks(for: text)
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
@@ -1191,12 +1206,13 @@ private struct WarrenConversationTable: View {
     let table: WarrenMarkdownTable
     let inline: (String) -> Text
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var headerHeight: CGFloat = 0
 
     /// The table takes the reading column and wraps its cells, so a long cell
     /// grows its row instead of pushing the table sideways.
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
             GridRow {
                 ForEach(Array(table.headers.enumerated()), id: \.offset) { column, header in
@@ -1272,9 +1288,10 @@ private struct WarrenConversationComposer: View {
     @State private var text = ""
     @State private var height: CGFloat = 22
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let disabled = disabledReason != nil
         VStack(alignment: .leading, spacing: 0) {
             if let plan, plan.total > 0 {
@@ -1305,7 +1322,13 @@ private struct WarrenConversationComposer: View {
         }
         .background(tokens.inputSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
-        .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.06), radius: 12, y: 4)
+        // On glass the composer is raised by its density and border alone; a
+        // drop shadow under a translucent surface darkens the coat around it.
+        .shadow(
+            color: tokens.material == .glass ? .clear : .black.opacity(colorScheme == .dark ? 0.28 : 0.06),
+            radius: 12,
+            y: 4
+        )
     }
 
     private func footer(tokens: WarrenColorTokens) -> some View {
@@ -1416,9 +1439,10 @@ private struct WarrenConversationChip: View {
     let onSetConfig: (String, String) async -> Void
     @State private var open = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Button {
             open.toggle()
         } label: {
@@ -1448,11 +1472,12 @@ private struct WarrenConversationChip: View {
 
 private struct WarrenConversationChipStyle: ButtonStyle {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         configuration.label
             .foregroundStyle(tokens.mutedForeground)
             .background((configuration.isPressed || hovering) && isEnabled ? tokens.fillHover : Color.clear, in: Capsule())
@@ -1467,9 +1492,10 @@ private struct WarrenConversationSelectorList: View {
     let options: [WarrenConversation.ConfigOption]
     let onSelect: (String, String) -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         ScrollView {
             VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
                 ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
@@ -1540,9 +1566,10 @@ private struct WarrenConversationSelectorList: View {
 private struct WarrenConversationContextMeter: View {
     let context: WarrenConversation.Context
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let fraction = min(1, max(0, Double(context.used) / Double(context.size)))
         let tint = fraction > 0.85 ? tokens.warning : tokens.mutedForeground
         HStack(spacing: WarrenSpacing.xs) {
@@ -1578,9 +1605,10 @@ private struct WarrenConversationPlanStrip: View {
     let plan: WarrenConversation.Plan
     @State private var open = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.small) {
             Button {
                 open.toggle()
@@ -1638,9 +1666,10 @@ private struct WarrenConversationDecisionDock: View {
     @State private var submitting: String?
     @State private var error: String?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
             HStack(spacing: WarrenSpacing.compact) {
                 Circle().fill(tokens.warning).frame(width: 8, height: 8)
@@ -1741,10 +1770,11 @@ private struct WarrenConversationDecisionDock: View {
 
 private struct WarrenConversationChoiceStyle: ButtonStyle {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         configuration.label
             .background(
                 (configuration.isPressed || hovering) ? tokens.fillHover : Color.clear,

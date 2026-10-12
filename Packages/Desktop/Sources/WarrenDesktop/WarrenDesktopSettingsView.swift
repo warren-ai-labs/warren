@@ -66,7 +66,7 @@ private extension WarrenDesktopSettingsSection {
 
     var detail: String {
         switch self {
-        case .appearance: "Light, dark, or follow macOS."
+        case .appearance: "Light, dark, or follow macOS, and Liquid Glass."
         case .terminalFont: "Applied to every terminal surface."
         case .terminalTitle: "Auxiliary context below the preset bar."
         case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
@@ -87,7 +87,7 @@ private extension WarrenDesktopSettingsSection {
     var searchTerms: [String] {
         switch self {
         case .appearance:
-            [rawValue, detail, "appearance", "theme", "light", "dark", "system", "color", "colour", "palette", "contrast"]
+            [rawValue, detail, "appearance", "theme", "light", "dark", "system", "color", "colour", "palette", "contrast", "glass", "liquid glass", "transparency", "translucent", "blur"]
         case .terminalFont: [rawValue, detail, "font", "family", "size", "typography"]
         case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
         case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
@@ -196,6 +196,9 @@ struct WarrenDesktopSettingsView: View {
     private var splitChordsEnabled = false
     @AppStorage(WarrenPreferenceKey.appearanceMode)
     private var appearanceModeRawValue = WarrenAppearanceMode.defaultValue.rawValue
+    @AppStorage(WarrenPreferenceKey.appearanceLiquidGlass)
+    private var liquidGlassEnabled = false
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var openAIBaseURLDraft = ""
     @State private var openAIModelDraft = ""
     @State private var openAIKeyDraft = ""
@@ -223,6 +226,7 @@ struct WarrenDesktopSettingsView: View {
     @State private var usageSelectedDay: String?
     @State private var copiedSettingsSection: WarrenDesktopSettingsSection?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     /// A deeplink can select a page and prefill the Relay URL and bounded-use
     /// enrollment key. The key is consumed only when the user starts joining.
@@ -343,7 +347,7 @@ struct WarrenDesktopSettingsView: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(spacing: 0) {
             chromeRow(tokens: tokens)
 
@@ -354,13 +358,13 @@ struct WarrenDesktopSettingsView: View {
                     .frame(width: WarrenLayoutMetrics.settingsNavigationWidth)
 
                 Rectangle()
-                    .fill(tokens.border)
+                    .fill(tokens.material == .glass ? tokens.chromeDivider : tokens.border)
                     .frame(width: WarrenSpacing.hairline)
 
                 detailPanel(tokens: tokens)
             }
         }
-        .background(tokens.background)
+        .background(tokens.canvas)
         .onExitCommand(perform: onBack)
         .onAppear(perform: applyDeepLinkPrefill)
         .onChange(of: initialSettingsSection) { _ in
@@ -523,7 +527,7 @@ struct WarrenDesktopSettingsView: View {
             )
         }
         .padding(3)
-        .background(tokens.chromeSurface)
+        .background(tokens.cardSurface)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -849,7 +853,7 @@ struct WarrenDesktopSettingsView: View {
                     }
                     .padding(.horizontal, 14)
                     .frame(height: 32)
-                    .background(tokens.chromeSurface)
+                    .background(tokens.cardSurface)
 
                     Rectangle()
                         .fill(tokens.border.opacity(0.35))
@@ -981,7 +985,7 @@ struct WarrenDesktopSettingsView: View {
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
-                            .background(tokens.chromeSurface)
+                            .background(tokens.cardSurface)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -2727,6 +2731,22 @@ struct WarrenDesktopSettingsView: View {
                         .font(WarrenTypography.settingsControl)
                         .frame(width: 240)
                         .accessibilityIdentifier("settings.appearance.picker")
+                    }
+
+                    WarrenSettingsCardDivider(tokens: tokens)
+
+                    WarrenSettingsRow(
+                        title: "Liquid Glass",
+                        subtitle: reduceTransparency
+                            ? "Unavailable while Reduce Transparency is on in macOS Accessibility settings."
+                            : "Lets the desktop show through the window, including behind terminals.",
+                        tokens: tokens
+                    ) {
+                        Toggle("Liquid Glass", isOn: $liquidGlassEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .disabled(reduceTransparency)
+                            .accessibilityIdentifier("settings.appearance.liquid-glass")
                     }
                 }
             }
