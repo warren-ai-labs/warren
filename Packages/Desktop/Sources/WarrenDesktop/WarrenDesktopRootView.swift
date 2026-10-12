@@ -202,6 +202,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var splitChordsEnabled = false
     @Environment(\.warrenSemanticRecorder) private var semanticRecorder
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Presentation {
@@ -825,7 +826,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             - WarrenSpacing.hairline
                     )
                     ZStack(alignment: .top) {
-                        WarrenColorTokens.resolved(for: colorScheme).modalScrim
+                        WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).modalScrim
                             .ignoresSafeArea()
                             .onTapGesture { setCommandPalettePresented(false) }
 
@@ -855,7 +856,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
         .overlay(alignment: .bottomTrailing) {
             if emacsChordActive {
-                let tokens = WarrenColorTokens.resolved(for: colorScheme)
+                let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
                 Text("C-x-")
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(tokens.hudForeground)

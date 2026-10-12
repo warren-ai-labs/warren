@@ -32,6 +32,18 @@ type claudeParser struct {
 	// claudeProposals holds each ExitPlanMode card until its result says
 	// whether the user approved or rejected the plan.
 	claudeProposals map[string]api.AgentEvent
+	// claudeQueue mirrors Claude's pending prompt queue from its
+	// queue-operation rows. Those rows carry no item identity and a dequeue
+	// carries no content either, so the parser numbers each enqueue and
+	// resolves dequeue/remove against this FIFO to give clients a stable
+	// queueId to remove.
+	claudeQueue      []claudeQueuedPrompt
+	claudeQueueCount int
+}
+
+type claudeQueuedPrompt struct {
+	ID      string
+	Content string
 }
 
 type claudeTask struct {
@@ -181,6 +193,9 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 		return nil
 	}
 	timestamp := parseTimestamp(record.Timestamp)
+	if record.Type == "queue-operation" {
+		return p.claudeQueueOperation(line, timestamp)
+	}
 	if structured := projectStructuredAgentEventWithLimit("claude", record.Type, line, timestamp, p.contentLimit); structured != nil {
 		if structured.ID == "" {
 			structured.ID = record.UUID
@@ -188,7 +203,7 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 		return []api.AgentEvent{*structured}
 	}
 	switch record.Type {
-	case "summary", "last-prompt", "ai-title", "pr-link", "queue-operation",
+	case "summary", "last-prompt", "ai-title", "pr-link",
 		"permission-mode", "mode", "file-history-snapshot":
 		return nil
 	case "user":
@@ -520,23 +535,11 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 			return nil
 		}
 		if kind == "queued_command" {
-			prompt := firstNonEmpty(record.Attachment.Prompt, p.content(record.Attachment.Content), p.content(record.Content))
-			payload := map[string]any{
-				"action":  "enqueue",
-				"content": prompt,
-				"prompt":  prompt,
-				"state":   "queued",
-			}
-			if record.SessionID != "" {
-				payload["sessionId"] = record.SessionID
-			}
-			return []api.AgentEvent{{
-				Provider:  "claude",
-				ID:        record.UUID,
-				Type:      "queue",
-				Payload:   payload,
-				Timestamp: timestamp,
-			}}
+			// Claude writes this when a queued prompt is delivered to the
+			// model, after the matching dequeue/remove row. It is not a
+			// pending item; projecting it as one left a queue entry that no
+			// later row ever cleared.
+			return nil
 		}
 		if kind == "agent_listing_delta" || kind == "skill_listing" {
 			content := p.content(record.Attachment.Content)
@@ -904,4 +907,66 @@ func claudeTodoPayloadWithLimit(input map[string]any, limit int) map[string]any 
 		payload["items"] = items
 	}
 	return payload
+}
+
+// claudeQueueOperation projects one queue-operation row against the parser's
+// FIFO. Claude dequeues from the front without naming the item and removes a
+// prompt absorbed mid-turn by content, so both resolve to the queueId assigned
+// at enqueue. A dequeue or remove with nothing pending is dropped rather than
+// emitted as an unmatched row.
+func (p *claudeParser) claudeQueueOperation(line []byte, timestamp time.Time) []api.AgentEvent {
+	var record struct {
+		Operation string          `json:"operation"`
+		SessionID string          `json:"sessionId"`
+		Content   json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(line, &record) != nil {
+		return nil
+	}
+	content := p.content(record.Content)
+	var item claudeQueuedPrompt
+	var action, state string
+	switch strings.ToLower(strings.TrimSpace(record.Operation)) {
+	case "enqueue":
+		p.claudeQueueCount++
+		item = claudeQueuedPrompt{ID: fmt.Sprintf("claude-queue-%d", p.claudeQueueCount), Content: content}
+		p.claudeQueue = append(p.claudeQueue, item)
+		action, state = "enqueue", "queued"
+	case "dequeue", "remove":
+		if len(p.claudeQueue) == 0 {
+			return nil
+		}
+		index := 0
+		if content != "" {
+			for candidate, queued := range p.claudeQueue {
+				if queued.Content == content {
+					index = candidate
+					break
+				}
+			}
+		}
+		item = p.claudeQueue[index]
+		p.claudeQueue = append(p.claudeQueue[:index], p.claudeQueue[index+1:]...)
+		action, state = "dequeue", "dequeued"
+	default:
+		return nil
+	}
+	payload := map[string]any{
+		"action":  action,
+		"queueId": item.ID,
+		"state":   state,
+	}
+	if item.Content != "" {
+		payload["content"] = item.Content
+	}
+	if record.SessionID != "" {
+		payload["sessionId"] = record.SessionID
+	}
+	return []api.AgentEvent{{
+		Provider:  "claude",
+		ID:        item.ID,
+		Type:      "queue",
+		Payload:   payload,
+		Timestamp: timestamp,
+	}}
 }

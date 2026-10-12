@@ -104,10 +104,11 @@ struct WarrenDesktopSidebar: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         // The rail owns the column's width. A child that cannot compress widens
         // the column instead of truncating, and SwiftUI then centres that
         // over-wide column inside the rail's frame — every row would lose its

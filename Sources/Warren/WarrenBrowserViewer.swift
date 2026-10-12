@@ -279,9 +279,10 @@ struct WarrenBrowserSurface: View {
     let model: WarrenRemoteApplicationModel
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         if let url = model.browserViewerURL(sessionID: sessionID) {
             WarrenBrowserViewerHost(sessionID: sessionID, url: url)
         } else {

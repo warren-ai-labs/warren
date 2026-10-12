@@ -2684,6 +2684,7 @@ struct WarrenEmbeddedEditorSurface: View {
     @ObservedObject var model: WarrenEmbeddedEditorModel
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     /// What the region is asking the model for.
     ///
@@ -2702,7 +2703,7 @@ struct WarrenEmbeddedEditorSurface: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Group {
             phaseContent(model.phase, tokens: tokens)
         }

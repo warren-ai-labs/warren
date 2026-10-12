@@ -41,6 +41,7 @@ struct WarrenDesktopSidebarHostRows: View {
     var onSplitDropSession: ((String, String, SplitDropTarget) -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expandedProjectKeys: Set<String> = []
     @State private var collapsedHostIDs: Set<String> = []
@@ -228,7 +229,7 @@ struct WarrenDesktopSidebarHostRows: View {
     }
 
     private func expandedHostSection(_ host: WarrenDesktopSidebarHostProjection) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let tintIndex = tintAllocator.assignments[host.endpointID]
             ?? WarrenDesktopHostTint.index(
                 for: host.endpointID,
@@ -648,7 +649,7 @@ struct WarrenDesktopSidebarHostRows: View {
     }
 
     private func updateTintAssignments() {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         tintAllocator.update(
             endpointIDs: hosts.map(\.endpointID),
             paletteCount: tokens.hostSectionTints.count
@@ -723,7 +724,7 @@ struct WarrenDesktopSidebarHostRows: View {
     }
 
     private func projectGlyph(_ project: Project, size: CGFloat = 22) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return Text(String(project.name.prefix(1)).uppercased())
             .font(.system(size: max(10, size * 0.48), weight: .semibold))
             .foregroundStyle(tokens.background)
@@ -874,10 +875,11 @@ private struct WarrenDesktopSidebarHostsSectionHeader: View {
     let hostCount: Int
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var isHovered = false
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Text(WarrenDesktopSidebarHostsSectionPresentation.title(
             hostCount: hostCount,
             isHovered: isHovered
@@ -933,6 +935,7 @@ private struct WarrenDesktopSidebarHostHeader: View {
     let onRetry: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     @FocusState private var isToggleFocused: Bool
@@ -958,7 +961,7 @@ private struct WarrenDesktopSidebarHostHeader: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let isEngaged = isHovered || isToggleFocused
         HStack(spacing: WarrenSpacing.small) {
             Button(action: onToggle) {

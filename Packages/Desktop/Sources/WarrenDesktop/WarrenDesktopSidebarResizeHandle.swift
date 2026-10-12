@@ -19,6 +19,7 @@ struct WarrenDesktopSidebarResizeHandle: View {
     let onReset: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.warrenForceHover) private var forceHover
     @State private var isHovered = false
     @State private var dragStartWidth: CGFloat?
@@ -30,7 +31,7 @@ struct WarrenDesktopSidebarResizeHandle: View {
     private var isActive: Bool { isHovered || dragStartWidth != nil || forceHover }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Rectangle()
             .fill(.clear)
             .frame(width: Self.hitWidth)

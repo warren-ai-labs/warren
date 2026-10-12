@@ -21,6 +21,7 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
 
     @State private var edges = WarrenScrollEdges()
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     public init(
         _ axes: Axis.Set = .vertical,
@@ -48,6 +49,10 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
                         }
                     }
             }
+            // A fade painted in the surface color only works over an opaque
+            // surface. On glass the region behind is the window's coat, so the
+            // content itself fades out instead.
+            .mask { glassFadeMask }
             .overlay(alignment: .top) {
                 fade(edge: .top)
                     .opacity(axes.contains(.vertical) && edges.canScrollTop ? 1 : 0)
@@ -93,8 +98,47 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
         showsEdgeChevrons && axes.contains(.horizontal) && canScroll
     }
 
+    private var fadesByMask: Bool { windowMaterial == .glass }
+
+    @ViewBuilder
+    private var glassFadeMask: some View {
+        if fadesByMask {
+            let top = axes.contains(.vertical) && edges.canScrollTop
+            let bottom = axes.contains(.vertical) && edges.canScrollBottom
+            let leading = axes.contains(.horizontal) && edges.canScrollLeft
+            let trailing = axes.contains(.horizontal) && edges.canScrollRight
+            VStack(spacing: 0) {
+                LinearGradient(colors: [top ? .clear : .black, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: axes.contains(.vertical) ? fadeLength : 0)
+                Color.black
+                LinearGradient(colors: [.black, bottom ? .clear : .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: axes.contains(.vertical) ? fadeLength : 0)
+            }
+            .mask {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [leading ? .clear : .black, .black], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: axes.contains(.horizontal) ? fadeLength : 0)
+                    Color.black
+                    LinearGradient(colors: [.black, trailing ? .clear : .black], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: axes.contains(.horizontal) ? fadeLength : 0)
+                }
+            }
+        } else {
+            Color.black
+        }
+    }
+
     @ViewBuilder
     private func fade(edge: Edge) -> some View {
+        if fadesByMask {
+            EmptyView()
+        } else {
+            surfaceFade(edge: edge)
+        }
+    }
+
+    @ViewBuilder
+    private func surfaceFade(edge: Edge) -> some View {
         switch edge {
         case .top:
             LinearGradient(colors: [surface, surface.opacity(0)], startPoint: .top, endPoint: .bottom)

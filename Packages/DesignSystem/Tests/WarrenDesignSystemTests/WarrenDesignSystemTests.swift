@@ -123,6 +123,58 @@ final class WarrenDesignSystemTests: XCTestCase {
         XCTAssertFalse(stack.allowsEscapeDismiss(role: .inline))
     }
 
+    /// Opaque is the appearance that shipped before glass existed. Resolving
+    /// against it must change nothing, or turning glass off is not a way back.
+    func testOpaqueMaterialResolvesToTheShippedTokens() {
+        for scheme in [ColorScheme.dark, .light] {
+            let shipped = WarrenColorTokens.resolved(for: scheme)
+            let opaque = WarrenColorTokens.resolved(for: scheme, material: .opaque)
+            XCTAssertEqual(opaque.chromeSurface, shipped.chromeSurface)
+            XCTAssertEqual(opaque.sidebarSurface, shipped.sidebarSurface)
+            XCTAssertEqual(opaque.popoverSurface, shipped.popoverSurface)
+            XCTAssertEqual(opaque.inputSurface, shipped.inputSurface)
+            XCTAssertEqual(opaque.modalScrim, shipped.modalScrim)
+            XCTAssertEqual(opaque.canvas, shipped.background)
+            XCTAssertEqual(opaque.cardSurface, shipped.chromeSurface)
+            XCTAssertEqual(opaque.selectedTabFill, shipped.background)
+            XCTAssertEqual(opaque.chromeDivider, shipped.chromeDivider)
+        }
+    }
+
+    /// Glass has one coat, drawn by the window. A region that still painted
+    /// its own ground would stack a second coat and turn opaque again.
+    func testGlassClearsRegionsAndRaisesSurfaces() {
+        for scheme in [ColorScheme.dark, .light] {
+            let shipped = WarrenColorTokens.resolved(for: scheme)
+            let glass = WarrenColorTokens.resolved(for: scheme, material: .glass)
+            XCTAssertEqual(glass.material, .glass)
+            XCTAssertEqual(glass.canvas, .clear)
+            XCTAssertEqual(glass.chromeSurface, .clear)
+            XCTAssertEqual(glass.sidebarSurface, .clear)
+            XCTAssertEqual(glass.cardSurface, glass.popoverSurface)
+            XCTAssertEqual(glass.inputSurface, glass.popoverSurface)
+            XCTAssertNotEqual(glass.popoverSurface, shipped.popoverSurface)
+            // Text and status colors are calibrated against the Ember ground,
+            // which the coat preserves, so glass must not touch them.
+            XCTAssertEqual(glass.foreground, shipped.foreground)
+            XCTAssertEqual(glass.mutedForeground, shipped.mutedForeground)
+            XCTAssertEqual(glass.background, shipped.background)
+            XCTAssertEqual(glass.highlight, shipped.highlight)
+        }
+    }
+
+    func testGlassDensitiesStayDenseEnoughForTheTextLadder() {
+        XCTAssertGreaterThanOrEqual(WarrenGlassMetrics.coatDensity, 0.5)
+        XCTAssertEqual(WarrenGlassMetrics.raisedOpacity(isLight: false), 0.55, accuracy: 0.0001)
+        XCTAssertEqual(WarrenGlassMetrics.raisedOpacity(isLight: true), 0.31, accuracy: 0.0001)
+    }
+
+    func testReduceTransparencyOverridesTheGlassPreference() {
+        XCTAssertEqual(WarrenWindowMaterial.resolve(glassEnabled: false, reduceTransparency: false), .opaque)
+        XCTAssertEqual(WarrenWindowMaterial.resolve(glassEnabled: true, reduceTransparency: false), .glass)
+        XCTAssertEqual(WarrenWindowMaterial.resolve(glassEnabled: true, reduceTransparency: true), .opaque)
+    }
+
     func testResolvedTokensAnswerTheRequestedAppearance() {
         XCTAssertEqual(
             WarrenColorTokens.resolved(for: .dark).background,

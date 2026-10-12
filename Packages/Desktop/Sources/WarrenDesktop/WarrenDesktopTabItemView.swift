@@ -36,6 +36,7 @@ struct WarrenDesktopTabItem: View {
     let onMoveSession: (TerminalSessionID, WarrenDesktopSessionMoveDestination) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.warrenForceHover) private var forceHover
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -125,7 +126,7 @@ struct WarrenDesktopTabItem: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         ZStack(alignment: .trailing) {
             Button(action: onSelect) {
                 HStack(spacing: WarrenSpacing.small) {
@@ -243,7 +244,7 @@ struct WarrenDesktopTabItem: View {
         .frame(width: WarrenLayoutMetrics.tabWidth, height: WarrenLayoutMetrics.tabBarHeight)
         .background(
             isSelected
-                ? tokens.background
+                ? tokens.selectedTabFill
                 : (isHovered ? tokens.fillHover : .clear)
         )
         .animation(
@@ -309,11 +310,12 @@ private struct WarrenTabButtonStyle: ButtonStyle {
     var isFocused: Bool
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         configuration.label
             .opacity(isEnabled ? (configuration.isPressed ? 0.82 : 1) : 0.42)
             .overlay {
@@ -333,9 +335,10 @@ struct WarrenDesktopTabAddSlot: View {
     let isLoading: Bool
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack {
             Button(action: action) {
                 Group {

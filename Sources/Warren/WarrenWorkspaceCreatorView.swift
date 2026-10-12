@@ -7,6 +7,7 @@ struct WarrenWorkspaceCreatorView: View {
     let onCancel: @MainActor () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @StateObject private var coordinator: WarrenWorkspaceCreationCoordinator
 
     init(
@@ -25,7 +26,7 @@ struct WarrenWorkspaceCreatorView: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
             Text("New workspace")
                 .font(WarrenTypography.dialogTitle)

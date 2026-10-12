@@ -29,6 +29,7 @@ struct WarrenDesktopTerminalGroupRow: View {
     let onDelete: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.warrenForceHover) private var forceHover
     @FocusState private var isFocused: Bool
     @State private var isHovered = false
@@ -42,7 +43,7 @@ struct WarrenDesktopTerminalGroupRow: View {
     }
 
     private var collapsedRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return Button(action: onSelect) {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "square.3.stack.3d")
@@ -80,7 +81,7 @@ struct WarrenDesktopTerminalGroupRow: View {
     }
 
     private var expandedRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return Button(action: {
             guard !showsSessionChildren else { return }
             onSelect()
@@ -205,9 +206,10 @@ struct WarrenDesktopTerminalGroupEditor: View {
     let onConfirm: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
             Text(title)
                 .font(WarrenTypography.dialogTitle)

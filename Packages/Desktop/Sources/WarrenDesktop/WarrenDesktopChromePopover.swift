@@ -31,6 +31,7 @@ struct WarrenDesktopChromePopoverSurface<Content: View>: View {
     let content: Content
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     init(
         title: String,
@@ -53,7 +54,7 @@ struct WarrenDesktopChromePopoverSurface<Content: View>: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: WarrenSpacing.xs) {
                 if let titleLeading {
@@ -192,9 +193,10 @@ struct WarrenDesktopEndpointPopoverContent: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let presentation = WarrenDesktopConnectionPresentation(connectionState)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: WarrenSpacing.compact) {
@@ -467,12 +469,13 @@ struct WarrenDesktopExternalIDEPopoverContent: View {
     let onDismiss: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.openURL) private var openURL
     @AppStorage(WarrenPreferenceKey.embeddedEditorOpenLinks)
     private var embeddedEditorOpenLinks = false
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: 0) {
             if embeddedEditorAvailable {
                 // Open and close are separate rows rather than one row that

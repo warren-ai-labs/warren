@@ -2437,60 +2437,54 @@ func TestDiffNormalization_Pi(t *testing.T) {
 
 func TestQueueNormalization_Claude(t *testing.T) {
 	parser := newParser("claude")
-	lineEnqueue := `{"type":"queue-operation","operation":"enqueue","timestamp":"2026-09-01T10:10:48.592Z","sessionId":"sess-123","content":"Please check line 10"}`
-	events := parser.Parse([]byte(lineEnqueue))
-	if len(events) != 1 || events[0].Type != "queue" {
-		t.Fatalf("expected 1 queue event, got %+v", events)
+	parse := func(line string) []api.AgentEvent {
+		t.Helper()
+		return parser.Parse([]byte(line))
 	}
-	if events[0].Payload["action"] != "enqueue" || events[0].Payload["content"] != "Please check line 10" || events[0].Payload["state"] != "queued" {
-		t.Fatalf("unexpected enqueue payload: %+v", events[0].Payload)
+	queueEvent := func(events []api.AgentEvent, action, queueID string) api.AgentEvent {
+		t.Helper()
+		if len(events) != 1 || events[0].Type != "queue" {
+			t.Fatalf("expected 1 queue event, got %+v", events)
+		}
+		if events[0].Payload["action"] != action || events[0].Payload["queueId"] != queueID {
+			t.Fatalf("payload = %+v, want action %q queueId %q", events[0].Payload, action, queueID)
+		}
+		return events[0]
 	}
-	canon := api.CanonicalAgentEventFromObservation(events[0], "stream-1", "exec-1", 1, time.Now())
+
+	first := queueEvent(parse(`{"type":"queue-operation","operation":"enqueue","timestamp":"2026-09-01T10:10:48.592Z","sessionId":"sess-123","content":"Please check line 10"}`), "enqueue", "claude-queue-1")
+	if first.Payload["content"] != "Please check line 10" || first.Payload["state"] != "queued" {
+		t.Fatalf("unexpected enqueue payload: %+v", first.Payload)
+	}
+	canon := api.CanonicalAgentEventFromObservation(first, "stream-1", "exec-1", 1, time.Now())
 	if canon.Type != "queue.updated" {
 		t.Fatalf("canonical type = %q, want queue.updated", canon.Type)
 	}
+	queueEvent(parse(`{"type":"queue-operation","operation":"enqueue","timestamp":"2026-09-01T10:10:50.000Z","sessionId":"sess-123","content":"Second"}`), "enqueue", "claude-queue-2")
 
-	lineRemove := `{"type":"queue-operation","operation":"remove","timestamp":"2026-09-01T10:12:07.407Z","sessionId":"sess-123","content":"Please check line 10"}`
-	eventsRemove := parser.Parse([]byte(lineRemove))
-	if len(eventsRemove) != 1 || eventsRemove[0].Type != "queue" {
-		t.Fatalf("expected 1 queue event, got %+v", eventsRemove)
+	// A prompt absorbed mid-turn is removed by content, out of FIFO order.
+	removed := queueEvent(parse(`{"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","timestamp":"2026-09-01T10:12:07.407Z","sessionId":"sess-123","content":"Second"}`), "dequeue", "claude-queue-2")
+	if removed.Payload["state"] != "dequeued" {
+		t.Fatalf("unexpected remove payload: %+v", removed.Payload)
 	}
-	if eventsRemove[0].Payload["action"] != "remove" || eventsRemove[0].Payload["state"] != "cancelled" {
-		t.Fatalf("unexpected remove payload: %+v", eventsRemove[0].Payload)
-	}
-
-	lineDequeue := `{"type":"queue-operation","operation":"dequeue","timestamp":"2026-08-30T12:54:26.367Z","sessionId":"sess-123"}`
-	eventsDequeue := parser.Parse([]byte(lineDequeue))
-	if len(eventsDequeue) != 1 || eventsDequeue[0].Type != "queue" {
-		t.Fatalf("expected 1 queue event, got %+v", eventsDequeue)
-	}
-	if eventsDequeue[0].Payload["action"] != "dequeue" || eventsDequeue[0].Payload["state"] != "dequeued" {
-		t.Fatalf("unexpected dequeue payload: %+v", eventsDequeue[0].Payload)
+	// A dequeue names nothing; it takes the front of the queue.
+	queueEvent(parse(`{"type":"queue-operation","operation":"dequeue","timestamp":"2026-09-01T10:12:08.000Z","sessionId":"sess-123"}`), "dequeue", "claude-queue-1")
+	if events := parse(`{"type":"queue-operation","operation":"dequeue","timestamp":"2026-09-01T10:12:09.000Z","sessionId":"sess-123"}`); len(events) != 0 {
+		t.Fatalf("dequeue on an empty queue emitted %+v", events)
 	}
 
-	lineAttachment := `{"parentUuid":"p1","type":"attachment","uuid":"att-1","timestamp":"2026-09-01T10:10:48.592Z","attachment":{"type":"queued_command","prompt":"Buffered command prompt"}}`
-	eventsAtt := parser.Parse([]byte(lineAttachment))
-	if len(eventsAtt) != 1 || eventsAtt[0].Type != "queue" {
-		t.Fatalf("expected 1 queue event from attachment, got %+v", eventsAtt)
-	}
-	if eventsAtt[0].Payload["action"] != "enqueue" || eventsAtt[0].Payload["content"] != "Buffered command prompt" {
-		t.Fatalf("unexpected attachment queue payload: %+v", eventsAtt[0].Payload)
+	// Claude records delivery of a queued prompt after the dequeue/remove row;
+	// it must not reopen the queue.
+	if events := parse(`{"parentUuid":"p1","type":"attachment","uuid":"att-1","timestamp":"2026-09-01T10:12:10.000Z","attachment":{"type":"queued_command","prompt":"Second"}}`); len(events) != 0 {
+		t.Fatalf("queued_command attachment emitted %+v", events)
 	}
 }
 
 func TestQueueNormalization_Qoder(t *testing.T) {
 	parser := newParser("qoder")
 	line := `{"type":"attachment","uuid":"qatt-1","timestamp":"2026-09-01T10:10:48.592Z","attachment":{"type":"queued_command","prompt":"Qoder buffered command"}}`
-	events := parser.Parse([]byte(line))
-	if len(events) != 1 || events[0].Type != "queue" {
-		t.Fatalf("expected 1 queue event, got %+v", events)
-	}
-	if events[0].Payload["action"] != "enqueue" || events[0].Payload["content"] != "Qoder buffered command" {
-		t.Fatalf("unexpected qoder queue payload: %+v", events[0].Payload)
-	}
-	canon := api.CanonicalAgentEventFromObservation(events[0], "stream-1", "exec-1", 1, time.Now())
-	if canon.Type != "queue.updated" {
-		t.Fatalf("canonical type = %q, want queue.updated", canon.Type)
+	if events := parser.Parse([]byte(line)); len(events) != 0 {
+		t.Fatalf("queued_command attachment emitted %+v", events)
 	}
 }
 

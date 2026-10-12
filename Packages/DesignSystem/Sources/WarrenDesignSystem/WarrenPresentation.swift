@@ -75,6 +75,7 @@ public struct WarrenPanelSurfaceModifier: ViewModifier {
     public let showsBorder: Bool
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     public init(
         role: WarrenPresentationRole = .popover,
@@ -87,12 +88,26 @@ public struct WarrenPanelSurfaceModifier: ViewModifier {
     }
 
     public func body(content: Content) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let resolvedCornerRadius = cornerRadius ?? WarrenPresentationMetrics.cornerRadius(for: role)
         let elevation = WarrenPresentationMetrics.elevation(for: role)
         let isElevatedModal = role == .modal || role == .sheet || role == .commandSurface
         content
-            .background(tokens.popoverSurface)
+            .background {
+                // On glass every floating surface is one material: the same
+                // Ember tone as a raised surface, over an in-window blur so the
+                // content underneath — usually terminal text — cannot compete
+                // with the surface's own. Inline and status surfaces sit in the
+                // flow and do not float, so they take the tone without a blur.
+                if windowMaterial == .glass, Self.floats(role) {
+                    ZStack {
+                        Rectangle().fill(.regularMaterial)
+                        tokens.popoverSurface
+                    }
+                } else {
+                    tokens.popoverSurface
+                }
+            }
             .clipShape(.rect(cornerRadius: resolvedCornerRadius))
             .overlay {
                 if showsBorder {
@@ -113,6 +128,15 @@ public struct WarrenPanelSurfaceModifier: ViewModifier {
                 radius: (isElevatedModal && colorScheme == .dark) ? 1 : 0,
                 y: (isElevatedModal && colorScheme == .dark) ? 1 : 0
             )
+    }
+}
+
+extension WarrenPanelSurfaceModifier {
+    static func floats(_ role: WarrenPresentationRole) -> Bool {
+        switch role {
+        case .inline, .status: false
+        case .popover, .menu, .modal, .sheet, .commandSurface: true
+        }
     }
 }
 
@@ -150,6 +174,7 @@ public extension View {
 public struct WarrenModalBackdrop<Content: View>: View {
     private let content: Content
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     public init(@ViewBuilder content: () -> Content) {
         self.content = content()
@@ -157,7 +182,7 @@ public struct WarrenModalBackdrop<Content: View>: View {
 
     public var body: some View {
         ZStack {
-            WarrenColorTokens.resolved(for: colorScheme).modalScrim
+            WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).modalScrim
                 .ignoresSafeArea()
                 .accessibilityHidden(true)
             content
@@ -249,6 +274,7 @@ public struct WarrenInputField: View {
 
     @Binding private var text: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var isFocused: Bool
 
     public init(
@@ -272,7 +298,7 @@ public struct WarrenInputField: View {
     }
 
     public var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
             Text(label)
                 .font(labelFont)

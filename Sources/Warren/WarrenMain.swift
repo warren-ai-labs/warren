@@ -33,7 +33,7 @@ struct WarrenAppMessage: Identifiable {
     }
 }
 
-private enum WarrenWindowGeometry {
+enum WarrenWindowGeometry {
     /// Subtle corner radius for the borderless shell. The window keeps its
     /// own chrome edge-to-edge while the content is clipped into a rounded
     /// shape. 8pt stays clear of the 12pt traffic lights, which sit only 8pt

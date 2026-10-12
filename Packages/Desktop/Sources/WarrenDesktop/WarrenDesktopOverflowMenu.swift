@@ -6,9 +6,10 @@ struct WarrenDesktopOverflowButton: View {
     let action: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         WarrenDesktopChromeButton(
             systemImage: "ellipsis",
             label: "More workspace actions",
@@ -30,10 +31,11 @@ struct WarrenDesktopOverflowPopover: View {
     let onDismiss: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var selectedControl: WarrenDesktopWorkspaceTabTrailingControl?
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let titleLeading: AnyView? = selectedControl == nil
             ? nil
             : AnyView(

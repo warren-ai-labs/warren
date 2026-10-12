@@ -64,6 +64,7 @@ struct WarrenDesktopCommandPalette: View {
     @State private var outcome: Outcome
     @State private var indexTask: Task<Void, Never>?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     init(
         projection: WarrenDesktopProjection,
@@ -106,7 +107,7 @@ struct WarrenDesktopCommandPalette: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(spacing: 0) {
             inputRow(tokens: tokens)
 

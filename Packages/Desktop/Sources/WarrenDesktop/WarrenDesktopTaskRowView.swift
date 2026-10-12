@@ -20,6 +20,7 @@ struct WarrenDesktopTaskRow: View {
     let onDelete: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.warrenForceHover) private var forceHover
     @State private var isHovered = false
     @FocusState private var isFocused: Bool
@@ -35,7 +36,7 @@ struct WarrenDesktopTaskRow: View {
     }
 
     private var collapsedRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return Button(action: onToggleExpansion) {
             taskIcon(tokens: tokens)
         }
@@ -65,7 +66,7 @@ struct WarrenDesktopTaskRow: View {
     }
 
     private var expandedRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let actionSlot = WarrenLayoutMetrics.sidebarActionButtonSize + WarrenSpacing.compact
         let compactActionSize = WarrenLayoutMetrics.sidebarActionButtonSize - WarrenSpacing.xs
         return ZStack(alignment: .trailing) {

@@ -94,6 +94,7 @@ struct WarrenDesktopProjectRow: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.warrenForceHover) private var forceHover
     @State private var isHovered = false
     @FocusState private var isFocused: Bool
@@ -109,14 +110,14 @@ struct WarrenDesktopProjectRow: View {
     }
 
     private var collapsedRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return Button(action: onSelect) {
             ZStack(alignment: .bottomTrailing) {
                 projectAvatar(tokens: tokens)
                     .frame(width: 24, height: 24)
                 if let deletionKind {
                     WarrenBrailleSpinner(size: 12, accessibilityLabel: deletionKind.accessibilityLabel)
-                        .background(tokens.sidebarSurface, in: Circle())
+                        .background(tokens.cardSurface, in: Circle())
                         .offset(x: 5, y: 5)
                 }
             }
@@ -164,7 +165,7 @@ struct WarrenDesktopProjectRow: View {
     }
 
     private var expandedRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let actionSlot = WarrenLayoutMetrics.sidebarActionButtonSize + WarrenSpacing.compact
         let compactActionSize = WarrenLayoutMetrics.sidebarActionButtonSize - WarrenSpacing.xs
         return ZStack(alignment: .trailing) {

@@ -646,6 +646,10 @@ public final class TerminalSurfaceManager {
         TerminalDiagnostics.log("surface_shutdown_end", ["duration_ms": String(ms), "pending": String(pendingDisposals.count)])
     }
 
+    public func apply(backgroundOpacity: Double) {
+        entries.values.forEach { $0.surface.apply(backgroundOpacity: backgroundOpacity) }
+    }
+
     public func apply(font: TerminalFontPreference) {
         entries.values.forEach { $0.surface.apply(font: font) }
     }

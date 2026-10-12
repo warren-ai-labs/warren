@@ -72,6 +72,7 @@ struct WarrenDesktopTabBar: View {
     let onDismissActivity: (TerminalSessionID, AgentActivityState) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pendingTabID: String?
     @State private var pendingTabGeneration = 0
@@ -185,7 +186,7 @@ struct WarrenDesktopTabBar: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         ZStack(alignment: .leading) {
             Rectangle()
                 .fill(tokens.chromeSurface)
@@ -331,7 +332,7 @@ struct WarrenDesktopTabBar: View {
         dropBeforeTabID: String?,
         canStartDrag: Bool
     ) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let mark = tab.sessionID.flatMap { tabMarks[$0] }
         WarrenDesktopTabItem(
             tab: tab,
@@ -411,7 +412,7 @@ struct WarrenDesktopTabBar: View {
         tabs runTabs: [ClientTab],
         dropBeforeTabID: String?
     ) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let color = WarrenDesktopSplitGroupPalette.color(for: group.scopeKey, tokens: tokens)
         HStack(spacing: 0) {
             WarrenDesktopSplitGroupMark(tree: group.tree, color: color)
@@ -861,6 +862,7 @@ struct WarrenDesktopSoloPaneIdentity: View {
     let onClose: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.warrenForceHover) private var forceHover
     @State private var isHovered = false
 
@@ -875,7 +877,7 @@ struct WarrenDesktopSoloPaneIdentity: View {
     private var showsControls: Bool { isHovered || forceHover }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: WarrenSpacing.small) {
             if let preset {
                 WarrenDesktopPresetIcon(preset: preset)
@@ -1109,9 +1111,10 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
     var inspector: WarrenDesktopInspectorToggle?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: WarrenSpacing.xxs) {
             ForEach(controlLayout.direct, id: \.self) {
                 trailingControl($0, tokens: tokens)
@@ -1270,9 +1273,10 @@ private struct WarrenDesktopIDEControl: View {
     let onPresentChoices: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         WarrenDesktopChromeButton(
             systemImage: "macwindow",
             label: embeddedEditorSelected ? "Close Embedded Editor" : "Open in IDE",
@@ -1317,6 +1321,7 @@ private struct WarrenDesktopEndpointControl: View {
     let onSelect: (String) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var isFocused: Bool
 
     private var selectedEndpoint: WarrenDesktopEndpointOption? {
@@ -1324,7 +1329,7 @@ private struct WarrenDesktopEndpointControl: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let presentation = WarrenDesktopConnectionPresentation(connectionState)
         let endpointColor = selectedEndpoint.map {
             WarrenDesktopEndpointAppearance.color(

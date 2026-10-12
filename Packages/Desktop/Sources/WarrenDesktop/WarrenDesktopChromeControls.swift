@@ -13,9 +13,10 @@ struct WarrenDesktopChromeButton: View {
     var edgeSpaced: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var isFocused: Bool
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
@@ -35,9 +36,10 @@ struct WarrenDesktopChromeButton: View {
 
 struct WarrenDesktopOfflineBadge: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Text("Offline")
             .font(WarrenTypography.navigationMeta)
             .foregroundStyle(tokens.mutedForeground)
@@ -51,10 +53,11 @@ struct WarrenDesktopOfflineBadge: View {
 
 struct WarrenDesktopChromeDivider: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
         Rectangle()
-            .fill(WarrenColorTokens.resolved(for: colorScheme).chromeDivider)
+            .fill(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).chromeDivider)
             .frame(height: WarrenSpacing.hairline)
     }
 }

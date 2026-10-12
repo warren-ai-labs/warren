@@ -277,6 +277,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var deletionReconciliationWire: WarrenRemoteClient?
     private var attachGeneration: UInt64 = 0
     private var terminalFont = TerminalFontPreference()
+    /// 1 paints the terminal's own ground; 0 lets the window's glass coat,
+    /// which is the same color, show through.
+    private var terminalBackgroundOpacity: Double = 1
     private var pendingTerminalOpenRequest: WarrenTerminalOpenRequest?
     private var maintenanceResetTask: Task<Void, Never>?
     private var connectionIssueTask: Task<Void, Never>?
@@ -2300,6 +2303,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         guard preference != terminalFont else { return }
         terminalFont = preference
         surfaceManager.apply(font: preference)
+    }
+
+    func updateTerminalBackgroundOpacity(_ opacity: Double) {
+        guard opacity != terminalBackgroundOpacity else { return }
+        terminalBackgroundOpacity = opacity
+        surfaceManager.apply(backgroundOpacity: opacity)
     }
     func startWebFromUI() {
         controlPublicAccess(.enable)
@@ -5014,6 +5023,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             attachmentID: TerminalAttachmentID(),
             workingDirectory: session.workingDirectory,
             font: terminalFont,
+            backgroundOpacity: terminalBackgroundOpacity,
             onInput: { data in inputBridge.send(data) },
             onResize: { [weak self] columns, rows in
                 Task { @MainActor in

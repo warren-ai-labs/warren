@@ -22,7 +22,7 @@ public struct WarrenSettingsCard<Content: View>: View {
         }
         .background(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .fill(tokens.chromeSurface)
+                .fill(tokens.cardSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
