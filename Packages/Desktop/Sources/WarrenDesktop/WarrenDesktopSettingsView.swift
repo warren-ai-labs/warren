@@ -66,7 +66,7 @@ private extension WarrenDesktopSettingsSection {
 
     var detail: String {
         switch self {
-        case .appearance: "Light, dark, or follow macOS, and Liquid Glass."
+        case .appearance: "Light, dark, or follow macOS, and a translucent window."
         case .terminalFont: "Applied to every terminal surface."
         case .terminalTitle: "Auxiliary context below the preset bar."
         case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
@@ -87,7 +87,7 @@ private extension WarrenDesktopSettingsSection {
     var searchTerms: [String] {
         switch self {
         case .appearance:
-            [rawValue, detail, "appearance", "theme", "light", "dark", "system", "color", "colour", "palette", "contrast", "glass", "liquid glass", "transparency", "translucent", "blur"]
+            [rawValue, detail, "appearance", "theme", "light", "dark", "system", "color", "colour", "palette", "contrast", "glass", "translucent window", "transparency", "translucent", "blur"]
         case .terminalFont: [rawValue, detail, "font", "family", "size", "typography"]
         case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
         case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
@@ -2736,13 +2736,13 @@ struct WarrenDesktopSettingsView: View {
                     WarrenSettingsCardDivider(tokens: tokens)
 
                     WarrenSettingsRow(
-                        title: "Liquid Glass",
+                        title: "Translucent Window",
                         subtitle: reduceTransparency
                             ? "Unavailable while Reduce Transparency is on in macOS Accessibility settings."
                             : "Lets the desktop show through the window, including behind terminals.",
                         tokens: tokens
                     ) {
-                        Toggle("Liquid Glass", isOn: $liquidGlassEnabled)
+                        Toggle("Translucent Window", isOn: $liquidGlassEnabled)
                             .labelsHidden()
                             .toggleStyle(.switch)
                             .disabled(reduceTransparency)
