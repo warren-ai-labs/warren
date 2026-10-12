@@ -572,6 +572,7 @@ struct WarrenCompositionRoot: View {
         }
         .animation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion), value: windowMaterial)
         .environment(\.warrenWindowMaterial, windowMaterial)
+        .environment(\.warrenGlassLayout, liquidGlassEnabled)
     }
 
     /// Glass is the user's choice, but Reduce Transparency overrides it.
