@@ -125,6 +125,44 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.25.0",
+        dateISO: "2026-10-12",
+        date: "October 12, 2026",
+        title: "Warren adds an opt-in translucent window.",
+        summary:
+          "A minor release that adds an opt-in Translucent Window material to the Desktop, so the window itself can carry one Ember coat over the desktop, and stacks a Conversation's pending work on the composer while it is on. The JSON control protocol remains at 4.0 and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Add an opt-in Translucent Window switch under Settings > Appearance, off by default. With it on the main window is the material: a behind-window blur with one translucent coat of the Ember background drawn at the root. Regions (sidebar, top bar, tabs, preset bar, panes, inspector, conversation timeline, settings) stop painting their own ground, raised surfaces (composer, cards, inputs) take the same Ember tone made denser, and floating surfaces add an in-window blur. Terminals paint no default background, so the coat shows through and OSC 11 still reports what is on screen.",
+              "Stack a Conversation's pending work on the composer while the preference is on: a dismissible problem banner, the decision dock, and one raised panel carrying the plan and the queued follow-ups, which can be edited back into the composer or dropped. The transcript scrolls beneath the stack, a sent message can be brought back into the composer to edit and resend, a long message folds after eight lines, and an empty Conversation names the workspace it will work in.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Name the setting Translucent Window, and let the arrangement it turns on follow the preference rather than the window material, so Reduce Transparency keeps the layout while forcing the window back to opaque. With it off nothing changes.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Bind a fresh Agent to its hook-reported transcript before the file exists. Claude creates its JSONL only with the first prompt, so a new Session had no timeline and clients kept showing it as starting while the TUI was already usable; the Host now trusts the path a SessionStart binding reports for the conversation the Session was started with, and the watcher retries the missing file. A switch to another conversation still waits for its file.",
+              "Pair Claude queue rows instead of reopening delivered prompts. Claude writes a `queued_command` attachment when a queued prompt is delivered, after its dequeue/remove row; it was projected as an enqueue nothing cleared, so idle conversations showed queued messages. The parser now numbers each enqueue and resolves dequeue and remove to that queueId.",
+              "Lift a worktree row's title to the project foreground only while the row is active.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0 and this release migrates no state.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.24.0",
         dateISO: "2026-10-08",
         date: "October 8, 2026",
@@ -1494,6 +1532,44 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.25.0",
+        dateISO: "2026-10-12",
+        date: "2026 年 10 月 12 日",
+        title: "Warren 加入可选的半透明窗口。",
+        summary:
+          "次版本：Desktop 新增可选的半透明窗口材质，窗口本身在桌面上覆一层 Ember 底色；开启时 Conversation 的待办事项叠放在 composer 上。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "在 Settings > Appearance 下新增可选的“半透明窗口”开关，默认关闭。开启后主窗口本身成为材质：窗口背后模糊，根部只覆一层半透明 Ember 背景。各区域（侧边栏、顶栏、标签、预设栏、面板、inspector、对话时间线、设置）不再自绘底色，浮起表面（composer、卡片、输入框）用同一 Ember 色调加重，浮动表面再加一层窗口内模糊。终端不绘制默认背景，因此底色透出，OSC 11 仍如实报告屏幕内容。",
+              "开启该偏好时，Conversation 的待办事项叠放在 composer 上：可关闭的问题横幅、决策区，以及一块承载计划与排队消息的浮起面板，排队消息可以取回 composer 编辑或丢弃。记录在该叠层下方滚动，已发送的消息可以取回 composer 编辑重发，长消息超过八行折叠，空 Conversation 会标出将要在哪个 workspace 工作。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "把该设置命名为“半透明窗口”，并让它带出的排布跟随偏好而非窗口材质，因此“降低透明度”只把窗口恢复为不透明，不会撤销布局。关闭时行为不变。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "在新 Agent 的 hook 上报的 transcript 文件还不存在时就绑定它。Claude 只在收到第一条 prompt 时才创建 JSONL，因此新 Session 此前没有时间线，TUI 已经可用，客户端却一直显示为启动中；现在只要 SessionStart 绑定所指的对话正是该 Session 启动时所用的对话且尚无其他绑定，Host 就信任该路径，watcher 会重试缺失的文件。切换到另一个对话仍会等待其文件出现。",
+              "配对 Claude 的队列行，不再把已投递的 prompt 重新显示为排队。Claude 在投递排队 prompt 时写入 `queued_command` 附件，位置在其 dequeue/remove 行之后；此前它被投影成一条永不清除的入队，空闲对话因此显示排队消息。队列行不带条目 ID，解析器现为每条入队编号，并把 dequeue 与 remove 解析到该 queueId。",
+              "worktree 行的标题只在行处于活动状态时提升为项目前景色。",
+            ],
+          },
+          {
+            title: "发行说明",
+            items: [
+              "JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该压缩包适合内部或临时测试，不适合公开发布。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.24.0",
         dateISO: "2026-10-08",

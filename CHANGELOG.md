@@ -6,6 +6,64 @@ All notable changes to Warren are documented here.
 
 _No changes yet._
 
+## [0.25.0] - 2026-10-12
+
+> Minor release: adds an opt-in Translucent Window material to the Desktop, so
+> the window itself can carry one Ember coat over the desktop, and stacks a
+> Conversation's pending work on the composer while it is on. The JSON control
+> protocol remains at 4.0 and this release migrates no state.
+
+### Added
+
+- Add an opt-in Translucent Window switch under Settings > Appearance, off by
+  default. With it on the main window is the material: a behind-window blur with
+  one translucent coat of the Ember background drawn at the root. Regions
+  (sidebar, top bar, tabs, preset bar, panes, inspector, conversation timeline,
+  settings) stop painting their own ground, raised surfaces (composer, cards,
+  inputs) take the same Ember tone made denser, and floating surfaces add an
+  in-window blur. Terminals paint no default background, so the coat — the
+  terminal's own background color — shows through and OSC 11 still reports what
+  is on screen.
+- Stack a Conversation's pending work on the composer while the preference is
+  on: a dismissible problem banner, the decision dock, and one raised panel
+  carrying the plan and the queued follow-ups, which can be edited back into the
+  composer or dropped. The transcript scrolls beneath the stack, a sent message
+  can be brought back into the composer to edit and resend, a long message folds
+  after eight lines, and an empty Conversation names the workspace it will work
+  in.
+
+### Changed
+
+- Name the setting Translucent Window, and let the arrangement it turns on follow
+  the preference rather than the window material, so Reduce Transparency keeps
+  the layout while forcing the window back to opaque. With it off nothing
+  changes.
+
+### Fixed
+
+- Bind a fresh Agent to its hook-reported transcript before the file exists.
+  Claude creates its JSONL only with the first prompt, so a new Session had no
+  timeline until then and clients kept showing it as starting while the TUI was
+  already usable. When the SessionStart binding names the conversation the
+  Session was started with and nothing else is bound, the Host now trusts the
+  reported path; the watcher already retries a missing file. A switch to another
+  conversation still waits for its file.
+- Pair Claude queue rows instead of reopening delivered prompts. Claude writes a
+  `queued_command` attachment when a queued prompt is delivered, after its
+  dequeue/remove row. It was projected as an enqueue that nothing ever cleared,
+  so idle conversations showed queued messages. Queue rows carry no item
+  identity, so the parser now numbers each enqueue and resolves dequeue (front)
+  and remove (by content) to that queueId.
+- Lift a worktree row's title to the project foreground only while the row is
+  active.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and this release migrates no state.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.24.0] - 2026-10-08
 
 > Minor release: redraws the Desktop Inspector's diffs in one text view, so a
