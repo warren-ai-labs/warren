@@ -71,8 +71,8 @@ private struct WarrenGlassLayoutKey: EnvironmentKey {
 }
 
 public extension EnvironmentValues {
-    /// Whether the person turned Liquid Glass on, regardless of whether the
-    /// window can show it.
+    /// Whether the person turned the translucent window on, regardless of
+    /// whether the window can show it.
     ///
     /// Layout that came with the glass design — the Conversation's composer
     /// stack, for one — reads this rather than the material, because it is
