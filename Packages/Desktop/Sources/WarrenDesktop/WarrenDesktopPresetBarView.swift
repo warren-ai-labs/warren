@@ -34,6 +34,7 @@ struct WarrenDesktopPresetBar: View {
     let onLaunch: (TerminalSessionLaunchRequest) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var focusedPresetID: String?
     @State private var pendingPresetID: String?
     @State private var pendingResetGeneration = 0
@@ -63,11 +64,11 @@ struct WarrenDesktopPresetBar: View {
     private var agentInterfaceRawValue = WarrenAgentInterface.defaultValue.rawValue
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         WarrenOverflowFadeScrollView(
             .horizontal,
             fadeLength: WarrenLayoutMetrics.sidebarScrollFadeLength,
-            surface: tokens.background
+            surface: tokens.canvas
         ) {
             HStack(spacing: WarrenSpacing.small) {
                 ForEach(WarrenDesktopSessionPreset.orderedLaunchable(
@@ -92,7 +93,7 @@ struct WarrenDesktopPresetBar: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: WarrenLayoutMetrics.presetBarHeight)
-        .background(tokens.background)
+        .background(tokens.canvas)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(tokens.chromeDivider)
@@ -271,6 +272,7 @@ struct WarrenDesktopPresetIcon: View {
     let preset: WarrenDesktopSessionPreset
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
         if let image = image {
@@ -287,7 +289,7 @@ struct WarrenDesktopPresetIcon: View {
                 // that softens the brand marks against Ember.
                 artwork
                     .foregroundStyle(
-                        WarrenColorTokens.resolved(for: colorScheme).mutedForeground
+                        WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground
                     )
             } else {
                 artwork.opacity(0.9)

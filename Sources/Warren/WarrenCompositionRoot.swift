@@ -59,6 +59,9 @@ struct WarrenCompositionRoot: View {
     @StateObject private var presentation = WarrenPresentationCoordinator()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage(WarrenPreferenceKey.appearanceLiquidGlass)
+    private var liquidGlassEnabled = false
     @AppStorage(WarrenPreferenceKey.terminalFontFamily)
     private var terminalFontFamily = TerminalFontPreference.defaultFamily
     @AppStorage(WarrenPreferenceKey.terminalFontSize)
@@ -371,9 +374,17 @@ struct WarrenCompositionRoot: View {
             )
         }
         .disabled(isSupersetImporting)
+        .background {
+            // The window's single coat. Opaque Ember draws nothing here, so
+            // turning glass off is exactly the appearance that shipped before.
+            if windowMaterial == .glass {
+                WarrenWindowCoat(cornerRadius: WarrenWindowGeometry.cornerRadius)
+                    .transition(.opacity)
+            }
+        }
         .overlay {
             if isSupersetImporting {
-                let tokens = WarrenColorTokens.resolved(for: colorScheme)
+                let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
                 ZStack {
                     tokens.modalScrim
                         .ignoresSafeArea()
@@ -433,6 +444,7 @@ struct WarrenCompositionRoot: View {
         }
         .onChange(of: terminalFontFamily) { _ in updateTerminalFont() }
         .onChange(of: terminalFontSize) { _ in updateTerminalFont() }
+        .onChange(of: windowMaterial) { _ in updateTerminalMaterial() }
         .onChange(of: remoteModel.projection) { _ in
             refreshMultiHostSidebar()
         }
@@ -490,6 +502,7 @@ struct WarrenCompositionRoot: View {
             presetOrder = WarrenDesktopSessionPreset.normalizedOrderRawValue(presetOrder)
             hiddenPresets = WarrenDesktopSessionPreset.normalizedHiddenRawValue(hiddenPresets)
             updateTerminalFont()
+            updateTerminalMaterial()
             restoreEndpointSelection()
             refreshMultiHostSidebar()
             publishEndpointCapabilities()
@@ -556,6 +569,17 @@ struct WarrenCompositionRoot: View {
             remoteModel.disconnect()
             multiHostSidebar.stop()
         }
+        .animation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion), value: windowMaterial)
+        .environment(\.warrenWindowMaterial, windowMaterial)
+        .environment(\.warrenGlassLayout, liquidGlassEnabled)
+    }
+
+    /// Glass is the user's choice, but Reduce Transparency overrides it.
+    private var windowMaterial: WarrenWindowMaterial {
+        WarrenWindowMaterial.resolve(
+            glassEnabled: liquidGlassEnabled,
+            reduceTransparency: reduceTransparency
+        )
     }
 
     @ViewBuilder
@@ -660,6 +684,12 @@ struct WarrenCompositionRoot: View {
             .onAppear { presentation.present(.sheet) }
             .onDisappear { presentation.dismissTop() }
         }
+    }
+
+    /// On glass the terminal's default ground is the window's coat, which is
+    /// the same color it reports, so the grid itself paints no background.
+    private func updateTerminalMaterial() {
+        remoteModel.updateTerminalBackgroundOpacity(windowMaterial == .glass ? 0 : 1)
     }
 
     private func updateTerminalFont() {
@@ -1356,6 +1386,7 @@ private struct WarrenSupersetImportView: View {
     let onConfirm: (SupersetImportPreview) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var selectedProjectIDs: Set<String>
 
     init(
@@ -1386,7 +1417,7 @@ private struct WarrenSupersetImportView: View {
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: 0) {
             header(tokens: tokens)
 
@@ -1623,6 +1654,7 @@ private struct WarrenTerminalSurfaceView: View {
     @State private var searchQuery = ""
     @FocusState private var searchFieldFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     private var activeSurface: GhosttySurface? {
         context.tab.sessionID.flatMap(surfaceManager.surface(for:))
@@ -1649,7 +1681,7 @@ private struct WarrenTerminalSurfaceView: View {
     }
 
     private var terminalBody: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return ZStack {
             TerminalHostRepresentable(
                 manager: surfaceManager,
@@ -1801,9 +1833,10 @@ private struct WarrenTerminalLoadingOverlay: View {
 /// Empty workspace state rendered above the stable native terminal host.
 private struct WarrenEmptyWorkspacePanel: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(spacing: WarrenSpacing.standard) {
             Text("Start a session")
                 .font(WarrenTypography.emptyStateTitle)
@@ -1857,9 +1890,10 @@ private struct WarrenTerminalSearchBar: View {
     let surface: GhosttySurface?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: WarrenSpacing.xs) {
             Image(systemName: "magnifyingglass")
                 .font(WarrenTypography.navigationMeta)

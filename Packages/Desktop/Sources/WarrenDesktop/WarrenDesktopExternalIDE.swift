@@ -171,9 +171,10 @@ struct WarrenDesktopExternalIDEMenu: View {
     let onOpen: (WarrenDesktopExternalIDEOption) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Button(action: onPresent) {
             Image(systemName: "macwindow")
                 .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .regular))

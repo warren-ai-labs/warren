@@ -36,9 +36,10 @@ struct WarrenSSHHostPicker: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: 0) {
             header(tokens: tokens)
 

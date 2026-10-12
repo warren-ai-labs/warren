@@ -54,15 +54,15 @@ public struct WarrenColorTokens: Sendable {
     public let amber: Color
 
     /// Low-contrast chrome surface behind the top bar and pane headers.
-    public let chromeSurface: Color
+    public private(set) var chromeSurface: Color
     /// The continuous Sidebar surface. Superset's desktop sidebar uses
     /// `bg-muted/45 dark:bg-muted/35`; both appearances resolve that blend to
     /// an opaque value here rather than introducing a separate panel color.
-    public let sidebarSurface: Color
+    public private(set) var sidebarSurface: Color
     /// Elevated surface for command palettes, menus, and relay popovers.
-    public let popoverSurface: Color
+    public private(set) var popoverSurface: Color
     /// Surface for text inputs and other editable controls.
-    public let inputSurface: Color
+    public private(set) var inputSurface: Color
     /// Dedicated, low-saturation colors for client-local Host section washes.
     /// Callers apply these with a very small opacity; they are not status
     /// colors and must never be used for row foregrounds or selection states.
@@ -93,9 +93,14 @@ public struct WarrenColorTokens: Sendable {
     public let tertiaryWash: Color
 
     /// The dimming layer behind a modal, sheet, or command palette.
-    public let modalScrim: Color
+    public private(set) var modalScrim: Color
     /// Ambient occlusion shadow for the few genuinely floating elements.
     public let elevationShadow: Color
+
+    /// The window material these tokens were resolved against. Surfaces read
+    /// it through `canvas` and the surface properties above; a component never
+    /// branches on it to pick its own alpha.
+    public private(set) var material: WarrenWindowMaterial = .opaque
 
     private init(
         background: Color,
@@ -245,6 +250,30 @@ public struct WarrenColorTokens: Sendable {
         }
     }
 
+    /// Resolves the tokens for a color scheme and a window material.
+    ///
+    /// Opaque returns exactly `resolved(for:)`. Glass keeps every text, status
+    /// and wash value and changes only the surfaces, because the window itself
+    /// now carries the one coat (`WarrenGlassMetrics`): region fills clear so
+    /// the coat shows through, and raised surfaces become the same Ember tone
+    /// made denser rather than a second opaque plate.
+    public static func resolved(
+        for colorScheme: ColorScheme,
+        material: WarrenWindowMaterial
+    ) -> Self {
+        var tokens = resolved(for: colorScheme)
+        guard material == .glass else { return tokens }
+        let isLight = colorScheme == .light
+        let raised = tokens.popoverSurface.opacity(WarrenGlassMetrics.raisedOpacity(isLight: isLight))
+        tokens.material = .glass
+        tokens.chromeSurface = .clear
+        tokens.sidebarSurface = .clear
+        tokens.popoverSurface = raised
+        tokens.inputSurface = raised
+        tokens.modalScrim = Color.black.opacity(WarrenGlassMetrics.scrimOpacity(isLight: isLight))
+        return tokens
+    }
+
     static func hex(_ value: UInt32) -> Color {
         Color(
             red: Double((value >> 16) & 0xFF) / 255,
@@ -380,9 +409,30 @@ public extension WarrenColorTokens {
     var hudSurface: Color { Color.black.opacity(0.85) }
     var hudForeground: Color { .white }
 
+    /// The fill for a whole region — a pane, a column, a page — as opposed to
+    /// something raised inside one.
+    ///
+    /// Opaque, it is `background`, which is also the terminal's ground. Glass
+    /// clears it: the window's coat is already that same color, and painting
+    /// it again per region would stack two coats into an opaque plate.
+    var canvas: Color { material == .glass ? .clear : background }
+
+    /// The fill for a card that groups content inside a page: settings cards,
+    /// usage panels. Opaque, a card is a step of chrome; on glass chrome is
+    /// clear, so a card is raised instead.
+    var cardSurface: Color { material == .glass ? popoverSurface : chromeSurface }
+
     /// Higher-contrast rule used to separate adjacent desktop chrome regions.
     /// The regular border token is intentionally softer for cards and fields.
-    var chromeDivider: Color { mutedForeground.opacity(0.20) }
+    ///
+    /// On glass there is no fill change left to reinforce, so the rule only has
+    /// to name the boundary and drops to a faint foreground-derived line, which
+    /// lightens Ember and darkens paper the way a wash does.
+    var chromeDivider: Color {
+        material == .glass
+            ? foreground.opacity(WarrenGlassMetrics.dividerOpacity)
+            : mutedForeground.opacity(0.20)
+    }
 
     /// The active tab's selection rule.
     ///
@@ -390,6 +440,11 @@ public extension WarrenColorTokens {
     /// "agent activity" in this very row (the working dot sits beside the tab
     /// title), so spending it on selection would put two meanings on one color.
     var activeTabIndicator: Color { foreground.opacity(0.55) }
+
+    /// The selected tab's fill. Opaque, the tab takes the content's ground so
+    /// it reads as joined to the pane below; on glass that ground is clear, so
+    /// the tab lifts to the raised tone instead.
+    var selectedTabFill: Color { material == .glass ? popoverSurface : background }
 
     /// Sidebar text hierarchy from brightest to most muted. Projects are the
     /// top-level navigation and read whitest; the selected workspace sits one

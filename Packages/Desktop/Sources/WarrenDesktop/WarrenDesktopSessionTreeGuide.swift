@@ -160,6 +160,7 @@ struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.warrenForceHover) private var forceHover
     @State private var isHovered = false
@@ -196,7 +197,7 @@ struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
     @ViewBuilder
     private var rail: some View {
         if leafCount > 0 {
-            let tokens = WarrenColorTokens.resolved(for: colorScheme)
+            let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
             let stroke = StrokeStyle(
                 lineWidth: WarrenLayoutMetrics.sidebarRailWidth,
                 lineCap: .round,

@@ -526,23 +526,9 @@ func (p *qoderParser) parseQoder(line []byte) []api.AgentEvent {
 				}}
 			}
 			if attType == "queued_command" {
-				prompt := firstNonEmpty(structuredTextValue(att["prompt"], p.contentLimit), structuredTextValue(att["content"], p.contentLimit))
-				payload := map[string]any{
-					"action":  "enqueue",
-					"content": prompt,
-					"prompt":  prompt,
-					"state":   "queued",
-				}
-				if record.SessionID != "" {
-					payload["sessionId"] = record.SessionID
-				}
-				return []api.AgentEvent{{
-					Provider:  qoderProvider,
-					ID:        firstNonEmpty(record.UUID, "qoder-queue"),
-					Type:      "queue",
-					Payload:   payload,
-					Timestamp: timestamp,
-				}}
+				// Delivery of an already-queued prompt, not a pending item;
+				// Qoder writes no row that would ever clear it from a queue.
+				return nil
 			}
 		}
 		return nil

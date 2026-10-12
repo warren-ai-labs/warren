@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -778,4 +779,66 @@ func TestAgentProviderPendingRebindKeepsRetiredTranscript(t *testing.T) {
 	if titleUser != "fresh prompt" {
 		t.Fatalf("title user input after rebind = %q, want %q", titleUser, "fresh prompt")
 	}
+}
+
+// TestAgentProviderBindsUnbornClaudeTranscript covers a fresh Claude Session:
+// its SessionStart hook reports the deterministic transcript path, but Claude
+// writes the JSONL only with the first prompt. The Session must bind, and so
+// advertise a timeline, right away, then read the file once it lands.
+func TestAgentProviderBindsUnbornClaudeTranscript(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("WARREN_DATA_DIR", directory)
+	transcriptPath := filepath.Join(t.TempDir(), "session-claude-fresh.jsonl")
+
+	state, err := store.Open(filepath.Join(directory, "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := store.NewID()
+	workspaceID := store.NewID()
+	session := api.Session{
+		ID: "session-claude-fresh", WorkspaceID: workspaceID, Title: "Claude",
+		Kind: "claude", Runtime: "runtime-claude", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+		AgentSessionID: "session-claude-fresh",
+	}
+	if err := state.Update(func(value *api.State) error {
+		value.Projects = []api.Project{{ID: projectID, Name: "Project", Path: directory, CreatedAt: time.Now().UTC()}}
+		value.Workspaces = []api.Workspace{{ID: workspaceID, ProjectID: projectID, Name: "main", Path: directory, Kind: "root", CreatedAt: time.Now().UTC()}}
+		value.Sessions = []api.Session{session}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.WriteBinding(agent.BindPath(session.ID), agent.Binding{
+		Provider:       "claude",
+		SessionID:      "session-claude-fresh",
+		TranscriptPath: transcriptPath,
+		Cwd:            directory,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &Service{Store: state, Runtime: newMemoryRuntime(t)}
+	service.AgentProviders = NewTUIAgentProviderRegistry(service)
+	service.lazyInit()
+
+	entry, err := service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == nil || entry.handle == nil {
+		t.Fatal("expected a handle before the first prompt creates the transcript")
+	}
+	defer entry.handle.Close()
+	capabilities := service.agentCapabilitiesForSession(session.ID, state.Snapshot().Sessions[0])
+	if !slices.Contains(capabilities, api.CapabilityAgentTimeline) {
+		t.Fatalf("capabilities = %v, want %s", capabilities, api.CapabilityAgentTimeline)
+	}
+
+	if err := os.WriteFile(transcriptPath, []byte(
+		`{"type":"user","uuid":"u1","timestamp":"2026-09-01T10:00:01.000Z","message":{"role":"user","content":"first prompt"}}`+"\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForAgentHistory(t, service, session.ID, "first prompt")
 }

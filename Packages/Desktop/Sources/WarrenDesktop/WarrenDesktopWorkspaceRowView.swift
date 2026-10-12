@@ -101,7 +101,10 @@ struct WarrenDesktopWorkspaceRow: View {
     let onDelete: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.warrenForceHover) private var forceHover
     @FocusState private var isFocused: Bool
+    @State private var isHovered = false
 
     var body: some View {
         if isCollapsed {
@@ -112,7 +115,7 @@ struct WarrenDesktopWorkspaceRow: View {
     }
 
     private var collapsedRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return Button(action: {
             guard !isSelectionDisabled else { return }
             onSelect()
@@ -132,7 +135,7 @@ struct WarrenDesktopWorkspaceRow: View {
                 }
                 if isDeleting {
                     WarrenBrailleSpinner(size: 12, accessibilityLabel: "Deleting workspace")
-                        .background(tokens.sidebarSurface, in: Circle())
+                        .background(tokens.cardSurface, in: Circle())
                         .offset(x: 5, y: 5)
                 }
             }
@@ -180,7 +183,7 @@ struct WarrenDesktopWorkspaceRow: View {
     }
 
     private var expandedRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return Button(action: {
             // See showsSessionChildren: a row that lists its Sessions does not
             // navigate, so a single click is inert. The leaves, the context
@@ -195,15 +198,16 @@ struct WarrenDesktopWorkspaceRow: View {
 
                 Text(workspace.name.isEmpty ? "Workspace" : workspace.name)
                     .font(WarrenTypography.navigationItem)
-                    // A workspace holding the selected leaf reads at the same
-                    // weight as a selected one. Only the fill moves to the leaf,
-                    // so the rail still answers "which workspace am I in" at a
-                    // glance rather than by tracing indentation upward.
+                    // At rest the title keeps the workspace tier; the pointer or
+                    // the selection lifts it to the project/task foreground so
+                    // the active worktree stays legible on the glass coat. Hover
+                    // is the row's, not the rail's, when the row lists sessions.
                     .foregroundStyle(
                         isSelectionDisabled
                             ? tokens.mutedForeground.opacity(0.62)
                             : isSelected || containsSelection
-                            ? tokens.workspaceSelectedText
+                            || ((isHovered || forceHover) && !showsSessionChildren)
+                            ? tokens.projectText
                             : tokens.workspaceText
                     )
                     .lineLimit(1)
@@ -290,6 +294,7 @@ struct WarrenDesktopWorkspaceRow: View {
         .padding(.horizontal, WarrenSpacing.compact)
         .help(taskName.map { "Task: \($0)" } ?? "")
         .accessibilityElement(children: .contain)
+        .onHover { isHovered = $0 }
     }
 
     private var contextMenuActions: [WarrenDesktopContextMenuAction] {
@@ -330,7 +335,7 @@ struct WarrenDesktopWorkspaceRow: View {
     @ViewBuilder
     private var editorEntry: some View {
         if isEditorMarked {
-            let tokens = WarrenColorTokens.resolved(for: colorScheme)
+            let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
             let label = "Editor open on this Mac"
             let glyph = Image(systemName: "chevron.left.forwardslash.chevron.right")
                 .font(.system(size: 9, weight: .semibold))
@@ -371,7 +376,7 @@ struct WarrenDesktopWorkspaceRow: View {
     @ViewBuilder
     private var taskLinkButton: some View {
         if let taskID, let taskName {
-            let tokens = WarrenColorTokens.resolved(for: colorScheme)
+            let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
             Button {
                 guard !isInteractionDisabled, !isMutationDisabled else { return }
                 onSelectTask(taskID)
@@ -497,11 +502,12 @@ struct WarrenDesktopActivityIndicator: View {
     let mark: WarrenActivityMark
     var dotSize: CGFloat = 7
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
         WarrenActivityMarkView(
             mark: mark,
-            color: mark.color(WarrenColorTokens.resolved(for: colorScheme)),
+            color: mark.color(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)),
             dotSize: dotSize
         )
     }
@@ -516,6 +522,7 @@ struct WarrenDesktopWorkspaceActivityIndicator: View {
     let isCompact: Bool
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     private var showsMultipleWorkingTabs: Bool {
         mark == .working && activeTabCount > 1
@@ -548,7 +555,7 @@ struct WarrenDesktopWorkspaceActivityIndicator: View {
     }
 
     private var activeTabCluster: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let dotSize: CGFloat = isCompact ? 4.5 : 5.5
         let dotSlotSize = dotSize * 1.6
         return HStack(spacing: 0) {

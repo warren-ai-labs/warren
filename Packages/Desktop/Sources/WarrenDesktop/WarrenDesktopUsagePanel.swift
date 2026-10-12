@@ -200,7 +200,7 @@ public struct WarrenDesktopUsagePanel: View {
         .padding(WarrenSpacing.standard)
         .background(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .fill(tokens.chromeSurface)
+                .fill(tokens.cardSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
@@ -364,7 +364,7 @@ public struct WarrenDesktopUsagePanel: View {
         .padding(WarrenSpacing.standard)
         .background(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .fill(tokens.chromeSurface)
+                .fill(tokens.cardSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
@@ -515,7 +515,7 @@ public struct WarrenDesktopUsagePanel: View {
                 }
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
-                .background(selectedAgentFilter != nil ? tokens.highlight.opacity(0.12) : tokens.chromeSurface)
+                .background(selectedAgentFilter != nil ? tokens.highlight.opacity(0.12) : tokens.cardSurface)
                 .foregroundStyle(selectedAgentFilter != nil ? tokens.highlight : tokens.foreground)
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .overlay(
@@ -561,7 +561,7 @@ public struct WarrenDesktopUsagePanel: View {
                 }
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
-                .background(selectedModelFilter != nil ? tokens.highlight.opacity(0.12) : tokens.chromeSurface)
+                .background(selectedModelFilter != nil ? tokens.highlight.opacity(0.12) : tokens.cardSurface)
                 .foregroundStyle(selectedModelFilter != nil ? tokens.highlight : tokens.foreground)
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .overlay(
@@ -640,7 +640,7 @@ public struct WarrenDesktopUsagePanel: View {
         .padding(WarrenSpacing.standard)
         .background(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .fill(tokens.chromeSurface)
+                .fill(tokens.cardSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
@@ -780,7 +780,7 @@ public struct WarrenDesktopUsagePanel: View {
         .padding(WarrenSpacing.standard)
         .background(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .fill(tokens.chromeSurface)
+                .fill(tokens.cardSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
@@ -1083,7 +1083,7 @@ public struct WarrenDesktopUsagePanel: View {
         .padding(WarrenSpacing.standard)
         .background(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .fill(tokens.chromeSurface)
+                .fill(tokens.cardSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)

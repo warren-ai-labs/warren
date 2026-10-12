@@ -200,6 +200,10 @@ public enum WarrenPreferenceKey {
     /// other key here: appearance is a property of the screen in front of you,
     /// not of the Host or the Sessions running on it.
     public static let appearanceMode = "appearance.mode"
+    /// Whether the desktop window is made of glass rather than opaque Ember.
+    /// Off by default: it changes how every region looks, so existing installs
+    /// keep the appearance they have until someone turns it on.
+    public static let appearanceLiquidGlass = "appearance.liquidGlass"
 }
 
 /// Which appearance the desktop client paints.

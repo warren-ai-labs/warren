@@ -38,12 +38,17 @@ public final class GhosttySurface: Identifiable {
     /// to distinguish "draw was called" from "draw could reach the screen".
     public weak var mountedTerminalView: TerminalView?
     public var onOpenURL: (@MainActor (String, TerminalOpenURLKind, String?) -> Bool)?
+    /// The two inputs of the appearance-independent configuration. Kept so
+    /// that changing one rebuilds the configuration without losing the other.
+    private var font: TerminalFontPreference
+    private var backgroundOpacity: Double
 
     public init(
         id: TerminalSessionID,
         attachmentID: TerminalAttachmentID,
         workingDirectory: String,
         font: TerminalFontPreference = .init(),
+        backgroundOpacity: Double = 1,
         outputRenderBudgetBytes: Int = 64 * 1024,
         outputRenderYield: Duration = .milliseconds(1),
         onInput: @escaping @Sendable (Data) -> Void,
@@ -54,6 +59,8 @@ public final class GhosttySurface: Identifiable {
         self.attachmentID = attachmentID
         self.onViewportResize = onResize
         self.onOpenURL = onOpenURL
+        self.font = font
+        self.backgroundOpacity = backgroundOpacity
 
         let inMemory = InMemoryTerminalSession(
             write: onInput,
@@ -87,7 +94,10 @@ public final class GhosttySurface: Identifiable {
             dark: Self.makeThemeConfiguration(appearance: .dark)
         )
         let controller = TerminalController(theme: theme) { _ in }
-        controller.setTerminalConfiguration(Self.makeConfiguration(font: font))
+        controller.setTerminalConfiguration(Self.makeConfiguration(
+            font: font,
+            backgroundOpacity: backgroundOpacity
+        ))
         // Seed the scheme from the application's appearance, which the
         // appearance preference drives. `AppTerminalView` keeps it current from
         // `viewDidChangeEffectiveAppearance` afterwards; this only covers the
@@ -308,17 +318,34 @@ public final class GhosttySurface: Identifiable {
     }
 
     public func apply(font: TerminalFontPreference) {
-        _ = state.controller.setTerminalConfiguration(Self.makeConfiguration(font: font))
+        self.font = font
+        applyConfiguration()
+    }
+
+    /// How much of the theme's ground the terminal paints for cells that use
+    /// the default background. Below 1 the window behind shows through; the
+    /// theme's background color, and so what OSC 11 reports, is unchanged.
+    public func apply(backgroundOpacity: Double) {
+        self.backgroundOpacity = backgroundOpacity
+        applyConfiguration()
+    }
+
+    private func applyConfiguration() {
+        _ = state.controller.setTerminalConfiguration(Self.makeConfiguration(
+            font: font,
+            backgroundOpacity: backgroundOpacity
+        ))
     }
 
     /// Terminal chrome that Warren owns as app-level shortcuts. Ghostty's
     /// default bindings for these keys would consume them while the surface is
     /// the first responder, so each one is explicitly unbound.
     private static func makeConfiguration(
-        font: TerminalFontPreference
+        font: TerminalFontPreference,
+        backgroundOpacity: Double
     ) -> TerminalConfiguration {
         TerminalConfiguration { builder in
-            builder.withBackgroundOpacity(1)
+            builder.withBackgroundOpacity(backgroundOpacity)
             builder.withFontFamily(font.family)
             builder.withFontSize(Float(font.size))
             builder.withFontThicken(false)

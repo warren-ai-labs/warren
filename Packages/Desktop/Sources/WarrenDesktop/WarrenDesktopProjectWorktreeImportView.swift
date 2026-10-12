@@ -13,6 +13,7 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
 
     @State private var selectedPaths: Set<String> = []
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     public init(
         projectName: String,
@@ -29,7 +30,7 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
     }
 
     public var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
             VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
                 Text("Import Existing Worktrees")

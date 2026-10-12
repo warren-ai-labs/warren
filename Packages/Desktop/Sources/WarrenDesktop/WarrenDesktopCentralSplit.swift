@@ -33,6 +33,7 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
     let editor: Editor?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var dragStartWidth: CGFloat?
 
     var body: some View {
@@ -91,7 +92,7 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
     /// oscillate instead of following the pointer.
     @ViewBuilder
     private func divider(totalWidth: CGFloat) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let isActive = dragStartWidth != nil
         Rectangle()
             .fill(tokens.chromeDivider)

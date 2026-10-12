@@ -14,6 +14,7 @@ struct WarrenDesktopSidebarHeader: View {
     var onToggleWorkspaceDisplayMode: () -> Void = {}
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var searchFocused: Bool
 
     init(
@@ -52,7 +53,7 @@ struct WarrenDesktopSidebarHeader: View {
         }
         .background(
             chromeMode == .workspace
-                ? WarrenColorTokens.resolved(for: colorScheme).sidebarSurface
+                ? WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).sidebarSurface
                 : .clear
         )
     }
@@ -67,7 +68,7 @@ struct WarrenDesktopSidebarHeader: View {
                 WarrenDesktopWindowDragRegion()
                     .frame(maxWidth: .infinity)
                     .frame(height: WarrenLayoutMetrics.tabBarHeight)
-                    .background(WarrenColorTokens.resolved(for: colorScheme).chromeSurface)
+                    .background(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).chromeSurface)
 
                 compactSearchButton
                     .padding(.top, WarrenSpacing.medium)
@@ -80,7 +81,7 @@ struct WarrenDesktopSidebarHeader: View {
     }
 
     private var trafficRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return HStack(spacing: WarrenSpacing.xs) {
             // Superset owns an 80pt traffic-light pad; Warren renders the
             // lights itself because the window is borderless.
@@ -144,7 +145,7 @@ struct WarrenDesktopSidebarHeader: View {
             HStack(spacing: WarrenSpacing.compact) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme).mutedForeground)
+                    .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground)
                     .frame(width: 20)
                     .accessibilityHidden(true)
 
@@ -157,10 +158,10 @@ struct WarrenDesktopSidebarHeader: View {
                 Text("⌘K")
                     .font(WarrenTypography.shortcut)
                     .tracking(1.2)
-                    .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme).mutedForeground)
+                    .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
-                    .background(WarrenColorTokens.resolved(for: colorScheme).fillHover)
+                    .background(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).fillHover)
                     .clipShape(.rect(cornerRadius: WarrenRadius.xs))
             }
             .padding(.horizontal, WarrenSpacing.compact)
@@ -168,7 +169,7 @@ struct WarrenDesktopSidebarHeader: View {
         }
         .buttonStyle(WarrenInteractiveRowStyle(isFocused: searchFocused))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme).mutedForeground)
+        .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground)
         .focused($searchFocused)
         .padding(.horizontal, WarrenSpacing.xs)
         .accessibilityLabel("Search")
@@ -184,7 +185,7 @@ struct WarrenDesktopSidebarHeader: View {
         .buttonStyle(WarrenInteractiveRowStyle(isFocused: searchFocused))
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
-        .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme).mutedForeground)
+        .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground)
         .focused($searchFocused)
         .accessibilityLabel("Search")
     }
@@ -201,7 +202,7 @@ struct WarrenDesktopSidebarHeader: View {
     }
 
     private var expandedDashboardHeader: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return HStack(spacing: WarrenSpacing.xs) {
             WarrenDesktopChromeButton(
                 systemImage: "sidebar.leading",

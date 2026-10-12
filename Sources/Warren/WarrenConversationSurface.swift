@@ -111,39 +111,67 @@ private struct WarrenConversationView: View {
     let model: WarrenRemoteApplicationModel
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.warrenGlassLayout) private var glassLayout
+    @Environment(\.conversationRoot) private var root
     @State private var pinnedToBottom = true
     @State private var hasNewActivity = false
     @State private var actionError: String?
     @State private var stopping = false
+    /// The composer's text. It lives here rather than in the composer so a
+    /// queued or sent message can be brought back into it for editing.
+    @State private var draft = ""
 
-    private var tokens: WarrenColorTokens { WarrenColorTokens.resolved(for: colorScheme) }
+    private var tokens: WarrenColorTokens { WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial) }
     private var lastTurn: WarrenConversation.Turn? { feed.conversation.turns.last }
     private var busy: Bool {
         feed.status?.activity == .working || feed.status?.activity == .blocked
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack(alignment: .bottom) {
+        Group {
+            if glassLayout {
+                // The transcript runs under the composer stack: the stack is
+                // a safe-area inset, so the last message rests above it and
+                // earlier ones scroll beneath its raised surface.
                 timeline
-                if hasNewActivity {
-                    Button("New activity ↓") { hasNewActivity = false; pinnedToBottom = true }
-                        .buttonStyle(.plain)
-                        .font(WarrenTypography.supporting)
-                        .foregroundStyle(tokens.mutedForeground)
-                        .padding(.horizontal, WarrenSpacing.medium)
-                        .padding(.vertical, WarrenSpacing.xs)
-                        .background(tokens.popoverSurface, in: Capsule())
-                        .overlay(Capsule().strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
-                        .padding(.bottom, WarrenSpacing.compact)
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        bottomDock
+                            .overlay(alignment: .top) {
+                                if hasNewActivity {
+                                    newActivityButton
+                                        .alignmentGuide(.top) { $0[.bottom] + WarrenSpacing.compact }
+                                }
+                            }
+                    }
+            } else {
+                VStack(spacing: 0) {
+                    ZStack(alignment: .bottom) {
+                        timeline
+                        if hasNewActivity {
+                            newActivityButton
+                                .padding(.bottom, WarrenSpacing.compact)
+                        }
+                    }
+                    bottomDock
                 }
             }
-            bottomDock
         }
-        .background(tokens.background)
+        .background(tokens.canvas)
         .onChange(of: feed.status?.activity) { activity in
             if activity != .working, activity != .blocked { stopping = false }
         }
+    }
+
+    private var newActivityButton: some View {
+        Button("New activity ↓") { hasNewActivity = false; pinnedToBottom = true }
+            .buttonStyle(.plain)
+            .font(WarrenTypography.supporting)
+            .foregroundStyle(tokens.mutedForeground)
+            .padding(.horizontal, WarrenSpacing.medium)
+            .padding(.vertical, WarrenSpacing.xs)
+            .background(tokens.popoverSurface, in: Capsule())
+            .overlay(Capsule().strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
     }
 
     // MARK: Timeline
@@ -153,11 +181,15 @@ private struct WarrenConversationView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 28) {
                     if feed.loaded, feed.conversation.turns.isEmpty, feed.pendingPrompts.isEmpty {
-                        Text("Ask \(providerName) to do something in this workspace.")
-                            .font(WarrenTypography.dialogBody)
-                            .foregroundStyle(tokens.mutedForeground)
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 120)
+                        if glassLayout {
+                            emptyState
+                        } else {
+                            Text("Ask \(providerName) to do something in this workspace.")
+                                .font(WarrenTypography.dialogBody)
+                                .foregroundStyle(tokens.mutedForeground)
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 120)
+                        }
                     }
                     ForEach(feed.conversation.turns) { turn in
                         WarrenConversationTurnView(
@@ -165,14 +197,17 @@ private struct WarrenConversationView: View {
                             live: turn.id == lastTurn?.id,
                             waiting: turn.id == lastTurn?.id && !feed.conversation.decisions.isEmpty,
                             openSession: { model.openSession(named: $0) },
-                            sessionExists: { model.sessionIsOpen(named: $0) }
+                            sessionExists: { model.sessionIsOpen(named: $0) },
+                            onEditPrompt: glassLayout ? { bringIntoComposer($0) } : nil
                         )
                     }
                     ForEach(feed.pendingPrompts) { prompt in
                         WarrenConversationPromptView(text: prompt.text, meta: prompt.failure ?? "Sending…")
                             .opacity(0.72)
                     }
-                    if !feed.queuedPrompts.isEmpty {
+                    // With the glass layout, queued messages wait in the
+                    // composer stack instead, where they can be edited.
+                    if !glassLayout, !feed.queuedPrompts.isEmpty {
                         VStack(alignment: .trailing, spacing: WarrenSpacing.compact) {
                             ForEach(feed.queuedPrompts) { prompt in
                                 WarrenConversationQueuedPromptView(text: prompt.text) {
@@ -213,6 +248,33 @@ private struct WarrenConversationView: View {
         }
     }
 
+    /// An empty Conversation names where it will work, so the first message
+    /// has a place to land.
+    private var emptyState: some View {
+        let place = root.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+        return VStack(spacing: WarrenSpacing.medium) {
+            Image(systemName: "bubble.left.and.text.bubble.right")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(tokens.mutedForeground)
+            Text(place.isEmpty ? "Start with \(providerName)" : "Start in \(place)")
+                .font(WarrenTypography.emptyStateTitle)
+                .foregroundStyle(tokens.foreground)
+            Text("Ask \(providerName) to do something in this workspace.")
+                .font(WarrenTypography.supporting)
+                .foregroundStyle(tokens.mutedForeground)
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 120)
+    }
+
+    /// Puts a message back in the composer: after anything already typed, so
+    /// bringing one back never discards a draft.
+    private func bringIntoComposer(_ text: String) {
+        let current = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = current.isEmpty ? text : current + "\n\n" + text
+    }
+
     // MARK: Bottom dock
 
     /// The decision, when one is pending, sits on the composer; the composer
@@ -220,30 +282,20 @@ private struct WarrenConversationView: View {
     private var bottomDock: some View {
         let conversation = feed.conversation
         let configurable = model.supportsConversationConfig(feed.sessionID)
-        return VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-            if let decision = conversation.decisions.first {
-                WarrenConversationDecisionDock(
-                    decision: decision,
-                    count: conversation.decisions.count,
-                    onDecide: { optionID in
-                        try await model.resolveConversationDecision(decision, optionID: optionID, in: feed.sessionID)
-                    }
-                )
-                .id(decision.id)
-            }
-            if let actionError {
-                Text(actionError)
-                    .font(WarrenTypography.supporting)
-                    .foregroundStyle(tokens.destructive)
-                    .padding(.horizontal, WarrenSpacing.xs)
+        return VStack(alignment: .leading, spacing: glassLayout ? 0 : WarrenSpacing.compact) {
+            if glassLayout {
+                composerStack(conversation)
+            } else {
+                legacyDockHeader(conversation)
             }
             WarrenConversationComposer(
+                text: $draft,
                 placeholder: busy ? "Queue a follow-up · Esc to stop" : "Message \(providerName)",
                 disabledReason: conversation.decisions.isEmpty ? nil : "Answer the decision above to continue",
                 busy: busy && conversation.decisions.isEmpty,
                 stopping: stopping,
                 statusNote: statusNote,
-                plan: conversation.plan,
+                plan: glassLayout ? nil : conversation.plan,
                 mode: configurable ? conversation.modeOption : nil,
                 modelOptions: configurable ? conversation.modelOptions : [],
                 modelSummary: conversation.modelSummary,
@@ -259,6 +311,71 @@ private struct WarrenConversationView: View {
         .padding(.horizontal, WarrenSpacing.standard)
         .padding(.bottom, WarrenSpacing.standard)
         .frame(maxWidth: .infinity)
+    }
+
+    /// Everything waiting on the person, stacked on the composer: problems
+    /// first, then the decision, then the plan and the queue, nearest the
+    /// composer the things it is about to act on.
+    @ViewBuilder
+    private func composerStack(_ conversation: WarrenConversation) -> some View {
+        let plan = conversation.plan.flatMap { $0.total > 0 ? $0 : nil }
+        if let actionError {
+            WarrenConversationBanner(message: actionError) { self.actionError = nil }
+                .padding(.bottom, WarrenSpacing.small)
+        }
+        if let decision = conversation.decisions.first {
+            WarrenConversationDecisionDock(
+                decision: decision,
+                count: conversation.decisions.count,
+                onDecide: { optionID in
+                    try await model.resolveConversationDecision(decision, optionID: optionID, in: feed.sessionID)
+                }
+            )
+            .id(decision.id)
+            .padding(.bottom, WarrenSpacing.small)
+        }
+        if plan != nil || !feed.queuedPrompts.isEmpty {
+            WarrenConversationStackedPanels {
+                if let plan {
+                    WarrenConversationPlanStrip(plan: plan)
+                }
+                if plan != nil, !feed.queuedPrompts.isEmpty {
+                    Rectangle().fill(tokens.border).frame(height: WarrenSpacing.hairline)
+                }
+                if !feed.queuedPrompts.isEmpty {
+                    WarrenConversationQueuePanel(
+                        prompts: feed.queuedPrompts,
+                        onEdit: { prompt in
+                            feed.queuedPrompts.removeAll { $0.id == prompt.id }
+                            bringIntoComposer(prompt.text)
+                        },
+                        onRemove: { prompt in
+                            feed.queuedPrompts.removeAll { $0.id == prompt.id }
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func legacyDockHeader(_ conversation: WarrenConversation) -> some View {
+        if let decision = conversation.decisions.first {
+            WarrenConversationDecisionDock(
+                decision: decision,
+                count: conversation.decisions.count,
+                onDecide: { optionID in
+                    try await model.resolveConversationDecision(decision, optionID: optionID, in: feed.sessionID)
+                }
+            )
+            .id(decision.id)
+        }
+        if let actionError {
+            Text(actionError)
+                .font(WarrenTypography.supporting)
+                .foregroundStyle(tokens.destructive)
+                .padding(.horizontal, WarrenSpacing.xs)
+        }
     }
 
     /// Anything other than ready or working; those two are already visible
@@ -321,29 +438,73 @@ private struct WarrenConversationView: View {
 private struct WarrenConversationPromptView: View {
     let text: String
     var meta: String?
+    var onEdit: (() -> Void)? = nil
+    @State private var expanded = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.warrenGlassLayout) private var glassLayout
+
+    /// A pasted log or a long brief would otherwise push the answer it asked
+    /// for off the screen; past this many lines the bubble folds.
+    private static let foldedLineLimit = 8
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let folds = glassLayout && Self.isLong(text)
         VStack(alignment: .trailing, spacing: WarrenSpacing.xs) {
             Text(text)
                 .font(WarrenConversationText.body)
                 .lineSpacing(WarrenConversationText.lineSpacing)
                 .foregroundStyle(tokens.foreground)
                 .textSelection(.enabled)
+                .lineLimit(folds && !expanded ? Self.foldedLineLimit : nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
-                .background(tokens.tertiaryWash, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            if let meta {
-                Text(meta)
-                    .font(WarrenTypography.supporting)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .padding(.horizontal, WarrenSpacing.xs)
+                // On glass the bubble is the same raised material as the
+                // composer it was typed into.
+                .background(
+                    glassLayout ? tokens.popoverSurface : tokens.tertiaryWash,
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                )
+            if folds || meta != nil || onEdit != nil {
+                HStack(spacing: WarrenSpacing.small) {
+                    if let meta {
+                        Text(meta)
+                            .font(WarrenTypography.supporting)
+                            .foregroundStyle(tokens.mutedForeground)
+                    }
+                    if folds {
+                        Button(expanded ? "Show less" : "Show more") { expanded.toggle() }
+                            .buttonStyle(.plain)
+                            .font(WarrenTypography.supporting)
+                            .foregroundStyle(tokens.mutedForeground)
+                    }
+                    if let onEdit {
+                        Button(action: onEdit) {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 10))
+                                .frame(width: 14, height: 14)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .help("Edit and send again")
+                        .accessibilityLabel("Edit and send again")
+                    }
+                }
+                .padding(.horizontal, WarrenSpacing.xs)
             }
         }
         .padding(.leading, 96)
         .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    /// Counts hard lines only, plus a length bound for one long paragraph
+    /// that wraps into many.
+    static func isLong(_ text: String) -> Bool {
+        text.split(separator: "\n", omittingEmptySubsequences: false).count > foldedLineLimit
+            || text.count > 800
     }
 }
 
@@ -353,10 +514,11 @@ private struct WarrenConversationQueuedPromptView: View {
     let text: String
     let onRemove: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var hovering = false
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(alignment: .center, spacing: WarrenSpacing.compact) {
             Spacer(minLength: 96)
             Button(action: onRemove) {
@@ -399,16 +561,21 @@ private struct WarrenConversationTurnView: View {
     let waiting: Bool
     let openSession: (String) -> Void
     let sessionExists: (String) -> Bool
+    /// Brings the turn's message back into the composer to edit and send
+    /// again; nil where that is not offered.
+    var onEditPrompt: ((String) -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let running = live && turn.status == .running
         VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
             if let prompt = turn.prompt {
                 WarrenConversationPromptView(
                     text: prompt,
-                    meta: turn.promptAttachments.isEmpty ? nil : turn.promptAttachments.joined(separator: ", ")
+                    meta: turn.promptAttachments.isEmpty ? nil : turn.promptAttachments.joined(separator: ", "),
+                    onEdit: onEditPrompt.map { edit -> () -> Void in { edit(prompt) } }
                 )
                 .padding(.bottom, WarrenSpacing.xs)
             }
@@ -471,9 +638,10 @@ private struct WarrenConversationAnswerFooter: View {
     let endedAt: Date?
     @State private var copied = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: WarrenSpacing.small) {
             Button {
                 NSPasteboard.general.clearContents()
@@ -512,6 +680,7 @@ private struct WarrenConversationDisclosure<Content: View, Trailing: View>: View
     @ViewBuilder var content: () -> Content
     @State private var open = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     init(label: String, @ViewBuilder trailing: () -> Trailing, @ViewBuilder content: @escaping () -> Content) {
         self.label = label
@@ -520,7 +689,7 @@ private struct WarrenConversationDisclosure<Content: View, Trailing: View>: View
     }
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
             Button {
                 open.toggle()
@@ -558,9 +727,10 @@ private struct WarrenConversationChangeCount: View {
     let additions: Int
     let deletions: Int
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         if additions > 0 || deletions > 0 {
             HStack(spacing: WarrenSpacing.xs) {
                 Text("+\(additions)").foregroundStyle(additions > 0 ? tokens.success : tokens.mutedForeground.opacity(0.6))
@@ -588,13 +758,14 @@ private struct WarrenConversationWorkTrail: View {
     @State private var lastWindow: [WarrenConversation.Step] = []
     @Environment(\.conversationRoot) private var root
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let windowSize = 3
     private static let settleDuration = 0.42
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let additions = turn.files.reduce(0) { $0 + $1.additions }
         let deletions = turn.files.reduce(0) { $0 + $1.deletions }
         let window = Array(turn.steps.sorted { $0.order < $1.order }.suffix(Self.windowSize))
@@ -766,9 +937,10 @@ private struct WarrenConversationStepRow: View {
     @State private var open = false
     @Environment(\.conversationRoot) private var root
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let line = step.line(relativeTo: root)
         let detail = step.diff?.text.isEmpty == false ? nil : (step.error.isEmpty ? step.output : step.error)
         let expandable = (detail?.isEmpty == false) || step.diff?.text.isEmpty == false
@@ -835,11 +1007,12 @@ private struct WarrenConversationFilesCard: View {
     let files: [WarrenConversation.FileChange]
     @State private var showAll = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     private static let collapsedCount = 5
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let additions = files.reduce(0) { $0 + $1.additions }
         let deletions = files.reduce(0) { $0 + $1.deletions }
         let visible = showAll ? files : Array(files.prefix(Self.collapsedCount))
@@ -891,9 +1064,10 @@ private struct WarrenConversationFileRow: View {
     @State private var open = false
     @Environment(\.conversationRoot) private var root
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let hasDiff = file.diffs.contains { !$0.isEmpty }
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -938,9 +1112,10 @@ private struct WarrenConversationFileRow: View {
 private struct WarrenConversationCodeBlock: View {
     let text: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         WarrenConversationLeadingScroll([.horizontal, .vertical]) {
             Text(text)
                 .font(WarrenTypography.compactCode)
@@ -961,9 +1136,10 @@ private struct WarrenConversationCodeFence: View {
     let code: String
     @State private var copied = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: WarrenSpacing.small) {
                 Text((language?.isEmpty == false ? language! : "text").lowercased())
@@ -1008,9 +1184,10 @@ private struct WarrenConversationCodeFence: View {
 private struct WarrenConversationDiffView: View {
     let text: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).prefix(400)
         WarrenConversationLeadingScroll([.horizontal, .vertical]) {
             VStack(alignment: .leading, spacing: 0) {
@@ -1043,9 +1220,10 @@ private struct WarrenConversationDiffView: View {
 struct WarrenConversationMarkdown: View {
     let text: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let blocks = WarrenMarkdownCache.shared.blocks(for: text)
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
@@ -1191,12 +1369,13 @@ private struct WarrenConversationTable: View {
     let table: WarrenMarkdownTable
     let inline: (String) -> Text
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var headerHeight: CGFloat = 0
 
     /// The table takes the reading column and wraps its cells, so a long cell
     /// grows its row instead of pushing the table sideways.
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
             GridRow {
                 ForEach(Array(table.headers.enumerated()), id: \.offset) { column, header in
@@ -1253,6 +1432,7 @@ private struct WarrenConversationTable: View {
 /// the permission mode and hand-off on the leading side, and the context,
 /// the model, and send or stop on the trailing side (after Synara's composer).
 private struct WarrenConversationComposer: View {
+    @Binding var text: String
     let placeholder: String
     let disabledReason: String?
     let busy: Bool
@@ -1269,12 +1449,12 @@ private struct WarrenConversationComposer: View {
     let onSend: (String) -> Void
     let onStop: () -> Void
 
-    @State private var text = ""
     @State private var height: CGFloat = 22
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let disabled = disabledReason != nil
         VStack(alignment: .leading, spacing: 0) {
             if let plan, plan.total > 0 {
@@ -1305,7 +1485,13 @@ private struct WarrenConversationComposer: View {
         }
         .background(tokens.inputSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
-        .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.06), radius: 12, y: 4)
+        // On glass the composer is raised by its density and border alone; a
+        // drop shadow under a translucent surface darkens the coat around it.
+        .shadow(
+            color: tokens.material == .glass ? .clear : .black.opacity(colorScheme == .dark ? 0.28 : 0.06),
+            radius: 12,
+            y: 4
+        )
     }
 
     private func footer(tokens: WarrenColorTokens) -> some View {
@@ -1416,9 +1602,10 @@ private struct WarrenConversationChip: View {
     let onSetConfig: (String, String) async -> Void
     @State private var open = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Button {
             open.toggle()
         } label: {
@@ -1448,11 +1635,12 @@ private struct WarrenConversationChip: View {
 
 private struct WarrenConversationChipStyle: ButtonStyle {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         configuration.label
             .foregroundStyle(tokens.mutedForeground)
             .background((configuration.isPressed || hovering) && isEnabled ? tokens.fillHover : Color.clear, in: Capsule())
@@ -1467,9 +1655,10 @@ private struct WarrenConversationSelectorList: View {
     let options: [WarrenConversation.ConfigOption]
     let onSelect: (String, String) -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         ScrollView {
             VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
                 ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
@@ -1540,9 +1729,10 @@ private struct WarrenConversationSelectorList: View {
 private struct WarrenConversationContextMeter: View {
     let context: WarrenConversation.Context
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let fraction = min(1, max(0, Double(context.used) / Double(context.size)))
         let tint = fraction > 0.85 ? tokens.warning : tokens.mutedForeground
         HStack(spacing: WarrenSpacing.xs) {
@@ -1578,9 +1768,10 @@ private struct WarrenConversationPlanStrip: View {
     let plan: WarrenConversation.Plan
     @State private var open = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.small) {
             Button {
                 open.toggle()
@@ -1626,6 +1817,183 @@ private struct WarrenConversationPlanStrip: View {
     }
 }
 
+// MARK: - Composer stack
+
+/// Panels that rest on the composer's top edge: one raised surface, rounded
+/// only at the top, set in from the composer's sides so its corners still
+/// read, with no border along the edge it shares with the composer.
+private struct WarrenConversationStackedPanels<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+
+    private static var radius: CGFloat { WarrenRadius.large }
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        VStack(alignment: .leading, spacing: 0) {
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tokens.popoverSurface, in: WarrenTopRoundedRectangle(radius: Self.radius))
+        .overlay(WarrenTopRoundedOutline(radius: Self.radius).stroke(tokens.border, lineWidth: WarrenSpacing.hairline))
+        .padding(.horizontal, WarrenSpacing.medium)
+    }
+}
+
+/// A rectangle with only its top corners rounded. A shape of its own because
+/// the per-corner rectangle is not available on every macOS Warren supports.
+private struct WarrenTopRoundedRectangle: Shape {
+    let radius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let r = min(radius, rect.width / 2, rect.height)
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
+        path.addArc(tangent1End: CGPoint(x: rect.minX, y: rect.minY), tangent2End: CGPoint(x: rect.minX + r, y: rect.minY), radius: r)
+        path.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+        path.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY), tangent2End: CGPoint(x: rect.maxX, y: rect.minY + r), radius: r)
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// The sides and top of `WarrenTopRoundedRectangle`, left open along the
+/// bottom where the panel meets the composer.
+private struct WarrenTopRoundedOutline: Shape {
+    let radius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let inset = rect.insetBy(dx: WarrenSpacing.hairline / 2, dy: WarrenSpacing.hairline / 2)
+        let r = min(radius, inset.width / 2, inset.height)
+        var path = Path()
+        path.move(to: CGPoint(x: inset.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: inset.minX, y: inset.minY + r))
+        path.addArc(tangent1End: CGPoint(x: inset.minX, y: inset.minY), tangent2End: CGPoint(x: inset.minX + r, y: inset.minY), radius: r)
+        path.addLine(to: CGPoint(x: inset.maxX - r, y: inset.minY))
+        path.addArc(tangent1End: CGPoint(x: inset.maxX, y: inset.minY), tangent2End: CGPoint(x: inset.maxX, y: inset.minY + r), radius: r)
+        path.addLine(to: CGPoint(x: inset.maxX, y: rect.maxY))
+        return path
+    }
+}
+
+/// Follow-ups waiting for the Agent to be ready, in the order they will go.
+/// Each can be pulled back into the composer to change it, or dropped.
+private struct WarrenConversationQueuePanel: View {
+    let prompts: [WarrenConversationFeed.QueuedPrompt]
+    let onEdit: (WarrenConversationFeed.QueuedPrompt) -> Void
+    let onRemove: (WarrenConversationFeed.QueuedPrompt) -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+            Label(prompts.count == 1 ? "1 queued" : "\(prompts.count) queued", systemImage: "clock")
+                .font(WarrenTypography.supporting)
+                .foregroundStyle(tokens.mutedForeground)
+                .padding(.bottom, WarrenSpacing.xxs)
+            ForEach(prompts) { prompt in
+                WarrenConversationQueueRow(
+                    text: prompt.text,
+                    onEdit: { onEdit(prompt) },
+                    onRemove: { onRemove(prompt) }
+                )
+            }
+        }
+        .padding(.horizontal, WarrenSpacing.medium)
+        .padding(.vertical, WarrenSpacing.compact)
+    }
+}
+
+private struct WarrenConversationQueueRow: View {
+    let text: String
+    let onEdit: () -> Void
+    let onRemove: () -> Void
+    @State private var hovering = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        HStack(spacing: WarrenSpacing.small) {
+            Text(text)
+                .font(WarrenTypography.body)
+                .foregroundStyle(tokens.foreground.opacity(0.8))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(text)
+            Spacer(minLength: WarrenSpacing.compact)
+            Group {
+                iconButton("pencil", label: "Edit queued message", action: onEdit, tokens: tokens)
+                iconButton("trash", label: "Remove queued message", action: onRemove, tokens: tokens)
+            }
+            .opacity(hovering ? 1 : 0.55)
+        }
+        .padding(.vertical, WarrenSpacing.xxs)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+    }
+
+    private func iconButton(_ symbol: String, label: String, action: @escaping () -> Void, tokens: WarrenColorTokens) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11))
+                .foregroundStyle(tokens.mutedForeground)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(WarrenConversationChoiceStyle())
+        .help(label)
+        .accessibilityLabel(label)
+    }
+}
+
+/// A problem with the Conversation itself rather than with a turn: a failed
+/// send, a refused config change. It sits at the top of the stack with one
+/// way to clear it.
+private struct WarrenConversationBanner: View {
+    let message: String
+    let onDismiss: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.small) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 11))
+                .foregroundStyle(tokens.destructive)
+            Text(message)
+                .font(WarrenTypography.supporting)
+                .foregroundStyle(tokens.foreground)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: WarrenSpacing.compact)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(tokens.mutedForeground)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(.horizontal, WarrenSpacing.medium)
+        .padding(.vertical, WarrenSpacing.compact)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tokens.popoverSurface, in: RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
+                .strokeBorder(tokens.destructive.opacity(0.45), lineWidth: WarrenSpacing.hairline)
+        )
+    }
+}
+
 // MARK: - Decision dock
 
 /// The one loud place: the pending decision, resting on the composer. ⌘2…⌘4
@@ -1638,9 +2006,11 @@ private struct WarrenConversationDecisionDock: View {
     @State private var submitting: String?
     @State private var error: String?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.warrenGlassLayout) private var glassLayout
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
             HStack(spacing: WarrenSpacing.compact) {
                 Circle().fill(tokens.warning).frame(width: 8, height: 8)
@@ -1677,8 +2047,8 @@ private struct WarrenConversationDecisionDock: View {
         .padding(.horizontal, WarrenSpacing.standard)
         .padding(.vertical, WarrenSpacing.medium)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tokens.popoverSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(tokens.warning.opacity(0.55), lineWidth: 1))
+        .background(tokens.popoverSurface, in: RoundedRectangle(cornerRadius: dockRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: dockRadius, style: .continuous).strokeBorder(tokens.warning.opacity(0.55), lineWidth: 1))
         .background(
             // Escape rejects once; Return is the default button's own shortcut.
             Button("") { if let reject = decision.options.first(where: { $0.kind == "reject_once" }) { choose(reject) } }
@@ -1691,6 +2061,10 @@ private struct WarrenConversationDecisionDock: View {
     @ViewBuilder
     private func optionButton(_ option: WarrenConversation.Decision.Option, index: Int, tokens: WarrenColorTokens) -> some View {
         let primary = index == 0
+        // The dock's border already carries the attention hue; with the glass
+        // layout the recommended row is marked by weight and a filled key
+        // alone, so the list stays neutral.
+        let keyFill = glassLayout ? tokens.foreground : tokens.warning
         let button = Button {
             choose(option)
         } label: {
@@ -1701,8 +2075,8 @@ private struct WarrenConversationDecisionDock: View {
                     .font(WarrenTypography.supporting.monospacedDigit())
                     .foregroundStyle(primary ? tokens.background : tokens.mutedForeground)
                     .frame(width: 18, height: 18)
-                    .background(primary ? tokens.warning : Color.clear, in: Circle())
-                    .overlay(Circle().strokeBorder(primary ? tokens.warning : tokens.border, lineWidth: 1))
+                    .background(primary ? keyFill : Color.clear, in: Circle())
+                    .overlay(Circle().strokeBorder(primary ? keyFill : tokens.border, lineWidth: 1))
                 Text(submitting == option.id ? "\(option.label)…" : option.label)
                     .font(primary ? WarrenTypography.bodyEmphasis : WarrenTypography.body)
                     .foregroundStyle(option.isReject ? tokens.mutedForeground : tokens.foreground)
@@ -1724,6 +2098,8 @@ private struct WarrenConversationDecisionDock: View {
         }
     }
 
+    private var dockRadius: CGFloat { glassLayout ? WarrenRadius.large : 14 }
+
     private func choose(_ option: WarrenConversation.Decision.Option) {
         guard submitting == nil else { return }
         submitting = option.id
@@ -1741,10 +2117,11 @@ private struct WarrenConversationDecisionDock: View {
 
 private struct WarrenConversationChoiceStyle: ButtonStyle {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         configuration.label
             .background(
                 (configuration.isPressed || hovering) ? tokens.fillHover : Color.clear,

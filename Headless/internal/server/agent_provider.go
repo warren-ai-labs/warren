@@ -1453,6 +1453,7 @@ func (provider *TUIAgentProvider) Ensure(ctx context.Context, value AgentSession
 
 	agentSessionID := strings.TrimSpace(value.AgentSessionID)
 	transcriptPath := strings.TrimSpace(value.TranscriptPath)
+	reportedByHook := false
 
 	// Explicit hook bindings written by Warren's lifecycle hooks/extensions are authoritative.
 	binding, err := agent.ReadBinding(agent.BindPath(value.SessionID))
@@ -1469,6 +1470,17 @@ func (provider *TUIAgentProvider) Ensure(ctx context.Context, value AgentSession
 		}
 		if binding.TranscriptPath != "" && regularFileExists(binding.TranscriptPath) {
 			transcriptPath = binding.TranscriptPath
+		} else if binding.TranscriptPath != "" && agentSessionID != "" &&
+			strings.TrimSpace(value.AgentSessionID) == agentSessionID &&
+			(strings.TrimSpace(value.TranscriptPath) == "" || strings.TrimSpace(value.TranscriptPath) == binding.TranscriptPath) {
+			// The hook names the conversation this Session was started with, and
+			// no other transcript is bound, so its path is trusted before the file
+			// exists. Claude creates the JSONL only with the first prompt;
+			// waiting for it left a fresh Agent without a timeline, which
+			// clients render as still starting although the TUI is ready. A
+			// switch to another conversation still waits for its file above.
+			transcriptPath = binding.TranscriptPath
+			reportedByHook = true
 		}
 	} else if value.TranscriptPath != "" && regularFileExists(value.TranscriptPath) && value.AgentSessionID != "" {
 		// Persisted from a prior reconcile before daemon restart.
@@ -1476,7 +1488,7 @@ func (provider *TUIAgentProvider) Ensure(ctx context.Context, value AgentSession
 		transcriptPath = value.TranscriptPath
 	}
 
-	if transcriptPath != "" && !regularFileExists(transcriptPath) {
+	if transcriptPath != "" && !reportedByHook && !regularFileExists(transcriptPath) {
 		transcriptPath = ""
 	}
 
