@@ -1,37 +1,55 @@
 import SwiftUI
 
-/// Typography tokens matching the confirmed Superset density hierarchy.
+/// The workbench type ramp.
+///
+/// Seven styles, three weights. Every role below is one of them, so a view
+/// picks a role by what the text is rather than by a size. Interface text is
+/// SF Pro; mono is reserved for what the machine wrote — output tails, paths,
+/// shortcuts, diff stats. The terminal grid keeps the person's own font.
+///
+/// Light (300) is gone on purpose: thin strokes disappear on glass.
 public enum WarrenTypography {
-    /// Superset inherits the platform UI sans stack; regular weight carries
-    /// most navigation and chrome, with weight reserved for active hierarchy.
-    public static let navigationGroup = Font.system(size: 13, weight: .medium)
-    public static let navigationItem = Font.system(size: 13, weight: .regular)
-    /// Secondary row metadata is Superset's `text-xs` tier.
-    public static let navigationMeta = Font.system(size: 12, weight: .regular)
-    /// External IDE labels remain readable in compact menus and settings rows.
-    public static let externalIDEName = Font.system(size: 13, weight: .regular)
-    public static let externalIDEPath = Font.system(size: 11, weight: .regular, design: .monospaced)
-    /// Settings is a functional surface rather than passive chrome. Keep its
-    /// navigation readable at a larger size and never use a light weight for
-    /// labels that users must scan or select.
-    public static let settingsNavigationItem = Font.system(size: 14, weight: .regular)
-    public static let settingsNavigationItemActive = Font.system(size: 14, weight: .medium)
-    public static let settingsGroupLabel = Font.system(size: 11, weight: .medium)
-    public static let settingsScreenTitle = Font.system(size: 22, weight: .light)
-    public static let settingsSectionTitle = Font.system(size: 22, weight: .light)
-    public static let settingsBody = Font.system(size: 14, weight: .regular)
-    public static let settingsBodyEmphasis = Font.system(size: 14, weight: .regular)
-    public static let settingsSupporting = Font.system(size: 13, weight: .regular)
-    public static let settingsControl = Font.system(size: 14, weight: .regular)
-    public static let settingsAction = Font.system(size: 14, weight: .regular)
-    public static let settingsMeta = Font.system(size: 12, weight: .regular)
-    public static let navigationItemLight = Font.system(size: 13, weight: .light)
-    /// Superset group headings are `text-xs font-medium`.
-    public static let groupHeading = Font.system(size: 12, weight: .medium)
-    /// Superset shortcuts are `text-xs tracking-widest`; Warren keeps the
-    /// monospaced design for keyboard hints.
-    public static let shortcut = Font.system(size: 12, weight: .medium, design: .monospaced)
-    public static let chromeLabel = Font.system(size: 12, weight: .regular)
+    // MARK: Ramp
+
+    /// Settings page titles and empty-state headings. 22/28 semibold.
+    public static let display = Font.system(size: 22, weight: .semibold)
+    /// Dialog titles, section titles, pane titles. 15/20 semibold.
+    public static let title = Font.system(size: 15, weight: .semibold)
+    /// Rows, controls, and running text. 13/18 regular.
+    public static let body = Font.system(size: 13, weight: .regular)
+    /// The selected item, a container row, an emphasized label. 13/18 medium.
+    public static let bodyStrong = Font.system(size: 13, weight: .medium)
+    /// Secondary lines, hints, metadata. 11.5/15 regular.
+    public static let caption = Font.system(size: 11.5, weight: .regular)
+    /// Command lines and code. 12.5/20 regular.
+    public static let mono = Font.system(size: 12.5, weight: .regular, design: .monospaced)
+    /// Output tails, shortcuts, diff stats. 11/16 regular.
+    public static let monoSmall = Font.system(size: 11, weight: .regular, design: .monospaced)
+
+    // MARK: Roles
+
+    public static let navigationGroup = bodyStrong
+    public static let navigationItem = body
+    public static let navigationMeta = caption
+    public static let externalIDEName = body
+    public static let externalIDEPath = monoSmall
+    public static let settingsNavigationItem = body
+    public static let settingsNavigationItemActive = bodyStrong
+    public static let settingsGroupLabel = caption
+    public static let settingsScreenTitle = display
+    public static let settingsSectionTitle = display
+    public static let settingsBody = body
+    public static let settingsBodyEmphasis = bodyStrong
+    public static let settingsSupporting = caption
+    public static let settingsControl = body
+    public static let settingsAction = body
+    public static let settingsMeta = caption
+    /// Kept for the call sites that asked for a quieter row; it is the regular
+    /// body style now, and the caller's color carries the quietness.
+    public static let navigationItemLight = body
+    public static let groupHeading = caption
+    public static let shortcut = monoSmall
+    public static let chromeLabel = body
     /// The sidebar's two row weights.
     ///
     /// Projects, Tasks, and Terminal Groups are containers: rows you open to
@@ -42,48 +60,33 @@ public enum WarrenTypography {
     public static let sidebarContainerRow = navigationGroup
     public static let sidebarRow = navigationItem
     public static let workspaceRow = navigationItem
-    /// Section labels are intentionally compact and uppercase in their source.
-    public static let sectionLabel = Font.system(size: 10, weight: .medium)
-    /// Superset tab and pane titles use the compact text-xs tier.
-    public static let tabTitle = Font.system(size: 12, weight: .regular)
-    public static let activeTabTitle = Font.system(size: 12, weight: .medium)
-    /// Tab shell titles use the light text tier; the active tab separates
-    /// itself with a brighter gray instead of a heavier weight.
-    public static let tabShellTitle = Font.system(size: 12, weight: .light)
-    /// The terminal pane title uses the same light text tier as tab shell
-    /// titles so chrome reads as one family instead of competing with the
-    /// terminal content.
-    public static let paneShellTitle = Font.system(size: 12, weight: .light)
-    public static let paneHeader = Font.system(size: 12, weight: .medium)
-    public static let badge = Font.system(size: 10, weight: .medium)
-    public static let activityChip = Font.system(size: 9, weight: .medium)
-    public static let emptyState = Font.system(size: 18, weight: .light)
-    /// Empty-state titles use the light text tier and a larger size so an
-    /// empty page reads as calm guidance instead of shouting chrome.
-    public static let emptyStateTitle = Font.system(size: 20, weight: .light)
-    public static let screenTitle = Font.system(size: 18, weight: .medium)
-    /// Superset settings page headings are `text-xl` in medium weight.
-    public static let pageTitle = Font.system(size: 20, weight: .medium)
-    /// Business dialogs use a clearer hierarchy than dense navigation chrome.
-    public static let dialogTitle = Font.system(size: 18, weight: .light)
-    public static let dialogBody = Font.system(size: 14, weight: .regular)
-    public static let dialogFieldLabel = Font.system(size: 13, weight: .regular)
-    public static let dialogInput = Font.system(size: 14, weight: .regular)
-    public static let dialogAction = Font.system(size: 14, weight: .regular)
-    public static let dialogCriticalAction = Font.system(size: 14, weight: .medium)
-    public static let dialogMeta = Font.system(size: 12, weight: .regular)
-    /// Top-right chrome popovers (Web, endpoint, external IDE) share one calm
-    /// light text family so the controls read as one surface.
-    public static let popoverTitle = Font.system(size: 13, weight: .light)
-    public static let popoverItem = Font.system(size: 13, weight: .light)
-    public static let popoverMeta = Font.system(size: 12, weight: .light)
-    public static let body = Font.system(size: 13, weight: .regular)
-    public static let bodyEmphasis = Font.system(size: 13, weight: .medium)
-    /// Superset `text-xs` descriptions and hints.
-    public static let supporting = Font.system(size: 12, weight: .regular)
-    public static let code = Font.system(size: 12, weight: .regular, design: .monospaced)
+    public static let sectionLabel = caption
+    public static let tabTitle = body
+    public static let activeTabTitle = bodyStrong
+    public static let tabShellTitle = body
+    public static let paneShellTitle = body
+    public static let paneHeader = bodyStrong
+    public static let badge = caption
+    public static let activityChip = caption
+    public static let emptyState = title
+    public static let emptyStateTitle = display
+    public static let screenTitle = title
+    public static let pageTitle = display
+    public static let dialogTitle = title
+    public static let dialogBody = body
+    public static let dialogFieldLabel = caption
+    public static let dialogInput = body
+    public static let dialogAction = body
+    public static let dialogCriticalAction = bodyStrong
+    public static let dialogMeta = caption
+    public static let popoverTitle = bodyStrong
+    public static let popoverItem = body
+    public static let popoverMeta = caption
+    public static let bodyEmphasis = bodyStrong
+    public static let supporting = caption
+    public static let code = mono
     /// The terminal find field uses Menlo rather than the system monospaced
     /// face so a typed query reads like the terminal grid it searches.
     public static let terminalSearchField = Font.custom("Menlo", size: 12)
-    public static let compactCode = Font.system(size: 11, weight: .regular, design: .monospaced)
+    public static let compactCode = monoSmall
 }

@@ -108,9 +108,29 @@ public enum WarrenLayoutMetrics {
     /// The Web popover needs room for a tokenized URL and its adjacent
     /// actions, without reading like a persistent side panel.
     public static let webPopoverWidth: CGFloat = 288
-    public static let paneHeaderHeight: CGFloat = 28
+    public static let paneHeaderHeight: CGFloat = 36
     public static let paneMinimumWidth: CGFloat = 260
     public static let paneMinimumHeight: CGFloat = 160
+
+    // Workbench geometry. The sidebar and the pane cards float inside the
+    // window: one inset from the window edge, one gap between cards, and the
+    // tab capsule sits on the same inset as the panels below it.
+    /// Space between the window edge and the sidebar panel or a pane card.
+    public static let workbenchInset: CGFloat = 8
+    /// Space between two pane cards, and between the sidebar and the content.
+    public static let paneGap: CGFloat = 10
+    /// The tab capsule and the button capsule beside it.
+    public static let tabCapsuleHeight: CGFloat = 36
+    /// One tab inside the capsule.
+    public static let tabCapsuleItemHeight: CGFloat = 30
+    /// The app icon tile a tab draws, and the overlap between stacked tiles.
+    public static let tabIconTileSize: CGFloat = 20
+    public static let tabIconStackOverlap: CGFloat = 6
+    /// The icon tile a sidebar agent line draws.
+    public static let sidebarAgentTileSize: CGFloat = 16
+    /// The leading column every sidebar status dot sits in.
+    public static let sidebarStatusGutterWidth: CGFloat = 14
+    public static let sidebarStatusDotSize: CGFloat = 7
 
     // Sidebar row geometry from DashboardSidebar's Tailwind classes.
     public static let sidebarProjectRowHeight: CGFloat = 32
@@ -271,4 +291,17 @@ public enum WarrenRadius {
     public static let large: CGFloat = 12
     /// Mobile sheets round only their top edge at this larger radius.
     public static let sheet: CGFloat = 16
+
+    // Workbench radii are concentric: each step is the radius outside it minus
+    // the 8pt inset between them, so nested corners stay parallel.
+    /// The sidebar panel, the tab capsule's neighbors, and every pane card.
+    public static let panel: CGFloat = 18
+    /// A sidebar row or a selected item inside a panel.
+    public static let panelRow: CGFloat = 12
+    /// Buttons, fields, and segmented controls inside a row.
+    public static let control: CGFloat = 9
+    /// App icon tiles at tab size.
+    public static let tile: CGFloat = 6
+    /// Floating glass surfaces: popovers, the command palette, sheets.
+    public static let floating: CGFloat = 22
 }
