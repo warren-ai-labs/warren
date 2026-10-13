@@ -24,6 +24,10 @@ struct WarrenDesktopTabBar: View {
     let presentation: WarrenDesktopPaneBarPresentation
     let tabTitles: [String: String]
     let tabMarks: [TerminalSessionID: WarrenActivityMark]
+    /// The app icon each Session's pill leads with, resolved by the caller from
+    /// the Session itself (`resolveAppIcons(for:session:)`). A Tab missing here falls
+    /// back to the icon its kind implies, so the bar never draws an empty tile.
+    let appIcons: [TerminalSessionID: WarrenDesktopAppIcon]
     let pinnedSessionIDs: Set<TerminalSessionID>
     let selectedTabID: String?
     /// The pane group the track draws, when the scope's layout has one.
@@ -81,6 +85,7 @@ struct WarrenDesktopTabBar: View {
         presentation: WarrenDesktopPaneBarPresentation,
         tabTitles: [String: String],
         tabMarks: [TerminalSessionID: WarrenActivityMark],
+        appIcons: [TerminalSessionID: WarrenDesktopAppIcon] = [:],
         pinnedSessionIDs: Set<TerminalSessionID>,
         selectedTabID: String?,
         splitGroup: WarrenDesktopSplitGroup? = nil,
@@ -126,6 +131,7 @@ struct WarrenDesktopTabBar: View {
         self.presentation = presentation
         self.tabTitles = tabTitles
         self.tabMarks = tabMarks
+        self.appIcons = appIcons
         self.pinnedSessionIDs = pinnedSessionIDs
         self.selectedTabID = selectedTabID
         self.splitGroup = splitGroup
@@ -173,10 +179,53 @@ struct WarrenDesktopTabBar: View {
     }
 
     /// The track's width for a listing, including the slot a drawn group's
-    /// mark costs. The mark is not a Tab, so it has to be added here and to
-    /// every Tab origin behind it in the scroll follower.
+    /// icon stack costs. The stack is not a Tab, so it has to be added here and
+    /// to every Tab origin behind it in the scroll follower.
     static func tabTrackWidth(tabCount: Int, groupMarkSlotWidth: CGFloat = 0) -> CGFloat {
         CGFloat(tabCount) * WarrenLayoutMetrics.tabWidth + groupMarkSlotWidth
+    }
+
+    /// The gap between the capsule's edge and the pills or buttons inside it.
+    static let capsuleInset = (WarrenLayoutMetrics.tabCapsuleHeight
+        - WarrenLayoutMetrics.tabCapsuleItemHeight) / 2
+
+    /// Both capsules are fully rounded.
+    static let capsuleCornerRadius = WarrenLayoutMetrics.tabCapsuleHeight / 2
+
+    /// Resolves every listed Session's app icon from its live record.
+    ///
+    /// The bar is handed this map rather than the Sessions themselves so it
+    /// only re-renders when an icon actually changes.
+    static func resolveAppIcons(
+        for tabs: [ClientTab],
+        session: (TerminalSessionID) -> WarrenDesktopSession?
+    ) -> [TerminalSessionID: WarrenDesktopAppIcon] {
+        var icons: [TerminalSessionID: WarrenDesktopAppIcon] = [:]
+        for tab in tabs {
+            guard let sessionID = tab.sessionID,
+                  let record = session(sessionID) else { continue }
+            icons[sessionID] = WarrenDesktopAppIcon.resolve(record)
+        }
+        return icons
+    }
+
+    /// The icon a Tab leads with: the resolved one when the caller has it,
+    /// otherwise the one the Tab's own kind implies.
+    static func appIcon(
+        for tab: ClientTab,
+        resolved: [TerminalSessionID: WarrenDesktopAppIcon]
+    ) -> WarrenDesktopAppIcon {
+        if let sessionID = tab.sessionID, let icon = resolved[sessionID] {
+            return icon
+        }
+        switch tab.kind {
+        case .browser:
+            return .browser
+        case .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae:
+            return .agent(tab.kind)
+        case .shell, .custom:
+            return .shell
+        }
     }
 
     private var tabs: [ClientTab] { presentation.listings }
@@ -187,121 +236,40 @@ struct WarrenDesktopTabBar: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        ZStack(alignment: .leading) {
-            Rectangle()
-                .fill(tokens.chromeSurface)
-
-            HStack(spacing: 0) {
-                if chromeMode == .workspace, isSidebarCollapsed {
-                    WarrenDesktopCollapsedWorkspaceLeading(onToggleSidebar: onToggleSidebar)
-                }
-
-                if let solo = presentation.solo {
-                    // With no track this row is the only chrome above the
-                    // terminal, so the Session's identity belongs here rather
-                    // than in a third bar below the presets.
-                    WarrenDesktopSoloPaneIdentity(
-                        identity: solo,
-                        onCopyTitle: onCopyPaneTitle,
-                        onClose: { onCloseTab(solo.tabID) }
-                    )
-                }
-
-                if presentation.showsTrack {
-                WarrenOverflowFadeScrollView(
-                    .horizontal,
-                    fadeLength: WarrenLayoutMetrics.tabScrollFadeLength,
-                    surface: tokens.chromeSurface,
-                    showsEdgeChevrons: true
-                ) {
-                    HStack(spacing: 0) {
-                        ForEach(rowElements) { element in
-                            switch element {
-                            case .tab(let tab):
-                                tabItem(
-                                    tab,
-                                    showsTrailingSeparator: true,
-                                    dropBeforeTabID: tab.id,
-                                    canStartDrag: true
-                                )
-                            case .groupRun(let group, let runTabs, let dropBeforeTabID):
-                                groupRun(
-                                    group: group,
-                                    tabs: runTabs,
-                                    dropBeforeTabID: dropBeforeTabID
-                                )
-                            }
-                        }
-                    }
-                    .background {
-                        WarrenDesktopTabScrollFollower(
-                            selectedTabID: selectedTabID,
-                            tabIDs: rowElements.drawnTabIDs,
-                            groupMarkSlotWidth: rowElements.groupMarkSlotWidth,
-                            groupMarkAnchorIndex: rowElements.groupMarkAnchorIndex,
-                            reduceMotion: reduceMotion
-                        )
-                    }
-                    .frame(minHeight: WarrenLayoutMetrics.tabBarHeight)
-                }
-                .frame(
-                    maxWidth: Self.tabTrackWidth(
-                        tabCount: tabs.count,
-                        groupMarkSlotWidth: rowElements.groupMarkSlotWidth
-                    ),
-                    alignment: .leading
-                )
-                .layoutPriority(1)
-                }
-
-                WarrenDesktopTabAddSlot(
-                    action: onAddTab,
-                    isEnabled: canAddTab,
-                    isLoading: isAddingTab
-                )
-                .dropDestination(for: String.self) { tabIDs, _ in
-                    guard let tabID = tabIDs.first else { return false }
-                    onMoveTab(tabID, nil)
-                    return true
-                }
-
-                // The drag filler lives outside the scroll view, exactly like
-                // Superset's TabBar: it stays available when the track is full
-                // so there is always a small native drag leaf.
-                WarrenDesktopWindowDragRegion(identifier: "warren.tab-bar-drag-region")
-                    .frame(minWidth: WarrenSpacing.standard, maxWidth: .infinity)
-                    .accessibilityHidden(true)
-
-                if chromeMode == .workspace {
-                    WarrenDesktopWorkspaceTabTrailing(
-                        connectionState: connectionState,
-                        endpointOptions: endpointOptions,
-                        selectedEndpointID: selectedEndpointID,
-                        webStatus: webStatus,
-                        externalIDEOptions: externalIDEOptions,
-                        embeddedEditorAvailable: embeddedEditorAvailable,
-                        embeddedEditorSelected: embeddedEditorSelected,
-                        embeddedEditorDefault: embeddedEditorDefault,
-                        externallyVisibleControls: externallyVisibleControls,
-                        isOverflowPresented: isOverflowPresented,
-                        onSettings: onSettings,
-                        onChromePopover: onChromePopover,
-                        onOpenInExternalIDE: onOpenInExternalIDE,
-                        onOpenEmbeddedEditor: onOpenEmbeddedEditor,
-                        onCloseEmbeddedEditor: onCloseEmbeddedEditor,
-                        onSelectEndpoint: onSelectEndpoint,
-                        onRetryConnection: onRetryConnection,
-                        onStopConnection: onStopConnection,
-                        inspector: inspector
-                    )
-                }
+        HStack(spacing: WarrenSpacing.compact) {
+            if chromeMode == .workspace, isSidebarCollapsed {
+                WarrenDesktopCollapsedWorkspaceLeading(onToggleSidebar: onToggleSidebar)
             }
-            .frame(height: WarrenLayoutMetrics.tabBarHeight)
+
+            if let solo = presentation.solo {
+                // With no track this row is the only chrome above the
+                // terminal, so the Session's identity belongs here rather
+                // than in a third bar below the presets. It sits in the same
+                // capsule the track would, so the row keeps one shape.
+                WarrenDesktopSoloPaneIdentity(
+                    identity: solo,
+                    onCopyTitle: onCopyPaneTitle,
+                    onClose: { onCloseTab(solo.tabID) }
+                )
+                .frame(height: WarrenLayoutMetrics.tabCapsuleHeight)
+                .warrenPanel(.navigation, cornerRadius: Self.capsuleCornerRadius)
+            }
+
+            if presentation.showsTrack {
+                tabCapsule(tokens: tokens)
+                    .layoutPriority(1)
+            }
+
+            // The drag filler lives outside the capsules, exactly like
+            // Superset's TabBar: it stays available when the track is full
+            // so there is always a small native drag leaf.
+            WarrenDesktopWindowDragRegion(identifier: "warren.tab-bar-drag-region")
+                .frame(minWidth: WarrenSpacing.standard, maxWidth: .infinity)
+                .accessibilityHidden(true)
+
+            trailingCapsule
         }
-        .frame(height: WarrenLayoutMetrics.tabBarHeight)
-        .overlay(alignment: .bottom) {
-            WarrenDesktopChromeDivider()
-        }
+        .frame(height: WarrenLayoutMetrics.tabCapsuleHeight)
         .onChange(of: selectedTabID) { selectedID in
             pendingTabGeneration &+= 1
             pendingTabID = nil
@@ -320,6 +288,107 @@ struct WarrenDesktopTabBar: View {
         .accessibilityLabel("Workspace tab bar")
     }
 
+    /// The rounded capsule that holds the track of pills.
+    private func tabCapsule(tokens: WarrenColorTokens) -> some View {
+        WarrenOverflowFadeScrollView(
+            .horizontal,
+            fadeLength: WarrenLayoutMetrics.tabScrollFadeLength,
+            // The fade is painted over the capsule, so it takes the capsule's
+            // own opaque fill. On glass that fill is clear and the scroll view
+            // masks its content instead.
+            surface: tokens.sidebarSurface,
+            showsEdgeChevrons: true
+        ) {
+            HStack(spacing: 0) {
+                ForEach(rowElements) { element in
+                    switch element {
+                    case .tab(let tab):
+                        tabItem(
+                            tab,
+                            showsTrailingSeparator: true,
+                            dropBeforeTabID: tab.id,
+                            canStartDrag: true
+                        )
+                    case .groupRun(let group, let runTabs, let dropBeforeTabID):
+                        groupRun(
+                            group: group,
+                            tabs: runTabs,
+                            dropBeforeTabID: dropBeforeTabID
+                        )
+                    }
+                }
+            }
+            .background {
+                WarrenDesktopTabScrollFollower(
+                    selectedTabID: selectedTabID,
+                    tabIDs: rowElements.drawnTabIDs,
+                    groupMarkSlotWidth: rowElements.groupMarkSlotWidth,
+                    groupMarkAnchorIndex: rowElements.groupMarkAnchorIndex,
+                    reduceMotion: reduceMotion
+                )
+            }
+            .frame(height: WarrenLayoutMetrics.tabCapsuleItemHeight)
+        }
+        .frame(
+            maxWidth: Self.tabTrackWidth(
+                tabCount: tabs.count,
+                groupMarkSlotWidth: rowElements.groupMarkSlotWidth
+            ),
+            alignment: .leading
+        )
+        .frame(height: WarrenLayoutMetrics.tabCapsuleItemHeight)
+        .padding(.horizontal, Self.capsuleInset)
+        .frame(height: WarrenLayoutMetrics.tabCapsuleHeight)
+        .warrenPanel(.navigation, cornerRadius: Self.capsuleCornerRadius)
+    }
+
+    /// The small capsule of round buttons at the row's trailing end: new tab
+    /// first, then the workspace's own actions.
+    private var trailingCapsule: some View {
+        HStack(spacing: 0) {
+            WarrenDesktopTabAddSlot(
+                action: onAddTab,
+                isEnabled: canAddTab,
+                isLoading: isAddingTab
+            )
+            .dropDestination(for: String.self) { tabIDs, _ in
+                guard let tabID = tabIDs.first else { return false }
+                onMoveTab(tabID, nil)
+                return true
+            }
+
+            if chromeMode == .workspace {
+                WarrenDesktopWorkspaceTabTrailing(
+                    connectionState: connectionState,
+                    endpointOptions: endpointOptions,
+                    selectedEndpointID: selectedEndpointID,
+                    webStatus: webStatus,
+                    externalIDEOptions: externalIDEOptions,
+                    embeddedEditorAvailable: embeddedEditorAvailable,
+                    embeddedEditorSelected: embeddedEditorSelected,
+                    embeddedEditorDefault: embeddedEditorDefault,
+                    externallyVisibleControls: externallyVisibleControls,
+                    isOverflowPresented: isOverflowPresented,
+                    onSettings: onSettings,
+                    onChromePopover: onChromePopover,
+                    onOpenInExternalIDE: onOpenInExternalIDE,
+                    onOpenEmbeddedEditor: onOpenEmbeddedEditor,
+                    onCloseEmbeddedEditor: onCloseEmbeddedEditor,
+                    onSelectEndpoint: onSelectEndpoint,
+                    onRetryConnection: onRetryConnection,
+                    onStopConnection: onStopConnection,
+                    inspector: inspector
+                )
+            }
+        }
+        .padding(.horizontal, Self.capsuleInset)
+        .frame(height: WarrenLayoutMetrics.tabCapsuleHeight)
+        .fixedSize(horizontal: true, vertical: false)
+        .warrenPanel(.navigation, cornerRadius: Self.capsuleCornerRadius)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Tab actions")
+    }
+
     /// One Tab of the track, with the pending feedback the bar owns.
     ///
     /// `dropBeforeTabID` is the Tab a drop on this one moves its source in
@@ -334,9 +403,11 @@ struct WarrenDesktopTabBar: View {
     ) -> some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let mark = tab.sessionID.flatMap { tabMarks[$0] }
+        let isPending = pendingTabID == tab.id
         WarrenDesktopTabItem(
             tab: tab,
             displayTitle: tabTitles[tab.id] ?? tab.title,
+            icon: Self.appIcon(for: tab, resolved: appIcons),
             mark: mark,
             isSelected: selectedTabID == tab.id,
             showsTrailingSeparator: showsTrailingSeparator,
@@ -385,27 +456,29 @@ struct WarrenDesktopTabBar: View {
             }
         )
         .disabled(pendingTabID != nil)
-        .opacity(pendingTabID == tab.id ? 0.72 : 1)
-        .overlay(alignment: .bottom) {
-            // Keep the pending state visible while the selection itself
-            // remains free of a colored underline. The tab surface already
-            // carries the selected background and border.
-            Rectangle()
-                .fill(pendingTabID == tab.id ? tokens.info : .clear)
-                .frame(height: pendingTabID == tab.id ? 2 : 0)
-                .allowsHitTesting(false)
+        .opacity(isPending ? 0.72 : 1)
+        .overlay {
+            // The pending pill is outlined rather than filled, so a selection
+            // in flight never looks like a selection that already landed.
+            RoundedRectangle(
+                cornerRadius: WarrenDesktopTabItem.pillCornerRadius,
+                style: .continuous
+            )
+            .strokeBorder(isPending ? tokens.info : .clear, lineWidth: isPending ? 1 : 0)
+            .padding(.horizontal, WarrenDesktopTabItem.pillHorizontalInset)
+            .allowsHitTesting(false)
         }
     }
 
-    /// One pane group: the mark in front of its first member, and the rule that
-    /// binds the members to it.
+    /// One pane group: its members' app icons stacked in front of the first
+    /// member, and a shared backing that binds the members to them.
     ///
     /// A drop anywhere in the run lands after the group, which is the only
     /// position a Session from outside can take: the group leads the strip, and
     /// the Tab the drop goes in front of is the first one that follows it. The
     /// group is one placement, so nothing can be inserted between its members —
-    /// that is also the only reason the rule under them can keep meaning "these
-    /// belong together".
+    /// that is also the only reason the backing behind them can keep meaning
+    /// "these belong together".
     @ViewBuilder
     private func groupRun(
         group: WarrenDesktopSplitGroup,
@@ -413,18 +486,31 @@ struct WarrenDesktopTabBar: View {
         dropBeforeTabID: String?
     ) -> some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let color = WarrenDesktopSplitGroupPalette.color(for: group.scopeKey, tokens: tokens)
+        let isLight = colorScheme == .light
+        // The ring separates overlapping tiles, so it takes the surface they
+        // sit on. Glass has no opaque fill to borrow; the raised tone is the
+        // closest solid one.
+        let ringColor = windowMaterial == .glass ? tokens.popoverSurface : tokens.sidebarSurface
         HStack(spacing: 0) {
-            WarrenDesktopSplitGroupMark(tree: group.tree, color: color)
-                .padding(.leading, WarrenLayoutMetrics.tabGroupMarkLeadingInset)
-                .padding(.trailing, WarrenLayoutMetrics.tabGroupMarkTrailingInset)
-                // The mark is part of the group for drops as well, so landing on
-                // it lands beside the group instead of on nothing.
-                .dropDestination(for: String.self) { tabIDs, _ in
-                    guard let sourceID = tabIDs.first else { return false }
-                    onMoveTab(sourceID, dropBeforeTabID)
-                    return true
-                }
+            WarrenDesktopAppIconStack(
+                icons: runTabs.map { Self.appIcon(for: $0, resolved: appIcons) },
+                size: WarrenLayoutMetrics.tabIconTileSize,
+                ringColor: ringColor
+            )
+            .padding(.leading, WarrenDesktopTabRowElement.groupStackLeadingInset)
+            .frame(
+                width: WarrenDesktopTabRowElement.groupMarkSlotWidth(memberCount: runTabs.count),
+                height: WarrenLayoutMetrics.tabCapsuleItemHeight,
+                alignment: .leading
+            )
+            .contentShape(.rect)
+            // The stack is part of the group for drops as well, so landing on
+            // it lands beside the group instead of on nothing.
+            .dropDestination(for: String.self) { tabIDs, _ in
+                guard let sourceID = tabIDs.first else { return false }
+                onMoveTab(sourceID, dropBeforeTabID)
+                return true
+            }
             ForEach(Array(runTabs.enumerated()), id: \.element.id) { index, tab in
                 tabItem(
                     tab,
@@ -434,13 +520,16 @@ struct WarrenDesktopTabBar: View {
                     // A member cannot be pulled out of its group: the layout,
                     // not the Tab strip, decides which Session sits where.
                     canStartDrag: false
-                )            }
+                )
+            }
         }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(color.opacity(WarrenLayoutMetrics.tabGroupRuleOpacity))
-                .frame(height: WarrenLayoutMetrics.tabGroupRuleHeight)
-                .allowsHitTesting(false)
+        .background {
+            RoundedRectangle(
+                cornerRadius: WarrenDesktopTabItem.pillCornerRadius,
+                style: .continuous
+            )
+            .fill(isLight ? Color.black.opacity(0.035) : Color.white.opacity(0.04))
+            .allowsHitTesting(false)
         }
         .warrenSemanticElement(
             id: "tabgroup.\(group.scopeKey)",
@@ -785,12 +874,33 @@ enum WarrenDesktopTabRowElement: Identifiable, Equatable {
         return false
     }
 
-    /// Whether the member at `index` of a run still draws the hairline that
-    /// divides it from the member after it.
+    /// The gap in front of a group's icon stack, and the gap between the stack
+    /// and the group's first member.
+    static let groupStackLeadingInset: CGFloat = WarrenSpacing.small
+    static let groupStackTrailingInset: CGFloat = WarrenSpacing.xxs
+
+    /// The width the overlapped icon stack draws for a group of this size.
+    static func groupStackWidth(memberCount: Int) -> CGFloat {
+        let visible = min(max(memberCount, 1), WarrenDesktopAppIconStack.maximumVisible)
+        let tile = WarrenLayoutMetrics.tabIconTileSize
+        return CGFloat(visible) * tile
+            - CGFloat(visible - 1) * WarrenLayoutMetrics.tabIconStackOverlap
+    }
+
+    /// The slot a group's icon stack takes in front of its first member. It
+    /// grows with the stack, up to the stack's visible maximum.
+    static func groupMarkSlotWidth(memberCount: Int) -> CGFloat {
+        groupStackLeadingInset
+            + groupStackWidth(memberCount: memberCount)
+            + groupStackTrailingInset
+    }
+
+    /// Whether the member at `index` of a run still draws the divider that
+    /// separates it from the member after it.
     ///
-    /// Only the last member does. The group's rule is what joins the members,
-    /// so a hairline between two of them would divide what the rule just
-    /// joined — while the last one still has to separate the group from
+    /// Only the last member does. The run's shared backing is what joins the
+    /// members, so a divider between two of them would divide what the backing
+    /// just joined — while the last one still has to separate the group from
     /// whatever Tab follows it.
     static func memberShowsTrailingSeparator(index: Int, count: Int) -> Bool {
         index == count - 1
@@ -816,11 +926,14 @@ extension Array where Element == WarrenDesktopTabRowElement {
         return nil
     }
 
-    /// The extra track width one drawn group costs.
+    /// The extra track width one drawn group's icon stack costs.
     var groupMarkSlotWidth: CGFloat {
-        contains(where: \.drawsGroupMark)
-            ? WarrenLayoutMetrics.tabGroupMarkSlotWidth
-            : 0
+        for element in self {
+            if case .groupRun(_, let tabs, _) = element {
+                return WarrenDesktopTabRowElement.groupMarkSlotWidth(memberCount: tabs.count)
+            }
+        }
+        return 0
     }
 
     /// The Tabs in the order the track draws them.
@@ -1115,7 +1228,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        HStack(spacing: WarrenSpacing.xxs) {
+        HStack(spacing: 0) {
             ForEach(controlLayout.direct, id: \.self) {
                 trailingControl($0, tokens: tokens)
             }
@@ -1124,6 +1237,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                     isPresented: isOverflowPresented,
                     action: { onChromePopover(.overflow) }
                 )
+                .modifier(WarrenDesktopCapsuleButtonSlot())
             }
             if let inspector {
                 // Last, at the window's edge, beside the region it opens
@@ -1136,6 +1250,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                     tint: inspector.isOpen ? tokens.foreground : nil,
                     edgeSpaced: true
                 )
+                .modifier(WarrenDesktopCapsuleButtonSlot())
                 .warrenSemanticElement(
                     id: "workspace-inspector.toggle",
                     role: .button,
@@ -1145,9 +1260,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                 )
             }
         }
-        .padding(.horizontal, WarrenSpacing.xs)
         .fixedSize(horizontal: true, vertical: false)
-        .frame(minHeight: WarrenLayoutMetrics.tabBarHeight)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace actions")
     }
@@ -1177,6 +1290,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                     onCloseEmbeddedEditor: onCloseEmbeddedEditor,
                     onPresentChoices: { onChromePopover(.externalIDE) }
                 )
+                .modifier(WarrenDesktopCapsuleButtonSlot())
                 .warrenSemanticElement(
                     id: "workspace-ide.open",
                     role: .button,
@@ -1197,6 +1311,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                     onPresent: { onChromePopover(.externalIDE) },
                     onOpen: onOpenInExternalIDE
                 )
+                .modifier(WarrenDesktopCapsuleButtonSlot())
             }
         case .endpoint:
             WarrenDesktopEndpointControl(
@@ -1206,6 +1321,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                 onPresent: { onChromePopover(.endpoint) },
                 onSelect: onSelectEndpoint
             )
+            .modifier(WarrenDesktopCapsuleButtonSlot())
         case .web:
             WarrenDesktopChromeButton(
                 systemImage: "globe",
@@ -1219,6 +1335,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                     : (webStatus.isRunning ? tokens.success : nil),
                 edgeSpaced: true
             )
+            .modifier(WarrenDesktopCapsuleButtonSlot())
         case .settings:
             WarrenDesktopChromeButton(
                 systemImage: "gearshape",
@@ -1227,6 +1344,7 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
                 action: onSettings,
                 edgeSpaced: true
             )
+            .modifier(WarrenDesktopCapsuleButtonSlot())
         }
     }
 
@@ -1242,6 +1360,21 @@ private struct WarrenDesktopWorkspaceTabTrailing: View {
         case .presentChoices:
             onChromePopover(.externalIDE)
         }
+    }
+}
+
+/// Seats one of the shared 28pt chrome buttons in a 30pt round slot of the
+/// trailing capsule. The circular clip turns the button's own hover wash into
+/// a round one, so every control in the capsule reads as the same shape.
+private struct WarrenDesktopCapsuleButtonSlot: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(
+                width: WarrenLayoutMetrics.tabCapsuleItemHeight,
+                height: WarrenLayoutMetrics.tabCapsuleItemHeight
+            )
+            .contentShape(Circle())
+            .clipShape(Circle())
     }
 }
 

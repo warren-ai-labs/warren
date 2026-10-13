@@ -7,18 +7,20 @@ import WarrenObservation
 struct WarrenDesktopTabItem: View {
     let tab: ClientTab
     let displayTitle: String
+    /// The app icon the pill leads with.
+    let icon: WarrenDesktopAppIcon
     let mark: WarrenActivityMark?
     let isSelected: Bool
-    /// Whether this Tab still draws the hairline that divides it from the Tab
-    /// after it. Members of one pane-group run hide theirs: the group's rule is
-    /// what binds them, and a hairline between them would divide what the rule
-    /// just joined.
+    /// Whether this Tab still draws the short divider that separates it from
+    /// the Tab after it. Members of one pane-group run hide theirs: the run's
+    /// shared backing is what binds them, and a divider between them would
+    /// divide what the backing just joined.
     var showsTrailingSeparator: Bool = true
     /// Whether this Tab can start a drag.
     ///
     /// A pane group is one placement rather than a set of slots, so its members
     /// are not draggable: the layout decides which Session sits where, and a
-    /// member that moved on its own would leave the group's chip and rule
+    /// member that moved on its own would leave the group's icon stack
     /// describing an arrangement the strip no longer shows. Selection, the
     /// context menu, and the close control are untouched.
     var canStartDrag: Bool = true
@@ -125,8 +127,24 @@ struct WarrenDesktopTabItem: View {
         return actions
     }
 
+    /// The pill's corner radius: fully rounded at the item's height.
+    static let pillCornerRadius = WarrenLayoutMetrics.tabCapsuleItemHeight / 2
+
+    /// The pill is inset from the Tab's fixed slot so neighbouring pills keep a
+    /// visible gap without changing the track's `index * tabWidth` geometry,
+    /// which the scroll follower depends on.
+    static let pillHorizontalInset: CGFloat = 1.5
+
+    /// Only a mark that asks for a person earns a place on a Tab. Progress and
+    /// "done" are read from the sidebar; the bar keeps one dot that means
+    /// "this pane is waiting on you".
+    static func showsActivityDot(_ mark: WarrenActivityMark?) -> Bool {
+        mark?.tier == .actionable
+    }
+
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let isLight = colorScheme == .light
         ZStack(alignment: .trailing) {
             Button(action: onSelect) {
                 HStack(spacing: WarrenSpacing.small) {
@@ -134,7 +152,17 @@ struct WarrenDesktopTabItem: View {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(tokens.info.opacity(0.8))
                             .frame(width: 7, height: 7)
+                            .frame(
+                                width: WarrenLayoutMetrics.tabIconTileSize,
+                                height: WarrenLayoutMetrics.tabIconTileSize
+                            )
                             .accessibilityHidden(true)
+                    } else {
+                        WarrenDesktopAppIconTile(
+                            icon: icon,
+                            size: WarrenLayoutMetrics.tabIconTileSize
+                        )
+                        .opacity(isSelected ? 1 : 0.86)
                     }
                     if isPinned {
                         Image(systemName: "pin.fill")
@@ -142,13 +170,9 @@ struct WarrenDesktopTabItem: View {
                             .foregroundStyle(tokens.mutedForeground)
                             .accessibilityHidden(true)
                     }
-                    if let mark {
-                        WarrenDesktopActivityIndicator(mark: mark)
-                            .accessibilityHidden(true)
-                    }
                     HStack(spacing: 0) {
                         Text(displayTitle)
-                            .font(WarrenTypography.tabShellTitle)
+                            .font(isSelected ? WarrenTypography.bodyStrong : WarrenTypography.body)
                             .lineLimit(1)
                             .truncationMode(.tail)
                         Spacer(minLength: 0)
@@ -174,27 +198,38 @@ struct WarrenDesktopTabItem: View {
                             onSplitDrop: onSplitDrop
                         )
                     }
+                    if let mark, Self.showsActivityDot(mark) {
+                        WarrenDesktopActivityIndicator(mark: mark)
+                            .accessibilityHidden(true)
+                    }
                 }
-                .padding(.leading, WarrenSpacing.medium)
-                .padding(.trailing, WarrenLayoutMetrics.tabAccessoryColumnWidth)
+                .padding(.leading, WarrenSpacing.small)
+                // The close control only claims its column while it is shown,
+                // so a resting Tab gives the whole pill to its title.
+                .padding(
+                    .trailing,
+                    exposesClose
+                        ? WarrenLayoutMetrics.tabAccessoryColumnWidth
+                        : WarrenSpacing.medium
+                )
+                .padding(.horizontal, Self.pillHorizontalInset)
                 .frame(
                     width: WarrenLayoutMetrics.tabWidth,
-                    height: WarrenLayoutMetrics.tabBarHeight,
+                    height: WarrenLayoutMetrics.tabCapsuleItemHeight,
                     alignment: .leading
                 )
                 .background(Color.clear)
                 .contentShape(.rect)
             }
-            // Selection and hover backgrounds are owned by the outer tab
-            // surface (background + hairline stroke). The inner button only
-            // adds focus and press feedback, so the active tab never picks
-            // up an extra wash while the pointer rests on it.
+            // Selection and hover backgrounds are owned by the outer pill. The
+            // inner button only adds focus and press feedback, so the active
+            // tab never picks up an extra wash while the pointer rests on it.
             .buttonStyle(WarrenTabButtonStyle(isFocused: isTabFocused))
             .focused($isTabFocused)
             .disabled(tab.sessionID == nil)
             .foregroundStyle(
                 isSelected
-                    ? tokens.foreground.opacity(0.90)
+                    ? tokens.foreground
                     : tokens.mutedForeground
             )
             .accessibilityLabel("Tab \(displayTitle)")
@@ -211,7 +246,7 @@ struct WarrenDesktopTabItem: View {
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 9, weight: .semibold))
                     .accessibilityHidden(true)
             }
             .buttonStyle(WarrenChromeButtonStyle(isFocused: isCloseFocused))
@@ -219,13 +254,16 @@ struct WarrenDesktopTabItem: View {
                 width: WarrenLayoutMetrics.tabCloseButtonSize,
                 height: WarrenLayoutMetrics.tabCloseButtonSize
             )
-            .contentShape(.rect)
-            .background(
-                isCloseHovered
-                    ? (isSelected ? tokens.muted.opacity(0.65) : tokens.fillHover)
-                    : .clear
-            )
-            .clipShape(.rect(cornerRadius: WarrenRadius.small))
+            .contentShape(Circle())
+            .background {
+                Circle().fill(
+                    isCloseHovered
+                        ? (isLight ? Color.black.opacity(0.08) : Color.white.opacity(0.12))
+                        : .clear
+                )
+            }
+            .clipShape(Circle())
+            .foregroundStyle(tokens.mutedForeground)
             .opacity(exposesClose ? 1 : 0)
             .allowsHitTesting(exposesClose)
             .focused($isCloseFocused)
@@ -239,14 +277,29 @@ struct WarrenDesktopTabItem: View {
                 isEnabled: exposesClose,
                 action: onClose
             )
-            .padding(.trailing, WarrenSpacing.xs)
+            .padding(.trailing, WarrenSpacing.xs + Self.pillHorizontalInset)
         }
-        .frame(width: WarrenLayoutMetrics.tabWidth, height: WarrenLayoutMetrics.tabBarHeight)
-        .background(
-            isSelected
-                ? tokens.selectedTabFill
-                : (isHovered ? tokens.fillHover : .clear)
-        )
+        .frame(width: WarrenLayoutMetrics.tabWidth, height: WarrenLayoutMetrics.tabCapsuleItemHeight)
+        .background {
+            RoundedRectangle(cornerRadius: Self.pillCornerRadius, style: .continuous)
+                .fill(pillFill(tokens: tokens, isLight: isLight))
+                .shadow(
+                    color: Color.black.opacity(isSelected && isLight ? 0.08 : 0),
+                    radius: 1.5,
+                    y: 0.5
+                )
+                .padding(.horizontal, Self.pillHorizontalInset)
+        }
+        .overlay(alignment: .trailing) {
+            // A short divider between two resting pills, so a row of
+            // unselected Tabs still reads as separate items. It steps aside for
+            // the selected and hovered pill, whose own fill already separates it.
+            Rectangle()
+                .fill(tokens.border.opacity(0.7))
+                .frame(width: WarrenSpacing.hairline, height: 14)
+                .opacity(showsTrailingSeparator && !isSelected && !isHovered ? 1 : 0)
+                .allowsHitTesting(false)
+        }
         .animation(
             WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
             value: isHovered
@@ -255,34 +308,6 @@ struct WarrenDesktopTabItem: View {
             WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
             value: isSelected
         )
-        .overlay(alignment: .top) {
-            if isSelected {
-                Rectangle()
-                    .fill(tokens.border)
-                    .frame(height: WarrenSpacing.hairline)
-            }
-        }
-        .overlay(alignment: .leading) {
-            if isSelected {
-                Rectangle()
-                    .fill(tokens.border)
-                    .frame(width: WarrenSpacing.hairline)
-            }
-        }
-        .overlay(alignment: .trailing) {
-            // Active tab outlines trailing edge; inactive tabs draw hairline separator.
-            Rectangle()
-                .fill((isSelected || showsTrailingSeparator) ? tokens.border : .clear)
-                .frame(width: WarrenSpacing.hairline)
-        }
-        .overlay(alignment: .bottom) {
-            // Superset-aligned tab flow: active tab has a transparent bottom so its
-            // background flows seamlessly into the content canvas below. Inactive tabs
-            // keep the continuous baseline separator.
-            Rectangle()
-                .fill(isSelected ? .clear : tokens.border)
-                .frame(height: WarrenSpacing.hairline)
-        }
         .contentShape(.rect)
         .dropDestination(for: String.self) { tabIDs, _ in
             guard let sourceID = tabIDs.first else { return false }
@@ -299,13 +324,25 @@ struct WarrenDesktopTabItem: View {
         .accessibilityLabel("Tab \(displayTitle)")
         .accessibilityValue(isSelected ? "Selected" : "Not selected")
     }
+
+    /// The selected pill is the brightest thing in the capsule: a white lift on
+    /// dark, the raised surface on light. Hover is a quieter step of the same.
+    private func pillFill(tokens: WarrenColorTokens, isLight: Bool) -> Color {
+        if isSelected {
+            return isLight ? tokens.selectedTabFill : Color.white.opacity(0.14)
+        }
+        if isHovered {
+            return isLight ? Color.black.opacity(0.05) : Color.white.opacity(0.06)
+        }
+        return .clear
+    }
 }
 
 /// Tab-specific button feedback: focus ring and press opacity only.
 ///
 /// Unlike the shared row style, this never paints a hover background.
 /// Selection and hover washes are drawn once by `WarrenDesktopTabItem`'s
-/// outer surface so the active tab keeps its pure background.
+/// outer pill so the active tab keeps its pure background.
 private struct WarrenTabButtonStyle: ButtonStyle {
     var isFocused: Bool
 
@@ -319,8 +356,12 @@ private struct WarrenTabButtonStyle: ButtonStyle {
         configuration.label
             .opacity(isEnabled ? (configuration.isPressed ? 0.82 : 1) : 0.42)
             .overlay {
-                Rectangle()
-                    .stroke(isFocused ? tokens.focusRing : .clear, lineWidth: isFocused ? 1 : 0)
+                RoundedRectangle(
+                    cornerRadius: WarrenDesktopTabItem.pillCornerRadius,
+                    style: .continuous
+                )
+                .strokeBorder(isFocused ? tokens.focusRing : .clear, lineWidth: isFocused ? 1 : 0)
+                .padding(.horizontal, WarrenDesktopTabItem.pillHorizontalInset)
             }
             .animation(
                 WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
@@ -329,6 +370,7 @@ private struct WarrenTabButtonStyle: ButtonStyle {
     }
 }
 
+/// The new-tab control: the first round button of the trailing capsule.
 struct WarrenDesktopTabAddSlot: View {
     let action: () -> Void
     let isEnabled: Bool
@@ -336,45 +378,47 @@ struct WarrenDesktopTabAddSlot: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @State private var isHovered = false
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        HStack {
-            Button(action: action) {
-                Group {
-                    if isLoading {
-                        WarrenBrailleSpinner(size: 14, accessibilityLabel: "Starting session")
-                    } else {
-                        Image(systemName: "plus")
-                            .font(.system(size: 13, weight: .medium))
-                    }
+        let isLight = colorScheme == .light
+        let size = WarrenLayoutMetrics.tabCapsuleItemHeight
+        Button(action: action) {
+            Group {
+                if isLoading {
+                    WarrenBrailleSpinner(size: 14, accessibilityLabel: "Starting session")
+                } else {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .medium))
                 }
-                .accessibilityHidden(true)
             }
-            .buttonStyle(.plain)
-            .disabled(!isEnabled || isLoading)
-            .frame(width: 28, height: 28)
-            .contentShape(.rect)
-            .foregroundStyle(tokens.mutedForeground)
-            .background(tokens.muted.opacity(0.30))
-            .overlay {
-                RoundedRectangle(cornerRadius: WarrenRadius.small)
-                    .stroke(tokens.border.opacity(0.60), lineWidth: WarrenSpacing.hairline)
-            }
-            .clipShape(.rect(cornerRadius: WarrenRadius.small))
-            .opacity(isEnabled ? 1 : 0.45)
-            .accessibilityLabel(isLoading ? "Starting session" : "New tab")
-            .warrenSemanticElement(
-                id: "tab.new",
-                role: .button,
-                label: "New tab",
-                isEnabled: isEnabled && !isLoading,
-                action: action
+            .frame(width: size, height: size)
+            .contentShape(Circle())
+            .accessibilityHidden(true)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled || isLoading)
+        .frame(width: size, height: size)
+        .foregroundStyle(isHovered && isEnabled ? tokens.foreground : tokens.mutedForeground)
+        .background {
+            Circle().fill(
+                isHovered && isEnabled && !isLoading
+                    ? (isLight ? Color.black.opacity(0.06) : Color.white.opacity(0.10))
+                    : .clear
             )
         }
-        .frame(width: WarrenLayoutMetrics.tabAddButtonSlotWidth, height: WarrenLayoutMetrics.tabBarHeight)
-        .padding(.leading, WarrenSpacing.xs)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Tab actions")
+        .contentShape(Circle())
+        .opacity(isEnabled ? 1 : 0.45)
+        .onHover { isHovered = $0 }
+        .help("New tab")
+        .accessibilityLabel(isLoading ? "Starting session" : "New tab")
+        .warrenSemanticElement(
+            id: "tab.new",
+            role: .button,
+            label: "New tab",
+            isEnabled: isEnabled && !isLoading,
+            action: action
+        )
     }
 }

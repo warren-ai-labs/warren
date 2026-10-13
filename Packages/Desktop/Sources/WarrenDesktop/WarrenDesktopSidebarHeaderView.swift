@@ -1,6 +1,16 @@
 import SwiftUI
 import WarrenDesignSystem
 
+/// The Host the sidebar is showing, as the header's host button names it.
+struct WarrenDesktopSidebarHeaderHost: Equatable {
+    /// The Host's own name, or its endpoint label when it reports none.
+    let name: String
+    /// Where the Host is: "Local" for this Mac, the endpoint label otherwise.
+    let subtitle: String
+    let isLocal: Bool
+    let connectionState: WarrenDesktopConnectionState
+}
+
 struct WarrenDesktopSidebarHeader: View {
     let isCollapsed: Bool
     let chromeMode: WarrenDesktopChromeMode
@@ -12,10 +22,15 @@ struct WarrenDesktopSidebarHeader: View {
     var onToggleActiveOnly: () -> Void = {}
     var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode = .compact
     var onToggleWorkspaceDisplayMode: () -> Void = {}
+    /// The current Host, drawn as the header's host button. `nil` draws none.
+    var host: WarrenDesktopSidebarHeaderHost? = nil
+    /// Opens the Host switcher. Without it the host button is a plain readout.
+    var onSelectHost: (() -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var searchFocused: Bool
+    @FocusState private var hostFocused: Bool
 
     init(
         isCollapsed: Bool,
@@ -27,7 +42,9 @@ struct WarrenDesktopSidebarHeader: View {
         showsActiveOnly: Bool = false,
         onToggleActiveOnly: @escaping () -> Void = {},
         workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode = .compact,
-        onToggleWorkspaceDisplayMode: @escaping () -> Void = {}
+        onToggleWorkspaceDisplayMode: @escaping () -> Void = {},
+        host: WarrenDesktopSidebarHeaderHost? = nil,
+        onSelectHost: (() -> Void)? = nil
     ) {
         self.isCollapsed = isCollapsed
         self.chromeMode = chromeMode
@@ -39,6 +56,8 @@ struct WarrenDesktopSidebarHeader: View {
         self.onToggleActiveOnly = onToggleActiveOnly
         self.workspaceDisplayMode = workspaceDisplayMode
         self.onToggleWorkspaceDisplayMode = onToggleWorkspaceDisplayMode
+        self.host = host
+        self.onSelectHost = onSelectHost
     }
 
     var body: some View {
@@ -74,6 +93,11 @@ struct WarrenDesktopSidebarHeader: View {
                     .padding(.top, WarrenSpacing.medium)
             } else {
                 trafficRow
+
+                if let host {
+                    hostButton(host)
+                        .padding(.bottom, WarrenSpacing.xs)
+                }
 
                 expandedSearchButton
             }
@@ -139,6 +163,108 @@ struct WarrenDesktopSidebarHeader: View {
             onUpdateAction: onUpdateAction
         )
     }
+
+    /// The current Host, leading the panel the way an account leads an app's
+    /// navigation: what the tree below belongs to, and the door to another.
+    @ViewBuilder
+    private func hostButton(_ host: WarrenDesktopSidebarHeaderHost) -> some View {
+        if let onSelectHost {
+            Button(action: onSelectHost) {
+                hostLabel(host, showsChevron: true)
+            }
+            .buttonStyle(WarrenInteractiveRowStyle(
+                isFocused: hostFocused,
+                cornerRadius: WarrenDesktopSidebarRowLayout.cornerRadius
+            ))
+            .focused($hostFocused)
+            .padding(.horizontal, WarrenSpacing.xs)
+            .help("Switch Host")
+            .accessibilityLabel("Host \(host.name)")
+            .accessibilityValue(hostAccessibilityValue(host))
+            .accessibilityHint("Choose which Host the sidebar shows")
+            .accessibilityIdentifier("sidebar.host")
+        } else {
+            hostLabel(host, showsChevron: false)
+                .padding(.horizontal, WarrenSpacing.xs)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Host \(host.name)")
+                .accessibilityValue(hostAccessibilityValue(host))
+                .accessibilityIdentifier("sidebar.host")
+        }
+    }
+
+    private func hostLabel(
+        _ host: WarrenDesktopSidebarHeaderHost,
+        showsChevron: Bool
+    ) -> some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let tileSize = Self.hostTileSize
+        return HStack(spacing: WarrenSpacing.compact + WarrenSpacing.xxs) {
+            ZStack(alignment: .bottomTrailing) {
+                RoundedRectangle(cornerRadius: tileSize * 0.28, style: .continuous)
+                    .fill(tokens.muted)
+                    .frame(width: tileSize, height: tileSize)
+                    .overlay {
+                        Image(systemName: host.isLocal ? "laptopcomputer" : "server.rack")
+                            .font(.system(size: 15, weight: .regular))
+                            .foregroundStyle(tokens.foreground.opacity(0.86))
+                    }
+                Circle()
+                    .fill(connectionColor(host.connectionState, tokens: tokens))
+                    .frame(width: 8, height: 8)
+                    .overlay {
+                        Circle().strokeBorder(tokens.background, lineWidth: 1.5)
+                    }
+                    .offset(x: 2, y: 2)
+            }
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(host.name)
+                    .font(WarrenTypography.bodyStrong)
+                    .foregroundStyle(tokens.projectText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(host.subtitle)
+                    .font(WarrenTypography.caption)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            Spacer(minLength: 0)
+
+            if showsChevron {
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(tokens.mutedForeground)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, WarrenSpacing.xs)
+        .padding(.vertical, WarrenSpacing.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
+    }
+
+    private func hostAccessibilityValue(_ host: WarrenDesktopSidebarHeaderHost) -> String {
+        "\(host.subtitle) · \(WarrenDesktopConnectionPresentation(host.connectionState).label)"
+    }
+
+    private func connectionColor(
+        _ state: WarrenDesktopConnectionState,
+        tokens: WarrenColorTokens
+    ) -> Color {
+        switch WarrenDesktopConnectionPresentation(state).tone {
+        case .success: tokens.success
+        case .info: tokens.info
+        case .warning: tokens.warning
+        case .destructive: tokens.destructive
+        }
+    }
+
+    /// The host button's icon tile.
+    static let hostTileSize: CGFloat = 34
 
     private var expandedSearchButton: some View {
         Button(action: onCommandPalette) {

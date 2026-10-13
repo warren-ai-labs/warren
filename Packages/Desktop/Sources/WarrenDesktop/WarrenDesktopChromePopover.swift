@@ -37,7 +37,7 @@ struct WarrenDesktopChromePopoverSurface<Content: View>: View {
         title: String,
         width: CGFloat,
         onDismiss: @escaping () -> Void,
-        titleFont: Font = WarrenTypography.popoverTitle,
+        titleFont: Font = WarrenTypography.title,
         role: WarrenPresentationRole = .popover,
         titleLeading: AnyView? = nil,
         titleTrailing: AnyView? = nil,
@@ -80,17 +80,21 @@ struct WarrenDesktopChromePopoverSurface<Content: View>: View {
                 .foregroundStyle(tokens.mutedForeground)
                 .accessibilityLabel("Close \(title)")
             }
-            .padding(.horizontal, WarrenSpacing.standard)
-            .padding(.vertical, WarrenSpacing.compact)
+            .padding(.leading, WarrenSpacing.standard)
+            .padding(.trailing, WarrenSpacing.medium)
+            .padding(.top, WarrenSpacing.medium)
+            .padding(.bottom, WarrenSpacing.compact)
 
             Rectangle()
                 .fill(tokens.border)
                 .frame(height: WarrenSpacing.hairline)
 
             content
+                // Keeps the last row clear of the floating radius.
+                .padding(.bottom, WarrenSpacing.xs)
         }
         .frame(width: width, alignment: .leading)
-        .warrenPresentationSurface(role: role, cornerRadius: WarrenRadius.base)
+        .warrenPresentationSurface(role: role, cornerRadius: WarrenRadius.floating)
         .onExitCommand(perform: onDismiss)
     }
 }

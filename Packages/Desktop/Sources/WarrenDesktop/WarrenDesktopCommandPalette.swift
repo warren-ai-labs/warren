@@ -130,7 +130,7 @@ struct WarrenDesktopCommandPalette: View {
             }
         }
         .frame(width: width)
-        .warrenPresentationSurface(role: .commandSurface, cornerRadius: WarrenRadius.base)
+        .warrenPresentationSurface(role: .commandSurface, cornerRadius: WarrenRadius.floating)
         .onExitCommand(perform: onDismiss)
         .onChange(of: projection) { newProjection in
             rebuildIndex(for: newProjection)

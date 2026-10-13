@@ -176,7 +176,7 @@ struct WarrenDesktopNoticeContent: View {
                                     VStack(alignment: .leading, spacing: 3) {
                                         HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.xs) {
                                             Text(notice.title)
-                                                .font(WarrenTypography.popoverItem)
+                                                .font(notice.isUnread ? WarrenTypography.bodyStrong : WarrenTypography.body)
                                                 .foregroundStyle(tokens.foreground)
                                                 .lineLimit(1)
                                             if notice.isUnread {
@@ -233,7 +233,7 @@ struct WarrenDesktopNoticeContent: View {
                 Spacer(minLength: 0)
             }
             Text(notice.title)
-                .font(WarrenTypography.popoverTitle)
+                .font(WarrenTypography.title)
                 .foregroundStyle(tokens.foreground)
             Text(notice.message)
                 .font(WarrenTypography.popoverItem)
@@ -252,10 +252,10 @@ struct WarrenDesktopNoticeContent: View {
                     onDismissNotice(notice.id)
                     selectedID = nil
                 }
-                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.popoverMeta))
+                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.body))
                 Spacer(minLength: 0)
                 Button("Done") { onDismiss() }
-                    .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.popoverMeta))
+                    .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.bodyStrong))
             }
         }
         .padding(WarrenSpacing.standard)

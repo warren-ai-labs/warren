@@ -86,15 +86,26 @@ struct WarrenDesktopTerminalGroupRow: View {
             guard !showsSessionChildren else { return }
             onSelect()
         }) {
-            HStack(spacing: WarrenSpacing.compact) {
-                Image(systemName: "square.3.stack.3d")
-                    .font(.system(size: 12, weight: .regular))
-                    .frame(
-                        width: WarrenLayoutMetrics.sidebarRowIconSlotSize,
-                        height: WarrenLayoutMetrics.sidebarRowIconSlotSize
-                    )
-                    .foregroundStyle(tokens.mutedForeground)
-                    .accessibilityHidden(true)
+            HStack(spacing: WarrenDesktopSidebarRowLayout.slotToContentSpacing) {
+                // The leading slot is the group's status column, the same one
+                // its Session lines use. A group that lists its Sessions leaves
+                // each state to its own line and keeps its glyph here.
+                Group {
+                    if let mark = group.mark,
+                       WarrenDesktopSidebarStatusGutter.draws(mark),
+                       !showsSessionChildren {
+                        WarrenDesktopSidebarStatusGutter(mark: mark)
+                    } else {
+                        Image(systemName: "square.3.stack.3d")
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(tokens.mutedForeground)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .frame(
+                    width: WarrenLayoutMetrics.sidebarRowIconSlotSize,
+                    height: WarrenLayoutMetrics.sidebarRowIconSlotSize
+                )
 
                 Text(group.group.name.isEmpty ? "Terminal Group" : group.group.name)
                     .font(WarrenTypography.sidebarContainerRow)
@@ -113,10 +124,6 @@ struct WarrenDesktopTerminalGroupRow: View {
                     .opacity(isHovered || isFocused || forceHover ? 1 : 0)
                     .accessibilityHidden(true)
 
-                if let mark = group.mark, !showsSessionChildren {
-                    WarrenDesktopActivityIndicator(mark: mark)
-                }
-
                 Spacer(minLength: 0)
             }
             .padding(.leading, WarrenDesktopSidebarIndent.terminalGroup)
@@ -128,6 +135,7 @@ struct WarrenDesktopTerminalGroupRow: View {
         .buttonStyle(WarrenInteractiveRowStyle(
             isSelected: isSelected,
             isFocused: isFocused,
+            cornerRadius: WarrenDesktopSidebarRowLayout.cornerRadius,
             showsHoverBackground: !showsSessionChildren
         ))
         .disabled(isInteractionDisabled)
@@ -156,7 +164,7 @@ struct WarrenDesktopTerminalGroupRow: View {
             focused: isFocused,
             hovered: showsSessionChildren ? false : isHovered
         )))
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
+        .clipShape(.rect(cornerRadius: WarrenDesktopSidebarRowLayout.cornerRadius))
         .contentShape(.rect)
         .onHover { isHovered = $0 }
         .contextMenu {

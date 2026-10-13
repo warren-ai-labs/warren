@@ -36,7 +36,9 @@ public enum WarrenLayoutMetrics {
     /// user was already working in when they opened a file — the smaller one.
     /// Half and half favors neither, and the divider settles the rest.
     public static let editorSplitDefaultRatio: Double = 0.5
-    public static let editorSplitDividerWidth: CGFloat = 6
+    /// The Terminal card and the region card beside it are separated by the
+    /// same gap as two pane cards; the drag strip lives in that gap.
+    public static let editorSplitDividerWidth: CGFloat = paneGap
 
     /// Returns the Terminal's width for a proposed central split, or `nil` when
     /// the available width cannot seat both regions at their minimums.

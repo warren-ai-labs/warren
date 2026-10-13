@@ -150,10 +150,7 @@ struct WarrenDesktopSidebarRows: View {
                                         leafCount: ownsSessionLeaves(
                                             workspace,
                                             semanticScope: "project-list"
-                                        ) ? activeSessions(in: workspace.id).count : 0,
-                                        mode: workspaceDisplayMode,
-                                        workspaceGlyph: WarrenDesktopWorkspaceGlyph(workspace),
-                                        isCurrentScope: selection == .workspace(workspace.id)
+                                        ) ? activeSessions(in: workspace.id).count : 0
                                     ) {
                                         workspaceRow(
                                             workspace,
@@ -493,10 +490,7 @@ struct WarrenDesktopSidebarRows: View {
                                             leafCount: ownsSessionLeaves(
                                                 workspace,
                                                 semanticScope: "task-list"
-                                            ) ? activeSessions(in: workspace.id).count : 0,
-                                            mode: workspaceDisplayMode,
-                                            workspaceGlyph: WarrenDesktopWorkspaceGlyph(workspace),
-                                            isCurrentScope: selection == .workspace(workspace.id)
+                                            ) ? activeSessions(in: workspace.id).count : 0
                                         ) {
                                             workspaceRow(
                                                 workspace,
@@ -657,10 +651,7 @@ struct WarrenDesktopSidebarRows: View {
                             let ownsLeaves = ownsTerminalGroupSessionLeaves(group)
                             let liveSessions = activeSessions(in: group)
                             WarrenDesktopSessionLeafGroup(
-                                leafCount: ownsLeaves ? liveSessions.count : 0,
-                                mode: workspaceDisplayMode,
-                                workspaceGlyph: .terminalGroup,
-                                isCurrentScope: selection == .terminalGroup(group.id)
+                                leafCount: ownsLeaves ? liveSessions.count : 0
                             ) {
                                 terminalGroupRow(group, ownsSessionLeaves: ownsLeaves)
                             } leaves: {
@@ -1083,8 +1074,11 @@ struct WarrenDesktopSidebarRows: View {
         activeSessionsByWorkspaceID[workspaceID] ?? []
     }
 
+    /// The gap between one project section and the next. The floating panel
+    /// separates sections by space rather than by rules, so the gap is the
+    /// same in both display modes.
     private var projectGroupSpacing: CGFloat {
-        workspaceDisplayMode.projectGroupSpacing
+        WarrenDesktopSidebarRowLayout.projectSectionSpacing
     }
 
     private func setDragMeasurementEnabled(_ enabled: Bool) {
@@ -1186,18 +1180,19 @@ struct WarrenDesktopSidebarRows: View {
 /// A Terminal Session leaf shown below its owning Workspace by the rich
 /// presentation.
 ///
-/// The row is one line: the provider icon leads, the session title takes the
-/// remaining width, and the trailing slot carries the state. A second line
-/// naming the provider was tried and removed — the icon already carries it, and
-/// two lines inside a navigation row leaves neither enough vertical room.
+/// The row is one line: the status gutter leads, then the app icon tile and the
+/// session title in the mono face. The gutter is the worktree row's own status
+/// column, so the tile starts where the branch name above it starts. A second
+/// line naming the provider was tried and removed — the tile already carries
+/// it, and two lines inside a navigation row leaves neither enough vertical
+/// room.
 ///
-/// Trailing detail is the activity marker alone, and only for a Session that
-/// reports Agent activity. The marker's color already separates a working Agent
-/// from a blocked or failed one, so a state word beside it only competed with
-/// the title for width; the full explanation still reaches assistive technology
-/// and the hover tooltip. A plain shell has no activity Warren can observe, so
-/// its leaf spends the trailing slot on nothing rather than on an invented
-/// marker.
+/// The dot is the only state the row draws, and only for a Session that reports
+/// Agent activity. No state word sits beside it: the dot's color separates a
+/// request from a completion, an actionable Session brightens its own title,
+/// and the full explanation still reaches assistive technology and the hover
+/// tooltip. A plain shell has no activity Warren can observe, so its gutter
+/// stays empty rather than carrying an invented marker.
 enum WarrenDesktopSessionRowScope {
     case workspace(project: Project, workspace: Workspace, semanticScope: String)
     case terminalGroup(TerminalGroup)
@@ -1383,41 +1378,57 @@ struct WarrenDesktopWorkspaceSessionRow: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let isActionable = session.activityMark?.tier == .actionable
         Button(action: onOpen) {
-            // The leaf indent is nudged right so its icon clears the rail, and
-            // the glyph-to-title gap gives that width back. The title's origin
-            // therefore does not move, so the extra rail gap costs the readable
-            // column nothing.
-            HStack(spacing: WarrenSpacing.compact - WarrenDesktopSidebarIndent.sessionGuideGap) {
-                sessionIcon
-                    .frame(width: WarrenLayoutMetrics.sidebarLeafIconSlotSize,
-                           height: WarrenLayoutMetrics.sidebarLeafIconSlotSize)
-                Text(title)
-                    .font(WarrenTypography.navigationItem)
-                    .foregroundStyle(
-                        isSelected
-                            ? tokens.sidebarLeafSelectedText
-                            : tokens.sidebarLeafText
-                    )
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+            // The leading slot is the worktree row's status column, so the dot
+            // sits under the worktree's and the icon tile starts on the column
+            // the branch name starts on.
+            HStack(spacing: WarrenDesktopSidebarRowLayout.slotToContentSpacing) {
+                WarrenDesktopSidebarStatusGutter(mark: session.activityMark)
 
-                if session.pinned {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(tokens.sidebarMetaText)
-                        .accessibilityHidden(true)
+                HStack(spacing: WarrenDesktopSidebarRowLayout.tileToTitleSpacing) {
+                    WarrenDesktopAppIconTile(
+                        icon: WarrenDesktopAppIcon.resolve(session),
+                        size: WarrenLayoutMetrics.sidebarAgentTileSize
+                    )
+                    Text(title)
+                        .font(WarrenTypography.monoSmall)
+                        // A Session that wants someone brightens its whole line,
+                        // so the request reads in the row's own text rather than
+                        // in a status word beside the dot.
+                        .foregroundStyle(
+                            isSelected
+                                ? tokens.sidebarLeafSelectedText
+                                : isActionable ? tokens.projectText : tokens.sidebarLeafText
+                        )
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    if session.pinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(tokens.sidebarMetaText)
+                            .accessibilityHidden(true)
+                    }
                 }
 
                 Spacer(minLength: WarrenSpacing.xs)
-
-                if let mark = session.activityMark {
-                    WarrenDesktopActivityIndicator(mark: mark)
-                }
             }
-            .padding(.leading, WarrenDesktopSidebarIndent.session)
+            .padding(.leading, WarrenDesktopSidebarIndent.workspace)
             .padding(.trailing, WarrenSpacing.compact)
             .frame(maxWidth: .infinity, minHeight: rowHeight)
+            .background {
+                if isSelected {
+                    RoundedRectangle(
+                        cornerRadius: WarrenDesktopSidebarRowLayout.cornerRadius,
+                        style: .continuous
+                    )
+                    .fill(WarrenDesktopSidebarRowLayout.selectedFill(
+                        colorScheme: colorScheme,
+                        tokens: tokens
+                    ))
+                }
+            }
             .contentShape(.rect)
             // The drag source is native for the same reason a Tab's is: a drop
             // over the AppKit terminal has to be resolved by the drag source.
@@ -1437,7 +1448,11 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                 }
             }
         }
-        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, isFocused: isFocused))
+        .buttonStyle(WarrenInteractiveRowStyle(
+            isSelected: isSelected,
+            isFocused: isFocused,
+            cornerRadius: WarrenDesktopSidebarRowLayout.cornerRadius
+        ))
         .disabled(isInteractionDisabled)
         .focused($isFocused)
         .opacity(isInteractionDisabled ? 0.62 : 1)
@@ -1454,15 +1469,14 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             action: { if !isInteractionDisabled { onOpen() } }
         )
         .help(helpText)
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
+        .clipShape(.rect(cornerRadius: WarrenDesktopSidebarRowLayout.cornerRadius))
         .contextMenu {
             if !isInteractionDisabled, !contextMenuActions.isEmpty {
                 WarrenDesktopContextMenu(contextMenuActions)
             }
         }
-        // A leaf's selection fill is inset like every other row's. Without this
-        // it started at the rail's edge, so the deepest row in the tree drew the
-        // widest highlight and read as the outermost one.
+        // A leaf's selection fill is inset like every other row's, so the
+        // worktree and its Session lines share one plate width.
         .padding(.horizontal, WarrenSpacing.compact)
     }
 
@@ -1514,20 +1528,6 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             return "Open \(providerName) session \(title)"
         }
         return "\(providerName) · \(detailLabel)"
-    }
-
-    @ViewBuilder
-    private var sessionIcon: some View {
-        if let preset = WarrenDesktopSessionPreset.builtIns.first(where: {
-            $0.request.kind == session.presentedKind
-        }) {
-            WarrenDesktopPresetIcon(preset: preset)
-        } else {
-            Image(systemName: session.presentedKind.symbolName)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground)
-                .accessibilityHidden(true)
-        }
     }
 }
 

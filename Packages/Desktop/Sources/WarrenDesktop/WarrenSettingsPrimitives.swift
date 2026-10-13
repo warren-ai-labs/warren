@@ -1,8 +1,14 @@
 import SwiftUI
 import WarrenDesignSystem
 
-/// A grouped settings card container with smooth continuous corners (12pt), subtle soft
-/// surface fill lifted off the page, and delicate hairline border matching Synara & Superset.
+/// The radius of an inset-grouped settings group.
+enum WarrenSettingsMetrics {
+    static let groupRadius: CGFloat = 14
+}
+
+/// An inset-grouped settings group (the macOS 26 System Settings look): rows
+/// in one rounded (14pt) continuous group lifted off the page, separated by
+/// hairlines, with a barely-there edge.
 public struct WarrenSettingsCard<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     private let tokens: WarrenColorTokens
@@ -21,18 +27,19 @@ public struct WarrenSettingsCard<Content: View>: View {
             content
         }
         .background(
-            RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
+            RoundedRectangle(cornerRadius: WarrenSettingsMetrics.groupRadius, style: .continuous)
                 .fill(tokens.cardSurface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .strokeBorder(tokens.border.opacity(colorScheme == .light ? 0.85 : 0.40), lineWidth: WarrenSpacing.hairline)
+            RoundedRectangle(cornerRadius: WarrenSettingsMetrics.groupRadius, style: .continuous)
+                .strokeBorder(tokens.border.opacity(colorScheme == .light ? 0.70 : 0.35), lineWidth: WarrenSpacing.hairline)
         )
-        .clipShape(RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: WarrenSettingsMetrics.groupRadius, style: .continuous))
     }
 }
 
-/// Thin divider line between stacked rows inside a `WarrenSettingsCard`.
+/// Hairline separator between stacked rows inside a `WarrenSettingsCard`,
+/// inset from the leading edge the way grouped lists separate their rows.
 public struct WarrenSettingsCardDivider: View {
     @Environment(\.colorScheme) private var colorScheme
     private let tokens: WarrenColorTokens
@@ -45,7 +52,7 @@ public struct WarrenSettingsCardDivider: View {
         Rectangle()
             .fill(tokens.border.opacity(colorScheme == .light ? 0.65 : 0.30))
             .frame(height: WarrenSpacing.hairline)
-            .padding(.horizontal, WarrenSpacing.standard)
+            .padding(.leading, WarrenSpacing.standard)
     }
 }
 
@@ -97,17 +104,17 @@ public struct WarrenSettingsRow<Control: View>: View {
                     .frame(width: 20, height: 20)
             }
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(WarrenTypography.body)
                     .foregroundStyle(tokens.foreground)
 
                 if let description, !description.isEmpty {
                     Text(description)
-                        .font(.system(size: 12, weight: .regular))
+                        .font(WarrenTypography.caption)
                         .foregroundStyle(tokens.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
-                        .lineSpacing(2)
+                        .lineSpacing(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -115,7 +122,7 @@ public struct WarrenSettingsRow<Control: View>: View {
             control
         }
         .padding(.horizontal, WarrenSpacing.standard)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
     }
 }
 
@@ -136,20 +143,20 @@ public struct WarrenSettingsSectionHeader: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(tokens.foreground)
+                .font(WarrenTypography.caption.weight(.semibold))
+                .foregroundStyle(tokens.mutedForeground)
 
             if let description, !description.isEmpty {
                 Text(description)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(tokens.mutedForeground)
+                    .font(WarrenTypography.caption)
+                    .foregroundStyle(tokens.mutedForeground.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.horizontal, 2)
-        .padding(.bottom, 4)
+        .padding(.horizontal, WarrenSpacing.xs)
+        .padding(.bottom, 2)
     }
 }
 

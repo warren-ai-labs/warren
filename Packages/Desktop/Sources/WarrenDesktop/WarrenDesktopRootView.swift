@@ -550,7 +550,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     target: target,
                     in: presentation
                 )
-            }
+            },
+            onSelectHost: { setChromePopover(.endpoint) }
         )
         .frame(width: sidebarState.renderedWidth)
         let workspaceColumn = makeWorkspaceColumn(
@@ -563,11 +564,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         ZStack(alignment: .topLeading) {
-            HStack(spacing: 0) {
+            // The workbench floats inside the window: the sidebar panel is
+            // inset from the leading, top and bottom edges, and the content
+            // column sits one pane gap beside it, inset from the trailing and
+            // bottom edges. The tab row carries its own top inset so the tab
+            // capsule lines up with the top of the sidebar panel.
+            HStack(spacing: WarrenLayoutMetrics.paneGap) {
                 sidebarView
-                    // The handle sits inside the rail's trailing edge rather
-                    // than between the columns, so grabbing it never shifts
-                    // either one and the drag reads as moving the boundary.
+                    .padding(.vertical, WarrenLayoutMetrics.workbenchInset)
+                    // The handle sits in the gap between the sidebar panel and
+                    // the content column, centered on it, so grabbing it never
+                    // shifts either one and never takes a click from the
+                    // panel's own rows.
                     .overlay(alignment: .trailing) {
                         if !sidebarState.isCollapsed {
                             WarrenDesktopSidebarResizeHandle(
@@ -575,10 +583,17 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                                 onResize: { sidebarState.setWidth($0) },
                                 onReset: { sidebarState.restoreExpanded() }
                             )
+                            .offset(
+                                x: (WarrenLayoutMetrics.paneGap
+                                    + WarrenDesktopSidebarResizeHandle.hitWidth) / 2
+                            )
                         }
                     }
                 workspaceColumn
+                    .padding(.trailing, WarrenLayoutMetrics.workbenchInset)
+                    .padding(.bottom, WarrenLayoutMetrics.workbenchInset)
             }
+            .padding(.leading, WarrenLayoutMetrics.workbenchInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .opacity(settingsPresented ? 0 : 1)
             .allowsHitTesting(!settingsPresented)
@@ -594,8 +609,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             // plus its Explorer — would be met by squeezing the Terminal to
             // nothing, and RFC 0021's open question about narrow windows would
             // become a state users could sit in.
-            minWidth: WarrenLayoutMetrics.sidebarExpandedWidth
+            minWidth: WarrenLayoutMetrics.workbenchInset
+                + WarrenLayoutMetrics.sidebarExpandedWidth
+                + WarrenLayoutMetrics.paneGap
                 + currentTree.windowMinimumPaneWidth
+                + WarrenLayoutMetrics.workbenchInset
                 + (showsEditorRegion
                     ? WarrenLayoutMetrics.editorRegionMinimumWidth
                         + WarrenLayoutMetrics.editorSplitDividerWidth
@@ -604,9 +622,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             + WarrenLayoutMetrics.editorSplitDividerWidth
                         : 0)),
             minHeight: (chromeMode.showsIndependentTopBar ? WarrenLayoutMetrics.topBarHeight : 0)
+                + WarrenLayoutMetrics.workbenchInset
                 + WarrenLayoutMetrics.tabBarHeight
                 + WarrenLayoutMetrics.presetBarHeight
                 + currentTree.windowMinimumPaneHeight
+                + WarrenLayoutMetrics.workbenchInset
         )
         .denSurface()
         .warrenUnixTextEditing()
@@ -1040,8 +1060,16 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     )
                 }
             }
-            .padding(.top, WarrenLayoutMetrics.tabBarHeight + WarrenSpacing.small)
-            .padding(.trailing, WarrenSpacing.medium)
+            .padding(
+                .top,
+                WarrenLayoutMetrics.workbenchInset
+                    + WarrenLayoutMetrics.tabBarHeight
+                    + WarrenSpacing.small
+            )
+            .padding(
+                .trailing,
+                WarrenLayoutMetrics.workbenchInset + WarrenSpacing.medium
+            )
             .transition(.move(edge: .top).combined(with: .opacity))
             .animation(
                 WarrenMotion.animation(.overlay, reduceMotion: reduceMotion),
@@ -1108,6 +1136,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             presentation: paneBar,
             tabTitles: tabTitles,
             tabMarks: tabMarks,
+            appIcons: WarrenDesktopTabBar.resolveAppIcons(
+                for: presentation.tabs,
+                session: { projection.session(id: $0) }
+            ),
             pinnedSessionIDs: pinnedSessionIDs,
             selectedTabID: navigation.selectedTabID,
             splitGroup: splitGroup(tree: barTree, presentation: presentation),
@@ -1212,6 +1244,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     )
                 }
                 tabBarView
+                    // The tab capsule sits on the same inset as the sidebar
+                    // panel beside it.
+                    .padding(.top, WarrenLayoutMetrics.workbenchInset)
                 // The preset bar used to be gated on the terminal-only content
                 // mode, so opening the editor removed it. The Terminal is now
                 // always on screen, so its launchers stay with it.

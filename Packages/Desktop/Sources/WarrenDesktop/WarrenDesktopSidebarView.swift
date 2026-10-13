@@ -97,6 +97,12 @@ struct WarrenDesktopSidebar: View {
     var onOpenEditor: (WorkspaceID) -> Void = { _ in }
     /// Drops a Session from the tree onto a pane.
     var onSplitDropSession: ((String, String, SplitDropTarget) -> Void)? = nil
+    /// The current Host as the header names it. When the composition root does
+    /// not supply one, the header derives it from the projection.
+    var currentHost: WarrenDesktopSidebarHeaderHost? = nil
+    /// Opens the Host switcher from the header's host button. `nil` leaves the
+    /// button a readout; the switcher stays reachable from the top bar.
+    var onSelectHost: (() -> Void)? = nil
 
     /// The current Host's marked Workspaces, for the current-Host tree.
     private var editorMarkedWorkspaceIDs: Set<WorkspaceID> {
@@ -125,7 +131,9 @@ struct WarrenDesktopSidebar: View {
                 showsActiveOnly: sidebarTree.showsActiveOnly,
                 onToggleActiveOnly: toggleActiveOnly,
                 workspaceDisplayMode: workspaceDisplayMode,
-                onToggleWorkspaceDisplayMode: toggleWorkspaceDisplayMode
+                onToggleWorkspaceDisplayMode: toggleWorkspaceDisplayMode,
+                host: currentHost ?? derivedHeaderHost,
+                onSelectHost: onSelectHost
             )
             if let displayConfigurationError {
                 displayConfigurationNotice(displayConfigurationError, tokens: tokens)
@@ -349,13 +357,27 @@ struct WarrenDesktopSidebar: View {
         .frame(width: sidebarState.renderedWidth, alignment: .leading)
         .clipped()
         .frame(maxHeight: .infinity)
-        .background(tokens.sidebarSurface)
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(tokens.chromeDivider)
-                .frame(width: WarrenSpacing.hairline)
-                .zIndex(2)
-        }
+        // The sidebar is a floating panel rather than a full-bleed column: it
+        // paints its own rounded surface, so it draws no edge divider. The
+        // window inset around it belongs to the root layout.
+        .warrenPanel(.navigation, cornerRadius: WarrenRadius.panel)
+    }
+
+    /// The current Host as the projection describes it, for a composition root
+    /// that supplies no `currentHost`.
+    private var derivedHeaderHost: WarrenDesktopSidebarHeaderHost {
+        let isLocal = activeEndpointID == "local"
+        let scoped = sidebarHostProjections?.first { $0.endpointID == activeEndpointID }
+        let projectedName = projection.host.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = scoped?.hostName
+            ?? (projectedName.isEmpty ? (scoped?.endpointLabel ?? activeEndpointID) : projectedName)
+        let subtitle = isLocal ? "Local" : (scoped?.endpointLabel ?? "Remote")
+        return WarrenDesktopSidebarHeaderHost(
+            name: name,
+            subtitle: subtitle == name ? (isLocal ? "Local" : "Remote") : subtitle,
+            isLocal: isLocal,
+            connectionState: scoped?.connectionState ?? projection.connectionState
+        )
     }
 
     @ViewBuilder

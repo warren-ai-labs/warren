@@ -39,14 +39,15 @@ public struct WarrenPresentationElevation: Sendable {
 
 /// Role-specific geometry and elevation values shared by the DesignSystem.
 public enum WarrenPresentationMetrics {
+    /// Every floating surface — popover, menu, command palette, dialog,
+    /// sheet — shares one radius so they read as one family; only surfaces
+    /// that sit in the flow keep the smaller in-content radius.
     public static func cornerRadius(for role: WarrenPresentationRole) -> CGFloat {
         switch role {
         case .inline, .status:
             WarrenRadius.medium
-        case .popover, .menu, .commandSurface:
-            WarrenRadius.base
-        case .modal, .sheet:
-            WarrenRadius.large
+        case .popover, .menu, .commandSurface, .modal, .sheet:
+            WarrenRadius.floating
         }
     }
 
@@ -108,10 +109,10 @@ public struct WarrenPanelSurfaceModifier: ViewModifier {
                     tokens.popoverSurface
                 }
             }
-            .clipShape(.rect(cornerRadius: resolvedCornerRadius))
+            .clipShape(RoundedRectangle(cornerRadius: resolvedCornerRadius, style: .continuous))
             .overlay {
                 if showsBorder {
-                    RoundedRectangle(cornerRadius: resolvedCornerRadius)
+                    RoundedRectangle(cornerRadius: resolvedCornerRadius, style: .continuous)
                         .stroke(
                             isElevatedModal ? tokens.border.opacity(0.9) : tokens.border,
                             lineWidth: WarrenSpacing.hairline
@@ -199,7 +200,7 @@ public struct WarrenModalSurface<Content: View>: View {
     private let cornerRadius: CGFloat
 
     public init(
-        cornerRadius: CGFloat = WarrenRadius.large,
+        cornerRadius: CGFloat = WarrenRadius.floating,
         @ViewBuilder content: () -> Content
     ) {
         self.cornerRadius = cornerRadius
@@ -222,7 +223,7 @@ public struct WarrenSheetSurface<Content: View>: View {
     private let cornerRadius: CGFloat
 
     public init(
-        cornerRadius: CGFloat = WarrenRadius.large,
+        cornerRadius: CGFloat = WarrenRadius.floating,
         @ViewBuilder content: () -> Content
     ) {
         self.cornerRadius = cornerRadius
@@ -485,7 +486,7 @@ public struct WarrenTextInputDialog: View {
         WarrenModalSurface {
             VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
                 Text(title)
-                    .font(WarrenTypography.dialogTitle)
+                    .font(WarrenTypography.title)
                     .foregroundStyle(tokens.foreground)
 
                 Text(message)
@@ -565,7 +566,7 @@ public struct WarrenMessageDialog: View {
         WarrenModalSurface {
             VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
                 Text(title)
-                    .font(WarrenTypography.dialogTitle)
+                    .font(WarrenTypography.title)
                     .foregroundStyle(tokens.foreground)
 
                 Text(message)

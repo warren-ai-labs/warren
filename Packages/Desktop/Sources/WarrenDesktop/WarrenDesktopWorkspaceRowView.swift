@@ -3,12 +3,10 @@ import WarrenDesignSystem
 import WarrenDomain
 import WarrenObservation
 
-/// The leading glyph a workspace row draws.
+/// The glyph a workspace is drawn with.
 ///
-/// Two things read this value: the row, which draws the glyph, and the tree
-/// rail, whose top tick has to reach it. The three glyphs are different widths
-/// inside the same 18pt slot, so the reach differs per kind; keeping one switch
-/// here is what stops the row and the guide from disagreeing.
+/// The collapsed icon rail leads with it. The expanded row spends its leading
+/// slot on the status column instead, and only says "merged" after the name.
 enum WarrenDesktopWorkspaceGlyph: Equatable, Sendable {
     /// The main checkout: a laptop glyph.
     case checkout
@@ -191,17 +189,21 @@ struct WarrenDesktopWorkspaceRow: View {
             guard !isSelectionDisabled, !showsSessionChildren else { return }
             onSelect()
         }) {
-            HStack(spacing: WarrenSpacing.compact) {
-                workspaceGlyph(tokens: tokens)
-                    .frame(width: WarrenLayoutMetrics.sidebarRowIconSlotSize,
-                           height: WarrenLayoutMetrics.sidebarRowIconSlotSize)
+            HStack(spacing: WarrenDesktopSidebarRowLayout.slotToContentSpacing) {
+                // The status column every row of the group shares. A row that
+                // lists its Sessions leaves it empty: each state is spelled out
+                // on its own line one row below, and repeating the aggregate
+                // here would put two dots on one state.
+                WarrenDesktopSidebarStatusGutter(mark: showsSessionChildren ? nil : mark)
 
                 Text(workspace.name.isEmpty ? "Workspace" : workspace.name)
-                    .font(WarrenTypography.navigationItem)
+                    .font(isSelected && !isSelectionDisabled
+                        ? WarrenTypography.bodyStrong
+                        : WarrenTypography.body)
                     // At rest the title keeps the workspace tier; the pointer or
                     // the selection lifts it to the project/task foreground so
                     // the active worktree stays legible on the glass coat. Hover
-                    // is the row's, not the rail's, when the row lists sessions.
+                    // is the row's only when the row navigates.
                     .foregroundStyle(
                         isSelectionDisabled
                             ? tokens.mutedForeground.opacity(0.62)
@@ -213,16 +215,22 @@ struct WarrenDesktopWorkspaceRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                if isDeleting {
-                    deletionStatus(tokens: tokens)
+                if WarrenDesktopWorkspaceGlyph(workspace) == .mergedWorktree {
+                    // The merge state used to be the row's leading glyph. The
+                    // leading slot is the status column now, so a merged
+                    // worktree says so after its name instead.
+                    Image(systemName: "arrow.triangle.merge")
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(
+                            isSelectionDisabled
+                                ? tokens.mutedForeground.opacity(0.62)
+                                : tokens.success.opacity(0.8)
+                        )
+                        .accessibilityHidden(true)
                 }
 
-                if let mark, !showsSessionChildren {
-                    WarrenDesktopWorkspaceActivityIndicator(
-                        mark: mark,
-                        activeTabCount: activeTabCount,
-                        isCompact: false
-                    )
+                if isDeleting {
+                    deletionStatus(tokens: tokens)
                 }
 
                 if isPinned {
@@ -244,13 +252,26 @@ struct WarrenDesktopWorkspaceRow: View {
             .padding(.trailing, trailingAccessoryInset)
             .frame(minHeight: rowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                if isSelected && !isSelectionDisabled {
+                    RoundedRectangle(
+                        cornerRadius: WarrenDesktopSidebarRowLayout.cornerRadius,
+                        style: .continuous
+                    )
+                    .fill(WarrenDesktopSidebarRowLayout.selectedFill(
+                        colorScheme: colorScheme,
+                        tokens: tokens
+                    ))
+                }
+            }
             .contentShape(.rect)
         }
         .buttonStyle(WarrenInteractiveRowStyle(
             isSelected: isSelected && !isSelectionDisabled,
             isFocused: isFocused,
-            // Hover belongs to the rail this row hangs from; see
-            // WarrenDesktopSessionLeafGroup.
+            cornerRadius: WarrenDesktopSidebarRowLayout.cornerRadius,
+            // A row that lists its Sessions does not navigate on a click, so it
+            // must not borrow the hover wash that says it does.
             showsHoverBackground: !showsSessionChildren
         ))
         .disabled(isInteractionDisabled || isSelectionDisabled)
@@ -274,7 +295,7 @@ struct WarrenDesktopWorkspaceRow: View {
         )
         .frame(maxWidth: .infinity, minHeight: rowHeight)
         .padding(.trailing, WarrenSpacing.compact)
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
+        .clipShape(.rect(cornerRadius: WarrenDesktopSidebarRowLayout.cornerRadius))
         .contentShape(.rect)
         // Both accessories sit outside the row's Button rather than inside its
         // label: a Button nested in another Button's label never receives the

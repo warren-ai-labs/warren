@@ -64,6 +64,27 @@ private extension WarrenDesktopSettingsSection {
         }
     }
 
+    /// The fill of the section's navigation tile. System colors, so each tile
+    /// follows the appearance the way System Settings' own tiles do.
+    var tileTint: Color {
+        switch self {
+        case .appearance: Color.indigo
+        case .terminalFont: Color.gray
+        case .terminalTitle: Color.blue
+        case .terminalRuntime: Color.teal
+        case .splits: Color.cyan
+        case .aiTitles: Color.purple
+        case .presets: Color.orange
+        case .workspaces: Color.green
+        case .notifications: Color.red
+        case .externalIDEs: Color.blue
+        case .usageOverview, .usage: Color.pink
+        case .relay: Color.teal
+        case .lanPairing: Color.gray
+        case .publicAccess: Color.blue
+        }
+    }
+
     var detail: String {
         switch self {
         case .appearance: "Light, dark, or follow macOS, and a translucent window."
@@ -433,7 +454,7 @@ struct WarrenDesktopSettingsView: View {
             .accessibilityLabel("Back to Warren")
 
             Text("Settings")
-                .font(WarrenTypography.screenTitle)
+                .font(WarrenTypography.display)
                 .foregroundStyle(tokens.foreground)
                 .padding(.horizontal, 16)
                 .padding(.top, 6)
@@ -589,24 +610,23 @@ struct WarrenDesktopSettingsView: View {
             }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "chart.line.uptrend.xyaxis")
-                    .font(.system(size: 13, weight: .regular))
-                    .frame(width: 18)
-                    .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
-                    .accessibilityHidden(true)
+                WarrenSettingsNavigationTile(
+                    symbol: "chart.line.uptrend.xyaxis",
+                    tint: SettingsSection.usage.tileTint
+                )
 
                 Text("Usage")
-                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
-                    .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
+                    .font(isSelected ? WarrenTypography.bodyStrong : WarrenTypography.body)
+                    .foregroundStyle(isSelected ? tokens.foreground : tokens.foreground.opacity(0.82))
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 6)
             .frame(maxWidth: .infinity, minHeight: 32)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isSelected ? tokens.fillSelected : Color.clear)
+                RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+                    .fill(isSelected ? selectedPillFill(tokens: tokens) : Color.clear)
             )
             .contentShape(Rectangle())
         }
@@ -629,13 +649,18 @@ struct WarrenDesktopSettingsView: View {
 
     private func groupLabel(_ title: String, tokens: WarrenColorTokens) -> some View {
         Text(title)
-            .font(.system(size: 10, weight: .medium))
-            .textCase(.uppercase)
-            .tracking(1.0)
-            .foregroundStyle(tokens.mutedForeground.opacity(0.55))
-            .padding(.horizontal, 10)
+            .font(WarrenTypography.caption.weight(.medium))
+            .foregroundStyle(tokens.mutedForeground.opacity(0.75))
+            .padding(.horizontal, 8)
             .padding(.top, 14)
             .padding(.bottom, 4)
+    }
+
+    /// The selected navigation item's pill: a step brighter than the shared
+    /// selected wash, so the current page reads at a glance beside the
+    /// colored tiles.
+    private func selectedPillFill(tokens: WarrenColorTokens) -> Color {
+        tokens.foreground.opacity(colorScheme == .dark ? 0.14 : 0.09)
     }
 
     private func searchField(tokens: WarrenColorTokens) -> some View {
@@ -666,9 +691,9 @@ struct WarrenDesktopSettingsView: View {
         .padding(.horizontal, 10)
         .frame(height: 32)
         .background(tokens.inputSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
                 .strokeBorder(
                     searchFocused ? tokens.highlight.opacity(0.65) : tokens.border.opacity(0.40),
                     lineWidth: WarrenSpacing.hairline
@@ -687,24 +712,20 @@ struct WarrenDesktopSettingsView: View {
             selectedSection = section
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: section.iconName)
-                    .font(.system(size: 13, weight: .regular))
-                    .frame(width: 18)
-                    .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
-                    .accessibilityHidden(true)
+                WarrenSettingsNavigationTile(symbol: section.iconName, tint: section.tileTint)
 
                 Text(section.rawValue)
-                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
-                    .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
+                    .font(isSelected ? WarrenTypography.bodyStrong : WarrenTypography.body)
+                    .foregroundStyle(isSelected ? tokens.foreground : tokens.foreground.opacity(0.82))
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 6)
             .frame(maxWidth: .infinity, minHeight: 32)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isSelected ? tokens.fillSelected : Color.clear)
+                RoundedRectangle(cornerRadius: WarrenRadius.medium, style: .continuous)
+                    .fill(isSelected ? selectedPillFill(tokens: tokens) : Color.clear)
             )
             .contentShape(Rectangle())
         }
@@ -3101,4 +3122,20 @@ private struct InstalledIDE: Identifiable {
     let name: String
     let path: String
     let icon: NSImage
+}
+
+/// A section's navigation icon: a white glyph on a small colored rounded
+/// tile, the way System Settings marks each pane.
+private struct WarrenSettingsNavigationTile: View {
+    let symbol: String
+    let tint: Color
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(Color.white)
+            .frame(width: 22, height: 22)
+            .background(tint, in: RoundedRectangle(cornerRadius: WarrenRadius.tile, style: .continuous))
+            .accessibilityHidden(true)
+    }
 }

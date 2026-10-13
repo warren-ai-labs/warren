@@ -80,7 +80,10 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
         XCTAssertEqual(elements.count, 1)
         XCTAssertEqual(runTabs(elements[0]), ["a", "b", "c"])
         XCTAssertTrue(elements[0].drawsGroupMark)
-        XCTAssertEqual(elements.groupMarkSlotWidth, WarrenLayoutMetrics.tabGroupMarkSlotWidth)
+        XCTAssertEqual(
+            elements.groupMarkSlotWidth,
+            WarrenDesktopTabRowElement.groupMarkSlotWidth(memberCount: 3)
+        )
         XCTAssertEqual(elements.groupMarkAnchorIndex, 0)
     }
 
@@ -155,22 +158,39 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
     }
 
     /// Only the last member keeps the hairline that separates it from whatever
-    /// follows; between members the group's rule is the only line.
+    /// follows; between members the run's shared backing joins them.
     func testOnlyTheLastMemberKeepsATrailingSeparator() {
         XCTAssertFalse(WarrenDesktopTabRowElement.memberShowsTrailingSeparator(index: 0, count: 3))
         XCTAssertFalse(WarrenDesktopTabRowElement.memberShowsTrailingSeparator(index: 1, count: 3))
         XCTAssertTrue(WarrenDesktopTabRowElement.memberShowsTrailingSeparator(index: 2, count: 3))
     }
 
-    /// The mark is drawn in front of the group's first member, and the group
-    /// leads the track, so every Tab starting at index zero is shifted by the
-    /// mark's slot.
+    /// The stack's slot grows with the group but stops at the stack's visible
+    /// maximum, so a large group never pushes its members off the track.
+    func testTheIconStackSlotGrowsUpToTheVisibleMaximum() {
+        let two = WarrenDesktopTabRowElement.groupMarkSlotWidth(memberCount: 2)
+        let three = WarrenDesktopTabRowElement.groupMarkSlotWidth(memberCount: 3)
+        let five = WarrenDesktopTabRowElement.groupMarkSlotWidth(memberCount: 5)
+        XCTAssertLessThan(two, three)
+        XCTAssertEqual(three, five)
+        XCTAssertEqual(
+            three - two,
+            WarrenLayoutMetrics.tabIconTileSize - WarrenLayoutMetrics.tabIconStackOverlap
+        )
+    }
+
+    /// The icon stack is drawn in front of the group's first member, and the
+    /// group leads the track, so every Tab starting at index zero is shifted by
+    /// the stack's slot.
     func testEveryTabOriginFollowsTheMarkSlot() {
         let elements = WarrenDesktopPaneBar.rowElements(
             listings: listings("a", "b", "c", "d"),
             group: group(tabIDs: ["c", "d"])
         )
-        XCTAssertEqual(elements.groupMarkSlotWidth, WarrenLayoutMetrics.tabGroupMarkSlotWidth)
+        XCTAssertEqual(
+            elements.groupMarkSlotWidth,
+            WarrenDesktopTabRowElement.groupMarkSlotWidth(memberCount: 2)
+        )
         XCTAssertEqual(elements.groupMarkAnchorIndex, 0)
     }
 

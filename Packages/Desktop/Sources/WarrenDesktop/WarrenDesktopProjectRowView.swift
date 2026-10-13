@@ -211,7 +211,11 @@ struct WarrenDesktopProjectRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
             }
-            .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, isFocused: isFocused))
+            .buttonStyle(WarrenInteractiveRowStyle(
+                isSelected: isSelected,
+                isFocused: isFocused,
+                cornerRadius: WarrenDesktopSidebarRowLayout.cornerRadius
+            ))
             .disabled(isInteractionDisabled)
             .focused($isFocused)
             .foregroundStyle(tokens.projectText)
@@ -292,7 +296,7 @@ struct WarrenDesktopProjectRow: View {
             focused: isFocused,
             hovered: isHovered || isAddFocused || isToggleFocused
         )))
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
+        .clipShape(.rect(cornerRadius: WarrenDesktopSidebarRowLayout.cornerRadius))
         .contentShape(.rect)
         .onHover { isHovered = $0 }
         .contextMenu {

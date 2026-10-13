@@ -155,7 +155,7 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
         case .split(let axis, _, let first, let second):
             return axis == .horizontal
                 ? first.minimumPaneWidth + second.minimumPaneWidth
-                    + WarrenLayoutMetrics.splitHandleHitWidth + 1
+                    + SplitLayoutTree.dividerThickness
                 : max(first.minimumPaneWidth, second.minimumPaneWidth)
         }
     }
@@ -172,7 +172,7 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
         case .split(let axis, _, let first, let second):
             return axis == .vertical
                 ? first.minimumPaneHeight + second.minimumPaneHeight
-                    + WarrenLayoutMetrics.splitHandleHitWidth + 1
+                    + SplitLayoutTree.dividerThickness
                 : max(first.minimumPaneHeight, second.minimumPaneHeight)
         }
     }
@@ -183,7 +183,7 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
     /// the window minimum stops at two panes per axis.
     public var windowMinimumPaneWidth: CGFloat {
         let twoPanes = WarrenLayoutMetrics.paneMinimumWidth * 2
-            + WarrenLayoutMetrics.splitHandleHitWidth + 1
+            + SplitLayoutTree.dividerThickness
         return min(minimumPaneWidth, twoPanes)
     }
 
@@ -191,7 +191,7 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
         let leafHeight = WarrenLayoutMetrics.paneHeaderHeight
             + WarrenLayoutMetrics.paneMinimumHeight
         let twoPanes = leafHeight * 2
-            + WarrenLayoutMetrics.splitHandleHitWidth + 1
+            + SplitLayoutTree.dividerThickness
         return min(minimumPaneHeight, twoPanes)
     }
 
@@ -656,8 +656,9 @@ public struct SplitLayoutPlacement: Equatable {
 }
 
 public extension SplitLayoutTree {
-    /// The width a divider occupies, hit padding included.
-    static let dividerThickness: CGFloat = 5
+    /// The width a divider occupies: the whole gap between two pane cards.
+    /// The divider draws no line at rest; its drag strip sits in the gap.
+    static let dividerThickness: CGFloat = WarrenLayoutMetrics.paneGap
 
     /// Flattens the layout for a container of `size`, in preorder.
     ///

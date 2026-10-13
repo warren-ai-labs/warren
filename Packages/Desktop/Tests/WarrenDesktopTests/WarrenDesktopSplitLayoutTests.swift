@@ -474,22 +474,21 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
         let placement = tree.placement(in: CGSize(width: 1_000, height: 100))
 
         XCTAssertEqual(placement.panes.map(\.id), ["pane-a", "pane-b"])
-        // 995 points of travel cannot split evenly, so the leading pane takes
-        // the extra point and the divider sits on 498 rather than between
-        // pixels.
+        // 990 points of travel split evenly; the divider is the whole gap
+        // between the two pane cards.
         XCTAssertEqual(
             placement.panes[0].frame,
-            CGRect(x: 0, y: 0, width: 498, height: 100)
+            CGRect(x: 0, y: 0, width: 495, height: 100)
         )
         XCTAssertEqual(
             placement.panes[1].frame,
-            CGRect(x: 503, y: 0, width: 497, height: 100)
+            CGRect(x: 505, y: 0, width: 495, height: 100)
         )
         let divider = try? XCTUnwrap(placement.dividers.first)
         XCTAssertEqual(divider?.path, [])
         XCTAssertEqual(divider?.axis, .horizontal)
-        XCTAssertEqual(divider?.frame, CGRect(x: 498, y: 0, width: 5, height: 100))
-        XCTAssertEqual(divider?.totalLength, 995)
+        XCTAssertEqual(divider?.frame, CGRect(x: 495, y: 0, width: 10, height: 100))
+        XCTAssertEqual(divider?.totalLength, 990)
     }
 
     func testVerticalPlacementSplitsAlongTheOtherAxis() {
@@ -503,15 +502,15 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
 
         XCTAssertEqual(
             placement.panes[0].frame,
-            CGRect(x: 0, y: 0, width: 1_000, height: 198)
+            CGRect(x: 0, y: 0, width: 1_000, height: 195)
         )
         XCTAssertEqual(
             placement.dividers.first?.frame,
-            CGRect(x: 0, y: 198, width: 1_000, height: 5)
+            CGRect(x: 0, y: 195, width: 1_000, height: 10)
         )
         XCTAssertEqual(
             placement.panes[1].frame,
-            CGRect(x: 0, y: 203, width: 1_000, height: 197)
+            CGRect(x: 0, y: 205, width: 1_000, height: 195)
         )
     }
 
@@ -536,7 +535,7 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
         XCTAssertEqual(placement.dividers.last?.axis, .vertical)
         XCTAssertEqual(
             placement.dividers.last?.frame,
-            CGRect(x: 503, y: 198, width: 497, height: 5)
+            CGRect(x: 505, y: 195, width: 495, height: 10)
         )
     }
 
@@ -581,8 +580,8 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
             second: .leaf(SplitPaneItem(id: "pane-b", tabID: "b"))
         )
         let roomy = tree.placement(in: CGSize(width: 1_000, height: 100)).dividers[0]
-        XCTAssertEqual(roomy.minimumRatio, 260 / 995, accuracy: 0.001)
-        XCTAssertEqual(roomy.maximumRatio, 1 - 260 / 995, accuracy: 0.001)
+        XCTAssertEqual(roomy.minimumRatio, 260 / 990, accuracy: 0.001)
+        XCTAssertEqual(roomy.maximumRatio, 1 - 260 / 990, accuracy: 0.001)
 
         let cramped = tree.placement(in: CGSize(width: 400, height: 100)).dividers[0]
         XCTAssertEqual(cramped.minimumRatio, 0.5)

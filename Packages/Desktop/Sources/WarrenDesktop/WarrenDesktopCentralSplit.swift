@@ -47,8 +47,13 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
                     .frame(width: editor == nil ? proxy.size.width : layout.terminalWidth)
                 if let editor {
                     divider(totalWidth: proxy.size.width)
+                    // The region beside the Terminal is a card of its own,
+                    // the same surface and gap as a pane card. Whatever the
+                    // region holds — the editor or the Inspector — paints
+                    // inside it rather than drawing its own edge.
                     editor
                         .frame(maxWidth: .infinity)
+                        .warrenPanel(.content)
                 }
             }
         }
@@ -94,9 +99,10 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
     private func divider(totalWidth: CGFloat) -> some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let isActive = dragStartWidth != nil
+        // The gap between the two cards is the boundary, so the strip draws
+        // no rule at rest; it only lights while it is being dragged.
         Rectangle()
-            .fill(tokens.chromeDivider)
-            .frame(width: WarrenSpacing.hairline)
+            .fill(Color.clear)
             .frame(width: WarrenLayoutMetrics.editorSplitDividerWidth)
             .overlay {
                 Rectangle()

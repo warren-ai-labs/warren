@@ -191,11 +191,15 @@ struct WarrenDesktopPresetBar: View {
     }
 
     /// The second step for "Ask each time": the same preset as its terminal
-    /// CLI or as a Chat over ACP, stacked under the clicked preset.
+    /// CLI or as a Chat over ACP, as an icon-only two-segment control under
+    /// the clicked preset. Each segment names itself in its tooltip and its
+    /// accessibility label.
     private func interfaceChoice(for preset: WarrenDesktopSessionPreset, tokens: WarrenColorTokens) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach([false, true], id: \.self) { conversation in
+        HStack(spacing: 2) {
+            ForEach([true, false], id: \.self) { conversation in
                 let label = conversation ? "Chat" : "Terminal"
+                let name = conversation ? "Conversation" : "Terminal"
+                let symbol = conversation ? "bubble.left" : "terminal"
                 let hint = conversation ? "Conversation over ACP, with approvals" : "The provider's own CLI"
                 let id = "\(preset.id).\(conversation ? "chat" : "terminal")"
                 let choose = {
@@ -203,28 +207,23 @@ struct WarrenDesktopPresetBar: View {
                     launch(preset, conversation: conversation)
                 }
                 Button(action: choose) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(label)
-                            .font(.system(size: 13, weight: .regular))
-                            .foregroundStyle(tokens.foreground)
-                        Text(hint)
-                            .font(.system(size: 11))
-                            .foregroundStyle(tokens.mutedForeground)
-                    }
-                    .lineLimit(1)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(.rect)
+                    Image(systemName: symbol)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(tokens.foreground)
+                        .frame(width: 24, height: 20)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(WarrenPresetButtonStyle(isFocused: focusedPresetID == id))
                 .focused($focusedPresetID, equals: id)
                 .disabled(isLaunchDisabled)
+                .help("\(name): \(hint)")
                 .accessibilityLabel("Start \(preset.title) as \(label)")
+                .accessibilityHint(hint)
             }
         }
-        .padding(4)
-        .frame(width: 240)
+        .padding(2)
+        .background(tokens.tertiaryWash, in: RoundedRectangle(cornerRadius: WarrenRadius.control, style: .continuous))
+        .padding(6)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(preset.presetBarTitle) interface")
     }

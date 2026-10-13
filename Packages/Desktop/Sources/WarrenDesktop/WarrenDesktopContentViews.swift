@@ -181,6 +181,7 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
             }
             .padding(.bottom, emptyStatePageOffset * 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .warrenPanel(.content)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("No workspace selected")
         }
@@ -231,6 +232,7 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
         }
         .padding(.bottom, emptyStatePageOffset * 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .warrenPanel(.content)
         .accessibilityElement(children: .contain)
     }
 
@@ -253,6 +255,7 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                 .opacity(0.72)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .warrenPanel(.content)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(presentation.label) Waiting for projects and sessions")
     }
@@ -271,6 +274,7 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
         }
         .foregroundStyle(tokens.mutedForeground)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .warrenPanel(.content)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(presentation.label)
     }
@@ -329,30 +333,29 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
             // seen while a Session streamed output. The fallback label below
             // keeps the height and the bar itself stable.
             if showsPaneHeader {
-                HStack(spacing: WarrenSpacing.xs) {
-                    // The focus dot answers "which of these panes takes my
-                    // keys", so it only appears once there is more than one —
-                    // and goes dark when the keys are not going to a pane.
-                    if isSplit {
-                        Circle()
-                            .fill(isActive && isKeyboardFocused ? tokens.info : Color.clear)
-                            .frame(width: 6, height: 6)
-                            .padding(.trailing, 2)
+                let titleParts = Self.paneHeaderParts(paneHeaderTitle)
+                HStack(spacing: WarrenSpacing.small) {
+                    // The tile names what the pane is running — an Agent by its
+                    // bound provider, anything else by its foreground process —
+                    // so the title beside it never has to spell the provider out.
+                    WarrenDesktopAppIconTile(icon: appIcon, size: Self.headerIconTileSize)
+                        .opacity(isActive ? 1 : 0.7)
+                    HStack(spacing: WarrenSpacing.small) {
+                        Text(titleParts.primary)
+                            .font(WarrenTypography.bodyStrong)
+                            .foregroundStyle(isActive ? tokens.foreground : tokens.mutedForeground)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .layoutPriority(1)
+                        if let secondary = titleParts.secondary {
+                            Text(secondary)
+                                .font(WarrenTypography.body)
+                                .foregroundStyle(tokens.mutedForeground)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
-                    // With a single pane the bar above shows no chip, so this is
-                    // the primary title and has to name the provider itself.
-                    if let providerPreset {
-                        WarrenDesktopPresetIcon(preset: providerPreset)
-                            .frame(width: 12, height: 12)
-                            .opacity(isActive ? 0.9 : 0.55)
-                            .accessibilityHidden(true)
-                    }
-                    Text(paneHeaderTitle)
-                        .font(.system(size: 11, weight: isActive ? .medium : .regular))
-                        .foregroundStyle(isActive ? tokens.foreground.opacity(0.85) : tokens.mutedForeground.opacity(0.65))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
+                    .textSelection(.enabled)
                     Spacer(minLength: 0)
                     HStack(spacing: 4) {
                         Button {
@@ -405,7 +408,6 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                 }
                 .padding(.horizontal, WarrenSpacing.medium)
                 .frame(height: WarrenLayoutMetrics.paneHeaderHeight)
-                .background(isActive ? tokens.tertiaryWash.opacity(0.06) : tokens.tertiaryWash.opacity(0.02))
                 .help(fullDisplayTitle)
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Pane context \(fullDisplayTitle)")
@@ -432,20 +434,13 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                         .allowsHitTesting(false)
                 }
             }
-            .overlay {
-                if isSplit {
-                    Rectangle()
-                        .stroke(
-                            isActive && isKeyboardFocused
-                                ? tokens.info.opacity(0.4)
-                                : tokens.border.opacity(0.3),
-                            lineWidth: 1
-                        )
-                }
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(tokens.canvas)
+        // Each pane is its own card. The card's brighter edge is what answers
+        // "which pane takes my keys", so it follows the keyboard rather than
+        // the selection alone.
+        .warrenPanel(.content, isFocused: isActive && isKeyboardFocused)
         .contentShape(Rectangle())
         // A click in the pane chrome (header, padding) selects the pane. It
         // must stay simultaneous so the click still reaches the terminal:
@@ -490,11 +485,35 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
         return kindName
     }
 
-    /// The catalog entry for the agent bound to this pane's Session, read from
-    /// the binding rather than from what Warren launched.
-    private var providerPreset: WarrenDesktopSessionPreset? {
-        guard let kind = session?.presentedKind else { return nil }
-        return WarrenDesktopSessionPreset.builtIns.first { $0.request.kind == kind }
+    /// Splits a rendered pane title into the part the header draws strong and
+    /// the context it draws muted.
+    ///
+    /// Title templates join their placeholders with " · ", so the first
+    /// segment is the name and the rest is context. A template with no
+    /// separator is drawn as a single strong title.
+    static func paneHeaderParts(_ title: String) -> (primary: String, secondary: String?) {
+        let separator = " · "
+        guard let range = title.range(of: separator) else {
+            return (title, nil)
+        }
+        let primary = title[..<range.lowerBound]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let secondary = title[range.upperBound...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !primary.isEmpty else {
+            return (secondary.isEmpty ? title : secondary, nil)
+        }
+        return (primary, secondary.isEmpty ? nil : secondary)
+    }
+
+    /// The header's app icon tile.
+    static var headerIconTileSize: CGFloat { 18 }
+
+    /// What the pane is running, for its icon tile. A pane with no Session yet
+    /// is drawn as a shell, never as an empty tile.
+    private var appIcon: WarrenDesktopAppIcon {
+        guard let session else { return .shell }
+        return WarrenDesktopAppIcon.resolve(session)
     }
 
     private var fullDisplayTitle: String {
@@ -787,9 +806,13 @@ struct WarrenDesktopSplitDivider: View {
             )
     }
 
+    /// The gap between two pane cards already reads as the boundary, so the
+    /// rule draws nothing at rest and only appears once the strip is hovered
+    /// or dragged.
     private func ruleColor(_ tokens: WarrenColorTokens) -> Color {
         if isSnapped { return tokens.info }
-        return isHovered ? tokens.info.opacity(0.8) : tokens.border
+        if isHovered || dragStartRatio != nil { return tokens.info.opacity(0.8) }
+        return .clear
     }
 
     /// Dashed lines at every reachable snap target, drawn from hover onwards so

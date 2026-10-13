@@ -92,6 +92,10 @@ struct WarrenConversationSurface: View {
 /// line up with the text above it.
 private let conversationColumnWidth: CGFloat = 736
 
+/// The composer's corner radius, shared with a decision resting on it so the
+/// two read as one container.
+private let conversationComposerRadius: CGFloat = 16
+
 private struct ConversationRootKey: EnvironmentKey {
     static let defaultValue: String? = nil
 }
@@ -277,35 +281,51 @@ private struct WarrenConversationView: View {
 
     // MARK: Bottom dock
 
-    /// The decision, when one is pending, sits on the composer; the composer
-    /// carries every control for the Session.
+    /// The decision, when one is pending, sits directly on the composer: the
+    /// two share one rounded container, the decision on top in the attention
+    /// tint and the composer below. The composer carries every control for
+    /// the Session.
     private var bottomDock: some View {
         let conversation = feed.conversation
         let configurable = model.supportsConversationConfig(feed.sessionID)
+        let decision = conversation.decisions.first
         return VStack(alignment: .leading, spacing: glassLayout ? 0 : WarrenSpacing.compact) {
             if glassLayout {
                 composerStack(conversation)
             } else {
                 legacyDockHeader(conversation)
             }
-            WarrenConversationComposer(
-                text: $draft,
-                placeholder: busy ? "Queue a follow-up · Esc to stop" : "Message \(providerName)",
-                disabledReason: conversation.decisions.isEmpty ? nil : "Answer the decision above to continue",
-                busy: busy && conversation.decisions.isEmpty,
-                stopping: stopping,
-                statusNote: statusNote,
-                plan: glassLayout ? nil : conversation.plan,
-                mode: configurable ? conversation.modeOption : nil,
-                modelOptions: configurable ? conversation.modelOptions : [],
-                modelSummary: conversation.modelSummary,
-                context: conversation.context,
-                canHandoff: model.conversationHasConversation(feed.sessionID),
-                onSetConfig: setConfig,
-                onHandoff: handoff,
-                onSend: send,
-                onStop: stop
-            )
+            VStack(alignment: .leading, spacing: 0) {
+                if let decision {
+                    WarrenConversationDecisionDock(
+                        decision: decision,
+                        count: conversation.decisions.count,
+                        onDecide: { optionID in
+                            try await model.resolveConversationDecision(decision, optionID: optionID, in: feed.sessionID)
+                        }
+                    )
+                    .id(decision.id)
+                }
+                WarrenConversationComposer(
+                    text: $draft,
+                    placeholder: busy ? "Queue a follow-up · Esc to stop" : "Message \(providerName)",
+                    disabledReason: conversation.decisions.isEmpty ? nil : "Answer the decision above to continue",
+                    busy: busy && conversation.decisions.isEmpty,
+                    stopping: stopping,
+                    statusNote: statusNote,
+                    plan: glassLayout ? nil : conversation.plan,
+                    mode: configurable ? conversation.modeOption : nil,
+                    modelOptions: configurable ? conversation.modelOptions : [],
+                    modelSummary: conversation.modelSummary,
+                    context: conversation.context,
+                    canHandoff: model.conversationHasConversation(feed.sessionID),
+                    onSetConfig: setConfig,
+                    onHandoff: handoff,
+                    onSend: send,
+                    onStop: stop,
+                    joinsDecision: decision != nil
+                )
+            }
         }
         .frame(maxWidth: conversationColumnWidth + 2 * WarrenSpacing.compact)
         .padding(.horizontal, WarrenSpacing.standard)
@@ -314,25 +334,14 @@ private struct WarrenConversationView: View {
     }
 
     /// Everything waiting on the person, stacked on the composer: problems
-    /// first, then the decision, then the plan and the queue, nearest the
-    /// composer the things it is about to act on.
+    /// first, then the plan and the queue. The decision is not part of this
+    /// stack; it joins the composer itself (see `bottomDock`).
     @ViewBuilder
     private func composerStack(_ conversation: WarrenConversation) -> some View {
         let plan = conversation.plan.flatMap { $0.total > 0 ? $0 : nil }
         if let actionError {
             WarrenConversationBanner(message: actionError) { self.actionError = nil }
                 .padding(.bottom, WarrenSpacing.small)
-        }
-        if let decision = conversation.decisions.first {
-            WarrenConversationDecisionDock(
-                decision: decision,
-                count: conversation.decisions.count,
-                onDecide: { optionID in
-                    try await model.resolveConversationDecision(decision, optionID: optionID, in: feed.sessionID)
-                }
-            )
-            .id(decision.id)
-            .padding(.bottom, WarrenSpacing.small)
         }
         if plan != nil || !feed.queuedPrompts.isEmpty {
             WarrenConversationStackedPanels {
@@ -360,16 +369,6 @@ private struct WarrenConversationView: View {
 
     @ViewBuilder
     private func legacyDockHeader(_ conversation: WarrenConversation) -> some View {
-        if let decision = conversation.decisions.first {
-            WarrenConversationDecisionDock(
-                decision: decision,
-                count: conversation.decisions.count,
-                onDecide: { optionID in
-                    try await model.resolveConversationDecision(decision, optionID: optionID, in: feed.sessionID)
-                }
-            )
-            .id(decision.id)
-        }
         if let actionError {
             Text(actionError)
                 .font(WarrenTypography.supporting)
@@ -1448,6 +1447,9 @@ private struct WarrenConversationComposer: View {
     let onHandoff: () async -> Void
     let onSend: (String) -> Void
     let onStop: () -> Void
+    /// A pending decision sits on the composer's top edge; the two then share
+    /// one container, so the composer squares its top corners to meet it.
+    var joinsDecision: Bool = false
 
     @State private var height: CGFloat = 22
     @Environment(\.colorScheme) private var colorScheme
@@ -1456,6 +1458,10 @@ private struct WarrenConversationComposer: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let disabled = disabledReason != nil
+        let shape = WarrenConversationContainerShape(
+            topRadius: joinsDecision ? 0 : conversationComposerRadius,
+            bottomRadius: conversationComposerRadius
+        )
         VStack(alignment: .leading, spacing: 0) {
             if let plan, plan.total > 0 {
                 WarrenConversationPlanStrip(plan: plan)
@@ -1483,12 +1489,13 @@ private struct WarrenConversationComposer: View {
             .padding(.top, WarrenSpacing.medium)
             footer(tokens: tokens)
         }
-        .background(tokens.inputSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
+        .background(tokens.inputSurface, in: shape)
+        .overlay(shape.strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
         // On glass the composer is raised by its density and border alone; a
         // drop shadow under a translucent surface darkens the coat around it.
+        // Joined to a decision, a shadow would fall across the decision above.
         .shadow(
-            color: tokens.material == .glass ? .clear : .black.opacity(colorScheme == .dark ? 0.28 : 0.06),
+            color: (tokens.material == .glass || joinsDecision) ? .clear : .black.opacity(colorScheme == .dark ? 0.28 : 0.06),
             radius: 12,
             y: 4
         )
@@ -1860,6 +1867,48 @@ private struct WarrenTopRoundedRectangle: Shape {
     }
 }
 
+/// A rectangle whose top and bottom corner pairs round independently: the
+/// composer squares its top corners when a decision rests on it.
+private struct WarrenConversationContainerShape: InsettableShape {
+    var topRadius: CGFloat
+    var bottomRadius: CGFloat
+    var insetAmount: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let r = rect.insetBy(dx: insetAmount, dy: insetAmount)
+        let limit = max(0, min(r.width, r.height) / 2)
+        let top = min(max(0, topRadius - insetAmount), limit)
+        let bottom = min(max(0, bottomRadius - insetAmount), limit)
+        var path = Path()
+        path.move(to: CGPoint(x: r.minX, y: r.minY + top))
+        if top > 0 {
+            path.addArc(tangent1End: CGPoint(x: r.minX, y: r.minY), tangent2End: CGPoint(x: r.minX + top, y: r.minY), radius: top)
+        } else {
+            path.addLine(to: CGPoint(x: r.minX, y: r.minY))
+        }
+        path.addLine(to: CGPoint(x: r.maxX - top, y: r.minY))
+        if top > 0 {
+            path.addArc(tangent1End: CGPoint(x: r.maxX, y: r.minY), tangent2End: CGPoint(x: r.maxX, y: r.minY + top), radius: top)
+        }
+        path.addLine(to: CGPoint(x: r.maxX, y: r.maxY - bottom))
+        if bottom > 0 {
+            path.addArc(tangent1End: CGPoint(x: r.maxX, y: r.maxY), tangent2End: CGPoint(x: r.maxX - bottom, y: r.maxY), radius: bottom)
+        }
+        path.addLine(to: CGPoint(x: r.minX + bottom, y: r.maxY))
+        if bottom > 0 {
+            path.addArc(tangent1End: CGPoint(x: r.minX, y: r.maxY), tangent2End: CGPoint(x: r.minX, y: r.maxY - bottom), radius: bottom)
+        }
+        path.closeSubpath()
+        return path
+    }
+
+    func inset(by amount: CGFloat) -> WarrenConversationContainerShape {
+        var shape = self
+        shape.insetAmount += amount
+        return shape
+    }
+}
+
 /// The sides and top of `WarrenTopRoundedRectangle`, left open along the
 /// bottom where the panel meets the composer.
 private struct WarrenTopRoundedOutline: Shape {
@@ -2047,8 +2096,18 @@ private struct WarrenConversationDecisionDock: View {
         .padding(.horizontal, WarrenSpacing.standard)
         .padding(.vertical, WarrenSpacing.medium)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tokens.popoverSurface, in: RoundedRectangle(cornerRadius: dockRadius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: dockRadius, style: .continuous).strokeBorder(tokens.warning.opacity(0.55), lineWidth: 1))
+        // The dock is the top half of one container with the composer: only
+        // its top corners round, and its outline stays open along the bottom
+        // where the composer's own border draws the shared seam.
+        .background(
+            WarrenTopRoundedRectangle(radius: conversationComposerRadius)
+                .fill(tokens.warning.opacity(colorScheme == .dark ? 0.10 : 0.08))
+        )
+        .background(tokens.popoverSurface, in: WarrenTopRoundedRectangle(radius: conversationComposerRadius))
+        .overlay(
+            WarrenTopRoundedOutline(radius: conversationComposerRadius)
+                .stroke(tokens.warning.opacity(0.55), lineWidth: 1)
+        )
         .background(
             // Escape rejects once; Return is the default button's own shortcut.
             Button("") { if let reject = decision.options.first(where: { $0.kind == "reject_once" }) { choose(reject) } }
@@ -2097,8 +2156,6 @@ private struct WarrenConversationDecisionDock: View {
             button
         }
     }
-
-    private var dockRadius: CGFloat { glassLayout ? WarrenRadius.large : 14 }
 
     private func choose(_ option: WarrenConversation.Decision.Option) {
         guard submitting == nil else { return }

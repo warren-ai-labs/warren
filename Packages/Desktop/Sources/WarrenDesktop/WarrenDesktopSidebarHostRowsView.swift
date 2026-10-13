@@ -311,18 +311,10 @@ struct WarrenDesktopSidebarHostRows: View {
                                 && !routesSelectionToTaskRow(scopedWorkspace.workspace, in: host)
                                 ? host.activeSessions(in: scopedWorkspace.workspace.id)
                                 : []
-                            // The same guide the single-Host tree draws; see
+                            // The same group the single-Host tree builds; see
                             // WarrenDesktopSessionLeafGroup.
                             WarrenDesktopSessionLeafGroup(
-                                leafCount: sessions.count,
-                                mode: workspaceDisplayMode,
-                                workspaceGlyph: WarrenDesktopWorkspaceGlyph(
-                                    scopedWorkspace.workspace
-                                ),
-                                isCurrentScope: isSelected(
-                                    workspace: scopedWorkspace.workspace.id,
-                                    in: host
-                                )
+                                leafCount: sessions.count
                             ) {
                                 hostWorkspaceRow(
                                     scopedWorkspace.workspace,
@@ -371,8 +363,8 @@ struct WarrenDesktopSidebarHostRows: View {
                     }
                 }
                 // Separate one project's subtree from the next; see
-                // WarrenDesktopWorkspaceDisplayMode.projectGroupSpacing.
-                .padding(.top, index == 0 ? 0 : workspaceDisplayMode.projectGroupSpacing)
+                // WarrenDesktopSidebarRowLayout.projectSectionSpacing.
+                .padding(.top, index == 0 ? 0 : WarrenDesktopSidebarRowLayout.projectSectionSpacing)
             }
         }
     }
