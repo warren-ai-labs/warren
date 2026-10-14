@@ -194,10 +194,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var embeddedEditorDefaultIDE = false
     @AppStorage(WarrenPreferenceKey.sidebarShowTasks)
     private var showsTasks = true
-    /// Mirrors the sidebar's own preference so the pane bar can resolve which
-    /// surface lists Sessions. See `WarrenDesktopPaneBar.presentation(...)`.
-    @AppStorage(WarrenPreferenceKey.sidebarWorkspaceDisplayMode)
-    private var workspaceDisplayModeRawValue = WarrenDesktopWorkspaceDisplayMode.rich.rawValue
     @AppStorage(WarrenPreferenceKey.terminalSplitChordsEnabled)
     private var splitChordsEnabled = false
     @Environment(\.warrenSemanticRecorder) private var semanticRecorder
@@ -2706,11 +2702,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         dispatch(.selectTab(tabID))
     }
 
-    /// The display mode, read from the same preference the sidebar reads so the
-    /// two surfaces cannot disagree about who owns the Session list.
-    private var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode {
-        WarrenDesktopWorkspaceDisplayMode(rawValue: workspaceDisplayModeRawValue) ?? .compact
-    }
+    /// Matches the sidebar, which always lists Sessions, so the pane bar and
+    /// the tree agree about who owns the Session list.
+    private var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode { .rich }
 
     /// The identity the top chrome row shows in place of a pane track.
     ///

@@ -66,8 +66,6 @@ struct WarrenDesktopSidebar: View {
     /// other Sessions. Compact remains available for navigating projects
     /// without their Sessions, at the cost of having to open a workspace to
     /// reach one.
-    @AppStorage(WarrenPreferenceKey.sidebarWorkspaceDisplayMode)
-    private var workspaceDisplayModeRawValue = WarrenDesktopWorkspaceDisplayMode.rich.rawValue
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
     let onRequestTerminalGroupCreate: () -> Void
@@ -123,9 +121,7 @@ struct WarrenDesktopSidebar: View {
                 onToggle: toggleSidebar,
                 onCommandPalette: onCommandPalette,
                 showsActiveOnly: sidebarTree.showsActiveOnly,
-                onToggleActiveOnly: toggleActiveOnly,
-                workspaceDisplayMode: workspaceDisplayMode,
-                onToggleWorkspaceDisplayMode: toggleWorkspaceDisplayMode
+                onToggleActiveOnly: toggleActiveOnly
             )
             if let displayConfigurationError {
                 displayConfigurationNotice(displayConfigurationError, tokens: tokens)
@@ -454,17 +450,9 @@ struct WarrenDesktopSidebar: View {
         }
     }
 
-    private var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode {
-        WarrenDesktopWorkspaceDisplayMode(rawValue: workspaceDisplayModeRawValue) ?? .compact
-    }
-
-    private func toggleWorkspaceDisplayMode() {
-        let nextMode: WarrenDesktopWorkspaceDisplayMode =
-            workspaceDisplayMode == .compact ? .rich : .compact
-        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
-            workspaceDisplayModeRawValue = nextMode.rawValue
-        }
-    }
+    /// The sidebar always lists Sessions under their Workspace; the compact
+    /// tree is no longer offered.
+    private var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode { .rich }
 
     private func sidebarFooter(tokens: WarrenColorTokens) -> some View {
         VStack(spacing: 0) {

@@ -10,8 +10,6 @@ struct WarrenDesktopSidebarHeader: View {
     let onCommandPalette: () -> Void
     var showsActiveOnly: Bool = false
     var onToggleActiveOnly: () -> Void = {}
-    var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode = .compact
-    var onToggleWorkspaceDisplayMode: () -> Void = {}
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
@@ -25,9 +23,7 @@ struct WarrenDesktopSidebarHeader: View {
         onToggle: @escaping () -> Void,
         onCommandPalette: @escaping () -> Void,
         showsActiveOnly: Bool = false,
-        onToggleActiveOnly: @escaping () -> Void = {},
-        workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode = .compact,
-        onToggleWorkspaceDisplayMode: @escaping () -> Void = {}
+        onToggleActiveOnly: @escaping () -> Void = {}
     ) {
         self.isCollapsed = isCollapsed
         self.chromeMode = chromeMode
@@ -37,8 +33,6 @@ struct WarrenDesktopSidebarHeader: View {
         self.onCommandPalette = onCommandPalette
         self.showsActiveOnly = showsActiveOnly
         self.onToggleActiveOnly = onToggleActiveOnly
-        self.workspaceDisplayMode = workspaceDisplayMode
-        self.onToggleWorkspaceDisplayMode = onToggleWorkspaceDisplayMode
     }
 
     var body: some View {
@@ -101,14 +95,6 @@ struct WarrenDesktopSidebarHeader: View {
                 hint: showsActiveOnly ? "Show all workspaces" : "Show only workspaces with active sessions",
                 action: onToggleActiveOnly,
                 tint: showsActiveOnly ? tokens.highlight : nil
-            )
-
-            WarrenDesktopChromeButton(
-                systemImage: workspaceDisplayMode.systemImage,
-                label: workspaceDisplayMode.toggleLabel,
-                hint: workspaceDisplayMode.toggleHint,
-                action: onToggleWorkspaceDisplayMode,
-                tint: workspaceDisplayMode.isRich ? tokens.highlight : nil,
             )
 
             WarrenDesktopWindowDragRegion()
@@ -217,14 +203,6 @@ struct WarrenDesktopSidebarHeader: View {
                 hint: showsActiveOnly ? "Show all workspaces" : "Show only workspaces with active sessions",
                 action: onToggleActiveOnly,
                 tint: showsActiveOnly ? tokens.highlight : nil
-            )
-
-            WarrenDesktopChromeButton(
-                systemImage: workspaceDisplayMode.systemImage,
-                label: workspaceDisplayMode.toggleLabel,
-                hint: workspaceDisplayMode.toggleHint,
-                action: onToggleWorkspaceDisplayMode,
-                tint: workspaceDisplayMode.isRich ? tokens.highlight : nil,
             )
 
             Spacer(minLength: 0)
