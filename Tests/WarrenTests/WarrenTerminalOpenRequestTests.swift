@@ -2,25 +2,6 @@ import XCTest
 @testable import Warren
 
 final class WarrenTerminalOpenRequestTests: XCTestCase {
-    func testParsesTerminalGroupName() throws {
-        let request = try XCTUnwrap(
-            WarrenTerminalOpenRequest(url: URL(string: "warren://terminal?group=Inbox")!)
-        )
-
-        XCTAssertEqual(request.group, "Inbox")
-        XCTAssertNil(request.project)
-        XCTAssertNil(request.workspace)
-        XCTAssertNil(request.session)
-    }
-
-    func testDecodesTerminalGroupName() throws {
-        let request = try XCTUnwrap(
-            WarrenTerminalOpenRequest(url: URL(string: "warren://terminal?group=Daily%20Shell")!)
-        )
-
-        XCTAssertEqual(request.group, "Daily Shell")
-    }
-
     func testParsesProjectWorkspaceAndSessionSelectors() throws {
         let request = try XCTUnwrap(
             WarrenTerminalOpenRequest(url: URL(
@@ -56,12 +37,21 @@ final class WarrenTerminalOpenRequestTests: XCTestCase {
         XCTAssertEqual(request.session, "Claude")
     }
 
-    func testMissingGroupUsesDefaultTerminalGroup() throws {
+    func testBareTerminalLinkHasNoResourceTarget() throws {
         let request = try XCTUnwrap(
             WarrenTerminalOpenRequest(url: URL(string: "warren://terminal")!)
         )
 
-        XCTAssertNil(request.group)
+        XCTAssertFalse(request.hasResourceTarget)
+    }
+
+    func testIgnoresRemovedGroupSelector() throws {
+        let request = try XCTUnwrap(
+            WarrenTerminalOpenRequest(url: URL(string: "warren://terminal?group=Shell")!)
+        )
+
+        XCTAssertFalse(request.hasResourceTarget)
+        XCTAssertNil(WarrenTerminalOpenRequest(url: URL(string: "warren://group/Shell")!))
     }
 
     func testRejectsUnknownURL() {

@@ -159,7 +159,7 @@ enum WarrenDesktopTaskCreationPresentation {
         onDismiss: () -> Void
     ) {
         tree.tasksCollapsed = false
-        tree.expandedTaskIDs.insert(taskID)
+        tree.collapsedTaskIDs.remove(taskID)
         onDismiss()
     }
 }
@@ -185,79 +185,87 @@ struct WarrenDesktopTaskCreatorView: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
-            Text("New Task")
-                .font(WarrenTypography.dialogTitle)
-                .foregroundStyle(tokens.foreground)
-            Text("Create a task to organize workspaces across projects.")
-                .font(WarrenTypography.dialogBody)
-                .foregroundStyle(tokens.mutedForeground)
+        WarrenDialog(
+            "New Task",
+            message: "Create a task to organize workspaces across projects.",
+            width: .m
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                WarrenInputField(
+                    "Name",
+                    text: coordinator.binding(\.name),
+                    placeholder: "Delivery",
+                    monospaced: false,
+                    focusOnAppear: true,
+                    labelFont: WarrenTypography.dialogFieldLabel,
+                    inputFont: WarrenTypography.dialogInput
+                )
+                .disabled(coordinator.isSubmitting)
+                WarrenInputField(
+                    "Source (optional)",
+                    text: coordinator.binding(\.source),
+                    placeholder: "tapd",
+                    monospaced: false,
+                    labelFont: WarrenTypography.dialogFieldLabel,
+                    inputFont: WarrenTypography.dialogInput
+                )
+                .disabled(coordinator.isSubmitting)
+                WarrenInputField(
+                    "External ID (optional)",
+                    text: coordinator.binding(\.externalID),
+                    placeholder: "123",
+                    monospaced: true,
+                    labelFont: WarrenTypography.dialogFieldLabel,
+                    inputFont: WarrenTypography.dialogInput
+                )
+                .disabled(coordinator.isSubmitting)
+                WarrenInputField(
+                    "URL (optional)",
+                    text: coordinator.binding(\.url),
+                    placeholder: "https://tracker.example/tasks/123",
+                    monospaced: true,
+                    labelFont: WarrenTypography.dialogFieldLabel,
+                    inputFont: WarrenTypography.dialogInput
+                )
+                .disabled(coordinator.isSubmitting)
 
-            WarrenInputField(
-                "Name",
-                text: coordinator.binding(\.name),
-                placeholder: "Delivery",
-                monospaced: false,
-                focusOnAppear: true,
-                labelFont: WarrenTypography.dialogFieldLabel,
-                inputFont: WarrenTypography.dialogInput
-            )
-            .disabled(coordinator.isSubmitting)
-            WarrenInputField(
-                "Source (optional)",
-                text: coordinator.binding(\.source),
-                placeholder: "tapd",
-                monospaced: false,
-                labelFont: WarrenTypography.dialogFieldLabel,
-                inputFont: WarrenTypography.dialogInput
-            )
-            .disabled(coordinator.isSubmitting)
-            WarrenInputField(
-                "External ID (optional)",
-                text: coordinator.binding(\.externalID),
-                placeholder: "123",
-                monospaced: false,
-                labelFont: WarrenTypography.dialogFieldLabel,
-                inputFont: WarrenTypography.dialogInput
-            )
-            .disabled(coordinator.isSubmitting)
-            WarrenInputField(
-                "URL (optional)",
-                text: coordinator.binding(\.url),
-                placeholder: "https://tracker.example/tasks/123",
-                labelFont: WarrenTypography.dialogFieldLabel,
-                inputFont: WarrenTypography.dialogInput
-            )
-            .disabled(coordinator.isSubmitting)
-
-            if let message = coordinator.validationMessage ?? coordinator.errorMessage {
-                Text(message)
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.destructive)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Task creation error: \(message)")
+                if let message = coordinator.validationMessage ?? coordinator.errorMessage {
+                    Text(message)
+                        .font(WarrenTypography.dialogBody)
+                        .foregroundStyle(tokens.destructive)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Task creation error: \(message)")
+                }
             }
-
-            HStack {
+        } footer: {
+            HStack(spacing: 8) {
                 if coordinator.isSubmitting {
                     WarrenBrailleSpinner(size: 16, accessibilityLabel: "Creating task")
                     Text("Creating task…")
                         .font(WarrenTypography.dialogBody)
                         .foregroundStyle(tokens.mutedForeground)
                 }
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(coordinator.isSubmitting)
-                Button("Create", action: submit)
-                    .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!coordinator.canSubmit)
+                Spacer(minLength: 0)
+                Button(action: onCancel) {
+                    HStack(spacing: 6) {
+                        Text("Cancel")
+                        WarrenDialogKeycap("esc")
+                    }
+                }
+                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
+                .keyboardShortcut(.cancelAction)
+                .disabled(coordinator.isSubmitting)
+                Button(action: submit) {
+                    HStack(spacing: 6) {
+                        Text("Create")
+                        WarrenDialogKeycap("\u{23CE}", isOnPrimary: true)
+                    }
+                }
+                .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
+                .keyboardShortcut(.defaultAction)
+                .disabled(!coordinator.canSubmit)
             }
         }
-        .padding(WarrenSpacing.large)
-        .frame(width: WarrenLayoutMetrics.standardDialogWidth)
         .onExitCommand {
             guard !coordinator.isSubmitting else { return }
             onCancel()

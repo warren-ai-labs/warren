@@ -1,10 +1,13 @@
 import Foundation
 import AppKit
+import CryptoKit
 import Network
 import Combine
 import Darwin
+import UniformTypeIdentifiers
 import GhosttyAdapter
 import WarrenClientCore
+import WarrenDesignSystem
 import WarrenDesktop
 import WarrenDomain
 import WarrenProtocol
@@ -134,11 +137,31 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     @Published private(set) var connectionError: String?
     @Published private(set) var hostProbes: [WarrenRemoteEndpointConfiguration: WarrenHostProbe] = [:]
+    /// Hosts whose probe is running now. Their last result stays in
+    /// `hostProbes` until the new one lands, so a row never blanks out while
+    /// it is being checked again.
+    @Published private(set) var hostProbesInFlight: Set<WarrenRemoteEndpointConfiguration> = []
     private var hostProbeTask: Task<Void, Never>?
+    private var hostProbesCheckedAt: ContinuousClock.Instant?
+    /// Opening the Host picker probes again only when the last results are
+    /// older than this; the picker's refresh button always probes.
+    private static let hostProbeFreshness: Duration = .seconds(60)
 
-    func probeHosts(_ endpoints: [WarrenRemoteEndpointConfiguration]) {
+    func probeHosts(_ endpoints: [WarrenRemoteEndpointConfiguration], force: Bool = true) {
+        let now = ContinuousClock.now
+        if !force,
+           let checkedAt = hostProbesCheckedAt,
+           now - checkedAt < Self.hostProbeFreshness,
+           endpoints.allSatisfy({ hostProbes[$0] != nil || hostProbesInFlight.contains($0) }) {
+            return
+        }
         hostProbeTask?.cancel()
-        hostProbes = [:]
+        hostProbesCheckedAt = now
+        // Results for Hosts no longer in the catalog go; the rest stay until
+        // their new result replaces them.
+        let wanted = Set(endpoints)
+        hostProbes = hostProbes.filter { wanted.contains($0.key) }
+        hostProbesInFlight = wanted
         let active = activeEndpointConfiguration
         let selected = endpointConfiguration
         hostProbeTask = Task { [weak self] in
@@ -146,7 +169,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 for endpoint in endpoints {
                     group.addTask {
                         if endpoint.ssh != nil, endpoint != selected || active == nil {
-                            return (endpoint, WarrenHostProbe(message: "Select Host to check its SSH connection"))
+                            return (endpoint, WarrenHostProbe(
+                                message: "Checked once selected: reaching it needs its SSH connection",
+                                isInconclusive: true
+                            ))
                         }
                         let target = endpoint.ssh != nil ? (active ?? endpoint) : endpoint
                         return (endpoint, await WarrenHostProbe.check(target))
@@ -155,6 +181,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 for await (endpoint, probe) in group {
                     guard !Task.isCancelled else { return }
                     self?.hostProbes[endpoint] = probe
+                    self?.hostProbesInFlight.remove(endpoint)
                 }
             }
         }
@@ -228,7 +255,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// connection spinner; it is not a transport or failure state.
     @Published private(set) var isMigratingRuntimeSessions = false
     @Published private(set) var creatingSessionWorkspaceIDs: Set<WorkspaceID> = []
-    @Published private(set) var creatingSessionTerminalGroupIDs: Set<TerminalGroupID> = []
     @Published private(set) var deletingProjectIDs: Set<ProjectID> = []
     @Published private(set) var deletingWorkspaceIDs: Set<WorkspaceID> = []
     @Published private(set) var attachingSessionID: TerminalSessionID?
@@ -294,6 +320,37 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var agentQuarantinedStreamIDs: Set<String> = []
     private var agentProjectionSequenceByStreamID: [String: UInt64] = [:]
     private var agentPendingProjectionByStreamID: [String: [UInt64: WarrenRemoteAgentEvent]] = [:]
+    /// The tool step each stream's Agent is on, with the highest sequence
+    /// folded into it, so a replayed batch cannot move it backwards.
+    private var agentCurrentStepByStreamID: [String: (step: WarrenConversation.Step?, sequence: UInt64)] = [:]
+    /// The turn each stream is in, so a turn that settled no call can still say
+    /// how long it ran once it ends.
+    private var agentTurnByStreamID: [String: WarrenAgentTurnFold] = [:]
+    /// The steps of each stream's latest turn, so a resting row can say what the
+    /// turn did and a working one can report what it has done so far. Reset at
+    /// every turn boundary by `WarrenConversation.steps`.
+    private var agentTurnStepsByStreamID: [String: [WarrenConversation.Step]] = [:]
+    /// The session's plan and context, the last each stream reported. They
+    /// outlive a roster rebuild the same way the activity lines do.
+    private var agentPlanByStreamID: [String: WarrenDesktopPlanProgress] = [:]
+    private var agentContextByStreamID: [String: WarrenDesktopContextUsage] = [:]
+    /// The subagents each stream has spawned, in first-seen order. Keyed by the
+    /// child's stable identity so a later row updates its own entry.
+    private var agentSubagentsByStreamID: [String: [WarrenDesktopSubagent]] = [:]
+    /// Every interaction event each stream has reported, so the decision a
+    /// Session is stopped on can be answered from the approval tray without
+    /// building that Session's Conversation. A turn reports a handful of
+    /// these, and they are dropped with their stream. Nothing is pruned on
+    /// resolution, because a gap refill can deliver a request after its own
+    /// resolution and must not bring it back.
+    private var agentInteractionEventsByStreamID: [String: [UInt64: WarrenRemoteAgentEvent]] = [:]
+    /// The decision each stream is waiting on, as the Conversation projection
+    /// reads it from those events: the first one still pending, which is the
+    /// one the dock shows.
+    private var agentOpenDecisionByStreamID: [String: WarrenConversation.Decision] = [:]
+    /// The open decisions of this Host's Conversation Sessions, for the
+    /// approval tray.
+    @Published private(set) var pendingDecisions: [TerminalSessionID: WarrenDesktopPendingDecision] = [:]
     private var agentSubscriptionTasks: [String: Task<Void, Never>] = [:]
     /// ACP Sessions own no terminal (RFC 0023): no surface, no subscribe, no
     /// resize. The Conversation surface renders them from their Agent stream.
@@ -305,6 +362,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// from the last subscription, for feeds created after it.
     private var conversationStateEventsByStreamID: [String: [WarrenRemoteAgentEvent]] = [:]
     private var conversationHandoffSessionIDs: Set<TerminalSessionID> = []
+    /// Chat Sessions whose agent advertises `agent-attachments-v1`, so the
+    /// composer only offers the file picker where the Host can take an upload.
+    private var conversationAttachmentSessionIDs: Set<TerminalSessionID> = []
     /// One feed per Conversation surface on screen, fed from the same replica
     /// the activity projection reads. Created on demand so a Host with many
     /// idle ACP Sessions keeps no transcripts in memory.
@@ -315,6 +375,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// local to the live application model.
     private var lastObservedActivityBySessionID: [TerminalSessionID: AgentActivityState] = [:]
     private var activityUpdatedAtBySessionID: [TerminalSessionID: Date] = [:]
+    /// What each Session last did, folded from its Agent event stream.
+    ///
+    /// The daemon roster describes what a Session is, not what it last did, so
+    /// this outlives the roster snapshot the same way the activity timestamps
+    /// do: a roster rebuild recreates every session value and would otherwise
+    /// empty the resting line on every Host change.
+    private var lastActivityBySessionID: [TerminalSessionID: String] = [:]
+    /// The last non-empty primary fact each Session's second line showed while
+    /// working. A roster rebuild recreates every Session value, so the sticky
+    /// line has to live beside `lastActivityBySessionID` rather than on the value.
+    private var lastPrimaryLineBySessionID: [TerminalSessionID: String] = [:]
     private var agentCompletionTracker = WarrenAgentCompletionTracker()
     private let agentCompletionSubject = PassthroughSubject<WarrenAgentCompletionEvent, Never>()
     private var activityAcknowledgments = WarrenDesktopActivityAcknowledgments()
@@ -366,7 +437,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     var onResumeConnection: (() -> Void)?
     private var retainedSurfaceRebindTask: Task<Void, Never>?
     private var tabOrderByWorkspaceID: [WorkspaceID: [String]] = [:]
-    private var tabOrderByTerminalGroupID: [TerminalGroupID: [String]] = [:]
     private var appliedLiveTabSessionIDs: Set<TerminalSessionID> = []
     let surfaceManager: TerminalSurfaceManager
     /// Latest screencast frame per Warren Browser Session. Kept out of the
@@ -432,10 +502,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let tabOrders = WarrenDesktopNavigationPersistence.restoreTabOrders(scope: scope)
         self.tabOrderByWorkspaceID = tabOrders.workspace.reduce(into: [:]) { result, entry in
             guard let id = WorkspaceID(uuidString: entry.key) else { return }
-            result[id] = entry.value
-        }
-        self.tabOrderByTerminalGroupID = tabOrders.terminalGroup.reduce(into: [:]) { result, entry in
-            guard let id = TerminalGroupID(uuidString: entry.key) else { return }
             result[id] = entry.value
         }
     }
@@ -641,11 +707,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         activityUpdatedAtBySessionID.removeAll()
         agentCompletionTracker = WarrenAgentCompletionTracker()
         tabOrderByWorkspaceID.removeAll()
-        tabOrderByTerminalGroupID.removeAll()
         activityAcknowledgments = WarrenDesktopActivityAcknowledgments()
         lastReportedScreenSessions.removeAll()
         creatingSessionWorkspaceIDs.removeAll()
-        creatingSessionTerminalGroupIDs.removeAll()
         clearDeletionState()
         resetAttachmentState()
         webStatus = WarrenDesktopWebStatus()
@@ -1021,6 +1085,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         agentQuarantinedStreamIDs.removeAll()
         agentProjectionSequenceByStreamID.removeAll()
         agentPendingProjectionByStreamID.removeAll()
+        agentCurrentStepByStreamID.removeAll()
+        agentInteractionEventsByStreamID.removeAll()
+        agentOpenDecisionByStreamID.removeAll()
+        publishPendingDecisions()
     }
 
     private func shutdownAllMountedSurfaces() {
@@ -1486,6 +1554,34 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Clears local Relay enrollment and stops the connector. The Host record
     /// on Relay is intentionally not revoked; that operation requires a Relay
     /// administrator token and remains an explicit Relay management action.
+    /// Turns the enrolled Relay on or off. Enrollment is kept either way: the
+    /// switch is the tunnel's lifecycle, not the Host's membership.
+    func setRelayEnabled(
+        _ enabled: Bool,
+        completion: @escaping (Result<Void, Error>) -> Void = { _ in }
+    ) {
+        guard let wire else {
+            let error = NSError(domain: "WarrenRemote", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The selected daemon is not connected.",
+            ])
+            completion(.failure(error))
+            return
+        }
+        Task { @MainActor [weak self] in
+            do {
+                let data = try await wire.request(
+                    "relay.enabled",
+                    params: ["enabled": enabled ? "true" : "false"]
+                )
+                self?.applySettingsResponse(data)
+                completion(.success(()))
+            } catch {
+                self?.present(error)
+                completion(.failure(error))
+            }
+        }
+    }
+
     func resetRelay(completion: @escaping (Result<Void, Error>) -> Void = { _ in }) {
         guard let configuration = endpointConfiguration else {
             let error = NSError(domain: "WarrenRemote", code: 12, userInfo: [
@@ -1574,13 +1670,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    private static let fractionalISO8601DateFormatter: ISO8601DateFormatter = {
+    // ISO8601DateFormatter is safe to share across threads once configured.
+    nonisolated(unsafe) private static let fractionalISO8601DateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
 
-    private static let iso8601DateFormatterWithoutFractionalSeconds: ISO8601DateFormatter = {
+    nonisolated(unsafe) private static let iso8601DateFormatterWithoutFractionalSeconds: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
@@ -1589,7 +1686,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Relay and daemon timestamps are RFC 3339 values with optional
     /// fractional seconds. Keep one parser so every remote date accepts both
     /// forms and malformed values remain explicitly unknown to the caller.
-    static func parseISO8601Date(_ rawValue: String?) -> Date? {
+    nonisolated static func parseISO8601Date(_ rawValue: String?) -> Date? {
         guard let value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else { return nil }
         return fractionalISO8601DateFormatter.date(from: value)
@@ -1781,13 +1878,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// `browser.session.create` — which takes no command, because the Host
     /// launches the browser itself rather than typing anything into a shell.
     static func createSessionCall(
-        scope: (key: String, id: String),
+        workspaceID: String,
         request launch: TerminalSessionLaunchRequest
     ) -> (method: String, params: [String: String]) {
         // Only an explicit user-chosen name becomes the session title. Built-in
         // preset launches leave it nil so the Host keeps the custom-title slot
         // free for automatic AI title generation.
-        var params: [String: String] = [scope.key: scope.id]
+        var params: [String: String] = ["workspace": workspaceID]
         if let title = launch.title {
             params["title"] = title
         }
@@ -1882,15 +1979,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Starts a turn. The command ID doubles as the causation the Host echoes
     /// on the user message, so the surface can retire its pending prompt.
     /// Sends a prompt now, showing it as pending until the Host echoes it.
-    func submitConversationPrompt(_ text: String, in feed: WarrenConversationFeed) {
+    func submitConversationPrompt(
+        _ text: String,
+        attachments: [WarrenRemoteAgentAttachmentRef] = [],
+        in feed: WarrenConversationFeed
+    ) {
         let placeholderID = "local-\(UUID().uuidString)"
-        feed.pendingPrompts.append(.init(id: placeholderID, text: text))
+        let names = attachments.compactMap { reference -> String? in
+            guard let name = reference.name, !name.isEmpty else { return nil }
+            return name
+        }
+        feed.pendingPrompts.append(.init(id: placeholderID, text: text, attachments: names))
         Task { @MainActor in
             do {
-                let commandID = try await self.sendConversationMessage(text, to: feed.sessionID)
+                let commandID = try await self.sendConversationMessage(text, attachments: attachments, to: feed.sessionID)
                 if let index = feed.pendingPrompts.firstIndex(where: { $0.id == placeholderID }) {
                     // Re-key the placeholder by the command so the echo retires it.
-                    feed.pendingPrompts[index] = .init(id: commandID, text: text)
+                    feed.pendingPrompts[index] = .init(id: commandID, text: text, attachments: names)
                     if feed.conversation.turns.contains(where: { $0.promptCausedBy == commandID }) {
                         feed.pendingPrompts.remove(at: index)
                     }
@@ -1906,8 +2011,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Holds a prompt until the Agent is ready for it (after Synara's queued
     /// follow-ups). The queue lives with the feed, not the view, so it keeps
     /// draining while another Session is on screen.
-    func queueConversationPrompt(_ text: String, in feed: WarrenConversationFeed) {
-        feed.queuedPrompts.append(.init(id: "queued-\(UUID().uuidString)", text: text))
+    func queueConversationPrompt(
+        _ text: String,
+        attachments: [WarrenRemoteAgentAttachmentRef] = [],
+        in feed: WarrenConversationFeed
+    ) {
+        feed.queuedPrompts.append(.init(id: "queued-\(UUID().uuidString)", text: text, attachments: attachments))
         drainConversationQueue(feed.sessionID)
     }
 
@@ -1920,17 +2029,160 @@ final class WarrenRemoteApplicationModel: ObservableObject {
               feed.conversation.decisions.isEmpty,
               feed.pendingPrompts.allSatisfy({ $0.failure != nil }) else { return }
         let next = feed.queuedPrompts.removeFirst()
-        submitConversationPrompt(next.text, in: feed)
+        submitConversationPrompt(next.text, attachments: next.attachments, in: feed)
     }
 
-    func sendConversationMessage(_ text: String, to sessionID: TerminalSessionID) async throws -> String {
+    func sendConversationMessage(
+        _ text: String,
+        attachments: [WarrenRemoteAgentAttachmentRef] = [],
+        to sessionID: TerminalSessionID
+    ) async throws -> String {
         let (wire, executionID) = try conversationCommandContext(sessionID)
         let commandID = "desktop-\(UUID().uuidString.lowercased())"
-        let receipt = try await wire.startAgentTurn(executionID: executionID, commandID: commandID, text: text)
+        let receipt = try await wire.startAgentTurn(
+            executionID: executionID,
+            commandID: commandID,
+            text: text,
+            attachments: attachments
+        )
         guard receipt.accepted else {
             throw WarrenRemoteClientError.requestFailed("The Host did not accept the message.")
         }
         return commandID
+    }
+
+    // MARK: Conversation attachments
+
+    /// Reads one local file, uploads it through the Host's
+    /// prepare/chunk/complete lifecycle, and leaves the Host-issued reference
+    /// on the feed's chip. The bytes never leave this Mac except as upload
+    /// chunks; only the returned id travels on the next turn.
+    func addConversationAttachment(_ url: URL, in feed: WarrenConversationFeed) {
+        let id = "attach-\(UUID().uuidString)"
+        let name = url.lastPathComponent
+        guard supportsConversationAttachments(feed.sessionID) else {
+            feed.pendingAttachments.append(.init(
+                id: id,
+                name: name,
+                failure: "This Host does not support attachments."
+            ))
+            return
+        }
+        feed.pendingAttachments.append(.init(id: id, name: name))
+        Task { @MainActor in
+            do {
+                let data = try await Task.detached(priority: .userInitiated) {
+                    try Data(contentsOf: url)
+                }.value
+                self.updateConversationAttachment(id, in: feed) { $0.size = Int64(data.count) }
+                let reference = try await self.uploadAgentAttachment(
+                    data: data,
+                    name: name,
+                    mime: Self.attachmentMimeType(for: url),
+                    sessionID: feed.sessionID
+                ) { [weak self] progress in
+                    self?.updateConversationAttachment(id, in: feed) { $0.progress = progress }
+                }
+                self.updateConversationAttachment(id, in: feed) {
+                    $0.reference = reference
+                    $0.progress = 1
+                }
+            } catch {
+                self.updateConversationAttachment(id, in: feed) {
+                    $0.failure = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func updateConversationAttachment(
+        _ id: String,
+        in feed: WarrenConversationFeed,
+        _ change: (inout WarrenConversationFeed.PendingAttachment) -> Void
+    ) {
+        guard let index = feed.pendingAttachments.firstIndex(where: { $0.id == id }) else { return }
+        change(&feed.pendingAttachments[index])
+    }
+
+    /// Uploads one file as opaque chunks. Progress is reported in whole-percent
+    /// steps so a large file does not invalidate the composer per chunk.
+    func uploadAgentAttachment(
+        data: Data,
+        name: String,
+        mime: String,
+        sessionID: TerminalSessionID,
+        progress: @escaping @MainActor (Double) -> Void = { _ in }
+    ) async throws -> WarrenRemoteAgentAttachmentRef {
+        let (wire, executionID) = try conversationCommandContext(sessionID)
+        let sharedBytes = data
+        let digest = await Task.detached(priority: .utility) {
+            Self.sha256Hex(sharedBytes)
+        }.value
+        let prepared = try await wire.prepareAgentAttachment(
+            executionID: executionID,
+            commandID: "attachment-\(UUID().uuidString.lowercased())",
+            name: name,
+            mime: mime,
+            size: Int64(data.count),
+            sha256: digest
+        )
+        let chunkSize = max(1, prepared.chunkSize)
+        var offset = 0
+        var sequence: UInt64 = 0
+        var lastReported = -1.0
+        while offset < data.count {
+            let end = min(offset + chunkSize, data.count)
+            let slice = Data(data[offset..<end])
+            let chunkDigest = await Task.detached(priority: .utility) {
+                Self.sha256Hex(slice)
+            }.value
+            let result = try await wire.uploadAgentAttachmentChunk(
+                executionID: executionID,
+                commandID: "\(prepared.uploadID)-chunk-\(sequence)",
+                uploadID: prepared.uploadID,
+                chunk: sequence,
+                length: slice.count,
+                sha256: chunkDigest,
+                data: slice.base64EncodedString()
+            )
+            guard result.accepted else {
+                throw WarrenRemoteClientError.requestFailed(result.error ?? "The Host rejected an attachment chunk.")
+            }
+            offset = end
+            sequence &+= 1
+            let value = Double(offset) / Double(max(data.count, 1))
+            if value - lastReported >= 0.01 || value >= 1 {
+                lastReported = value
+                progress(value)
+            }
+        }
+        let completed = try await wire.completeAgentAttachment(
+            executionID: executionID,
+            commandID: "\(prepared.uploadID)-complete",
+            uploadID: prepared.uploadID,
+            length: Int64(data.count),
+            sha256: digest
+        )
+        guard completed.accepted,
+              let attachmentID = completed.attachmentID,
+              !attachmentID.isEmpty else {
+            throw WarrenRemoteClientError.requestFailed(completed.error ?? "The Host rejected the attachment.")
+        }
+        progress(1)
+        return WarrenRemoteAgentAttachmentRef(
+            attachmentID: attachmentID,
+            name: name,
+            mime: mime,
+            size: Int64(data.count)
+        )
+    }
+
+    nonisolated static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    nonisolated static func attachmentMimeType(for url: URL) -> String {
+        UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
     }
 
     func cancelConversationTurn(_ sessionID: TerminalSessionID, turnID: String) async throws {
@@ -1948,14 +2200,88 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         optionID: String,
         in sessionID: TerminalSessionID
     ) async throws {
+        try await resolveConversationDecision(
+            decision,
+            resolution: ["decision": .string(optionID)],
+            in: sessionID
+        )
+    }
+
+    /// Resolves a decision with the wire's own resolution shape: an option id
+    /// for a choice, `text` for a question, or `cancelled` to dismiss.
+    func resolveConversationDecision(
+        _ decision: WarrenConversation.Decision,
+        resolution: [String: WarrenRemoteJSONValue],
+        in sessionID: TerminalSessionID
+    ) async throws {
         let (wire, executionID) = try conversationCommandContext(sessionID)
         _ = try await wire.resolveAgentInteraction(
             executionID: executionID,
             commandID: "resolve-\(executionID)-\(decision.id)-\(decision.version)",
             interactionID: decision.id,
             version: decision.version,
-            resolution: ["decision": .string(optionID)]
+            resolution: resolution
         )
+    }
+
+    /// Answers the decision the approval tray shows for `sessionID`, through
+    /// the same request the Conversation's dock sends. The tray names the
+    /// decision it drew, so an answer to a request that has since moved on is
+    /// refused rather than applied to its successor.
+    func resolvePendingDecision(
+        _ decisionID: String,
+        optionID: String,
+        in sessionID: TerminalSessionID
+    ) async throws {
+        guard let streamID = conversationStreamID(sessionID),
+              let decision = agentOpenDecisionByStreamID[streamID],
+              decision.id == decisionID else {
+            throw WarrenRemoteClientError.requestFailed("This request was already answered.")
+        }
+        try await resolveConversationDecision(decision, optionID: optionID, in: sessionID)
+    }
+
+    /// Folds a batch's interaction events into the stream's open decision.
+    /// The Conversation projection is the rule for what is still pending, so
+    /// the tray and the dock cannot disagree about it.
+    private func foldOpenDecision(_ events: [WarrenRemoteAgentEvent], streamID: String) {
+        let interactions = events.filter { $0.type.lowercased().hasPrefix("interaction.") }
+        guard !interactions.isEmpty else { return }
+        var held = agentInteractionEventsByStreamID[streamID] ?? [:]
+        for event in interactions where held[event.sequence] == nil {
+            held[event.sequence] = event
+        }
+        agentInteractionEventsByStreamID[streamID] = held
+        let open = WarrenConversation.project(Array(held.values)).decisions.first
+        guard agentOpenDecisionByStreamID[streamID] != open else { return }
+        agentOpenDecisionByStreamID[streamID] = open
+        publishPendingDecisions()
+    }
+
+    /// Publishes the open decisions of the Sessions whose decisions the
+    /// Desktop can answer: Conversation Sessions, the only ones the dock
+    /// answers today. A terminal Agent's request is answered in its own TUI,
+    /// so the tray offers only Open for it.
+    private func publishPendingDecisions() {
+        var next: [TerminalSessionID: WarrenDesktopPendingDecision] = [:]
+        for (streamID, decision) in agentOpenDecisionByStreamID where !decision.options.isEmpty {
+            guard let sessionID = agentSessionByStreamID[streamID],
+                  conversationSessionIDs.contains(sessionID) else { continue }
+            let session = projection.session(id: sessionID)
+            let providerName = (session?.agentProvider ?? session?.kind)?.displayName ?? "Agent"
+            let target = decision.detail.isEmpty ? (decision.diff?.file ?? "") : decision.detail
+            next[sessionID] = WarrenDesktopPendingDecision(
+                id: decision.id,
+                ask: decision.ask(providerName: providerName),
+                detail: WarrenConversation.displayTarget(target, root: session?.workingDirectory),
+                options: decision.options.map {
+                    WarrenDesktopPendingDecision.Option(id: $0.id, label: $0.label, isReject: $0.isReject)
+                }
+            )
+        }
+        if pendingDecisions != next {
+            pendingDecisions = next
+        }
     }
 
     /// Changes one agent selector (model, mode) of a chat Session
@@ -2001,6 +2327,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         conversationConfigSessionIDs.contains(sessionID)
     }
 
+    func supportsConversationAttachments(_ sessionID: TerminalSessionID) -> Bool {
+        conversationAttachmentSessionIDs.contains(sessionID)
+    }
+
     func conversationHasConversation(_ sessionID: TerminalSessionID) -> Bool {
         conversationHandoffSessionIDs.contains(sessionID)
     }
@@ -2027,7 +2357,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             defer { self?.finishCreatingSession(in: workspaceID) }
             do {
                 let call = Self.createSessionCall(
-                    scope: ("workspace", workspaceID.description),
+                    workspaceID: workspaceID.description,
                     request: launch
                 )
                 let data = try await wire.request(call.method, params: call.params)
@@ -2063,41 +2393,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
-    func createSession(terminalGroupID: TerminalGroupID, request launch: TerminalSessionLaunchRequest) {
-        guard let wire, !creatingSessionTerminalGroupIDs.contains(terminalGroupID) else { return }
-        creatingSessionTerminalGroupIDs.insert(terminalGroupID)
-        Task { @MainActor [weak self] in
-            defer { self?.finishCreatingSession(in: terminalGroupID) }
-            do {
-                let call = Self.createSessionCall(
-                    scope: ("group", terminalGroupID.description),
-                    request: launch
-                )
-                let data = try await wire.request(call.method, params: call.params)
-                let created = try JSONDecoder().decode(CreatedSession.self, from: data)
-                guard let sessionID = TerminalSessionID(uuidString: created.id) else {
-                    throw NSError(domain: "WarrenRemote", code: 10, userInfo: [
-                        NSLocalizedDescriptionKey: "The daemon returned an invalid Session ID.",
-                    ])
-                }
-                try await self?.refreshRoster(using: wire)
-                guard let self,
-                      self.selectedTerminalGroupID == terminalGroupID else { return }
-                self.finishCreatingSession(in: terminalGroupID)
-                self.publishNavigationIfChanged(
-                    WarrenDesktopNavigationReducer.reduce(
-                        self.navigation,
-                        action: .selectTab(Self.tabID(sessionID)),
-                        in: self.projection
-                    )
-                )
-                await self.presentSelectedSession()
-            } catch {
-                self?.present(error)
-            }
-        }
-    }
-
     /// Resolves a launcher link and opens its requested resource. The request
     /// is retained until the local/remote roster is ready so a Raycast
     /// invocation can arrive during Warren's first connection attempt.
@@ -2115,34 +2410,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             return
         }
 
-        let group: WarrenDomain.TerminalGroup?
-        if let requestedGroup = request.group {
-            group = resolveSelector(
-                requestedGroup,
-                in: projection.terminalGroups,
-                name: { $0.name },
-                id: { $0.id.description }
-            )
-        } else {
-            group = projection.terminalGroups.first
-        }
-        guard let group else {
-            pendingTerminalOpenRequest = nil
+        // A bare terminal link opens a shell where ⌘T would: in the selected
+        // Workspace. With no Workspace selected there is nowhere to put one.
+        pendingTerminalOpenRequest = nil
+        guard let workspaceID = selectedWorkspaceID else {
             present(NSError(domain: "WarrenRemote", code: 30, userInfo: [
-                NSLocalizedDescriptionKey: "The requested Warren terminal group does not exist.",
+                NSLocalizedDescriptionKey: "Select a workspace before opening a Warren terminal.",
             ]))
             return
         }
-
-        pendingTerminalOpenRequest = nil
-        publishNavigationIfChanged(
-            WarrenDesktopNavigationReducer.reduce(
-                navigation,
-                action: .selectTerminalGroup(group.id),
-                in: projection
-            )
-        )
-        createSession(terminalGroupID: group.id, request: .shell)
+        createSession(workspaceID: workspaceID, request: .shell)
     }
 
     private func fulfillResourceOpenRequest(_ request: WarrenTerminalOpenRequest) {
@@ -2281,11 +2558,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         creatingSessionWorkspaceIDs.remove(workspaceID)
     }
 
-    private func finishCreatingSession(in terminalGroupID: TerminalGroupID) {
-        guard creatingSessionTerminalGroupIDs.contains(terminalGroupID) else { return }
-        creatingSessionTerminalGroupIDs.remove(terminalGroupID)
-    }
-
     func addProject(_ folder: URL) async {
         guard let wire else { return }
         do {
@@ -2408,9 +2680,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         NSWorkspace.shared.open(browserURL)
     }
     func copyWebURL(_ url: URL) {
-        let clipboardURL = browserURL(for: url)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(clipboardURL.absoluteString, forType: .string)
+        WarrenCopyFeedback.shared.copy(browserURL(for: url).absoluteString, announcing: "Copied link")
     }
     func copyLocalWebURL() {
         if let url = webStatus.localURL { copyWebURL(url) }
@@ -2424,12 +2694,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 ]))
                 return
             }
-            let clipboardURL = browserURL(for: url)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(
-                clipboardURL.absoluteString,
-                forType: .string
-            )
+            WarrenCopyFeedback.shared.copy(browserURL(for: url).absoluteString, announcing: "Copied public link")
         }
     }
 
@@ -2815,7 +3080,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             WarrenDesktopNavigationReducer.reduce(navigation, action: action, in: projection)
         )
         switch action {
-        case .selectProject, .selectWorkspace, .openWorkspace, .selectTerminalGroup, .selectTab, .restoreNavigation:
+        case .selectProject, .selectWorkspace, .openWorkspace, .selectTab, .restoreNavigation:
             Task { await presentSelectedSession() }
         case .openSession(let id):
             selectSession(id)
@@ -2827,10 +3092,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             break
         case .launchSession(let workspaceID, let launch):
             createSession(workspaceID: workspaceID, request: launch)
-        case .requestNewTerminalGroupSession(let groupID):
-            createSession(terminalGroupID: groupID, request: .shell)
-        case .launchTerminalGroupSession(let groupID, let launch):
-            createSession(terminalGroupID: groupID, request: launch)
         case .addProject:
             present(NSError(domain: "WarrenRemote", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Remote projects must use remote paths. "
@@ -2866,22 +3127,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             request("project.pin", params: ["id": id.description, "pinned": String(pinned)])
         case .setWorkspacePinned(let id, let pinned):
             request("workspace.pin", params: ["id": id.description, "pinned": String(pinned)])
-        case .createTerminalGroup(let name, let home):
-            var params = ["name": name]
-            if let home { params["home"] = home }
-            request("terminal-group.create", params: params)
-        case .renameTerminalGroup(let id, let name):
-            request("terminal-group.rename", params: ["id": id.description, "name": name])
-        case .setTerminalGroupHome(let id, let home):
-            request("terminal-group.home", params: [
-                "id": id.description,
-                "path": home ?? "",
-            ])
-        case .deleteTerminalGroup(let id):
-            request("terminal-group.remove", params: [
-                "id": id.description,
-                "force": "true",
-            ])
         case .setSessionPinned(let id, let pinned):
             request("session.pin", params: ["id": id.description, "pinned": String(pinned)])
         case .dismissActivity(let id, let expectedActivity):
@@ -2914,10 +3159,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             var params = ["id": workspaceID.description]
             if let before { params["before"] = before.description }
             request("workspace.move", params: params)
-        case .moveTerminalGroup(let groupID, let before):
-            var params = ["id": groupID.description]
-            if let before { params["before"] = before.description }
-            request("terminal-group.move", params: params)
         case .moveTab(let tabID, let before):
             moveTab(tabID, before: before)
         case .moveSession(let id, let destination):
@@ -3242,35 +3483,50 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Session, and every later edit is one tree replacement under the revision
     /// the roster reported. A rejected edit is not fatal: the roster's answer
     /// replaces the optimistic local value on the next update.
-    func commitPaneTree(owner: WarrenDesktopPaneOwner, tree: PaneNode) {
+    func commitPaneTree(
+        owner: WarrenDesktopPaneOwner,
+        tree: PaneNode,
+        target: WarrenDesktopPaneGroupTarget
+    ) {
         guard let wire else { return }
-        let workspaceID = owner.workspaceID?.description
-        let terminalGroupID = owner.terminalGroupID?.description
+        guard let workspaceID = owner.workspaceID?.description else { return }
         Task { @MainActor [weak self, wire] in
             guard let self, self.wire === wire else { return }
             // A Host that does not advertise the capability owns no
             // arrangements, so a write would be an unknown method rather than a
             // rejected tree. The read side needs no gate: an old Host has no
             // groups to project, and the scope renders its selected Tab alone.
-            guard await wire.supportsCapability("pane-groups-v1") else { return }
+            guard await wire.supportsCapability("pane-groups-v1") else {
+                TerminalDiagnostics.log("pane_update_skipped", ["reason": "noCapability"])
+                return
+            }
             do {
-                let existing = self.projection.paneGroups.first { group in
-                    group.workspaceID?.description == workspaceID
-                        && group.terminalGroupID?.description == terminalGroupID
-                }
-                var groupID: String
-                var revision: UInt64
-                if let existing {
+                let groupID: String
+                let revision: UInt64
+                switch target {
+                case .group(let id):
+                    // A scope can hold several arrangements, so the window names
+                    // the one it renders. Reaching for the scope's first group
+                    // here would edit an arrangement that is not on screen.
+                    guard let existing = self.projection.paneGroups.first(where: { $0.id == id }) else {
+                        TerminalDiagnostics.log("pane_update_skipped", ["reason": "groupGone"])
+                        await self.refreshRosterAfterDeltaMismatch(using: wire)
+                        return
+                    }
                     groupID = existing.id.description
                     revision = existing.revision
-                } else {
+                case .newGroup:
+                    // A new arrangement is opened around the tree's first
+                    // Session, then given its full shape in one follow-up write
+                    // under the revision create returned. Naming the revision
+                    // here keeps the two writes off each other's CAS token,
+                    // which two updates of one group could not do.
                     guard let sessionID = tree.sessionIDs.first else { return }
-                    var params: [String: Any] = ["session": sessionID.description]
-                    if let workspaceID {
-                        params["workspace"] = workspaceID
-                    } else if let terminalGroupID {
-                        params["group"] = terminalGroupID
-                    }
+                    TerminalDiagnostics.log("pane_group_create", ["panes": String(tree.paneCount)])
+                    let params: [String: Any] = [
+                        "session": sessionID.description,
+                        "workspace": workspaceID,
+                    ]
                     let created: RemoteRoster.PaneGroup = try await wire.request(
                         "pane-group.create",
                         jsonParams: params,
@@ -3289,9 +3545,20 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                         "expectedRevision": revision,
                     ]
                 )
+                TerminalDiagnostics.log("pane_update_accepted", [
+                    "group": String(groupID.prefix(8)),
+                    "expectedRevision": String(revision),
+                    "panes": String(tree.paneCount),
+                ])
                 // The mutation is accepted, so the next roster delta carries the
                 // Host's version of the tree. Nothing is cached locally.
             } catch {
+                // A rejected write was invisible before this: the roster simply
+                // kept the old arrangement and the split read as a no-op.
+                TerminalDiagnostics.log("pane_update_rejected", [
+                    "panes": String(tree.paneCount),
+                    "error": String(error.localizedDescription.prefix(200)),
+                ])
                 // A revision conflict means another client shaped the same
                 // arrangement first. Re-reading the roster is the whole
                 // recovery: the Host's version is already authoritative.
@@ -3511,8 +3778,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         switch destination {
         case .workspace(let workspaceID):
             params["workspace"] = workspaceID.description
-        case .terminalGroup(let groupID):
-            params["group"] = groupID.description
         }
         Task { @MainActor [weak self] in
             do {
@@ -4328,6 +4593,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         })
         for feed in conversationFeeds.values { seedConversationFeed(feed) }
         let activeStreamIDs = Set(agentSessionByStreamID.keys)
+        agentCurrentStepByStreamID = agentCurrentStepByStreamID.filter { activeStreamIDs.contains($0.key) }
+        agentTurnByStreamID = agentTurnByStreamID.filter { activeStreamIDs.contains($0.key) }
+        agentTurnStepsByStreamID = agentTurnStepsByStreamID.filter { activeStreamIDs.contains($0.key) }
+        agentPlanByStreamID = agentPlanByStreamID.filter { activeStreamIDs.contains($0.key) }
+        agentContextByStreamID = agentContextByStreamID.filter { activeStreamIDs.contains($0.key) }
+        agentSubagentsByStreamID = agentSubagentsByStreamID.filter { activeStreamIDs.contains($0.key) }
+        agentInteractionEventsByStreamID = agentInteractionEventsByStreamID.filter { activeStreamIDs.contains($0.key) }
+        agentOpenDecisionByStreamID = agentOpenDecisionByStreamID.filter { activeStreamIDs.contains($0.key) }
+        publishPendingDecisions()
         await WarrenAgentEventStore.shared.purgeOrphanStreams(
             namespace: namespace,
             activeStreamIDs: activeStreamIDs
@@ -4461,6 +4735,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // and context the Conversation shows however far back they were set.
             conversationStateEventsByStreamID[streamID] = result.stateEvents
             if let sessionID = agentSessionByStreamID[streamID] {
+                // The plan and context live in the state events, which are older
+                // than the replica window; fold them so a Session that has not
+                // moved since it was opened still shows them.
+                if foldSessionSummary(result.stateEvents, streamID: streamID, includingTurnSteps: false) {
+                    publishSessionSummary(streamID: streamID, sessionID: sessionID)
+                }
                 conversationFeeds[sessionID]?.merge(result.stateEvents, streamID: streamID)
                 drainConversationQueue(sessionID)
             }
@@ -4544,6 +4824,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         guard let projectedSessionID = agentSessionByStreamID[streamID] else { return }
         conversationFeeds[projectedSessionID]?.merge(events, streamID: streamID)
         drainConversationQueue(projectedSessionID)
+        foldCurrentStep(events, streamID: streamID, sessionID: projectedSessionID)
+        foldOpenDecision(events, streamID: streamID)
         let baseline = agentProjectionSequenceByStreamID[streamID] ?? 0
         let statusEvents = events.filter {
             $0.type == "status.changed" && $0.sequence > baseline
@@ -4568,6 +4850,411 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             }
             agentProjectionSequenceByStreamID[streamID] = cursor
         }
+    }
+
+    private func foldCurrentStep(
+        _ events: [WarrenRemoteAgentEvent],
+        streamID: String,
+        sessionID: TerminalSessionID
+    ) {
+        let folded = agentCurrentStepByStreamID[streamID]
+        let fresh = events.filter { $0.sequence > (folded?.sequence ?? 0) }
+        guard let last = fresh.map(\.sequence).max() else { return }
+        let step = WarrenConversation.currentStep(after: folded?.step, applying: fresh)
+        agentCurrentStepByStreamID[streamID] = (step, last)
+        var turn = agentTurnByStreamID[streamID] ?? WarrenAgentTurnFold()
+        guard let session = projection.session(id: sessionID) else { return }
+        // Most tool events leave the line as it was (an update or a result for
+        // the step already shown); only a changed line republishes the tree.
+        let line = Self.stepLine(step, root: session.workingDirectory)
+        let lastActivity = Self.lastActivity(
+            after: session.lastActivity,
+            applying: fresh,
+            from: folded?.step,
+            root: session.workingDirectory,
+            turn: &turn
+        )
+        agentTurnByStreamID[streamID] = turn
+        let summaryChanged = foldSessionSummary(fresh, streamID: streamID)
+        // A resting row's age is measured from the turn's own end, which the
+        // replayed history carries too. Without it, a Session that was already
+        // idle when this client connected has no age until its next turn ends.
+        var settledAt: Date?
+        if let ended = Self.lastSettledDate(in: fresh),
+           ended > (activityUpdatedAtBySessionID[sessionID] ?? .distantPast) {
+            activityUpdatedAtBySessionID[sessionID] = ended
+            settledAt = ended
+        }
+        // The secondary line holds the last primary fact it showed. A tool step
+        // wins, then the plan entry being advanced, then whatever was shown
+        // before, so a gap between steps never swaps the subject.
+        let primaryLine = line
+            ?? agentPlanByStreamID[streamID]?.currentStep
+            ?? lastPrimaryLineBySessionID[sessionID]
+        let linesChanged = line != session.currentStep
+            || primaryLine != session.primaryLine
+            || lastActivity != session.lastActivity
+        guard linesChanged || summaryChanged || settledAt != nil else { return }
+        if let lastActivity { lastActivityBySessionID[sessionID] = lastActivity }
+        if let primaryLine { lastPrimaryLineBySessionID[sessionID] = primaryLine }
+        var next = projection
+        if linesChanged {
+            next = next.withSessionActivityLines(
+                currentStep: line,
+                primaryLine: primaryLine,
+                lastActivity: lastActivity,
+                for: sessionID
+            )
+        }
+        if summaryChanged {
+            next = next.withSessionSummary(
+                plan: agentPlanByStreamID[streamID],
+                context: agentContextByStreamID[streamID],
+                turnCounts: Self.turnCounts(agentTurnStepsByStreamID[streamID] ?? []),
+                turnStartedAt: agentTurnByStreamID[streamID]?.startedAt,
+                subagents: agentSubagentsByStreamID[streamID] ?? [],
+                for: sessionID
+            )
+        }
+        if let settledAt {
+            next = next.withSessionAgentStatus(
+                session.agentStatus,
+                activityUpdatedAt: settledAt,
+                acknowledgedActivity: session.acknowledgedActivity,
+                for: sessionID
+            )
+        }
+        publishProjectionIfChanged(next)
+    }
+
+    /// When the last turn in a batch of events ended, by the Host's stamp.
+    nonisolated static func lastSettledDate(in events: [WarrenRemoteAgentEvent]) -> Date? {
+        events
+            .filter { turnEndingEventTypes.contains($0.type.lowercased()) }
+            .compactMap { eventDate($0) }
+            .max()
+    }
+
+    nonisolated static let turnEndingEventTypes: Set<String> = [
+        "turn.completed", "turn.failed", "turn.cancelled", "turn.interrupted", "turn.aborted",
+    ]
+
+    /// What a Session last did, folded forward over a batch of events.
+    ///
+    /// A settled tool call is what a resting row reports: the last thing the
+    /// Session did, in the past tense, and nothing in a turn's ending replaces
+    /// it. A turn that settled no call at all still has to say something about
+    /// itself, and the honest thing Warren holds is how long it ran.
+    ///
+    /// A step still in flight moves nothing, so a half-done action never gets
+    /// frozen in the past tense; the previous line stands until the call it
+    /// belongs to settles.
+    nonisolated static func lastActivity(
+        after current: String?,
+        applying events: [WarrenRemoteAgentEvent],
+        from start: WarrenConversation.Step?,
+        root: String?,
+        turn: inout WarrenAgentTurnFold
+    ) -> String? {
+        var step = start
+        var line = current
+        for event in events.sorted(by: { $0.sequence < $1.sequence }) {
+            step = WarrenConversation.currentStep(after: step, applying: [event])
+            switch event.type.lowercased() {
+            case "turn.started":
+                turn = WarrenAgentTurnFold(startedAt: eventDate(event))
+            case let type where turnEndingEventTypes.contains(type):
+                line = turn.settledLine(replacing: line, at: eventDate(event))
+            case "tool.completed", "tool.failed":
+                guard let step, step.status == .completed || step.status == .failed else { break }
+                line = stepLine(step, root: root) ?? line
+                turn.settledCalls += 1
+            default:
+                break
+            }
+        }
+        return line
+    }
+
+    /// When an event says it happened. The Host stamps both fields; a client
+    /// that has neither has no duration to report.
+    nonisolated static func eventDate(_ event: WarrenRemoteAgentEvent) -> Date? {
+        [event.occurredAt, event.recordedAt, event.timestamp]
+            .compactMap { $0 }
+            .compactMap { parseISO8601Date($0) }
+            .first
+    }
+
+    /// One sidebar line for a step, e.g. "Running git status".
+    nonisolated static func stepLine(_ step: WarrenConversation.Step?, root: String?) -> String? {
+        guard let step else { return nil }
+        let line = step.line(relativeTo: root)
+        let text = [line.verb, line.target]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return text.isEmpty ? nil : text
+    }
+
+    /// Maps the Host's OSC 133 prompt state onto the Desktop read model. A nil
+    /// input stays nil so a shell that never emitted a marker stays unknown,
+    /// which is not the same as sitting at an empty prompt.
+    ///
+    /// Two facts outlive one snapshot and are carried forward from `previous`:
+    /// the shell's own name, captured while the foreground process named it,
+    /// and when the running command began. The Host reports a foreground
+    /// process, not a command start time, so this client records the prompt
+    /// transition it observed.
+    nonisolated static func shellState(
+        from shell: RemoteRoster.ShellMetadata?,
+        previous: WarrenDesktopShellState?,
+        foregroundProcess: String,
+        now: Date
+    ) -> WarrenDesktopShellState? {
+        guard let shell else { return nil }
+        let shellName = TerminalSessionPresentation.shellName(process: foregroundProcess)
+            ?? previous?.shellName
+            ?? ""
+        let lastExitAt = parseISO8601Date(shell.lastExitAt)
+        let commandStartedAt: Date?
+        if shell.atPrompt {
+            commandStartedAt = nil
+        } else if previous?.isRunningCommand == true {
+            commandStartedAt = previous?.commandStartedAt ?? lastExitAt ?? now
+        } else {
+            // A fresh client meets a command already running. The previous
+            // command's end is a closer start than this observation, so prefer
+            // it when it is the only thing known.
+            commandStartedAt = lastExitAt ?? now
+        }
+        return WarrenDesktopShellState(
+            atPrompt: shell.atPrompt,
+            runningCommand: shell.runningCommand ?? "",
+            lastCommand: shell.lastCommand ?? "",
+            lastExitCode: shell.lastExitCode,
+            lastExitAt: lastExitAt,
+            shellName: shellName,
+            commandStartedAt: commandStartedAt
+        )
+    }
+
+    /// Folds a batch of events into the values the sidebar's second line reads
+    /// from a Session: this turn's steps, the plan, the context, and the
+    /// subagents. Returns whether anything changed, so a caller can avoid
+    /// republishing a tree that did not move.
+    @discardableResult
+    private func foldSessionSummary(
+        _ events: [WarrenRemoteAgentEvent],
+        streamID: String,
+        includingTurnSteps: Bool = true
+    ) -> Bool {
+        var changed = false
+        if includingTurnSteps {
+            let before = agentTurnStepsByStreamID[streamID] ?? []
+            let after = WarrenConversation.steps(after: before, applying: events)
+            if after != before {
+                agentTurnStepsByStreamID[streamID] = after
+                changed = true
+            }
+        }
+        var subagents = agentSubagentsByStreamID[streamID] ?? []
+        for event in events.sorted(by: { $0.sequence < $1.sequence }) {
+            let type = event.type.lowercased()
+            let payload = event.payload ?? [:]
+            switch type {
+            case "plan.updated":
+                guard let plan = Self.planProgress(from: payload) else { break }
+                if agentPlanByStreamID[streamID] != plan {
+                    agentPlanByStreamID[streamID] = plan
+                    changed = true
+                }
+            case "context.updated":
+                let usage = WarrenDesktopContextUsage(
+                    used: payload.int("used"),
+                    size: payload.int("size")
+                )
+                guard usage.size > 0 else { break }
+                if agentContextByStreamID[streamID] != usage {
+                    agentContextByStreamID[streamID] = usage
+                    changed = true
+                }
+            case "subagent", "subagent.updated":
+                guard let id = payload.string("subagentId"), !id.isEmpty else { break }
+                let state: WarrenDesktopSubagent.State =
+                    payload.string("state") == "completed" ? .completed : .running
+                if let index = subagents.firstIndex(where: { $0.id == id }) {
+                    let existing = subagents[index]
+                    let next = WarrenDesktopSubagent(
+                        id: id,
+                        parentCallID: payload.string("parentCallId") ?? existing.parentCallID,
+                        title: payload.string("title") ?? payload.string("label") ?? existing.title,
+                        summary: payload.string("summary") ?? existing.summary,
+                        // A later row without a state leaves the previous one
+                        // standing; a completed child never goes back to running.
+                        state: payload.string("state") == nil ? existing.state : state,
+                        lastActivity: existing.lastActivity,
+                        isWaiting: existing.isWaiting
+                    )
+                    if next != existing {
+                        subagents[index] = next
+                        changed = true
+                    }
+                } else {
+                    subagents.append(WarrenDesktopSubagent(
+                        id: id,
+                        parentCallID: payload.string("parentCallId"),
+                        title: payload.string("title") ?? payload.string("label") ?? "Subagent",
+                        summary: payload.string("summary") ?? "",
+                        state: state,
+                        lastActivity: nil
+                    ))
+                    changed = true
+                }
+            case "tool.started", "tool.updated", "tool.completed", "tool.failed":
+                // A child's tool call rides the parent stream tagged with the
+                // child's id; only that child's activity moves.
+                guard event.sidechain,
+                      let id = payload.string("subagentId"),
+                      !id.isEmpty,
+                      let index = subagents.firstIndex(where: { $0.id == id })
+                else { break }
+                let line = Self.subagentActivityLine(type: type, payload: payload)
+                if subagents[index].lastActivity != line {
+                    let existing = subagents[index]
+                    subagents[index] = WarrenDesktopSubagent(
+                        id: existing.id,
+                        parentCallID: existing.parentCallID,
+                        title: existing.title,
+                        summary: existing.summary,
+                        state: existing.state,
+                        lastActivity: line,
+                        isWaiting: existing.isWaiting
+                    )
+                    changed = true
+                }
+            case "interaction.requested", "interaction.resolved", "interaction.expired":
+                // A child's pending question or approval rides the same
+                // sidechain stream. The Host lifts it to the parent's
+                // attention; folding it here is what lets the row name which
+                // child is asking and reveal only that row.
+                guard event.sidechain,
+                      let id = payload.string("subagentId"),
+                      !id.isEmpty,
+                      let index = subagents.firstIndex(where: { $0.id == id })
+                else { break }
+                let state = payload.string("state") ?? ""
+                guard let waiting = Self.subagentWaiting(type: type, state: state) else { break }
+                if subagents[index].isWaiting != waiting {
+                    let existing = subagents[index]
+                    subagents[index] = WarrenDesktopSubagent(
+                        id: existing.id,
+                        parentCallID: existing.parentCallID,
+                        title: existing.title,
+                        summary: existing.summary,
+                        state: existing.state,
+                        lastActivity: existing.lastActivity,
+                        isWaiting: waiting
+                    )
+                    changed = true
+                }
+            default:
+                break
+            }
+        }
+        if changed {
+            agentSubagentsByStreamID[streamID] = subagents
+        }
+        return changed
+    }
+
+    /// Publishes one Session's summary values after a fold changed them.
+    private func publishSessionSummary(streamID: String, sessionID: TerminalSessionID) {
+        publishProjectionIfChanged(projection.withSessionSummary(
+            plan: agentPlanByStreamID[streamID],
+            context: agentContextByStreamID[streamID],
+            turnCounts: Self.turnCounts(agentTurnStepsByStreamID[streamID] ?? []),
+            turnStartedAt: agentTurnByStreamID[streamID]?.startedAt,
+            subagents: agentSubagentsByStreamID[streamID] ?? [],
+            for: sessionID
+        ))
+    }
+
+    /// The sidebar's count order, heaviest first, and the wording each kind
+    /// uses. It is data, not a switch inside the function, so the priority can
+    /// be read and changed in one place.
+    nonisolated static let turnCountOrder: [WarrenConversation.TurnSummaryItem.Kind] = [
+        .edited,
+        .gitWrite,
+        .ran,
+        .fetched,
+        .searched,
+        .read,
+        .other,
+        .decision,
+    ]
+
+    /// This turn's counts, heaviest first. The sidebar's priority differs from
+    /// `summarize`'s stable order: an edit outranks a Git write, which outranks
+    /// a command, which outranks fetching, searching, and reading, because that
+    /// is the order a person would name what a turn did.
+    nonisolated static func turnCounts(_ steps: [WarrenConversation.Step]) -> [String] {
+        let rank = Dictionary(
+            uniqueKeysWithValues: turnCountOrder.enumerated().map { ($0.element, $0.offset) }
+        )
+        return WarrenConversation.summaryItems(steps)
+            .sorted { (rank[$0.kind] ?? 99) < (rank[$1.kind] ?? 99) }
+            .map(\.label)
+    }
+
+    /// The plan `plan.updated` reports, in the sidebar's shape.
+    nonisolated static func planProgress(
+        from payload: [String: WarrenRemoteJSONValue]
+    ) -> WarrenDesktopPlanProgress? {
+        guard case let .array(items)? = payload["items"] else { return nil }
+        var entries: [(title: String, state: String)] = []
+        for item in items {
+            guard case let .object(value) = item else { continue }
+            let title = value.string("title") ?? value.string("label") ?? ""
+            if title.isEmpty { continue }
+            entries.append((title, value.string("state") ?? "pending"))
+        }
+        guard !entries.isEmpty else { return nil }
+        let done = entries.filter { $0.state == "completed" }.count
+        let current = (entries.first { $0.state == "in_progress" }
+            ?? entries.first { $0.state == "pending" })?.title ?? ""
+        return WarrenDesktopPlanProgress(done: done, total: entries.count, currentStep: current)
+    }
+
+    /// Whether one interaction event leaves a child waiting on a person. A
+    /// pending request asks; a resolved or expired one settles it. A type that
+    /// is not an interaction returns nil so the caller leaves the state alone.
+    nonisolated static func subagentWaiting(type: String, state: String) -> Bool? {
+        switch type.lowercased() {
+        case "interaction.requested":
+            return state.isEmpty || state == "pending"
+        case "interaction.resolved", "interaction.expired":
+            return false
+        default:
+            return nil
+        }
+    }
+
+    /// One child tool call as a line, built from the same step vocabulary the
+    /// parent's activity line uses.
+    nonisolated static func subagentActivityLine(
+        type: String,
+        payload: [String: WarrenRemoteJSONValue]
+    ) -> String? {
+        var step = WarrenConversation.Step(id: payload.string("callId") ?? "", kind: .tool)
+        step.toolKind = payload.string("toolKind") ?? ""
+        step.title = payload.string("toolName") ?? ""
+        step.detail = payload.string("toolDetail") ?? ""
+        step.status = type == "tool.completed"
+            ? .completed
+            : type == "tool.failed"
+                ? .failed
+                : (payload.string("toolStatus") == "in_progress" ? .running : .pending)
+        return stepLine(step, root: nil)
     }
 
     private func applyAgentCheckpoint(
@@ -4722,7 +5409,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 rootPath: value.path,
                 setupScript: value.setupScript,
                 autoImportGitWorktrees: value.autoImportGitWorktrees ?? false,
-                pinned: value.pinned ?? false
+                pinned: value.pinned ?? false,
+                activeSince: Self.parseISO8601Date(value.activeSince)
             )
         }
         let workspaces = roster.workspaces.compactMap { value -> Workspace? in
@@ -4738,7 +5426,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 pinned: value.pinned ?? false,
                 mergeState: value.mergeState.flatMap(WorkspaceMergeState.init(rawValue:)),
                 managedWorktree: value.managedWorktree ?? false,
-                worktreeLocked: value.worktreeLocked ?? false
+                worktreeLocked: value.worktreeLocked ?? false,
+                createdAt: Self.parseISO8601Date(value.createdAt),
+                lastActivityAt: Self.parseISO8601Date(value.lastActivityAt)
             )
         }
         let liveProjectIDs = Set(projects.map(\.id))
@@ -4751,31 +5441,19 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             deletingWorkspaceIDs,
             against: liveWorkspaceIDs
         )
-        let terminalGroups = roster.terminalGroups.enumerated().compactMap { index, value -> WarrenDomain.TerminalGroup? in
-            guard let id = TerminalGroupID(uuidString: value.id) else { return nil }
-            return WarrenDomain.TerminalGroup(
-                id: id,
-                hostID: hostID,
-                name: value.name,
-                home: value.home,
-                order: value.order ?? index,
-                createdAt: Self.terminalGroupDate(value.createdAt)
-            )
-        }
         // Pane groups are Host state, so the projection carries them verbatim:
         // the client renders the arrangement the Host owns instead of keeping a
         // device-local copy that no other client can see.
         let paneGroups = roster.paneGroups.enumerated().compactMap { index, value -> PaneGroup? in
             guard let id = PaneGroupID(uuidString: value.id),
                   let tree = Self.paneTree(value.tree) else { return nil }
-            let workspaceID = value.workspace.flatMap(WorkspaceID.init(uuidString:))
-            let terminalGroupID = value.terminalGroup.flatMap(TerminalGroupID.init(uuidString:))
-            guard (workspaceID == nil) != (terminalGroupID == nil) else { return nil }
+            guard let workspaceID = value.workspace.flatMap(WorkspaceID.init(uuidString:)) else {
+                return nil
+            }
             return PaneGroup(
                 id: id,
                 hostID: hostID,
                 workspaceID: workspaceID,
-                terminalGroupID: terminalGroupID,
                 name: value.name,
                 order: value.order ?? index,
                 tree: tree,
@@ -4783,27 +5461,31 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             )
         }
         let workspacePaths = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0.path) })
-        let groupHomes = Dictionary(uniqueKeysWithValues: terminalGroups.map { ($0.id, $0.home ?? "") })
+        // Every Session belongs to a Workspace; one the Host reports without
+        // a resolvable Workspace has nowhere to be shown.
         let remoteSessions = roster.sessions.compactMap {
-            value -> (RemoteRoster.Session, TerminalSessionID, WorkspaceID?, TerminalGroupID?)? in
-            guard let id = TerminalSessionID(uuidString: value.id) else { return nil }
-            let workspaceID = value.workspace.flatMap(WorkspaceID.init(uuidString:))
-            let terminalGroupID = value.terminalGroup.flatMap(TerminalGroupID.init(uuidString:))
-            guard (workspaceID == nil) != (terminalGroupID == nil) else { return nil }
-            return (value, id, workspaceID, terminalGroupID)
+            value -> (RemoteRoster.Session, TerminalSessionID, WorkspaceID)? in
+            guard let id = TerminalSessionID(uuidString: value.id),
+                  let workspaceID = value.workspace.flatMap(WorkspaceID.init(uuidString:)) else {
+                return nil
+            }
+            return (value, id, workspaceID)
         }
-        conversationSessionIDs = Set(remoteSessions.compactMap { value, id, _, _ in
+        conversationSessionIDs = Set(remoteSessions.compactMap { value, id, _ in
             value.lifecycle == "running" && value.runtimeKind == "acp" ? id : nil
         })
-        conversationConfigSessionIDs = Set(remoteSessions.compactMap { value, id, _, _ in
+        conversationConfigSessionIDs = Set(remoteSessions.compactMap { value, id, _ in
             value.agentCapabilities?.contains(WarrenRemoteAgentCapability.config) == true ? id : nil
         })
-        conversationHandoffSessionIDs = Set(remoteSessions.compactMap { value, id, _, _ in
+        conversationAttachmentSessionIDs = Set(remoteSessions.compactMap { value, id, _ in
+            value.agentCapabilities?.contains(WarrenRemoteAgentCapability.attachments) == true ? id : nil
+        })
+        conversationHandoffSessionIDs = Set(remoteSessions.compactMap { value, id, _ in
             value.agentSessionId?.isEmpty == false ? id : nil
         })
         conversationFeeds = conversationFeeds.filter { conversationSessionIDs.contains($0.key) }
         let agentTurns = Dictionary(uniqueKeysWithValues: remoteSessions.compactMap {
-            value, sessionID, _, _ in
+            value, sessionID, _ in
             value.agentTurn.map { (sessionID, $0) }
         })
         let completedAgentSessions = agentCompletionTracker.observe(
@@ -4818,7 +5500,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         var nextActivityUpdatedAtBySessionID = activityUpdatedAtBySessionID
         var nextAcknowledgments = activityAcknowledgments
         var acknowledgmentsChanged = false
-        let sessions = remoteSessions.map { value, id, workspaceID, terminalGroupID in
+        let sessions = remoteSessions.map { value, id, workspaceID in
             let candidateStatus = Self.resolvedAgentStatus(
                 rosterStatus: value.agentStatus,
                 liveStatus: agentStatusBySessionID[id]
@@ -4841,10 +5523,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             if nextAcknowledgments.invalidate(sessionID: id, currentActivity: candidateActivity) {
                 acknowledgmentsChanged = true
             }
+            let workingDirectory = value.directory
+                ?? workspacePaths[workspaceID]
+                ?? ""
+            let previousShell = previousProjectionSessions[id]?.shellState
+            let streamID = value.agentExecutionId?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let currentStep = streamID
+                .flatMap { agentCurrentStepByStreamID[$0]?.step }
+            let stepLine = Self.stepLine(currentStep, root: workingDirectory)
+            let plan = streamID.flatMap { agentPlanByStreamID[$0] }
+            let primaryLine = stepLine
+                ?? plan?.currentStep
+                ?? lastPrimaryLineBySessionID[id]
+            if let primaryLine { lastPrimaryLineBySessionID[id] = primaryLine }
             return WarrenDesktopSession(
                 id: id,
                 workspaceID: workspaceID,
-                terminalGroupID: terminalGroupID,
                 tabID: Self.tabID(id),
                 title: value.title,
                 customTitle: value.customTitle,
@@ -4854,13 +5549,26 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 state: value.lifecycle == "running" ? .attached : .exited,
                 agentStatus: candidateStatus,
                 activityUpdatedAt: nextActivityUpdatedAtBySessionID[id],
+                createdAt: Self.parseISO8601Date(value.createdAt),
                 runtimeProcess: value.process ?? value.command ?? "",
                 runtimeCommandLine: value.commandLine ?? "",
-                workingDirectory: value.directory
-                    ?? workspaceID.flatMap { workspacePaths[$0] }
-                    ?? terminalGroupID.flatMap { groupHomes[$0] }
-                    ?? "",
-                acknowledgedActivity: nextAcknowledgments[id]
+                workingDirectory: workingDirectory,
+                shellState: Self.shellState(
+                    from: value.shell,
+                    previous: previousShell,
+                    foregroundProcess: value.process ?? "",
+                    now: rosterObservationDate
+                ),
+                acknowledgedActivity: nextAcknowledgments[id],
+                currentStep: stepLine,
+                resultSentence: value.resultSentence,
+                primaryLine: primaryLine,
+                lastActivity: lastActivityBySessionID[id],
+                plan: plan,
+                context: streamID.flatMap { agentContextByStreamID[$0] },
+                turnCounts: streamID.map { Self.turnCounts(agentTurnStepsByStreamID[$0] ?? []) } ?? [],
+                turnStartedAt: streamID.flatMap { agentTurnByStreamID[$0]?.startedAt },
+                subagents: streamID.flatMap { agentSubagentsByStreamID[$0] } ?? []
             )
         }
         let liveSessionIDs = Set(remoteSessions.map(\.1))
@@ -4870,13 +5578,19 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         activityUpdatedAtBySessionID = nextActivityUpdatedAtBySessionID.filter {
             liveSessionIDs.contains($0.key)
         }
+        lastActivityBySessionID = lastActivityBySessionID.filter {
+            liveSessionIDs.contains($0.key)
+        }
+        lastPrimaryLineBySessionID = lastPrimaryLineBySessionID.filter {
+            liveSessionIDs.contains($0.key)
+        }
         nextAcknowledgments.retain(sessionIDs: liveSessionIDs)
         if acknowledgmentsChanged || nextAcknowledgments != activityAcknowledgments {
             activityAcknowledgments = nextAcknowledgments
             persistActivityAcknowledgments()
         }
         let activeStatusSessionIDs = Set(
-            remoteSessions.compactMap { value, id, _, _ in
+            remoteSessions.compactMap { value, id, _ in
                 value.agentStatus == nil ? nil : id
             }
         )
@@ -4886,7 +5600,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         // Ended sessions stay in the projection for history, but they are
         // not openable tabs: attaching to them would fail and leave the user
         // staring at a terminal that cannot accept input.
-        let unorderedTabs = remoteSessions.compactMap { value, id, _, _ -> ClientTab? in
+        let unorderedTabs = remoteSessions.compactMap { value, id, _ -> ClientTab? in
             guard value.lifecycle == "running" else { return nil }
             return ClientTab(
                 id: Self.tabID(id),
@@ -4899,16 +5613,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     ?? .custom
             )
         }
-        let sessionWorkspaces = Dictionary(uniqueKeysWithValues: remoteSessions.compactMap { value in
-            value.2.map { (value.1, $0) }
-        })
-        let sessionTerminalGroups = Dictionary(uniqueKeysWithValues: remoteSessions.compactMap { value in
-            value.3.map { (value.1, $0) }
+        let sessionWorkspaces = Dictionary(uniqueKeysWithValues: remoteSessions.map { value in
+            (value.1, value.2)
         })
         let tabs = applyingLocalTabOrder(
             unorderedTabs,
-            sessionWorkspaces: sessionWorkspaces,
-            sessionTerminalGroups: sessionTerminalGroups
+            sessionWorkspaces: sessionWorkspaces
         )
         let nextProjection = WarrenDesktopProjection(
             host: host,
@@ -4919,11 +5629,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             tabs: tabs,
             sessionWorkspaceIDs: sessionWorkspaces,
             connectionState: .attached,
-            terminalGroups: terminalGroups,
-            sessionTerminalGroupIDs: sessionTerminalGroups,
             paneGroups: paneGroups
         )
         publishProjectionIfChanged(nextProjection)
+        // Which Sessions are Conversations, and their names, came with this
+        // roster; the tray's decisions are filtered and worded by both.
+        publishPendingDecisions()
         TerminalDiagnostics.log("roster_apply", [
             "tabs": String(tabs.count),
             "selectedTab": navigation.selectedTabID ?? "nil",
@@ -5582,11 +6293,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     private func selectSession(_ id: TerminalSessionID) {
         guard let session = projection.sessions.first(where: { $0.id == id }) else { return }
-        guard session.workspaceID != nil || session.terminalGroupID != nil else { return }
+        guard session.workspaceID != nil else { return }
         TerminalDiagnostics.log("select_session", [
             "session": id.description,
             "workspace": session.workspaceID?.description ?? "nil",
-            "terminalGroup": session.terminalGroupID?.description ?? "nil",
         ])
         publishNavigationIfChanged(
             WarrenDesktopNavigationReducer.reduce(
@@ -5599,34 +6309,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     private func moveTab(_ tabID: String, before destinationTabID: String?) {
-        let currentOrder: [String]
-        let reorder: ([String]) -> Void
-        if let workspaceID = projection.workspaceID(forTabID: tabID) {
-            guard destinationTabID == nil
+        guard let workspaceID = projection.workspaceID(forTabID: tabID),
+              destinationTabID == nil
                 || projection.workspaceID(forTabID: destinationTabID!) == workspaceID else { return }
-            currentOrder = projection.tabs(in: workspaceID).map(\.id)
-            reorder = { [weak self] order in
-                guard let self else { return }
-                self.tabOrderByWorkspaceID[workspaceID] = order
-            }
-        } else if let groupID = projection.terminalGroupID(forTabID: tabID) {
-            guard destinationTabID == nil
-                || projection.terminalGroupID(forTabID: destinationTabID!) == groupID else { return }
-            currentOrder = projection.tabs(in: groupID).map(\.id)
-            reorder = { [weak self] order in
-                guard let self else { return }
-                self.tabOrderByTerminalGroupID[groupID] = order
-            }
-        } else {
-            return
-        }
+        let currentOrder = projection.tabs(in: workspaceID).map(\.id)
         let nextOrder = WarrenRemoteTabOrdering.moving(
             tabID,
             before: destinationTabID,
             in: currentOrder
         )
         guard nextOrder != currentOrder else { return }
-        reorder(nextOrder)
+        tabOrderByWorkspaceID[workspaceID] = nextOrder
         persistTabOrders()
         publishProjectionIfChanged(
             projection.reorderingTabs(
@@ -5638,8 +6331,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     private func applyingLocalTabOrder(
         _ tabs: [ClientTab],
-        sessionWorkspaces: [TerminalSessionID: WorkspaceID],
-        sessionTerminalGroups: [TerminalSessionID: TerminalGroupID]
+        sessionWorkspaces: [TerminalSessionID: WorkspaceID]
     ) -> [ClientTab] {
         let tabWorkspaceIDs = Dictionary(uniqueKeysWithValues: tabs.compactMap { tab in
             tab.sessionID.flatMap { sessionWorkspaces[$0] }.map { (tab.id, $0) }
@@ -5647,13 +6339,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let liveWorkspaceIDs = Set(tabWorkspaceIDs.values)
         tabOrderByWorkspaceID = tabOrderByWorkspaceID.filter {
             liveWorkspaceIDs.contains($0.key)
-        }
-        let tabTerminalGroupIDs = Dictionary(uniqueKeysWithValues: tabs.compactMap { tab in
-            tab.sessionID.flatMap { sessionTerminalGroups[$0] }.map { (tab.id, $0) }
-        })
-        let liveTerminalGroupIDs = Set(tabTerminalGroupIDs.values)
-        tabOrderByTerminalGroupID = tabOrderByTerminalGroupID.filter {
-            liveTerminalGroupIDs.contains($0.key)
         }
 
         var result = tabs
@@ -5671,22 +6356,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             var orderedTabs = reconciledOrder.compactMap { tabsByID[$0] }.makeIterator()
             result = result.map { tab in
                 tabWorkspaceIDs[tab.id] == workspaceID ? (orderedTabs.next() ?? tab) : tab
-            }
-        }
-        for groupID in liveTerminalGroupIDs {
-            let availableIDs = tabs.compactMap { tab in
-                tabTerminalGroupIDs[tab.id] == groupID ? tab.id : nil
-            }
-            let preferredOrder = tabOrderByTerminalGroupID[groupID] ?? availableIDs
-            let reconciledOrder = WarrenRemoteTabOrdering.reconciling(
-                preferredOrder: preferredOrder,
-                availableTabIDs: availableIDs
-            )
-            tabOrderByTerminalGroupID[groupID] = reconciledOrder
-            let tabsByID = Dictionary(uniqueKeysWithValues: result.map { ($0.id, $0) })
-            var orderedTabs = reconciledOrder.compactMap { tabsByID[$0] }.makeIterator()
-            result = result.map { tab in
-                tabTerminalGroupIDs[tab.id] == groupID ? (orderedTabs.next() ?? tab) : tab
             }
         }
         return result
@@ -5773,23 +6442,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         switch navigation.selection {
         case .workspace(let id): id
         case .project(let id): projection.firstWorkspace(in: id)?.id
-        case .terminalGroup: nil
         case nil: nil
-        }
-    }
-
-    private var selectedTerminalGroupID: TerminalGroupID? {
-        switch navigation.selection {
-        case .terminalGroup(let id): id
-        default: nil
         }
     }
 
     private var selectedContextTabs: [ClientTab] {
         switch navigation.selection {
         case .workspace(let id):
-            return projection.tabs(in: id)
-        case .terminalGroup(let id):
             return projection.tabs(in: id)
         case .project(let id):
             guard let workspaceID = projection.firstWorkspace(in: id)?.id else { return [] }
@@ -5920,10 +6579,6 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             guard let id = WorkspaceID(uuidString: entry.key) else { return }
             result[id] = entry.value
         }
-        tabOrderByTerminalGroupID = orders.terminalGroup.reduce(into: [:]) { result, entry in
-            guard let id = TerminalGroupID(uuidString: entry.key) else { return }
-            result[id] = entry.value
-        }
     }
 
     /// Records that this person has now seen whatever the Session was reporting.
@@ -5959,16 +6614,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         WarrenDesktopNavigationPersistence.saveTabOrders(WarrenDesktopTabOrders(
             workspace: Dictionary(uniqueKeysWithValues: tabOrderByWorkspaceID.map {
                 ($0.key.description, $0.value)
-            }),
-            terminalGroup: Dictionary(uniqueKeysWithValues: tabOrderByTerminalGroupID.map {
-                ($0.key.description, $0.value)
             })
         ), scope: navigationScope)
     }
-    private static func terminalGroupDate(_ rawValue: String?) -> Date {
-        parseISO8601Date(rawValue) ?? .distantPast
-    }
-
     private static func tabID(_ id: TerminalSessionID) -> String { "remote-\(id.description)" }
 
     /// Maps the Host's pane tree into the domain tree. A leaf whose Session ID
@@ -5994,6 +6642,55 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             case (let firstChild?, let secondChild?):
                 return .split(axis: axis, ratio: ratio, first: firstChild, second: secondChild)
             }
+        }
+    }
+}
+
+/// One Agent turn, folded far enough to describe it once it ends.
+///
+/// The sidebar's resting line is the last thing a Session did. A turn can end
+/// without having done anything countable — a reply to a question runs no tools
+/// at all — and then the only fact the client holds about that turn is how long
+/// it took, which is more than the word "Answered" ever said.
+struct WarrenAgentTurnFold: Equatable {
+    /// When the turn this fold describes began. Nil before the first
+    /// `turn.started` the client saw; a session whose history starts mid-turn
+    /// therefore reports no duration rather than a wrong one.
+    var startedAt: Date?
+    /// How many tool calls the turn settled.
+    var settledCalls = 0
+
+    /// What the turn has to say about itself as it ends.
+    ///
+    /// A turn that settled a call is already described by that call, so its own
+    /// line stands. Anything else is described by how long it ran.
+    func settledLine(replacing line: String?, at endedAt: Date?) -> String? {
+        guard settledCalls == 0,
+              let startedAt,
+              let endedAt,
+              endedAt.timeIntervalSince(startedAt) >= 1
+        else { return line }
+        return "Worked \(WarrenConversation.formatElapsed(endedAt.timeIntervalSince(startedAt)))"
+    }
+}
+
+private extension Dictionary where Key == String, Value == WarrenRemoteJSONValue {
+    /// The payload's string for `key`, with a whole number rendered as its
+    /// integer form. Agent payloads mix strings and numbers for the same field,
+    /// so one reader has to accept both.
+    func string(_ key: String) -> String? {
+        switch self[key] {
+        case .string(let value)?: return value
+        case .number(let value)?: return value == value.rounded() ? String(Int(value)) : String(value)
+        default: return nil
+        }
+    }
+
+    func int(_ key: String) -> Int {
+        switch self[key] {
+        case .number(let value)?: return Int(value)
+        case .string(let value)?: return Int(value) ?? 0
+        default: return 0
         }
     }
 }

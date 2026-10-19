@@ -9,20 +9,17 @@ struct WarrenDesktopTabItem: View {
     let displayTitle: String
     let mark: WarrenActivityMark?
     let isSelected: Bool
-    /// Whether this Tab still draws the hairline that divides it from the Tab
-    /// after it. Members of one pane-group run hide theirs: the group's rule is
-    /// what binds them, and a hairline between them would divide what the rule
-    /// just joined.
-    var showsTrailingSeparator: Bool = true
     /// Whether this Tab can start a drag.
-    ///
-    /// A pane group is one placement rather than a set of slots, so its members
-    /// are not draggable: the layout decides which Session sits where, and a
-    /// member that moved on its own would leave the group's chip and rule
-    /// describing an arrangement the strip no longer shows. Selection, the
-    /// context menu, and the close control are untouched.
     var canStartDrag: Bool = true
     let isPinned: Bool
+    /// The bar's selection namespace, so the plate slides between Tabs.
+    let selectionNamespace: Namespace.ID
+    /// This Tab's width. The bar gives every Tab the same width, so the track's
+    /// origin math stays `index * width`.
+    var width: CGFloat = WarrenLayoutMetrics.tabWidth
+    /// Whether the plate travels here. A Tab more than a viewport away appears
+    /// with the plate already on it instead of sweeping the whole track.
+    var plateTravels = true
     let onSelect: () -> Void
     let onClose: () -> Void
     let onCloseOthers: () -> Void
@@ -49,28 +46,13 @@ struct WarrenDesktopTabItem: View {
         tab.sessionID != nil && (isHovered || isCloseFocused || forceHover)
     }
 
-    private var workspaceMoveTargets: [WarrenDesktopSessionMoveTarget] {
-        sessionMoveTargets.filter { target in
-            if case .workspace = target.destination { return true }
-            return false
-        }
-    }
-
-    private var terminalGroupMoveTargets: [WarrenDesktopSessionMoveTarget] {
-        sessionMoveTargets.filter { target in
-            if case .terminalGroup = target.destination { return true }
-            return false
-        }
-    }
-
     private var contextMenuActions: [WarrenDesktopContextMenuAction] {
         guard let sessionID = tab.sessionID else { return [] }
         return Self.contextMenuActions(
             sessionID: sessionID,
             isPinned: isPinned,
             hasActivity: mark != nil,
-            workspaceMoveTargets: workspaceMoveTargets,
-            terminalGroupMoveTargets: terminalGroupMoveTargets,
+            workspaceMoveTargets: sessionMoveTargets,
             onMoveSession: onMoveSession,
             onTogglePin: onTogglePin,
             onDismissActivity: onDismissActivity,
@@ -89,7 +71,6 @@ struct WarrenDesktopTabItem: View {
         isPinned: Bool,
         hasActivity: Bool,
         workspaceMoveTargets: [WarrenDesktopSessionMoveTarget],
-        terminalGroupMoveTargets: [WarrenDesktopSessionMoveTarget],
         onMoveSession: @escaping (TerminalSessionID, WarrenDesktopSessionMoveDestination) -> Void,
         onTogglePin: @escaping () -> Void,
         onDismissActivity: @escaping () -> Void,
@@ -102,11 +83,6 @@ struct WarrenDesktopTabItem: View {
         var moveActions: [WarrenDesktopContextMenuAction] = []
         if !workspaceMoveTargets.isEmpty {
             moveActions.append(.menu(title: "Workspace", actions: workspaceMoveTargets.map { target in
-                .button(title: target.title, action: { onMoveSession(sessionID, target.destination) })
-            }))
-        }
-        if !terminalGroupMoveTargets.isEmpty {
-            moveActions.append(.menu(title: "Terminal Group", actions: terminalGroupMoveTargets.map { target in
                 .button(title: target.title, action: { onMoveSession(sessionID, target.destination) })
             }))
         }
@@ -127,31 +103,23 @@ struct WarrenDesktopTabItem: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let pillShape = RoundedRectangle(
+            cornerRadius: WarrenLayoutMetrics.tabPillRadius,
+            style: .continuous
+        )
         ZStack(alignment: .trailing) {
             Button(action: onSelect) {
-                HStack(spacing: WarrenSpacing.small) {
-                    if tab.sessionID == nil {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(tokens.info.opacity(0.8))
-                            .frame(width: 7, height: 7)
-                            .accessibilityHidden(true)
-                    }
+                HStack(spacing: 7) {
+                    badge(tokens: tokens)
                     if isPinned {
                         Image(systemName: "pin.fill")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(tokens.mutedForeground)
                             .accessibilityHidden(true)
                     }
-                    if let mark {
-                        WarrenDesktopActivityIndicator(mark: mark)
-                            .accessibilityHidden(true)
-                    }
-                    HStack(spacing: 0) {
+                    WarrenDesktopFadingLine(edge: .trailing) {
                         Text(displayTitle)
-                            .font(WarrenTypography.tabShellTitle)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer(minLength: 0)
+                            .font(.system(size: 13, weight: .medium))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(.rect)
@@ -175,27 +143,24 @@ struct WarrenDesktopTabItem: View {
                         )
                     }
                 }
-                .padding(.leading, WarrenSpacing.medium)
-                .padding(.trailing, WarrenLayoutMetrics.tabAccessoryColumnWidth)
+                .padding(.leading, 5)
+                .padding(.trailing, WarrenLayoutMetrics.tabAccessoryColumnWidth - 4)
                 .frame(
-                    width: WarrenLayoutMetrics.tabWidth,
-                    height: WarrenLayoutMetrics.tabBarHeight,
+                    width: width,
+                    height: WarrenLayoutMetrics.tabPillHeight,
                     alignment: .leading
                 )
-                .background(Color.clear)
                 .contentShape(.rect)
             }
-            // Selection and hover backgrounds are owned by the outer tab
-            // surface (background + hairline stroke). The inner button only
-            // adds focus and press feedback, so the active tab never picks
-            // up an extra wash while the pointer rests on it.
+            // Selection and hover fills are owned by the pill below. The inner
+            // button only adds focus and press feedback.
             .buttonStyle(WarrenTabButtonStyle(isFocused: isTabFocused))
             .focused($isTabFocused)
             .disabled(tab.sessionID == nil)
             .foregroundStyle(
                 isSelected
-                    ? tokens.foreground.opacity(0.90)
-                    : tokens.mutedForeground
+                    ? tokens.foreground.opacity(0.95)
+                    : (isHovered ? tokens.foreground.opacity(0.83) : tokens.mutedForeground)
             )
             .accessibilityLabel("Tab \(displayTitle)")
             .accessibilityValue(isSelected ? "Selected" : "Not selected")
@@ -211,21 +176,17 @@ struct WarrenDesktopTabItem: View {
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 9, weight: .semibold))
                     .accessibilityHidden(true)
             }
             .buttonStyle(WarrenChromeButtonStyle(isFocused: isCloseFocused))
-            .frame(
-                width: WarrenLayoutMetrics.tabCloseButtonSize,
-                height: WarrenLayoutMetrics.tabCloseButtonSize
-            )
+            .frame(width: 18, height: 18)
             .contentShape(.rect)
             .background(
-                isCloseHovered
-                    ? (isSelected ? tokens.muted.opacity(0.65) : tokens.fillHover)
-                    : .clear
+                isCloseHovered ? tokens.fillHover : .clear,
+                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
             )
-            .clipShape(.rect(cornerRadius: WarrenRadius.small))
+            .foregroundStyle(tokens.mutedForeground)
             .opacity(exposesClose ? 1 : 0)
             .allowsHitTesting(exposesClose)
             .focused($isCloseFocused)
@@ -239,50 +200,35 @@ struct WarrenDesktopTabItem: View {
                 isEnabled: exposesClose,
                 action: onClose
             )
-            .padding(.trailing, WarrenSpacing.xs)
+            .padding(.trailing, 4)
         }
-        .frame(width: WarrenLayoutMetrics.tabWidth, height: WarrenLayoutMetrics.tabBarHeight)
-        .background(
-            isSelected
-                ? tokens.selectedTabFill
-                : (isHovered ? tokens.fillHover : .clear)
-        )
+        .frame(width: width, height: WarrenLayoutMetrics.tabPillHeight)
+        .background {
+            if isSelected {
+                // The plate is the anchor: it slides to the newly selected Tab
+                // rather than fading in place.
+                pillShape
+                    .fill(tokens.treeRowSelected)
+                    .overlay {
+                        pillShape.strokeBorder(tokens.cardBorder, lineWidth: 1)
+                    }
+                    .matchedGeometryEffect(
+                        id: plateTravels ? "tab-selection" : "tab-selection-here",
+                        in: selectionNamespace
+                    )
+                    .transition(.opacity)
+            } else if isHovered {
+                pillShape.fill(tokens.fillHover)
+            }
+        }
         .animation(
             WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
             value: isHovered
         )
         .animation(
-            WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
+            WarrenMotion.selection(reduceMotion: reduceMotion),
             value: isSelected
         )
-        .overlay(alignment: .top) {
-            if isSelected {
-                Rectangle()
-                    .fill(tokens.border)
-                    .frame(height: WarrenSpacing.hairline)
-            }
-        }
-        .overlay(alignment: .leading) {
-            if isSelected {
-                Rectangle()
-                    .fill(tokens.border)
-                    .frame(width: WarrenSpacing.hairline)
-            }
-        }
-        .overlay(alignment: .trailing) {
-            // Active tab outlines trailing edge; inactive tabs draw hairline separator.
-            Rectangle()
-                .fill((isSelected || showsTrailingSeparator) ? tokens.border : .clear)
-                .frame(width: WarrenSpacing.hairline)
-        }
-        .overlay(alignment: .bottom) {
-            // Superset-aligned tab flow: active tab has a transparent bottom so its
-            // background flows seamlessly into the content canvas below. Inactive tabs
-            // keep the continuous baseline separator.
-            Rectangle()
-                .fill(isSelected ? .clear : tokens.border)
-                .frame(height: WarrenSpacing.hairline)
-        }
         .contentShape(.rect)
         .dropDestination(for: String.self) { tabIDs, _ in
             guard let sourceID = tabIDs.first else { return false }
@@ -290,14 +236,25 @@ struct WarrenDesktopTabItem: View {
             return true
         }
         .onHover { isHovered = $0 }
-        .contextMenu {
-            if tab.sessionID != nil {
-                WarrenDesktopContextMenu(contextMenuActions)
-            }
-        }
+        .warrenContextMenu(tab.sessionID == nil ? [] : contextMenuActions)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Tab \(displayTitle)")
         .accessibilityValue(isSelected ? "Selected" : "Not selected")
+    }
+
+    /// The Session's kind badge. A Tab with no Session yet shows a placeholder
+    /// tile.
+    @ViewBuilder
+    private func badge(tokens: WarrenColorTokens) -> some View {
+        if tab.sessionID == nil {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(tokens.info.opacity(0.6))
+                .frame(width: 16, height: 16)
+                .accessibilityHidden(true)
+        } else {
+            // Status lives in the sidebar's dots; the Tab names the Session.
+            WarrenDesktopSessionKindBadge(kind: tab.kind, size: 16)
+        }
     }
 }
 
@@ -319,8 +276,11 @@ private struct WarrenTabButtonStyle: ButtonStyle {
         configuration.label
             .opacity(isEnabled ? (configuration.isPressed ? 0.82 : 1) : 0.42)
             .overlay {
-                Rectangle()
-                    .stroke(isFocused ? tokens.focusRing : .clear, lineWidth: isFocused ? 1 : 0)
+                RoundedRectangle(
+                    cornerRadius: WarrenLayoutMetrics.tabPillRadius,
+                    style: .continuous
+                )
+                .stroke(isFocused ? tokens.focusRing : .clear, lineWidth: isFocused ? 1 : 0)
             }
             .animation(
                 WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
@@ -346,34 +306,30 @@ struct WarrenDesktopTabAddSlot: View {
                         WarrenBrailleSpinner(size: 14, accessibilityLabel: "Starting session")
                     } else {
                         Image(systemName: "plus")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 13, weight: .regular))
                     }
                 }
                 .accessibilityHidden(true)
             }
-            .buttonStyle(.plain)
+            // Drawn like the panels button beside it: two plain glyphs at the
+            // trailing edge, not a boxed control competing with the Tabs.
+            .buttonStyle(WarrenChromeButtonStyle())
             .disabled(!isEnabled || isLoading)
-            .frame(width: 28, height: 28)
+            .frame(width: 28, height: WarrenLayoutMetrics.tabPillHeight)
             .contentShape(.rect)
             .foregroundStyle(tokens.mutedForeground)
-            .background(tokens.muted.opacity(0.30))
-            .overlay {
-                RoundedRectangle(cornerRadius: WarrenRadius.small)
-                    .stroke(tokens.border.opacity(0.60), lineWidth: WarrenSpacing.hairline)
-            }
-            .clipShape(.rect(cornerRadius: WarrenRadius.small))
             .opacity(isEnabled ? 1 : 0.45)
-            .accessibilityLabel(isLoading ? "Starting session" : "New tab")
+            .accessibilityLabel(isLoading ? "Starting session" : "New session")
+            .warrenTooltip("New session")
             .warrenSemanticElement(
                 id: "tab.new",
                 role: .button,
-                label: "New tab",
+                label: "New session",
                 isEnabled: isEnabled && !isLoading,
                 action: action
             )
         }
-        .frame(width: WarrenLayoutMetrics.tabAddButtonSlotWidth, height: WarrenLayoutMetrics.tabBarHeight)
-        .padding(.leading, WarrenSpacing.xs)
+        .frame(height: WarrenLayoutMetrics.tabPillHeight)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Tab actions")
     }

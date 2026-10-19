@@ -1,8 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 5.2 80 80" role="img" aria-labelledby="title desc">
   <title id="title">Warren W black</title>
   <desc id="desc">Warren W menubar template image</desc>
-  <polygon points="689.3,844.2 937.0,195.2 793.4,151.6 637.9,828.6" fill="#000000"/>
-  <polygon points="730.7,820.7 549.7,239.2 499.5,251.0 596.5,852.2" fill="#000000"/>
-  <polygon points="502.6,231.6 103.1,800.4 220.6,872.4 546.6,258.5" fill="#000000"/>
-  <polygon points="236.7,842.0 237.9,175.4 184.3,171.4 87.0,830.9" fill="#000000"/>
+  <polyline points="17.5,30.5 31.5,72.5 47.5,43.5 63.5,72.5 76.5,33.5" fill="none" stroke="#000000" stroke-width="10.35" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="81.37" cy="18.86" r="6.25" fill="#000000"/>
 </svg>

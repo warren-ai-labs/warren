@@ -8,7 +8,6 @@ struct WarrenTerminalOpenRequest: Equatable, Sendable {
     static let scheme = "warren"
     static let terminalHost = "terminal"
 
-    let group: String?
     let project: String?
     let workspace: String?
     let session: String?
@@ -19,7 +18,7 @@ struct WarrenTerminalOpenRequest: Equatable, Sendable {
         }
 
         let host = url.host?.lowercased() ?? ""
-        let allowedHosts = [Self.terminalHost, "project", "workspace", "session", "group"]
+        let allowedHosts = [Self.terminalHost, "project", "workspace", "session"]
         guard allowedHosts.contains(host) else {
             return nil
         }
@@ -31,7 +30,7 @@ struct WarrenTerminalOpenRequest: Equatable, Sendable {
         var selectors: [String: String] = [:]
         for item in queryItems {
             let key = item.name.lowercased()
-            guard ["group", "project", "workspace", "session"].contains(key),
+            guard ["project", "workspace", "session"].contains(key),
                   let rawValue = item.value else { continue }
             let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty, selectors[key] == nil else { continue }
@@ -50,7 +49,7 @@ struct WarrenTerminalOpenRequest: Equatable, Sendable {
             while index + 1 < pathParts.count {
                 let key = pathParts[index].lowercased()
                 let value = pathParts[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
-                guard ["group", "project", "workspace", "session"].contains(key), !value.isEmpty else {
+                guard ["project", "workspace", "session"].contains(key), !value.isEmpty else {
                     index += 1
                     continue
                 }
@@ -63,7 +62,6 @@ struct WarrenTerminalOpenRequest: Equatable, Sendable {
             return nil
         }
 
-        group = selectors["group"]
         project = selectors["project"]
         workspace = selectors["workspace"]
         session = selectors["session"]

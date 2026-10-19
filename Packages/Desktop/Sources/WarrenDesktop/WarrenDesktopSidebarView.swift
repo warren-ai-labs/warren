@@ -2,41 +2,10 @@ import SwiftUI
 import WarrenDesignSystem
 import WarrenDomain
 
-struct NotificationBellButton: View {
-    let unreadCount: Int
-    let isMuted: Bool
-    let action: () -> Void
-    let tokens: WarrenColorTokens
-    
-    @FocusState private var isFocused: Bool
-    
-    var body: some View {
-        let bellColor = isMuted
-            ? tokens.mutedForeground
-            : (unreadCount > 0 ? tokens.highlight.opacity(0.78) : tokens.mutedForeground)
-        
-        Button(action: action) {
-            Image(systemName: isMuted ? "bell.slash" : "bell")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(bellColor)
-                .accessibilityHidden(true)
-                .frame(width: 28, height: 28)
-        }
-        .buttonStyle(WarrenInteractiveRowStyle())
-        .focused($isFocused)
-        .help(isMuted ? "Notifications muted" : "Notifications")
-        .accessibilityLabel("Notifications")
-        .accessibilityValue(
-            isMuted
-                ? "Muted"
-                : (unreadCount > 0 ? "\(unreadCount) unread" : "No unread notifications")
-        )
-        .accessibilityHint("See system messages and Agent task completion notices")
-    }
-}
-
 struct WarrenDesktopSidebar: View {
     let projection: WarrenDesktopProjection
+    /// Whether this card is the docked column or the floating peek copy.
+    var presentation: WarrenDesktopSidebarPresentation = .docked
     @Binding var sidebarState: WarrenDesktopSidebarState
     @Binding var sidebarTree: WarrenDesktopSidebarTreeState
     let selection: WarrenDesktopSidebarSelection?
@@ -52,26 +21,19 @@ struct WarrenDesktopSidebar: View {
     let onAction: (WarrenDesktopAction) -> Void
     let onCommandPalette: () -> Void
     let onSettings: () -> Void
-    let notices: [WarrenDesktopNotice]
-    @Binding var isNoticePopoverPresented: Bool
-    let onDismissNoticePopover: () -> Void
-    let onNoticeRead: (WarrenDesktopNotice.ID) -> Void
-    let onNoticeDismiss: (WarrenDesktopNotice.ID) -> Void
-    let onMarkAllNoticesRead: () -> Void
-    
-    @AppStorage("notificationsMuted")
-    private var notificationsMuted = false
+    /// Which failed shell commands have been looked at; see
+    /// `WarrenDesktopShellAttention`.
+    @StateObject private var shellAttention = WarrenDesktopShellAttention()
+    /// Whether the pointer is over the rail, so an idle row does not collapse
+    /// under it.
+    @State private var pointerInsideSidebar = false
     /// Rich is the default because the tree is the only session switcher: the
     /// tab strip controls the panes on screen and no longer lists a workspace's
     /// other Sessions. Compact remains available for navigating projects
     /// without their Sessions, at the cost of having to open a workspace to
     /// reach one.
-    @AppStorage(WarrenPreferenceKey.sidebarWorkspaceDisplayMode)
-    private var workspaceDisplayModeRawValue = WarrenDesktopWorkspaceDisplayMode.rich.rawValue
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onRequestDeletion: (WarrenDesktopDeletionRequest) -> Void
-    let onRequestTerminalGroupCreate: () -> Void
-    let onRequestTerminalGroupEdit: (TerminalGroup) -> Void
     let activeEndpointID: String
     let displayConfigurationError: String?
     /// Optional ordered Host sections. When present, the Projects/Workspaces
@@ -97,6 +59,24 @@ struct WarrenDesktopSidebar: View {
     var onOpenEditor: (WorkspaceID) -> Void = { _ in }
     /// Drops a Session from the tree onto a pane.
     var onSplitDropSession: ((String, String, SplitDropTarget) -> Void)? = nil
+    /// The Host this window works on, for the row at the top of the card.
+    var hostSummary: WarrenDesktopSidebarHostIdentity? = nil
+    /// Whether Public Access is serving this Host. A quiet globe with a green
+    /// dot follows the Host name while it is, so it stays visible with the
+    /// right sidebar closed.
+    var isPublicAccessOn: Bool = false
+    /// Whether the Host picker is open, and what clicking the Host row does.
+    /// The window root owns the picker, like every other chrome surface.
+    var isHostPickerPresented: Bool = false
+    var onToggleHostPicker: (() -> Void)? = nil
+    /// The Hosts listed at the foot of the card, and what picking one does.
+    var otherHosts: [WarrenDesktopSidebarOtherHost] = []
+    var onSelectHost: (String) -> Void = { _ in }
+    /// Opens the flow that adds a Host; offered at the foot of the other
+    /// Hosts' panel.
+    var onAddHost: (() -> Void)? = nil
+    /// The notice center's bell, at the card's bottom-left corner.
+    var noticeBell: AnyView? = nil
 
     /// The current Host's marked Workspaces, for the current-Host tree.
     private var editorMarkedWorkspaceIDs: Set<WorkspaceID> {
@@ -116,7 +96,6 @@ struct WarrenDesktopSidebar: View {
         // clipping keeps overflow on the trailing edge, where it is harmless.
         VStack(alignment: .leading, spacing: 0) {
             WarrenDesktopSidebarHeader(
-                isCollapsed: sidebarState.isCollapsed,
                 chromeMode: chromeMode,
                 updateStatus: updateStatus,
                 onUpdateAction: onUpdateAction,
@@ -124,8 +103,10 @@ struct WarrenDesktopSidebar: View {
                 onCommandPalette: onCommandPalette,
                 showsActiveOnly: sidebarTree.showsActiveOnly,
                 onToggleActiveOnly: toggleActiveOnly,
-                workspaceDisplayMode: workspaceDisplayMode,
-                onToggleWorkspaceDisplayMode: toggleWorkspaceDisplayMode
+                host: hostSummary,
+                isHostPickerPresented: isHostPickerPresented,
+                isPublicAccessOn: isPublicAccessOn,
+                onToggleHostPicker: onToggleHostPicker
             )
             if let displayConfigurationError {
                 displayConfigurationNotice(displayConfigurationError, tokens: tokens)
@@ -134,24 +115,18 @@ struct WarrenDesktopSidebar: View {
                 WarrenOverflowFadeScrollView(
                     .vertical,
                     fadeLength: WarrenLayoutMetrics.sidebarScrollFadeLength,
-                    surface: tokens.sidebarSurface
+                    surface: tokens.workbenchCardFill
                 ) {
                     Group {
                         if let sidebarHostProjections, usesSidebarHostSections {
                             VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                                // Tasks and Terminal Groups remain current-host
-                                // features in the first multi-host release. Reuse
-                                // the existing rows for those sections while the
-                                // scoped Host view owns only Projects/Workspaces.
+                                // Tasks remain a current-host feature in the
+                                // first multi-host release. Reuse the existing
+                                // rows for that section while the scoped Host
+                                // view owns only Projects/Workspaces.
                                 WarrenDesktopSidebarRows(
                                     taskGroups: projection.taskGroups,
                                     groups: projection.groups,
-                                    terminalGroups: projection.terminalGroups.map {
-                                        WarrenDesktopTerminalGroup(
-                                            group: $0,
-                                            sessions: projection.sessions(in: $0.id)
-                                        )
-                                    },
                                     workspaceActivitySummaries: projection.workspaceActivitySummaries,
                                     activeWorkspaceIDs: editorActivity.activeWorkspaceIDs(
                                         projection.activeWorkspaceIDs,
@@ -163,7 +138,6 @@ struct WarrenDesktopSidebar: View {
                                     showsTasks: showsTasks,
                                     showsProjects: false,
                                     tree: $sidebarTree,
-                                    isCollapsed: sidebarState.isCollapsed,
                                     selection: selection,
                                     selectedTabID: selectedTabID,
                                     deletingProjectIDs: deletingProjectIDs,
@@ -183,8 +157,6 @@ struct WarrenDesktopSidebar: View {
                                             }
                                         }
                                     },
-                                    onRequestTerminalGroupCreate: onRequestTerminalGroupCreate,
-                                    onRequestTerminalGroupEdit: onRequestTerminalGroupEdit,
                                     onAction: onAction,
                                     onRequestRename: onRequestRename,
                                     onRequestDeletion: onRequestDeletion,
@@ -197,7 +169,6 @@ struct WarrenDesktopSidebar: View {
                                     },
                                     showsActiveOnly: sidebarTree.showsActiveOnly,
                                     workspaceDisplayMode: workspaceDisplayMode,
-                                    isCollapsed: sidebarState.isCollapsed,
                                     selection: sidebarResourceSelection,
                                     activeEndpointID: activeEndpointID,
                                     selectedTabID: selectedTabID,
@@ -223,19 +194,14 @@ struct WarrenDesktopSidebar: View {
                                     },
                                     onToggleActiveOnly: toggleActiveOnly,
                                     onRetry: onRetrySidebarHost,
-                                    onSplitDropSession: onSplitDropSession
+                                    onSplitDropSession: onSplitDropSession,
+                                    onOpenEditor: onOpenEditor
                                 )
                             }
                         } else {
                             WarrenDesktopSidebarRows(
                             taskGroups: projection.taskGroups,
                             groups: projection.groups,
-                            terminalGroups: projection.terminalGroups.map {
-                                WarrenDesktopTerminalGroup(
-                                    group: $0,
-                                    sessions: projection.sessions(in: $0.id)
-                                )
-                            },
                             workspaceActivitySummaries: projection.workspaceActivitySummaries,
                             activeWorkspaceIDs: editorActivity.activeWorkspaceIDs(
                                 projection.activeWorkspaceIDs,
@@ -246,13 +212,13 @@ struct WarrenDesktopSidebar: View {
                             workspaceDisplayMode: workspaceDisplayMode,
                             showsTasks: showsTasks,
                             tree: $sidebarTree,
-                            isCollapsed: sidebarState.isCollapsed,
                             selection: selection,
                             selectedTabID: selectedTabID,
                             deletingProjectIDs: deletingProjectIDs,
                             deletingWorkspaceIDs: deletingWorkspaceIDs,
                             endpointCapabilities: endpointCapabilities,
                             isInteractionDisabled: !projection.isConnected,
+                            connectionState: projection.connectionState,
                             onAddProject: { onAction(.addProject) },
                             onRequestTaskCreate: onRequestTaskCreate,
                             onFocusTask: { taskID in
@@ -268,8 +234,6 @@ struct WarrenDesktopSidebar: View {
                                     }
                                 }
                             },
-                            onRequestTerminalGroupCreate: onRequestTerminalGroupCreate,
-                            onRequestTerminalGroupEdit: onRequestTerminalGroupEdit,
                             onAction: onAction,
                             onRequestRename: onRequestRename,
                             onRequestDeletion: onRequestDeletion,
@@ -278,7 +242,12 @@ struct WarrenDesktopSidebar: View {
                             )
                         }
                     }
-                    .padding(.vertical, WarrenSpacing.compact)
+                    .padding(.vertical, WarrenDesktopSidebarMetrics.contentVerticalInset)
+                    .padding(.horizontal, WarrenDesktopSidebarMetrics.contentHorizontalInset)
+                    .animation(
+                        WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion),
+                        value: rowStructure
+                    )
                 }
                 .onChange(of: sidebarResourceSelection) { newSelection in
                     guard usesSidebarHostSections,
@@ -345,17 +314,108 @@ struct WarrenDesktopSidebar: View {
                 }
             }
             sidebarFooter(tokens: tokens)
+            if presentation == .peek {
+                peekPinRow(tokens: tokens)
+            }
         }
-        .frame(width: sidebarState.renderedWidth, alignment: .leading)
+        .frame(width: renderedWidth, alignment: .leading)
         .clipped()
         .frame(maxHeight: .infinity)
-        .background(tokens.sidebarSurface)
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(tokens.chromeDivider)
-                .frame(width: WarrenSpacing.hairline)
-                .zIndex(2)
+        .modifier(WarrenDesktopSidebarPresentationStyle(
+            presentation: presentation,
+            tokens: tokens
+        ))
+        .onHover { pointerInsideSidebar = $0 }
+        .environment(\.warrenPointerInsideSidebar, pointerInsideSidebar)
+        .environment(\.warrenShellAttention, shellAttention)
+    }
+
+    /// The rail's rows by identity: the Tasks, Projects, Workspaces and
+    /// Sessions it lists and which Workspaces count as active. A Session that
+    /// opens or closes, or a Workspace that folds into its project's idle row,
+    /// changes it, so the rows around them move instead of snapping. What a row
+    /// says is left out: a working line changes too often to animate.
+    private var rowStructure: [String] {
+        var ids: [String] = []
+        func append(
+            groups: [WarrenDesktopProjectGroup],
+            sessions: [WorkspaceID: [WarrenDesktopSession]],
+            active: Set<WorkspaceID>
+        ) {
+            for group in groups {
+                ids.append("p:\(group.id.description)")
+                for workspace in group.workspaces {
+                    let mark = active.contains(workspace.id) ? "a" : "i"
+                    ids.append("w\(mark):\(workspace.id.description)")
+                    for session in sessions[workspace.id] ?? [] {
+                        ids.append("s:\(session.id.description)")
+                    }
+                }
+            }
         }
+        for group in projection.taskGroups {
+            ids.append("t:\(group.id.description)")
+            ids.append(contentsOf: group.workspaces.map { "tw:\($0.id.description)" })
+        }
+        if let sidebarHostProjections, usesSidebarHostSections {
+            for host in sidebarHostProjections {
+                ids.append("h:\(host.endpointID)")
+                append(
+                    groups: host.projectGroups,
+                    sessions: host.activeSessionsByWorkspaceID,
+                    active: host.activeWorkspaceIDs
+                )
+            }
+        } else {
+            append(
+                groups: projection.groups,
+                sessions: projection.activeSessionsByWorkspaceID,
+                active: editorActivity.activeWorkspaceIDs(
+                    projection.activeWorkspaceIDs,
+                    hostId: activeEndpointID
+                )
+            )
+        }
+        return ids
+    }
+
+    /// The docked column takes the dragged width; the peek copy ignores the
+    /// collapse entirely and reuses the width the user chose.
+    private var renderedWidth: CGFloat {
+        presentation == .peek ? sidebarState.width : sidebarState.renderedWidth
+    }
+
+    /// The peek's foot: the hint that it will move away, and the pin chord.
+    private func peekPinRow(tokens: WarrenColorTokens) -> some View {
+        HStack(spacing: WarrenSpacing.compact) {
+            Text("Click a session to jump. Moves away to hide.")
+                .font(WarrenTypography.navigationMeta)
+                .foregroundStyle(tokens.treeQuietText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            HStack(spacing: WarrenSpacing.xxs) {
+                Text("\u{2318}B")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(tokens.treeSecondaryText)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(tokens.muted, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                Text("pin")
+                    .font(WarrenTypography.navigationMeta)
+                    .foregroundStyle(tokens.treeQuietText)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 36)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(tokens.cardBorder)
+                .frame(height: 1)
+                .accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Pin sidebar with Command-B")
     }
 
     @ViewBuilder
@@ -363,33 +423,22 @@ struct WarrenDesktopSidebar: View {
         _ message: String,
         tokens: WarrenColorTokens
     ) -> some View {
-        if sidebarState.isCollapsed {
+        HStack(alignment: .top, spacing: WarrenSpacing.xs) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(tokens.warning)
-                .frame(width: 32, height: 28)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .help(message)
-                .accessibilityLabel("Display configuration warning")
-                .accessibilityValue(message)
-        } else {
-            HStack(alignment: .top, spacing: WarrenSpacing.xs) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(tokens.warning)
-                    .accessibilityHidden(true)
-                Text(message)
-                    .font(WarrenTypography.navigationMeta)
-                    .foregroundStyle(tokens.warning)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, WarrenSpacing.compact)
-            .padding(.vertical, WarrenSpacing.xs)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Display configuration warning")
-            .accessibilityValue(message)
+                .accessibilityHidden(true)
+            Text(message)
+                .font(WarrenTypography.navigationMeta)
+                .foregroundStyle(tokens.warning)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.horizontal, WarrenSpacing.compact)
+        .padding(.vertical, WarrenSpacing.xs)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Display configuration warning")
+        .accessibilityValue(message)
     }
 
     static func revealTask(
@@ -397,7 +446,7 @@ struct WarrenDesktopSidebar: View {
         in tree: inout WarrenDesktopSidebarTreeState
     ) {
         tree.tasksCollapsed = false
-        tree.expandedTaskIDs.insert(taskID)
+        tree.collapsedTaskIDs.remove(taskID)
     }
 
     static func workspaceScrollTarget(for workspace: Workspace) -> String {
@@ -449,53 +498,44 @@ struct WarrenDesktopSidebar: View {
         )) {
             sidebarTree.showsActiveOnly.toggle()
             if sidebarTree.showsActiveOnly {
-                sidebarTree.expandedProjectIDs.formUnion(projection.groups.map(\.project.id))
+                sidebarTree.collapsedProjectIDs.subtract(projection.groups.map(\.project.id))
             }
         }
     }
 
-    private var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode {
-        WarrenDesktopWorkspaceDisplayMode(rawValue: workspaceDisplayModeRawValue) ?? .compact
-    }
+    /// The sidebar always lists Sessions under their Workspace; the compact
+    /// tree is no longer offered.
+    private var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode { .rich }
 
-    private func toggleWorkspaceDisplayMode() {
-        let nextMode: WarrenDesktopWorkspaceDisplayMode =
-            workspaceDisplayMode == .compact ? .rich : .compact
-        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
-            workspaceDisplayModeRawValue = nextMode.rawValue
-        }
-    }
-
+    /// The foot of the card: the other Hosts this window can switch to,
+    /// stacked, with a dot while one of their Sessions needs someone (see
+    /// `WarrenDesktopSidebarHostStack`) and the notice bell at the row's end,
+    /// then the bottom row with the update badge. Without other Hosts the
+    /// bell takes the bottom row's corner.
+    @ViewBuilder
     private func sidebarFooter(tokens: WarrenColorTokens) -> some View {
+        // With other Hosts listed, the bell shares their row; the bottom row
+        // is left to the update badge.
+        let bellInBottomRow = otherHosts.isEmpty ? noticeBell : nil
+        let showsBottomRow = bellInBottomRow != nil || updateStatus != .none
         VStack(spacing: 0) {
-            Rectangle()
-                .fill(tokens.border)
-                .frame(height: WarrenSpacing.hairline)
-
-            if sidebarState.isCollapsed {
-                VStack(spacing: WarrenSpacing.xs) {
-                    if endpointCapabilities.canAddProject {
-                        addProjectButton(tokens: tokens, showsLabel: false)
-                    }
-                    if updateStatus != .none {
-                        updateButton(tokens: tokens)
-                    }
-                    // Show notification bell before settings button in collapsed mode
-                    NotificationBellButton(
-                        unreadCount: projection.unreadNoticeCount,
-                        isMuted: notificationsMuted,
-                        action: { onAction(.openNotifications) },
-                        tokens: tokens
-                    )
-                    settingsButton(tokens: tokens)
-                }
-                .padding(.vertical, WarrenSpacing.xs)
-            } else {
-                HStack(spacing: WarrenSpacing.xs) {
-                    if endpointCapabilities.canAddProject {
-                        addProjectButton(tokens: tokens, showsLabel: true)
-                    } else {
-                        Spacer(minLength: 0)
+            if !otherHosts.isEmpty {
+                WarrenDesktopSidebarHostStack(
+                    hosts: otherHosts,
+                    onSelectHost: onSelectHost,
+                    onAddHost: onAddHost,
+                    trailingAccessory: noticeBell
+                )
+            } else if showsBottomRow {
+                Rectangle()
+                    .fill(tokens.cardBorder)
+                    .frame(height: 1)
+                    .accessibilityHidden(true)
+            }
+            if showsBottomRow {
+                HStack(spacing: 6) {
+                    if let bellInBottomRow {
+                        bellInBottomRow
                     }
                     if updateStatus != .none {
                         WarrenDesktopBuildBadge(
@@ -504,100 +544,47 @@ struct WarrenDesktopSidebar: View {
                             onUpdateAction: onUpdateAction
                         )
                     }
-                    // Show notification bell before settings button in the bottom bar
-                    NotificationBellButton(
-                        unreadCount: projection.unreadNoticeCount,
-                        isMuted: notificationsMuted,
-                        action: { onAction(.openNotifications) },
-                        tokens: tokens
-                    )
-                    settingsButton(tokens: tokens)
-                }
-                .padding(.horizontal, WarrenSpacing.compact)
-                .padding(.vertical, WarrenSpacing.xs)
-            }
-        }
-        .popover(
-            isPresented: Binding(
-                get: { isNoticePopoverPresented },
-                set: { _ in onDismissNoticePopover() }
-            ),
-            content: {
-                WarrenDesktopNoticePopover(
-                    notices: notices,
-                    onRead: onNoticeRead,
-                    onDismissNotice: onNoticeDismiss,
-                    isMuted: $notificationsMuted,
-                    onMarkAllRead: onMarkAllNoticesRead,
-                    onDismiss: onDismissNoticePopover
-                )
-            }
-        )
-    }
-
-    private func addProjectButton(tokens: WarrenColorTokens, showsLabel: Bool) -> some View {
-        Button { onAction(.addProject) } label: {
-            HStack(spacing: WarrenSpacing.compact) {
-                Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 13, weight: .regular))
-                    .frame(width: 18)
-                    .accessibilityHidden(true)
-                if showsLabel {
-                        Text("Add project")
-                            .font(WarrenTypography.navigationItemLight)
-                        .lineLimit(1)
                     Spacer(minLength: 0)
                 }
+                // The bell's pill brings its own room; the badge alone keeps
+                // the inset it always had.
+                .padding(.horizontal, bellInBottomRow == nil ? 12 : 8)
+                .frame(height: WarrenDesktopSidebarMetrics.footerHeight)
             }
-            .foregroundStyle(tokens.mutedForeground)
-            .frame(maxWidth: showsLabel ? .infinity : nil, minHeight: 32, alignment: .leading)
-            .frame(width: showsLabel ? nil : 32)
-            .contentShape(.rect)
         }
-        .buttonStyle(WarrenInteractiveRowStyle())
-        .disabled(!endpointCapabilities.canAddProject || !projection.isConnected)
-        .help("Add project")
-        .accessibilityLabel("Add project")
-        .accessibilityIdentifier("sidebar.add-project")
+        .frame(maxWidth: .infinity)
     }
+}
 
-    private func settingsButton(tokens: WarrenColorTokens) -> some View {
-        Button(action: onSettings) {
-            Image(systemName: "gearshape")
-                .font(.system(size: 13, weight: .regular))
-                .frame(width: 32, height: 32)
-                .foregroundStyle(tokens.mutedForeground)
-                .contentShape(.rect)
+/// The two fills one sidebar view can wear.
+///
+/// The docked card's fill and corners are drawn by the root view's card
+/// modifier. The peek copy draws its own, because it floats over the content
+/// card rather than sitting on the window backdrop: it is one step brighter,
+/// carries a hairline, and is lifted by a long, offset shadow.
+private struct WarrenDesktopSidebarPresentationStyle: ViewModifier {
+    let presentation: WarrenDesktopSidebarPresentation
+    let tokens: WarrenColorTokens
+
+    func body(content: Content) -> some View {
+        switch presentation {
+        case .docked:
+            content.background(tokens.workbenchCardFill)
+        case .peek:
+            content
+                .background(tokens.peekSurface)
+                .clipShape(RoundedRectangle(
+                    cornerRadius: WarrenLayoutMetrics.cardRadius,
+                    style: .continuous
+                ))
+                .overlay(
+                    RoundedRectangle(
+                        cornerRadius: WarrenLayoutMetrics.cardRadius,
+                        style: .continuous
+                    )
+                    .strokeBorder(tokens.cardBorder, lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.6), radius: 40, x: 12, y: 0)
         }
-        .buttonStyle(WarrenInteractiveRowStyle())
-        .help("Open Warren settings")
-        .accessibilityLabel("Open Warren settings")
-        .accessibilityIdentifier("sidebar.settings")
     }
-
-    private func updateButton(tokens: WarrenColorTokens) -> some View {
-        Button(action: onUpdateAction) {
-            Group {
-                switch updateStatus {
-                case .updating:
-                    WarrenBrailleSpinner(size: 10, accessibilityLabel: "Updating Warren")
-                case .failed:
-                    Image(systemName: "exclamationmark.triangle")
-                case .available:
-                    Image(systemName: "arrow.down.circle")
-                case .none:
-                    EmptyView()
-                }
-            }
-            .font(.system(size: 13, weight: .regular))
-            .foregroundStyle(updateStatus == .failed ? tokens.destructive : tokens.info)
-            .frame(width: 32, height: 32)
-            .contentShape(.rect)
-        }
-        .buttonStyle(WarrenInteractiveRowStyle())
-        .disabled(!updateStatus.isActionable)
-        .help(updateStatus.helpText ?? "Warren is up to date")
-        .accessibilityLabel(updateStatus.accessibilityLabel ?? "Warren update")
-    }
-
 }

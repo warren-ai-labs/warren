@@ -506,7 +506,6 @@ final class WarrenRemoteClientTests: XCTestCase {
             "name": "feature/protocol", "path": "/tmp/warren-worktree",
             "branch": "feature/protocol", "kind": "worktree"
           }],
-          "terminalGroups": [],
           "sessions": []
         }
         """
@@ -545,7 +544,7 @@ final class WarrenRemoteClientTests: XCTestCase {
         let initialRoster = await client.roster()
         let initial = try XCTUnwrap(initialRoster)
         XCTAssertEqual(initial.revision, 1)
-        let delta = "{\"t\":\"roster.delta\",\"baseRevision\":1,\"revision\":2,\"sessions\":{\"upsert\":[{\"id\":\"\(sessionUUID.uuidString.lowercased())\",\"workspace\":\"workspace-2\",\"scope\":\"workspace\",\"title\":\"shell\",\"kind\":\"shell\",\"lifecycle\":\"running\"}]}}"
+        let delta = "{\"t\":\"roster.delta\",\"baseRevision\":1,\"revision\":2,\"sessions\":{\"upsert\":[{\"id\":\"\(sessionUUID.uuidString.lowercased())\",\"workspace\":\"workspace-2\",\"title\":\"shell\",\"kind\":\"shell\",\"lifecycle\":\"running\"}]}}"
         await task.enqueue(.text(delta))
         try await waitUntil { await client.roster()?.revision == 2 }
         let mergedWorkspace = await client.roster()?.sessions.first?.workspaceID
@@ -824,8 +823,8 @@ final class WarrenRemoteClientTests: XCTestCase {
         try await waitUntil(timeout: .seconds(5)) { await client.state() == .connected }
 
         // The replacement socket carries an auth frame followed by one restore
-        // per retained subscription. They are issued sequentially, so each has
-        // to be answered before the next one is sent.
+        // per retained subscription. The Session holding the lease is restored
+        // first and alone, so it has to be answered before the others are sent.
         var requests: [String: [String: Any]] = [:]
         for index in 0..<2 {
             let restored = await waitForSentMessages(
@@ -969,6 +968,68 @@ final class WarrenRemoteClientTests: XCTestCase {
                 return text.contains("\"t\":\"ping\"")
             }
         }
+        await client.stop()
+    }
+
+    func testReceivedOutputIsAcknowledgedWhenNegotiated() async throws {
+        let task = ScriptedWebSocketTask()
+        await task.enqueue(.text("{\"t\":\"welcome\",\"version\":\"4.0\",\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"accessScopeId\":\"scope-owner\",\"capabilities\":[\"roster-delta\",\"output-ack-v1\"]}"))
+        await task.enqueue(.text(rosterJSON(revision: 1)))
+        let client = WarrenRemoteClient(
+            configuration: WarrenRemoteEndpointConfiguration(name: "Host", url: "http://example.test"),
+            task: task,
+            capabilities: ["roster-delta", WarrenRemoteCapability.outputAck]
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        defer { consuming.cancel() }
+        await client.start()
+        try await waitUntil { await client.state() == .connected }
+
+        let codec = WarrenWireCodec()
+        let payload = Data("hello".utf8)
+        let header = try XCTUnwrap(BinaryOutputFrameHeader(
+            sessionID: TerminalSessionID(rawValue: sessionUUID),
+            epoch: 4,
+            sequence: 100,
+            payloadLength: payload.count
+        ))
+        await task.enqueue(.binary(try codec.encodeOutput(header: header, payload: payload)))
+
+        // A small frame is acknowledged after the short delay, at its end.
+        try await waitUntil {
+            await task.sentMessages.contains { message in
+                guard case .text(let text) = message,
+                      let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+                      object["method"] as? String == "session.ack",
+                      let params = object["params"] as? [String: Any] else { return false }
+                return params["id"] as? String == self.sessionUUID.uuidString.lowercased()
+                    && (params["epoch"] as? NSNumber)?.uint64Value == 4
+                    && (params["sequence"] as? NSNumber)?.uint64Value == 105
+                    && object["id"] == nil
+            }
+        }
+        await client.stop()
+    }
+
+    func testOutputIsNotAcknowledgedWithoutTheCapability() async throws {
+        let (client, task, consuming, _) = try await connectedClient()
+        defer { consuming.cancel() }
+        let codec = WarrenWireCodec()
+        let payload = Data("hello".utf8)
+        let header = try XCTUnwrap(BinaryOutputFrameHeader(
+            sessionID: TerminalSessionID(rawValue: sessionUUID),
+            epoch: 4,
+            sequence: 100,
+            payloadLength: payload.count
+        ))
+        await task.enqueue(.binary(try codec.encodeOutput(header: header, payload: payload)))
+        try await Task.sleep(for: .milliseconds(200))
+        let acks = await task.sentMessages.filter { message in
+            guard case .text(let text) = message else { return false }
+            return text.contains("session.ack")
+        }
+        XCTAssertTrue(acks.isEmpty, "an older Host must not be sent output acks")
         await client.stop()
     }
 
@@ -1360,7 +1421,7 @@ final class WarrenRemoteClientTests: XCTestCase {
     }
 
     private func rosterJSONValue(revision: Int = 1) -> String {
-        "{\"schema\":1,\"revision\":\(revision),\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"tasks\":[],\"projects\":[],\"workspaces\":[],\"terminalGroups\":[],\"sessions\":[]}"
+        "{\"schema\":1,\"revision\":\(revision),\"host\":{\"id\":\"host-1\",\"name\":\"Test Host\",\"version\":\"dev\"},\"tasks\":[],\"projects\":[],\"workspaces\":[],\"sessions\":[]}"
     }
 
     private func waitForSentMessages(
@@ -1603,9 +1664,9 @@ final class WarrenPaneGroupDecodingTests: XCTestCase {
     func testRosterDecodesNestedPaneGroupsAndDeltasApplyThem() throws {
         let rosterJSON = """
         {"schema":4,"revision":9,"host":{"id":"host-1","name":"Test Host","version":"dev"},
-         "tasks":[],"projects":[],"workspaces":[],"terminalGroups":[],"sessions":[],
+         "tasks":[],"projects":[],"workspaces":[],"sessions":[],
          "paneGroups":[
-           {"id":"group-1","workspace":"workspace-1","scope":"workspace","name":"left","order":0,"revision":4,
+           {"id":"group-1","workspace":"workspace-1","name":"left","order":0,"revision":4,
             "tree":{"axis":"horizontal","ratio":0.5,
                     "first":{"paneId":"pane-1","sessionId":"session-1"},
                     "second":{"axis":"vertical","ratio":0.25,
@@ -1620,7 +1681,6 @@ final class WarrenPaneGroupDecodingTests: XCTestCase {
         guard let group = roster.paneGroups.first else { return XCTFail("no pane group decoded") }
         XCTAssertEqual(group.revision, 4)
         XCTAssertEqual(group.ownerID, "workspace-1")
-        XCTAssertEqual(group.ownerScope, .workspace)
         XCTAssertEqual(group.paneCount, 3)
         XCTAssertEqual(group.tree.splitCount, 2)
         XCTAssertEqual(group.paneIndex(forSession: "session-3"), 3)
@@ -1631,7 +1691,7 @@ final class WarrenPaneGroupDecodingTests: XCTestCase {
 
         let deltaJSON = """
         {"t":"roster.delta","baseRevision":9,"revision":10,
-         "paneGroups":{"upsert":[{"id":"group-1","workspace":"workspace-1","scope":"workspace","revision":5,
+         "paneGroups":{"upsert":[{"id":"group-1","workspace":"workspace-1","revision":5,
             "tree":{"paneId":"pane-1","sessionId":"session-1"}}]}}
         """
         let message: WarrenRemoteRoster.StreamMessage = try JSONDecoder().decode(

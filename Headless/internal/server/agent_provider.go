@@ -919,7 +919,7 @@ func (s *Service) agentProviderRegistry() *AgentProviderRegistry {
 }
 
 func (s *Service) agentSessionContext(state api.State, session api.Session) (AgentSessionContext, error) {
-	workspacePath, err := sessionWorkingDirectory(state, session.WorkspaceID, session.TerminalGroupID)
+	workspacePath, err := sessionWorkingDirectory(state, session.WorkspaceID)
 	if err != nil {
 		return AgentSessionContext{}, err
 	}
@@ -1307,6 +1307,10 @@ func resetAgentProjectionLocked(entry *agentSession) {
 	entry.titleAssistantID = ""
 	entry.titleAssistantComplete = false
 	entry.titleGenerationStarted = false
+	entry.cliTitleDeadline = time.Time{}
+	entry.cliTitleCaptured = false
+	entry.titleFallbackFired = false
+	entry.aiTitleValue = ""
 	entry.hookStateModTime = time.Time{}
 }
 
@@ -1720,6 +1724,7 @@ func (handle *tuiAgentHandle) SendMessage(ctx context.Context, message api.Agent
 		return errors.New("agent message transport is unavailable")
 	}
 	unlock := handle.service.lockAgentSessionAction(handle.sessionID)
+	ctx = handle.service.agentInputContext(ctx, handle.sessionID)
 	defer unlock()
 	text := message.Text
 	if len(message.Attachments) > 0 {
@@ -1757,6 +1762,7 @@ func (handle *tuiAgentHandle) Interrupt(ctx context.Context, request api.AgentTu
 		return errors.New("agent interrupt transport is unavailable")
 	}
 	unlock := handle.service.lockAgentSessionAction(handle.sessionID)
+	ctx = handle.service.agentInputContext(ctx, handle.sessionID)
 	defer unlock()
 	if request.Replacement != nil && len(request.Replacement.Attachments) > 0 {
 		text, err := handle.service.agentMessageTextWithAttachments(*request.Replacement)
@@ -1784,6 +1790,7 @@ func (handle *tuiAgentHandle) RespondInteraction(ctx context.Context, response a
 	}
 	payload := handle.service.agentInteractionPayload(handle.sessionID, strings.TrimSpace(response.RequestID), response.Kind)
 	unlock := handle.service.lockAgentSessionAction(handle.sessionID)
+	ctx = handle.service.agentInputContext(ctx, handle.sessionID)
 	defer unlock()
 	return sendProviderInteractionInput(ctx, runtime, handle.runtimeName, handle.provider, response, payload)
 }
@@ -1806,6 +1813,7 @@ func (handle *tuiAgentHandle) SetGoal(ctx context.Context, request api.AgentGoal
 		return errors.New("agent goal transport is unavailable")
 	}
 	unlock := handle.service.lockAgentSessionAction(handle.sessionID)
+	ctx = handle.service.agentInputContext(ctx, handle.sessionID)
 	defer unlock()
 	return sendAgentGoalInputMode(ctx, runtime, handle.runtimeName, request.Objective, request.ReplaceExisting)
 }
@@ -1828,6 +1836,7 @@ func (handle *tuiAgentHandle) ClearGoal(ctx context.Context, request api.AgentGo
 		return errors.New("agent goal transport is unavailable")
 	}
 	unlock := handle.service.lockAgentSessionAction(handle.sessionID)
+	ctx = handle.service.agentInputContext(ctx, handle.sessionID)
 	defer unlock()
 	return sendAgentGoalInput(ctx, runtime, handle.runtimeName, "clear")
 }

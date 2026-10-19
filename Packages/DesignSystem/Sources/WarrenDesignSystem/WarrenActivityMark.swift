@@ -142,6 +142,12 @@ public enum WarrenActivityMark: Int, Comparable, CaseIterable, Sendable {
     /// a failure does not un-fail because it was visited.
     public var isAcknowledgeable: Bool { self == .ready }
 
+    /// Whether the Agent is stopped until a person answers it: an approval,
+    /// an input request, or a request Warren cannot name. These are the marks
+    /// that reduce to `blocked`. A failure is actionable too, but nothing is
+    /// waiting on an answer, so a "waiting on you" count leaves it out.
+    public var isWaitingOnPerson: Bool { lifecycle == .blocked }
+
     /// The lifecycle value this mark reduces to.
     ///
     /// Lossy on purpose: all three attention marks reduce to `blocked`, which is

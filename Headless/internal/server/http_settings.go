@@ -26,6 +26,7 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 		var body struct {
 			DefaultRuntime     string                         `json:"defaultRuntime"`
 			RuntimeEnv         map[string]string              `json:"runtimeEnv"`
+			ACPCommands        map[string]string              `json:"acpCommands"`
 			AutoOpenShell      *bool                          `json:"autoOpenShell"`
 			AutoStartAI        *bool                          `json:"autoStartAI"`
 			OpenAIBaseURL      *string                        `json:"openaiBaseURL"`
@@ -47,6 +48,12 @@ func (s *HTTPServer) handleSettings(writer http.ResponseWriter, request *http.Re
 		if err := s.Service.UpdateSettings(body.DefaultRuntime, runtimeEnv); err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if body.ACPCommands != nil {
+			if err := s.Service.SetACPCommands(body.ACPCommands); err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 		if body.AutoOpenShell != nil {
 			if err := s.Service.SetAutoOpenShell(*body.AutoOpenShell); err != nil {
@@ -151,6 +158,7 @@ func (s *HTTPServer) settingsProjection() map[string]any {
 	return map[string]any{
 		"defaultRuntime":     value.DefaultRuntime,
 		"runtimeEnv":         value.RuntimeEnv,
+		"acpCommands":        value.ACPCommands,
 		"autoOpenShell":      value.AutoOpenShell,
 		"autoStartAI":        value.AutoStartAI,
 		"openaiBaseURL":      value.OpenAIBaseURL,

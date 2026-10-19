@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -453,6 +454,86 @@ func TestAgentViewAttachmentLifecycleValidatesChunksAndPrepareHash(t *testing.T)
 		Session: sessionID, UploadID: value.UploadID, Length: int64(len(data)),
 	}); err != nil || !completed.Accepted || completed.State != "ready" {
 		t.Fatalf("valid completion = %#v, err=%v", completed, err)
+	}
+}
+
+// The attachment lifecycle end to end over a real WebSocket: prepare, one
+// chunk, complete. This is the round trip the Desktop client speaks, so a wire
+// shape mismatch fails here instead of in the UI.
+func TestAgentViewAttachmentRoundTripsOverWebSocket(t *testing.T) {
+	service := newAgentViewTestService(t, &recordingAgentViewController{})
+	t.Cleanup(service.cleanupAgentAttachments)
+	sessionID := "agent-view-session"
+	execution, ok := service.canonicalExecutionForSession(sessionID)
+	if !ok || execution.ID == "" {
+		t.Fatal("agent execution identity was not created")
+	}
+	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
+	defer httpServer.Close()
+	connection := openAuthenticatedConnection(t, httpServer.URL, "/v1/ws")
+	defer connection.Close()
+
+	request := func(id, method string, params map[string]any) map[string]any {
+		t.Helper()
+		if err := connection.WriteJSON(api.Envelope{Type: "request", ID: id, Method: method, Params: params}); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			var response api.Response
+			if err := connection.ReadJSON(&response); err != nil {
+				t.Fatalf("%s: %v", method, err)
+			}
+			if response.ID != id {
+				continue
+			}
+			if !response.OK {
+				t.Fatalf("%s failed: %s", method, response.Error)
+			}
+			result, _ := response.Result.(map[string]any)
+			return result
+		}
+	}
+
+	data := []byte("hello attachment")
+	digest := sha256.Sum256(data)
+	hash := hex.EncodeToString(digest[:])
+
+	prepared := request("prepare-1", "agent.attachment.prepare", map[string]any{
+		"commandId":   "prepare-1",
+		"executionId": execution.ID,
+		"name":        "notes.txt",
+		"mime":        "text/plain",
+		"size":        len(data),
+		"sha256":      hash,
+	})
+	uploadID, _ := prepared["uploadId"].(string)
+	if uploadID == "" {
+		t.Fatalf("prepare result has no uploadId: %#v", prepared)
+	}
+	chunk := request("chunk-1", "agent.attachment.chunk", map[string]any{
+		"commandId":   "chunk-1",
+		"executionId": execution.ID,
+		"uploadId":    uploadID,
+		"chunk":       0,
+		"length":      len(data),
+		"sha256":      hash,
+		"data":        base64.StdEncoding.EncodeToString(data),
+	})
+	if accepted, _ := chunk["accepted"].(bool); !accepted {
+		t.Fatalf("chunk was not accepted: %#v", chunk)
+	}
+	completed := request("complete-1", "agent.attachment.complete", map[string]any{
+		"commandId":   "complete-1",
+		"executionId": execution.ID,
+		"uploadId":    uploadID,
+		"length":      len(data),
+		"sha256":      hash,
+	})
+	if accepted, _ := completed["accepted"].(bool); !accepted {
+		t.Fatalf("complete was not accepted: %#v", completed)
+	}
+	if attachmentID, _ := completed["attachmentId"].(string); attachmentID == "" {
+		t.Fatalf("complete result has no attachmentId: %#v", completed)
 	}
 }
 

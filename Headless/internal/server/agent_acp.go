@@ -34,6 +34,10 @@ const (
 	acpDiffLineLimit = 4000
 	// acpImageAttachmentLimit bounds an image sent inline in a prompt.
 	acpImageAttachmentLimit = 8 << 20
+	// acpModelMetaKey is where the claude-agent-acp adapter reports the concrete
+	// model of the current turn. ACP's own usage and prompt response carry no
+	// model, so without this key the Usage rollup cannot price the call.
+	acpModelMetaKey = "_claude/model"
 )
 
 // ACPAgentProvider drives a provider family over the Agent Client Protocol
@@ -155,11 +159,14 @@ type acpAgentHandle struct {
 	loading      bool
 	sequence     uint64
 
-	turn          uint64
-	promptActive  bool
-	promptDone    chan struct{}
-	promptCancel  context.CancelFunc
-	turnUsage     *api.AgentUsage
+	turn         uint64
+	promptActive bool
+	promptDone   chan struct{}
+	promptCancel context.CancelFunc
+	turnUsage    *api.AgentUsage
+	// turnModel is the concrete model this turn's usage belongs to, captured
+	// from the `_meta` hint on usage_update. Empty when the adapter reports none.
+	turnModel     string
 	lastAssistant *acpStream
 
 	permissions map[string]*acpPermission
@@ -632,6 +639,7 @@ func (handle *acpAgentHandle) startTurn(message api.AgentMessageSendRequest) err
 	promptContext, cancel := context.WithCancel(context.Background())
 	handle.promptCancel = cancel
 	handle.turnUsage = nil
+	handle.turnModel = ""
 	handle.lastAssistant = nil
 	handle.segment = 0
 	handle.streamEpoch = ""
@@ -1012,6 +1020,10 @@ func (handle *acpAgentHandle) applyUpdateLocked(update acp.SessionUpdate) []api.
 		}
 		return handle.replaceConfigLocked(parseACPConfig(update.ConfigOptions, handle.legacyModesLocked()))
 	case "usage_update":
+		// The model is claimed before the used/size guard: a notification may
+		// omit the context numbers while still naming the model the usage
+		// belongs to, and losing it would leave the call unpriceable.
+		handle.captureUsageModelLocked(update)
 		if update.Used == nil || update.Size == nil {
 			return nil
 		}
@@ -1023,6 +1035,27 @@ func (handle *acpAgentHandle) applyUpdateLocked(update acp.SessionUpdate) []api.
 	default:
 		return nil
 	}
+}
+
+// captureUsageModelLocked records the concrete model a turn's usage belongs to.
+// ACP's usage and prompt response carry no model, so the claude-agent-acp
+// adapter reports the assistant message's own model under `_meta`. Without it
+// the Usage rollup stores an empty model and the panel shows the call as an
+// unknown model instead of a priced one.
+func (handle *acpAgentHandle) captureUsageModelLocked(update acp.SessionUpdate) {
+	raw, ok := update.Meta[acpModelMetaKey]
+	if !ok {
+		return
+	}
+	var model string
+	if json.Unmarshal(raw, &model) != nil {
+		return
+	}
+	model = strings.TrimSpace(model)
+	if model == "" || model == "<synthetic>" {
+		return
+	}
+	handle.turnModel = model
 }
 
 func (handle *acpAgentHandle) stampLocked(event api.AgentEvent) api.AgentEvent {
@@ -1130,8 +1163,9 @@ func (handle *acpAgentHandle) completedAssistantLocked() []api.AgentEvent {
 	if last == nil {
 		return nil
 	}
-	event := api.AgentEvent{ID: last.id, Type: "assistant", Role: "assistant", Content: last.full.String(), StopReason: "end_turn", Usage: handle.turnUsage}
+	event := api.AgentEvent{ID: last.id, Type: "assistant", Role: "assistant", Content: last.full.String(), StopReason: "end_turn", Model: handle.turnModel, Usage: handle.turnUsage}
 	handle.turnUsage = nil
+	handle.turnModel = ""
 	return []api.AgentEvent{handle.stampLocked(event)}
 }
 

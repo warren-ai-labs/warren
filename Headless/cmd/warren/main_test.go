@@ -643,26 +643,19 @@ func TestSessionReadUsesPTYUnlessTranscriptFlagsAreExplicit(t *testing.T) {
 	}
 }
 
-func TestTerminalGroupAliasAndSessionCreateParams(t *testing.T) {
-	if got := canonicalResource("group"); got != "terminal-group" {
-		t.Fatalf("group alias = %q, want terminal-group", got)
+func TestTerminalGroupResourceIsGone(t *testing.T) {
+	if got := canonicalResource("group"); got != "group" {
+		t.Fatalf("group alias = %q, want no alias", got)
 	}
-	if !knownResourceAction("terminal-group", "home") {
-		t.Fatal("terminal-group home action is not registered")
+	if knownResourceAction("terminal-group", "list") {
+		t.Fatal("terminal-group is still registered")
 	}
 	if !knownResourceAction("session", "move") {
 		t.Fatal("session move action is not registered")
 	}
-	params := normalizedParams(parseFlags([]string{"--group", "group-1", "--kind", "shell"}), "session", "create")
-	if params["group"] != "group-1" {
-		t.Fatalf("normalized group = %#v", params["group"])
-	}
-	if _, ok := params["workspace"]; ok {
-		t.Fatalf("group session unexpectedly has workspace: %#v", params)
-	}
-	defaultParams := normalizedParams(parseFlags(nil), "session", "create")
-	if _, ok := defaultParams["workspace"]; ok {
-		t.Fatalf("default session unexpectedly has workspace: %#v", defaultParams)
+	params := normalizedParams(parseFlags([]string{"workspace-1", "--kind", "shell"}), "session", "create")
+	if params["workspace"] != "workspace-1" {
+		t.Fatalf("normalized workspace = %#v", params["workspace"])
 	}
 }
 
@@ -681,30 +674,13 @@ func TestProjectAddNormalizesAutomaticWorktreeImportFlag(t *testing.T) {
 	}
 }
 
-func TestSessionRowsJoinsTerminalGroup(t *testing.T) {
-	state := api.State{
-		TerminalGroups: []api.TerminalGroup{{ID: "group-1", Name: "Inbox", Home: "/home/test"}},
-		Sessions: []api.Session{{
-			ID: "session-1", TerminalGroupID: "group-1", Scope: api.SessionScopeTerminalGroup,
-			Title: "Shell", Kind: "shell", Lifecycle: "running",
-		}},
-	}
-	rows := sessionRows(state, false, false)
-	if len(rows) != 1 {
-		t.Fatalf("rows = %d, want 1", len(rows))
-	}
-	if rows[0].TerminalGroupName != "Inbox" || rows[0].Path != "/home/test" {
-		t.Fatalf("group context = %#v", rows[0])
-	}
-}
-
-func TestSessionCreateRejectsWorkspaceAndGroupTogether(t *testing.T) {
-	err := run([]string{"session", "create", "workspace-1", "--group", "group-1"})
+func TestSessionCreateRequiresWorkspace(t *testing.T) {
+	err := run([]string{"session", "create", "--kind", "shell"})
 	var usageErr *usageError
 	if !errors.As(err, &usageErr) {
 		t.Fatalf("error = %v, want *usageError", err)
 	}
-	if usageErr.message != "workspace and --group are mutually exclusive" {
+	if usageErr.message != "missing WORKSPACE_ID" {
 		t.Fatalf("message = %q", usageErr.message)
 	}
 }
@@ -718,12 +694,7 @@ func TestSessionMoveValidatesTargetFlag(t *testing.T) {
 		{
 			name: "missing target",
 			args: []string{"session", "move", "session-1"},
-			want: "missing --workspace WORKSPACE_ID or --group GROUP_ID",
-		},
-		{
-			name: "conflicting targets",
-			args: []string{"session", "move", "session-1", "--workspace", "workspace-1", "--group", "group-1"},
-			want: "--workspace and --group are mutually exclusive",
+			want: "missing --workspace WORKSPACE_ID",
 		},
 	}
 	for _, test := range tests {
@@ -746,12 +717,6 @@ func TestSessionMoveNormalizesParams(t *testing.T) {
 	}), "session", "move")
 	if params["id"] != "session-1" || params["workspace"] != "workspace-1" {
 		t.Fatalf("normalized params = %#v", params)
-	}
-	groupParams := normalizedParams(parseFlags([]string{
-		"session-1", "--group", "group-1",
-	}), "session", "move")
-	if groupParams["id"] != "session-1" || groupParams["group"] != "group-1" {
-		t.Fatalf("normalized group params = %#v", groupParams)
 	}
 }
 
@@ -865,7 +830,7 @@ func TestEffectiveSessionTitlePrefersCustomTitle(t *testing.T) {
 		ID: "session-1", Title: "Shell", CustomTitle: "My Shell",
 		Kind: "shell", Lifecycle: "running",
 	}}}, false, false)
-	if got := sessionRowCells(rows[0])[5]; got != "My Shell" {
+	if got := sessionRowCells(rows[0])[4]; got != "My Shell" {
 		t.Fatalf("session list title cell = %q, want My Shell", got)
 	}
 }
@@ -940,7 +905,7 @@ func TestScreenPaneRowsReadTheDurableArrangement(t *testing.T) {
 	}
 	if err := state.Update(func(value *api.State) error {
 		value.PaneGroups = []api.PaneGroup{{
-			ID: "group-1", WorkspaceID: "workspace-1", Scope: api.SessionScopeWorkspace,
+			ID: "group-1", WorkspaceID: "workspace-1",
 			Name: "left", Revision: 7,
 			Tree: api.PaneNode{
 				Axis: pane.AxisHorizontal, Ratio: 0.5,
@@ -2295,8 +2260,8 @@ func TestFilterSessionRows(t *testing.T) {
 			Branch:        "feat/auth",
 		},
 		{
-			Session:           api.Session{ID: "sess-3", TerminalGroupID: "grp-1", Kind: "shell", Lifecycle: "ended", Title: "Bash", Command: "/bin/bash"},
-			TerminalGroupName: "Server Logs",
+			Session:       api.Session{ID: "sess-3", WorkspaceID: "ws-3", Kind: "shell", Lifecycle: "ended", Title: "Bash", Command: "/bin/bash"},
+			WorkspaceName: "server-logs",
 		},
 	}
 
@@ -2334,10 +2299,9 @@ func TestFilterSessionRows(t *testing.T) {
 		t.Fatalf("filterSessionRows project proj-1 got %d rows, want 2", len(got))
 	}
 
-	// Filter by group
-	got, err = filterSessionRows(rows, map[string]any{"group": "grp-1", "all": true}, "")
+	got, err = filterSessionRows(rows, map[string]any{"workspace": "server-logs", "all": true}, "")
 	if err != nil || len(got) != 1 || got[0].ID != "sess-3" {
-		t.Fatalf("filterSessionRows group grp-1 got %v, want sess-3", got)
+		t.Fatalf("filterSessionRows workspace server-logs got %v, want sess-3", got)
 	}
 
 	// Filter by kind
@@ -2574,9 +2538,8 @@ func TestSessionForegroundCommandPrefersRuntimeCommandLine(t *testing.T) {
 
 func TestFilterPaneGroupRowsScopesByOwner(t *testing.T) {
 	groups := []api.PaneGroup{
-		{ID: "group-a", WorkspaceID: "workspace-1", Scope: api.SessionScopeWorkspace, Name: "left"},
-		{ID: "group-b", WorkspaceID: "workspace-2", Scope: api.SessionScopeWorkspace, Name: "right"},
-		{ID: "group-c", TerminalGroupID: "group-1", Scope: api.SessionScopeTerminalGroup, Name: "inbox"},
+		{ID: "group-a", WorkspaceID: "workspace-1", Name: "left"},
+		{ID: "group-b", WorkspaceID: "workspace-2", Name: "right"},
 	}
 	byWorkspace, err := filterPaneGroupRows(groups, map[string]any{"workspace": "workspace-2"})
 	if err != nil {
@@ -2585,22 +2548,12 @@ func TestFilterPaneGroupRowsScopesByOwner(t *testing.T) {
 	if len(byWorkspace) != 1 || byWorkspace[0].ID != "group-b" {
 		t.Fatalf("workspace filter = %#v", byWorkspace)
 	}
-	byGroup, err := filterPaneGroupRows(groups, map[string]any{"group": "group-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(byGroup) != 1 || byGroup[0].ID != "group-c" {
-		t.Fatalf("group filter = %#v", byGroup)
-	}
 	bySearch, err := filterPaneGroupRows(groups, map[string]any{"search": "RIGH"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(bySearch) != 1 || bySearch[0].ID != "group-b" {
 		t.Fatalf("search filter = %#v", bySearch)
-	}
-	if _, err := filterPaneGroupRows(groups, map[string]any{"workspace": "w", "group": "g"}); err == nil {
-		t.Fatal("expected mutually exclusive owners to be rejected")
 	}
 }
 
@@ -2660,7 +2613,7 @@ func TestPaneSplitSendsOneGuardedTreeUpdate(t *testing.T) {
 					"t": "response", "id": id, "ok": true,
 					"result": api.State{
 						PaneGroups: []api.PaneGroup{{
-							ID: "group-a", WorkspaceID: "workspace-1", Scope: api.SessionScopeWorkspace,
+							ID: "group-a", WorkspaceID: "workspace-1",
 							Name: "left", Revision: 4,
 							Tree: api.PaneNode{PaneID: "pane-1", SessionID: "session-1"},
 						}},

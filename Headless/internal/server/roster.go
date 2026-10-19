@@ -8,6 +8,7 @@ import (
 
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
+	"github.com/abcdlsj/warren/Headless/internal/runtime"
 )
 
 func (s *Service) Roster(ctx context.Context) api.State {
@@ -88,7 +89,6 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	sortTasks(state.Tasks)
 	sortProjects(state.Projects)
 	sortWorkspaces(state.Workspaces)
-	sortTerminalGroups(state.TerminalGroups)
 	// Filter out ended sessions from the roster to reduce payload size and
 	// present only active resources. Frontend already filters by lifecycle,
 	// so this optimization improves network efficiency without changing semantics.
@@ -119,10 +119,6 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	for _, workspace := range state.Workspaces {
 		workspacePaths[workspace.ID] = workspace.Path
 	}
-	groupHomes := make(map[string]string, len(state.TerminalGroups))
-	for _, group := range state.TerminalGroups {
-		groupHomes[group.ID] = group.Home
-	}
 	agentsStartedAt := time.Now()
 	for i := range state.Sessions {
 		session := &state.Sessions[i]
@@ -142,9 +138,6 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		if handler := s.agentHandlerForSession(session.ID); handler != "" {
 			session.AgentHandler = handler
 		}
-		if session.Scope == "" {
-			session.Scope = session.ScopeKind()
-		}
 		if session.Lifecycle != "running" {
 			continue
 		}
@@ -153,10 +146,11 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 				session.Process = metadata.Process
 				session.CommandLine = metadata.CommandLine
 				session.Directory = metadata.Directory
+				session.Shell = sessionShellMetadata(metadata.Shell)
 			}
 		}
 		if session.Directory == "" {
-			session.Directory = sessionLaunchDirectory(*session, workspacePaths, groupHomes)
+			session.Directory = sessionLaunchDirectory(*session, workspacePaths)
 		}
 		if status := s.agentStatus(session.ID); status.Activity != "" {
 			session.AgentStatus = &status
@@ -179,6 +173,29 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 		)
 	}
 	return state, revision
+}
+
+// sessionShellMetadata maps the runtime's OSC 133 state onto the roster's
+// projection. A nil input stays nil so a client can tell "never reported" from
+// "reported as at the prompt with nothing run".
+func sessionShellMetadata(shell *runtime.ShellMetadata) *api.SessionShell {
+	if shell == nil {
+		return nil
+	}
+	projected := &api.SessionShell{
+		AtPrompt:       shell.AtPrompt,
+		RunningCommand: shell.RunningCommand,
+		LastCommand:    shell.LastCommand,
+	}
+	if shell.LastExitCode != nil {
+		code := *shell.LastExitCode
+		projected.LastExitCode = &code
+	}
+	if shell.LastExitAt != nil {
+		at := *shell.LastExitAt
+		projected.LastExitAt = &at
+	}
+	return projected
 }
 
 func sortTasks(tasks []api.Task) {
@@ -226,17 +243,5 @@ func sortWorkspaces(workspaces []api.Workspace) {
 			return workspaces[i].CreatedAt.Before(workspaces[j].CreatedAt)
 		}
 		return workspaces[i].ID < workspaces[j].ID
-	})
-}
-
-func sortTerminalGroups(groups []api.TerminalGroup) {
-	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].Order != groups[j].Order {
-			return groups[i].Order < groups[j].Order
-		}
-		if groups[i].CreatedAt != groups[j].CreatedAt {
-			return groups[i].CreatedAt.Before(groups[j].CreatedAt)
-		}
-		return groups[i].ID < groups[j].ID
 	})
 }

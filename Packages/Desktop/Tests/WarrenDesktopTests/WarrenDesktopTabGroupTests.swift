@@ -3,12 +3,9 @@ import WarrenClientCore
 import WarrenDesignSystem
 @testable import WarrenDesktop
 
-/// The pane bar's group contract: what the track draws for a scope whose layout
-/// is split, and where the group's chip puts every Tab behind it.
-///
-/// The chip is a slot rather than a Tab, so the two facts these tests hold down
-/// are the ones the scroll follower depends on: how much wider the track gets,
-/// and which Tab index the shift starts at.
+/// The pane bar's group contract: what the bar draws for a scope whose layout
+/// is split. The group is one pill pinned in front of the scrolling track, so
+/// the track holds only the Tabs outside it.
 final class WarrenDesktopTabGroupTests: XCTestCase {
     private func listings(_ ids: String...) -> [ClientTab] {
         ids.map { ClientTab(id: $0, title: $0) }
@@ -51,7 +48,7 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
     func testASinglePaneDrawsNoGroup() {
         let elements = WarrenDesktopPaneBar.rowElements(
             listings: listings("a", "b"),
-            group: group(tabIDs: ["a"])
+            groups: [group(tabIDs: ["a"])]
         )
         XCTAssertEqual(elements.count, 2)
         for element in elements {
@@ -59,15 +56,13 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
                 return XCTFail("A one-pane scope must not draw a group")
             }
         }
-        XCTAssertEqual(elements.groupMarkSlotWidth, 0)
-        XCTAssertNil(elements.groupMarkAnchorIndex)
+        XCTAssertNil(elements.groupRunElement)
     }
 
     func testAnUnsplittableScopeDrawsPlainTabs() {
-        let elements = WarrenDesktopPaneBar.rowElements(listings: listings("a", "b"), group: nil)
+        let elements = WarrenDesktopPaneBar.rowElements(listings: listings("a", "b"), groups: [])
         XCTAssertEqual(elements.map(\.id), ["a", "b"])
-        XCTAssertEqual(elements.groupMarkSlotWidth, 0)
-        XCTAssertNil(elements.groupMarkAnchorIndex)
+        XCTAssertNil(elements.groupRunElement)
     }
 
     /// Rich mode already lists the tree's own panes, so the group covers the
@@ -75,13 +70,13 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
     func testContiguousMembersBecomeOneRunWithTheChip() {
         let elements = WarrenDesktopPaneBar.rowElements(
             listings: listings("a", "b", "c"),
-            group: group(tabIDs: ["a", "b", "c"])
+            groups: [group(tabIDs: ["a", "b", "c"])]
         )
         XCTAssertEqual(elements.count, 1)
         XCTAssertEqual(runTabs(elements[0]), ["a", "b", "c"])
         XCTAssertTrue(elements[0].drawsGroupMark)
-        XCTAssertEqual(elements.groupMarkSlotWidth, WarrenLayoutMetrics.tabGroupMarkSlotWidth)
-        XCTAssertEqual(elements.groupMarkAnchorIndex, 0)
+        XCTAssertNotNil(elements.groupRunElement)
+        XCTAssertTrue(elements.trackTabs.isEmpty, "Every member is on the pill, none on the track")
     }
 
     /// Compact mode lists every Session in the order the user dragged them, so
@@ -91,12 +86,12 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
     func testScatteredMembersLeadTheTrack() {
         let elements = WarrenDesktopPaneBar.rowElements(
             listings: listings("a", "x", "b", "y", "c"),
-            group: group(tabIDs: ["a", "b", "c"])
+            groups: [group(tabIDs: ["a", "b", "c"])]
         )
         XCTAssertEqual(elements.count, 3)
         XCTAssertEqual(runTabs(elements[0]), ["a", "b", "c"])
         XCTAssertEqual(elements.map(\.id), ["tabgroup.workspace-a", "x", "y"])
-        XCTAssertEqual(elements.groupMarkAnchorIndex, 0)
+        XCTAssertNotNil(elements.groupRunElement)
     }
 
     /// Gathering preserves the pane order the glyph draws, not the order the
@@ -104,7 +99,7 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
     func testGatheredMembersKeepPaneOrder() {
         let elements = WarrenDesktopPaneBar.rowElements(
             listings: listings("b", "a", "x"),
-            group: group(tabIDs: ["a", "b"])
+            groups: [group(tabIDs: ["a", "b"])]
         )
         XCTAssertEqual(elements.map(\.id), ["tabgroup.workspace-a", "x"])
         XCTAssertEqual(runTabs(elements[0]), ["a", "b"])
@@ -116,11 +111,11 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
     func testTheGroupLeadsWhateverTheStoredOrderWas() {
         let elements = WarrenDesktopPaneBar.rowElements(
             listings: listings("p", "q", "b", "x", "a"),
-            group: group(tabIDs: ["a", "b"])
+            groups: [group(tabIDs: ["a", "b"])]
         )
         XCTAssertEqual(elements.map(\.id), ["tabgroup.workspace-a", "p", "q", "x"])
         XCTAssertEqual(runTabs(elements[0]), ["a", "b"])
-        XCTAssertEqual(elements.groupMarkAnchorIndex, 0)
+        XCTAssertNotNil(elements.groupRunElement)
         XCTAssertEqual(
             elements.drawnTabIDs,
             ["a", "b", "p", "q", "x"],
@@ -133,7 +128,7 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
     func testAGroupRunTargetsTheTabThatFollowsIt() {
         let withRest = WarrenDesktopPaneBar.rowElements(
             listings: listings("b", "a", "x"),
-            group: group(tabIDs: ["a", "b"])
+            groups: [group(tabIDs: ["a", "b"])]
         )
         guard let target = withRest.first(where: { $0.drawsGroupMark }) else {
             return XCTFail("Expected a group run")
@@ -142,7 +137,7 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
 
         let alone = WarrenDesktopPaneBar.rowElements(
             listings: listings("b", "a"),
-            group: group(tabIDs: ["a", "b"])
+            groups: [group(tabIDs: ["a", "b"])]
         )
         guard let target = alone.first(where: { $0.drawsGroupMark }) else {
             return XCTFail("Expected a group run")
@@ -154,24 +149,15 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
         )
     }
 
-    /// Only the last member keeps the hairline that separates it from whatever
-    /// follows; between members the group's rule is the only line.
-    func testOnlyTheLastMemberKeepsATrailingSeparator() {
-        XCTAssertFalse(WarrenDesktopTabRowElement.memberShowsTrailingSeparator(index: 0, count: 3))
-        XCTAssertFalse(WarrenDesktopTabRowElement.memberShowsTrailingSeparator(index: 1, count: 3))
-        XCTAssertTrue(WarrenDesktopTabRowElement.memberShowsTrailingSeparator(index: 2, count: 3))
-    }
-
-    /// The mark is drawn in front of the group's first member, and the group
-    /// leads the track, so every Tab starting at index zero is shifted by the
-    /// mark's slot.
-    func testEveryTabOriginFollowsTheMarkSlot() {
+    /// The pill is pinned in front of the track, so the track itself holds
+    /// only the Tabs outside the group, in their own order.
+    func testTheTrackHoldsOnlyTabsOutsideTheGroup() {
         let elements = WarrenDesktopPaneBar.rowElements(
             listings: listings("a", "b", "c", "d"),
-            group: group(tabIDs: ["c", "d"])
+            groups: [group(tabIDs: ["c", "d"])]
         )
-        XCTAssertEqual(elements.groupMarkSlotWidth, WarrenLayoutMetrics.tabGroupMarkSlotWidth)
-        XCTAssertEqual(elements.groupMarkAnchorIndex, 0)
+        XCTAssertNotNil(elements.groupRunElement)
+        XCTAssertEqual(elements.trackTabs.map(\.id), ["a", "b"])
     }
 
     /// Rich mode's tree already lists the Sessions, so the bar is a pure pane
@@ -196,10 +182,10 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
         )
         XCTAssertEqual(listed.map(\.id), ["c"])
 
-        let elements = WarrenDesktopPaneBar.rowElements(listings: listed, group: nil)
+        let elements = WarrenDesktopPaneBar.rowElements(listings: listed, groups: [])
         XCTAssertEqual(elements.map(\.id), ["c"])
         XCTAssertFalse(elements.contains(where: \.drawsGroupMark))
-        XCTAssertEqual(elements.groupMarkSlotWidth, 0)
+        XCTAssertNil(elements.groupRunElement)
     }
 
     /// The visiting Session is added to the panes, not drawn in place of one.
@@ -214,6 +200,33 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
         XCTAssertEqual(listed.map(\.id), ["a", "b"])
     }
 
+    /// A scope can hold several arrangements, so each one is drawn as its own
+    /// run with its own mark. The panes of one arrangement must not be mixed
+    /// into another's, and both marks have to be accounted for in the track's
+    /// width and in every Tab origin behind them.
+    func testTwoGroupsDrawTwoRunsWithTheirOwnMarks() {
+        let first = WarrenDesktopSplitGroup(id: "group-a", scopeKey: "workspace-a", tree: tree(tabIDs: ["a", "b"]))
+        let second = WarrenDesktopSplitGroup(id: "group-b", scopeKey: "workspace-a", tree: tree(tabIDs: ["c", "d"]))
+        let elements = WarrenDesktopPaneBar.rowElements(
+            listings: listings("a", "c", "b", "d", "x"),
+            groups: [first, second]
+        )
+
+        XCTAssertEqual(elements.count, 3)
+        XCTAssertEqual(runTabs(elements[0]), ["a", "b"])
+        XCTAssertEqual(runTabs(elements[1]), ["c", "d"])
+        XCTAssertEqual(elements.map(\.id), ["tabgroup.group-a", "tabgroup.group-b", "x"])
+        XCTAssertEqual(elements.groupMarkAnchors, [0, 2])
+        XCTAssertEqual(
+            elements.groupMarkTotalWidth,
+            WarrenLayoutMetrics.tabGroupMarkSlotWidth * 2
+        )
+        // A drop lands after every run, since nothing can sit inside one.
+        for element in elements.prefix(2) {
+            XCTAssertEqual(groupDropTarget(element), .some("x"))
+        }
+    }
+
     /// Compact mode already enumerates every Session, so a visit is not a
     /// special case there: the group is gathered inside the user's own order.
     func testCompactModeListsEverySessionAndGathersTheGroup() {
@@ -226,7 +239,7 @@ final class WarrenDesktopTabGroupTests: XCTestCase {
         )
         let elements = WarrenDesktopPaneBar.rowElements(
             listings: listed,
-            group: group(tabIDs: ["a", "b"])
+            groups: [group(tabIDs: ["a", "b"])]
         )
         XCTAssertEqual(elements.map(\.id), ["tabgroup.workspace-a", "x", "c"])
     }

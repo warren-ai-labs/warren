@@ -90,7 +90,7 @@ struct WarrenCompositionRoot: View {
     @State private var endpointCatalog: [WarrenRemoteEndpointConfiguration]
     @State private var displayConfiguration: WarrenDisplayConfiguration?
     @State private var endpointCatalogError: String?
-    @State private var isSSHHostPickerPresented = false
+
     @State private var localEndpointWaitGeneration: UInt64 = 0
     @State private var pendingSidebarSelection: WarrenDesktopSidebarResourceSelection?
     @State private var pendingSidebarOpenWorkspace: WarrenDesktopHostResourceRef<WorkspaceID>?
@@ -177,7 +177,10 @@ struct WarrenCompositionRoot: View {
         _endpointCatalogError = State(initialValue: nil)
     }
 
-    var body: some View {
+    /// The root view itself. It is a separate expression from the observer
+    /// chain in `body` because the initializer takes well over fifty arguments,
+    /// and holding both in one expression pushes the type checker over budget.
+    private var rootChrome: some View {
         WarrenDesktopRoot(
             projection: activeProjection,
             navigation: activeNavigation,
@@ -193,10 +196,19 @@ struct WarrenCompositionRoot: View {
             onCreateTask: { creation in
                 try await remoteModel.createTask(creation)
             },
+            pendingDecisions: WarrenDesktopPendingDecisions(
+                decisions: remoteModel.pendingDecisions,
+                resolve: { sessionID, decisionID, optionID in
+                    try await remoteModel.resolvePendingDecision(
+                        decisionID,
+                        optionID: optionID,
+                        in: sessionID
+                    )
+                }
+            ),
             webStatus: remoteModel.webStatus,
             isMigratingRuntimeSessions: remoteModel.isMigratingRuntimeSessions,
             creatingSessionWorkspaceIDs: remoteModel.creatingSessionWorkspaceIDs,
-            creatingSessionTerminalGroupIDs: remoteModel.creatingSessionTerminalGroupIDs,
             deletingProjectIDs: remoteModel.deletingProjectIDs,
             deletingWorkspaceIDs: remoteModel.deletingWorkspaceIDs,
             notices: remoteModel.notices,
@@ -218,8 +230,11 @@ struct WarrenCompositionRoot: View {
                 remoteModel.ensureVisibleSessions(sessions)
                 remoteModel.reportActiveScreenSessions(sessions)
             },
-            onCommitPaneTree: { owner, tree in
-                remoteModel.commitPaneTree(owner: owner, tree: tree)
+            onCommitPaneTree: { owner, tree, target in
+                remoteModel.commitPaneTree(owner: owner, tree: tree, target: target)
+            },
+            onPaneDiagnostic: { event, fields in
+                TerminalDiagnostics.log(event, fields)
             },
             endpointOptions: endpointOptions,
             selectedEndpointID: selectedEndpointID,
@@ -234,11 +249,8 @@ struct WarrenCompositionRoot: View {
             onOpenSidebarWorkspace: openSidebarWorkspace,
             onOpenSidebarSession: openSidebarSession,
             onRetrySidebarHost: retrySidebarHost,
-            onAddSSHHost: {
-                // Present immediately with a loading state; parsing a large
-                // Include tree happens inside the picker on a utility task.
-                isSSHHostPickerPresented = true
-            },
+            onAddSSHHost: {},
+            sshHostPage: sshHostPageModel,
             onRetryConnection: retrySelectedEndpointConnection,
             onStopConnection: stopSelectedEndpointConnection,
             onWebStart: { remoteModel.startWebFromUI() },
@@ -269,6 +281,9 @@ struct WarrenCompositionRoot: View {
                 }
             },
             relaySettings: remoteModel.relaySettings,
+            onSetRelayEnabled: { enabled in
+                remoteModel.setRelayEnabled(enabled)
+            },
             onResetRelay: { completion in
                 remoteModel.resetRelay(completion: completion)
             },
@@ -329,10 +344,12 @@ struct WarrenCompositionRoot: View {
                     column: document.column
                 )
             },
-            inspectorSurface: { workspace in
+            inspectorSurface: { workspace, tab, activity in
                 AnyView(WarrenInspectorSurface(
                     inspector: remoteModel.inspector(for: workspace),
-                    readsLocalFiles: remoteModel.inspectorReadsLocalFiles
+                    readsLocalFiles: remoteModel.inspectorReadsLocalFiles,
+                    tab: tab,
+                    activity: activity
                 ))
             }
         ) { context in
@@ -406,6 +423,10 @@ struct WarrenCompositionRoot: View {
                 .transition(.opacity)
             }
         }
+    }
+
+    var body: some View {
+        rootChrome
         .overlay {
             appPresentationLayer
         }
@@ -423,6 +444,7 @@ struct WarrenCompositionRoot: View {
         .onReceive(remoteModel.agentCompletionEvents) { event in
             handleAgentCompletion(event)
         }
+        .modifier(WarrenAttentionAlertsModifier(model: remoteModel) { handle(.openSession($0)) })
         .onReceive(NotificationCenter.default.publisher(for: WarrenAppCommand.openTerminal)) { note in
             guard let request = note.object as? WarrenTerminalOpenRequest else { return }
             remoteModel.openTerminal(request)
@@ -457,8 +479,11 @@ struct WarrenCompositionRoot: View {
         .onReceive(NotificationCenter.default.publisher(for: WebCommand.copySecureURL)) { _ in
             remoteModel.copySecureWebURL()
         }
-        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopEndpointOption.probeRequested)) { _ in
-            remoteModel.probeHosts([.localDaemon()] + endpointCatalog.filter { $0.id != "local" })
+        .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopEndpointOption.probeRequested)) { note in
+            remoteModel.probeHosts(
+                [.localDaemon()] + endpointCatalog.filter { $0.id != "local" },
+                force: WarrenDesktopEndpointOption.isForcedProbe(note)
+            )
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenUpdateNotification.available)) { note in
             guard let release = note.userInfo?[WarrenUpdateNotification.keyRelease] as? WarrenRelease else {
@@ -571,7 +596,6 @@ struct WarrenCompositionRoot: View {
         }
         .animation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion), value: windowMaterial)
         .environment(\.warrenWindowMaterial, windowMaterial)
-        .environment(\.warrenGlassLayout, liquidGlassEnabled)
     }
 
     /// Glass is the user's choice, but Reduce Transparency overrides it.
@@ -584,20 +608,9 @@ struct WarrenCompositionRoot: View {
 
     @ViewBuilder
     private var appPresentationLayer: some View {
-        if isSSHHostPickerPresented {
-            WarrenSheetSurface {
-                WarrenSSHHostPicker(
-                    hosts: [],
-                    loadOnAppear: true,
-                    onConfigure: configureSSHHost,
-                    onDismiss: { isSSHHostPickerPresented = false }
-                )
-            }
-            .zIndex(WarrenPresentationLayer.modal)
-            .onAppear { presentation.present(.sheet) }
-            .onDisappear { presentation.dismissTop() }
-        } else if let preview = supersetImportPreview {
-            WarrenSheetSurface {
+        if let preview = supersetImportPreview {
+            // The importer draws its own `WarrenDialog`, so it is not wrapped.
+            Group {
                 WarrenSupersetImportView(
                     preview: preview,
                     onCancel: { supersetImportPreview = nil },
@@ -617,31 +630,34 @@ struct WarrenCompositionRoot: View {
         } else if let context = workspaceCreatorContext,
                   context.endpointID == selectedEndpointID,
                   let project = activeProjection.projectGroup(id: context.projectID)?.project {
-            WarrenModalSurface {
-                WarrenWorkspaceCreatorView(
-                    project: project,
-                    onCancel: { workspaceCreatorContext = nil },
-                    onCreate: { request in
-                        guard context.endpointID == selectedEndpointID else {
-                            throw WarrenEndpointScopedModalError.endpointChanged
-                        }
-                        try await remoteModel.createWorkspace(
-                            projectID: context.projectID,
-                            taskID: context.taskID,
-                            request: request
-                        )
+            // The creator draws its own `WarrenDialog`, so it is not wrapped.
+            WarrenWorkspaceCreatorView(
+                project: project,
+                onCancel: { workspaceCreatorContext = nil },
+                onCreate: { request in
+                    guard context.endpointID == selectedEndpointID else {
+                        throw WarrenEndpointScopedModalError.endpointChanged
                     }
-                )
-            }
+                    try await remoteModel.createWorkspace(
+                        projectID: context.projectID,
+                        taskID: context.taskID,
+                        request: request
+                    )
+                }
+            )
             .zIndex(WarrenPresentationLayer.modal)
             .onAppear { presentation.present(.modal) }
             .onDisappear { presentation.dismissTop() }
         } else if let projectID = setupScriptProjectID,
                   setupScriptEndpointID == selectedEndpointID,
                   let project = activeProjection.projectGroup(id: projectID)?.project {
-            WarrenSetupScriptEditorView(
-                project: project,
-                value: $setupScriptValue,
+            WarrenDesktopSetupScriptDialog(
+                script: $setupScriptValue,
+                onClear: {
+                    setupScriptValue = ""
+                    remoteModel.setProjectSetupScript(projectID, script: "")
+                    dismissSetupScript()
+                },
                 onCancel: dismissSetupScript,
                 onSave: {
                     guard setupScriptEndpointID == selectedEndpointID else {
@@ -658,7 +674,8 @@ struct WarrenCompositionRoot: View {
         } else if let projectID = worktreeImportProjectID,
                   worktreeImportEndpointID == selectedEndpointID,
                   let project = activeProjection.projectGroup(id: projectID)?.project {
-            WarrenSheetSurface {
+            // The importer draws its own `WarrenDialog`, so it is not wrapped.
+            Group {
                 WarrenDesktopProjectWorktreeImportView(
                     projectName: project.name,
                     candidates: worktreeImportCandidates,
@@ -725,8 +742,6 @@ struct WarrenCompositionRoot: View {
             remoteModel.setProjectAutoImportGitWorktrees(projectID, enabled: enabled)
         } else if case .requestNewSession(let workspaceID) = action {
             remoteModel.createSession(workspaceID: workspaceID, request: .shell)
-        } else if case .requestNewTerminalGroupSession(let groupID) = action {
-            remoteModel.createSession(terminalGroupID: groupID, request: .shell)
         } else {
             let workspaceID = WarrenDesktopAutomaticSessionPolicy.workspaceID(
                 for: action,
@@ -813,6 +828,7 @@ struct WarrenCompositionRoot: View {
             detail: Self.endpointDetail(localEndpoint.url),
             probeStatus: localProbe?.message ?? "Checking Host…",
             probeFailed: localProbe?.isFailure ?? false,
+            probeState: Self.probeState(localProbe, isInFlight: remoteModel.hostProbesInFlight.contains(localEndpoint)),
             connectionError: selectedEndpointID == "local" ? remoteModel.connectionError : nil,
             isDisplayedInSidebar: displayConfiguration?.endpoints.contains("local") == true
         )
@@ -829,11 +845,27 @@ struct WarrenCompositionRoot: View {
                     detail: endpoint.ssh.map { "SSH · \($0)" } ?? Self.endpointDetail(endpoint.url),
                     probeStatus: remoteModel.hostProbes[endpoint]?.message ?? "Checking Host…",
                     probeFailed: remoteModel.hostProbes[endpoint]?.isFailure ?? false,
+                    probeState: Self.probeState(
+                        remoteModel.hostProbes[endpoint],
+                        isInFlight: remoteModel.hostProbesInFlight.contains(endpoint)
+                    ),
                     connectionError: selectedEndpointID == endpoint.id ? remoteModel.connectionError : nil,
                     isDisplayedInSidebar: displayConfiguration?.endpoints.contains(endpoint.id) == true
                 )
             }
         return [local] + configured
+    }
+
+    /// What a Host's dot shows: a probe still running is checking, even when
+    /// an older result is on hand.
+    private static func probeState(
+        _ probe: WarrenHostProbe?,
+        isInFlight: Bool
+    ) -> WarrenDesktopEndpointOption.ProbeState {
+        if isInFlight { return .checking }
+        guard let probe else { return .unknown }
+        if probe.isFailure { return .failed }
+        return probe.isInconclusive ? .unknown : .reachable
     }
 
     private static func endpointDetail(_ urlString: String) -> String {
@@ -887,7 +919,7 @@ struct WarrenCompositionRoot: View {
             return .workspace(
                 WarrenDesktopHostResourceRef(endpointID: endpointID, id: workspaceID)
             )
-        case .terminalGroup, .none:
+        case .none:
             return nil
         }
     }
@@ -1121,22 +1153,82 @@ struct WarrenCompositionRoot: View {
         applyPendingSidebarSelectionIfReady()
     }
 
-    private func configureSSHHost(_ host: WarrenSSHHost) {
-        guard host.supported else { return }
-        let name = Self.endpointName(for: host.name, endpoints: endpointCatalog)
+    /// The Add SSH Host page the Host panel drills into. The Desktop draws
+    /// it; the app owns the catalog and how an alias becomes an endpoint.
+    private var sshHostPageModel: WarrenDesktopSSHHostPageModel {
+        WarrenDesktopSSHHostPageModel(
+            load: {
+                let result = await Task.detached(priority: .utility) {
+                    WarrenSSHHostCatalog.loadResult(
+                        from: FileManager.default.homeDirectoryForCurrentUser
+                            .appendingPathComponent(".ssh/config")
+                    )
+                }.value
+                return WarrenDesktopSSHHostLoadResult(
+                    hosts: result.hosts.map(Self.sshHostOption),
+                    error: result.error
+                )
+            },
+            onAdd: { option in
+                configureSSHHost(named: option.name)
+            },
+            onCopyFallback: { option in
+                copySSHHostFallback(named: option.name)
+            },
+            onOpenConfig: openSSHConfig
+        )
+    }
+
+    private static func sshHostOption(_ host: WarrenSSHHost) -> WarrenDesktopSSHHostOption {
+        WarrenDesktopSSHHostOption(
+            id: host.name,
+            name: host.name,
+            route: "\(host.user)@\(host.host):\(host.port)",
+            isSupported: host.supported,
+            reason: host.message
+        )
+    }
+
+    private func configureSSHHost(named name: String) {
+        let endpointName = Self.endpointName(for: name, endpoints: endpointCatalog)
         let endpoint = WarrenRemoteEndpointConfiguration(
-            name: name,
+            name: endpointName,
             url: "http://127.0.0.1:0",
             token: "",
-            ssh: host.name
+            ssh: name
         )
         do {
-            try WarrenEndpointCatalog.upsert(endpoint, current: name)
+            try WarrenEndpointCatalog.upsert(endpoint, current: endpointName)
             endpointCatalog = WarrenEndpointCatalog.load().endpoints
-            selectedEndpointID = name
-            isSSHHostPickerPresented = false
+            selectedEndpointID = endpointName
         } catch {
             remoteModel.report(error)
+        }
+    }
+
+    private func copySSHHostFallback(named name: String) {
+        let quoted = "'" + name.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let command = "ssh -L 8789:127.0.0.1:8789 \(quoted)"
+            + "  # then: warren endpoint add \(quoted)"
+            + " --url http://127.0.0.1:8789 --token '<TOKEN>' --use"
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(command, forType: .string)
+    }
+
+    private func openSSHConfig() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let config = home.appendingPathComponent(".ssh/config")
+        if FileManager.default.fileExists(atPath: config.path) {
+            NSWorkspace.shared.open(config)
+        } else {
+            let sshDirectory = home.appendingPathComponent(".ssh")
+            try? FileManager.default.createDirectory(
+                at: sshDirectory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            NSWorkspace.shared.open(sshDirectory)
         }
     }
 
@@ -1193,7 +1285,7 @@ struct WarrenCompositionRoot: View {
                 if endpointCatalogError != message {
                     endpointCatalogError = message
                     remoteModel.addNotice(
-                        title: "Endpoint catalog unavailable",
+                        title: "Host list unavailable",
                         message: "Warren could not read ~/.warren/config.json.",
                         detail: message,
                         kind: .error
@@ -1418,45 +1510,18 @@ private struct WarrenSupersetImportView: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        VStack(alignment: .leading, spacing: 0) {
-            header(tokens: tokens)
-
-            divider(tokens: tokens)
-
-            summary(tokens: tokens)
-
-            projectList(tokens: tokens)
-
-            divider(tokens: tokens)
-
+        WarrenDialog(
+            "Import from Superset",
+            message: "One-time copy. Warren does not modify or synchronize Superset.",
+            width: .l
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                summary(tokens: tokens)
+                projectList(tokens: tokens)
+            }
+        } footer: {
             footer(tokens: tokens)
         }
-        .frame(
-            minWidth: 680,
-            idealWidth: 720,
-            maxWidth: WarrenLayoutMetrics.wideSheetWidth,
-            minHeight: 520,
-            idealHeight: 580
-        )
-    }
-
-    private func divider(tokens: WarrenColorTokens) -> some View {
-        Rectangle()
-            .fill(tokens.border)
-            .frame(height: WarrenSpacing.hairline)
-    }
-
-    private func header(tokens: WarrenColorTokens) -> some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-            Text("Import from Superset")
-                .font(WarrenTypography.dialogTitle)
-            Text("One-time copy. Warren does not modify or synchronize Superset.")
-                .font(WarrenTypography.dialogBody)
-                .foregroundStyle(tokens.mutedForeground)
-        }
-        .padding(.horizontal, WarrenSpacing.large)
-        .padding(.top, WarrenSpacing.large)
-        .padding(.bottom, WarrenSpacing.standard)
     }
 
     private func summary(tokens: WarrenColorTokens) -> some View {
@@ -1470,8 +1535,6 @@ private struct WarrenSupersetImportView: View {
             summaryMetric(invalidPathCount, label: "invalid paths", tokens: tokens)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, WarrenSpacing.large)
-        .padding(.vertical, WarrenSpacing.medium)
     }
 
     private func summaryMetric(
@@ -1513,15 +1576,13 @@ private struct WarrenSupersetImportView: View {
                 .padding(WarrenSpacing.small)
             }
         }
-        .frame(maxHeight: .infinity)
-        .background(tokens.chromeSurface)
+        .frame(minHeight: 280, maxHeight: 420)
+        .background(tokens.inputSurface)
         .clipShape(.rect(cornerRadius: WarrenRadius.medium))
         .overlay {
             RoundedRectangle(cornerRadius: WarrenRadius.medium)
                 .stroke(tokens.border, lineWidth: WarrenSpacing.hairline)
         }
-        .padding(.horizontal, WarrenSpacing.large)
-        .padding(.vertical, WarrenSpacing.medium)
     }
 
     private func projectRow(
@@ -1610,29 +1671,35 @@ private struct WarrenSupersetImportView: View {
     }
 
     private func footer(tokens: WarrenColorTokens) -> some View {
-        HStack(spacing: WarrenSpacing.compact) {
+        HStack(spacing: 8) {
             Text("\(selectedProjectIDs.count) of \(preview.readyProjectCount) projects selected")
                 .font(WarrenTypography.dialogMeta)
                 .foregroundStyle(tokens.mutedForeground)
 
             Spacer(minLength: 0)
 
-            Button("Cancel") {
-                onCancel()
+            Button(action: onCancel) {
+                HStack(spacing: 6) {
+                    Text("Cancel")
+                    WarrenDialogKeycap("esc")
+                }
             }
             .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
             .keyboardShortcut(.cancelAction)
 
-            Button("Import") {
+            Button {
                 onCancel()
                 onConfirm(selectedPreview)
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Import")
+                    WarrenDialogKeycap("\u{23CE}", isOnPrimary: true)
+                }
             }
             .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
             .keyboardShortcut(.defaultAction)
             .disabled(selectedProjectIDs.isEmpty)
         }
-        .padding(.horizontal, WarrenSpacing.large)
-        .padding(.vertical, WarrenSpacing.standard)
     }
 }
 
@@ -1701,7 +1768,6 @@ private struct WarrenTerminalSurfaceView: View {
         .onAppear {
             TerminalDiagnostics.log("terminal_view_appear", [
                 "workspace": context.workspace?.id.description ?? "nil",
-                "terminalGroup": context.terminalGroup?.id.description ?? "nil",
                 "tab": context.tab.sessionID.map(\.description) ?? "nil",
                 "mounted": String(surfaceManager.retainedSurfaceCount),
                 "active": activeSurface != nil ? "true" : "false",
@@ -1720,26 +1786,13 @@ private struct WarrenTerminalSurfaceView: View {
         }
         .overlay(alignment: .top) {
             if let maintenanceMessage {
-                HStack(spacing: WarrenSpacing.small) {
-                    WarrenBrailleSpinner(
-                        size: 14,
-                        accessibilityLabel: "Updating Warren"
-                    )
-                    Text("Updating Warren…")
-                        .font(WarrenTypography.supporting)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, WarrenSpacing.standard)
-                .padding(.vertical, WarrenSpacing.small)
-                // A status capsule floating over the terminal. It reads as
-                // raised from the popover surface plus a rule, which is what
-                // survives both appearances; a translucent black pill would
-                // only read on Ember.
-                .background(tokens.popoverSurface, in: Capsule())
-                .overlay(Capsule().strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
-                .shadow(color: tokens.elevationShadow, radius: 6, y: 2)
+                WarrenTerminalStatusPill(
+                    title: "Updating Warren…",
+                    detail: maintenanceMessage == "Warren is updating" ? nil : maintenanceMessage,
+                    lingeringDetail: "Your Sessions pick up where they were once it is back."
+                )
                 .padding(.top, WarrenSpacing.small)
-                .help(maintenanceMessage)
+                .transition(.opacity.combined(with: .offset(y: -6)))
             }
         }
         .onChange(of: searchPresented) { presented in
@@ -1764,7 +1817,6 @@ private struct WarrenTerminalSurfaceView: View {
         .onChange(of: context.scopeID) { _ in
             TerminalDiagnostics.log("workspace_switch", [
                 "workspace": context.workspace?.id.description ?? "nil",
-                "terminalGroup": context.terminalGroup?.id.description ?? "nil",
                 "tab": context.tab.sessionID.map(\.description) ?? "nil",
                 "mounted": String(surfaceManager.retainedSurfaceCount),
                 "active": activeSurface != nil ? "true" : "false",
@@ -1803,24 +1855,17 @@ private struct WarrenTerminalLoadingOverlay: View {
     var body: some View {
         Group {
             if isVisible {
-                HStack(spacing: WarrenSpacing.compact) {
-                    WarrenBrailleSpinner(size: 18, accessibilityLabel: label)
-                    Text(label)
-                        .font(WarrenTypography.supporting)
-                }
-                .padding(.horizontal, WarrenSpacing.standard)
-                .padding(.vertical, WarrenSpacing.compact)
-                .warrenPresentationSurface(
-                    role: .status,
-                    cornerRadius: WarrenRadius.medium,
-                    showsBorder: false
+                WarrenTerminalStatusPill(
+                    title: label,
+                    lingeringDetail: "The Host is taking a moment; the Session keeps running there."
                 )
-                .transition(.opacity)
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(false)
         .task {
+            // A fast attach never shows the pill at all.
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled else { return }
             withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
@@ -1830,56 +1875,91 @@ private struct WarrenTerminalLoadingOverlay: View {
     }
 }
 
-/// Empty workspace state rendered above the stable native terminal host.
-private struct WarrenEmptyWorkspacePanel: View {
+/// The small floating status that sits over a terminal while it connects,
+/// reconnects or waits out a Warren update.
+///
+/// Both used to be bare capsules of their own making: one on the status
+/// surface without a border, one on the popover surface with a rule and a
+/// different spinner size. This is one card on the menu surface, the
+/// spinner in a 16pt slot the way a loading menu row draws it, a title and,
+/// once the wait runs long, a second line saying nothing is lost, so a
+/// slow reconnect reads as expected rather than stuck.
+private struct WarrenTerminalStatusPill: View {
+    let title: String
+    var detail: String? = nil
+    /// Shown in place of `detail` once the wait passes `lingerDelay`.
+    var lingeringDetail: String? = nil
+
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isLingering = false
+
+    private static let lingerDelay: Duration = .seconds(4)
+
+    private var shownDetail: String? {
+        isLingering ? (lingeringDetail ?? detail) : detail
+    }
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        VStack(spacing: WarrenSpacing.standard) {
-            Text("Start a session")
-                .font(WarrenTypography.emptyStateTitle)
-                .foregroundStyle(tokens.mutedForeground)
-            Text("Open a terminal with the + button or a preset")
-                .font(WarrenTypography.body)
-                .foregroundStyle(tokens.mutedForeground)
-                .opacity(0.72)
-                .multilineTextAlignment(.center)
-                .lineSpacing(WarrenSpacing.small)
-            VStack(spacing: WarrenSpacing.compact) {
-                shortcutRow(tokens: tokens, key: "⌘T", label: "New terminal")
-                shortcutRow(tokens: tokens, key: "⌘X", label: "Next tab")
-                shortcutRow(tokens: tokens, key: "⇧⌘X", label: "Previous tab")
-                shortcutRow(tokens: tokens, key: "⌘1…⌘9", label: "Switch to tab")
-                shortcutRow(tokens: tokens, key: "⌘W", label: "Close terminal")
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        HStack(alignment: shownDetail == nil ? .center : .top, spacing: 9) {
+            WarrenBrailleSpinner(size: 13, accessibilityLabel: title)
+                .frame(width: 16, height: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(tokens.foreground.opacity(0.92))
+                if let shownDetail {
+                    Text(shownDetail)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .transition(.opacity)
+                }
             }
-            .frame(maxWidth: 420)
-            .padding(.top, WarrenSpacing.compact)
+            .lineLimit(2)
+            // Hugs the title alone; with a second line the card takes a
+            // reading width so the text wraps instead of stretching, and a
+            // narrow pane gets less of it rather than a card wider than itself.
+            .frame(maxWidth: shownDetail == nil ? nil : 268, alignment: .leading)
         }
-        .padding(.bottom, 60)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.leading, 11)
+        .padding(.trailing, 14)
+        .padding(.vertical, shownDetail == nil ? 8 : 9)
+        .background(shape.fill(tokens.popoverSurface))
+        .overlay(shape.strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
+        .shadow(color: tokens.elevationShadow, radius: 14, y: 6)
+        .padding(.horizontal, WarrenSpacing.small)
+        .animation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion), value: isLingering)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.updatesFrequently)
+        .task {
+            guard lingeringDetail != nil else { return }
+            try? await Task.sleep(for: Self.lingerDelay)
+            guard !Task.isCancelled else { return }
+            isLingering = true
+        }
+    }
+}
+
+/// Empty workspace state rendered above the stable native terminal host.
+private struct WarrenEmptyWorkspacePanel: View {
+    var body: some View {
+        WarrenDesktopEmptyStage(
+            mark: .symbol("terminal"),
+            title: "Start a session",
+            message: "Open a Shell or an Agent from + in the top bar.",
+            hints: [
+                .init(keys: "⌘T", label: "New shell"),
+                .init(keys: "⌘X", label: "Next tab"),
+                .init(keys: "⇧⌘X", label: "Previous tab"),
+                .init(keys: "⌘W", label: "Close terminal"),
+            ]
+        )
         .accessibilityElement(children: .combine)
         .accessibilityLabel("No open sessions")
-    }
-
-    private func shortcutRow(
-        tokens: WarrenColorTokens,
-        key: String,
-        label: String
-    ) -> some View {
-        HStack(spacing: WarrenSpacing.medium) {
-            Text(key)
-                .font(WarrenTypography.shortcut)
-                .foregroundStyle(tokens.mutedForeground)
-                .frame(width: 72, alignment: .leading)
-            Spacer(minLength: WarrenSpacing.medium)
-            Text(label)
-                .font(WarrenTypography.supporting)
-                .foregroundStyle(tokens.mutedForeground)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(key): \(label)")
     }
 }
 
@@ -1914,7 +1994,7 @@ private struct WarrenTerminalSearchBar: View {
                 Image(systemName: "chevron.up")
                     .frame(width: 20, height: 20)
             }
-            .help("Previous match (⇧⏎)")
+            .warrenTooltip("Previous match", shortcut: "⇧⏎")
 
             Button {
                 surface?.navigateSearch(.next)
@@ -1922,7 +2002,7 @@ private struct WarrenTerminalSearchBar: View {
                 Image(systemName: "chevron.down")
                     .frame(width: 20, height: 20)
             }
-            .help("Next match (⏎)")
+            .warrenTooltip("Next match", shortcut: "⏎")
 
             Button {
                 presented = false
@@ -1931,14 +2011,14 @@ private struct WarrenTerminalSearchBar: View {
                     .frame(width: 20, height: 20)
             }
             .keyboardShortcut(.cancelAction)
-            .help("Close search (esc)")
+            .warrenTooltip("Close search", shortcut: "esc")
         }
         .buttonStyle(.plain)
         .font(WarrenTypography.navigationMeta)
         .foregroundStyle(tokens.mutedForeground)
         .padding(.horizontal, WarrenSpacing.small)
         .frame(height: 30)
-        .warrenPresentationSurface(role: .popover, cornerRadius: WarrenRadius.medium)
+        .warrenMenuSurface(width: nil, shadowY: 6)
         .onAppear {
             surface?.search(for: query)
             focusSearchField()

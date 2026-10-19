@@ -36,8 +36,7 @@ const browserNavigateTimeout = 30 * time.Second
 
 // BrowserCreateOptions describes a browser Session to create.
 type BrowserCreateOptions struct {
-	WorkspaceID     string
-	TerminalGroupID string
+	WorkspaceID string
 	// Title is the user-facing name. Empty uses the generated default.
 	Title string
 	// URL is opened once Chromium is up. Empty leaves the browser on a blank
@@ -114,46 +113,35 @@ func (s *Service) browserProfileRoot() string {
 // leaves nothing behind: no record for a browser that died, and no browser for a
 // record that was rolled back.
 func (s *Service) CreateBrowserSession(ctx context.Context, options BrowserCreateOptions) (api.Session, error) {
-	if options.WorkspaceID == "" && options.TerminalGroupID == "" {
-		return api.Session{}, errors.New("workspace or terminal group is required")
+	if options.WorkspaceID == "" {
+		return api.Session{}, errors.New("workspace is required")
 	}
-	if options.WorkspaceID != "" && options.TerminalGroupID != "" {
-		return api.Session{}, errors.New("workspace and terminal group are mutually exclusive")
-	}
-	if err := s.checkBrowserScope(options.WorkspaceID, options.TerminalGroupID); err != nil {
+	if err := s.checkBrowserScope(options.WorkspaceID); err != nil {
 		return api.Session{}, err
 	}
 
 	id := store.NewID()
-	scope := api.SessionScopeTerminalGroup
-	if options.WorkspaceID != "" {
-		scope = api.SessionScopeWorkspace
-	}
 	title := strings.TrimSpace(options.Title)
 	customTitle := ""
 	if title != "" && title != browserDefaultTitle {
 		customTitle = title
 	}
 	session := api.Session{
-		ID:              id,
-		WorkspaceID:     options.WorkspaceID,
-		TerminalGroupID: options.TerminalGroupID,
-		Scope:           scope,
-		Title:           browserDefaultTitle,
-		CustomTitle:     customTitle,
-		Kind:            sessionKindBrowser,
-		RuntimeKind:     sessionKindBrowser,
-		Lifecycle:       "running",
-		CreatedAt:       time.Now().UTC(),
+		ID:          id,
+		WorkspaceID: options.WorkspaceID,
+		Title:       browserDefaultTitle,
+		CustomTitle: customTitle,
+		Kind:        sessionKindBrowser,
+		RuntimeKind: sessionKindBrowser,
+		Lifecycle:   "running",
+		CreatedAt:   time.Now().UTC(),
 	}
 
 	chromium, err := s.browserManager().Start(ctx, browser.StartOptions{
-		SessionID:       id,
-		WorkspaceID:     options.WorkspaceID,
-		TerminalGroupID: options.TerminalGroupID,
-		Scope:           scope,
-		Headless:        options.Headless,
-		Viewport:        options.Viewport,
+		SessionID:   id,
+		WorkspaceID: options.WorkspaceID,
+		Headless:    options.Headless,
+		Viewport:    options.Viewport,
 	})
 	if err != nil {
 		return api.Session{}, err
@@ -181,28 +169,18 @@ func (s *Service) CreateBrowserSession(ctx context.Context, options BrowserCreat
 	return session, nil
 }
 
-// checkBrowserScope confirms the named owner still exists.
-func (s *Service) checkBrowserScope(workspaceID, groupID string) error {
+// checkBrowserScope confirms the owning Workspace still exists.
+func (s *Service) checkBrowserScope(workspaceID string) error {
 	state := s.Store.Snapshot()
-	if workspaceID != "" {
-		for _, workspace := range state.Workspaces {
-			if workspace.ID == workspaceID {
-				return nil
-			}
-		}
+	if !workspaceExists(&state, workspaceID) {
 		return fmt.Errorf("workspace not found: %s", workspaceID)
 	}
-	for _, group := range state.TerminalGroups {
-		if group.ID == groupID {
-			return nil
-		}
-	}
-	return fmt.Errorf("terminal group not found: %s", groupID)
+	return nil
 }
 
-// BrowserSessions projects every running browser Session in one scope. Both
-// filters empty means every browser Session on this Host.
-func (s *Service) BrowserSessions(workspaceID, groupID string) []api.BrowserSession {
+// BrowserSessions projects every running browser Session in one Workspace. An
+// empty filter means every browser Session on this Host.
+func (s *Service) BrowserSessions(workspaceID string) []api.BrowserSession {
 	manager := s.browserManagerIfPresent()
 	projections := make([]api.BrowserSession, 0, 4)
 	for _, session := range s.Store.Snapshot().Sessions {
@@ -210,9 +188,6 @@ func (s *Service) BrowserSessions(workspaceID, groupID string) []api.BrowserSess
 			continue
 		}
 		if workspaceID != "" && session.WorkspaceID != workspaceID {
-			continue
-		}
-		if groupID != "" && session.TerminalGroupID != groupID {
 			continue
 		}
 		projections = append(projections, browserProjection(manager, session))
@@ -241,13 +216,11 @@ func browserProjection(manager *browser.Manager, session api.Session) api.Browse
 		title = session.Title
 	}
 	projection := api.BrowserSession{
-		ID:              session.ID,
-		WorkspaceID:     session.WorkspaceID,
-		TerminalGroupID: session.TerminalGroupID,
-		Scope:           session.Scope,
-		Title:           title,
-		Phase:           browser.PhaseUnavailable,
-		Error:           "the browser is not running on this Host",
+		ID:          session.ID,
+		WorkspaceID: session.WorkspaceID,
+		Title:       title,
+		Phase:       browser.PhaseUnavailable,
+		Error:       "the browser is not running on this Host",
 	}
 	if manager == nil {
 		return projection

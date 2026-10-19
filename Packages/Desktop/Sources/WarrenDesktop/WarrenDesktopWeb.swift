@@ -8,7 +8,7 @@ public enum WarrenPublicAccessCopy {
     public static let relayURL = "Relay URL"
     public static let publicHostname = "Public hostname"
     public static let pathPrefix = "Path prefix"
-    public static let publicEndpoint = "Public Endpoint"
+    public static let publicEndpoint = "Public URL"
     public static let resetLocalSetup = "Reset local route"
 }
 
@@ -223,7 +223,6 @@ public struct WarrenDesktopWebPanel: View {
     public let onStop: () -> Void
     public let onOpenURL: (URL) -> Void
     public let onCopyURL: (URL) -> Void
-    public let onDismiss: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
@@ -236,8 +235,7 @@ public struct WarrenDesktopWebPanel: View {
         onOpenSettings: (() -> Void)? = nil,
         onStop: @escaping () -> Void,
         onOpenURL: @escaping (URL) -> Void,
-        onCopyURL: @escaping (URL) -> Void,
-        onDismiss: @escaping () -> Void = {}
+        onCopyURL: @escaping (URL) -> Void
     ) {
         self.status = status
         self.canControl = canControl
@@ -247,50 +245,23 @@ public struct WarrenDesktopWebPanel: View {
         self.onStop = onStop
         self.onOpenURL = onOpenURL
         self.onCopyURL = onCopyURL
-        self.onDismiss = onDismiss
     }
 
+    /// The Host panel's Public Access page. The outer surface owns the
+    /// title, close affordance and elevation, so the panel draws only its
+    /// status row and content, with no second border or close button.
     public var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let addresses = presentedAddresses
         VStack(alignment: .leading, spacing: 0) {
-            header(tokens: tokens, showsDismiss: true, showsTitle: true)
-            WarrenDesktopChromeDivider()
-            panelContent(addresses: addresses, tokens: tokens)
-        }
-        .frame(width: WarrenLayoutMetrics.webPopoverWidth, alignment: .leading)
-        .warrenPresentationSurface(role: .popover, cornerRadius: WarrenRadius.base)
-    }
-
-    /// Content used by More's inline detail view. The outer More surface owns
-    /// the close affordance and elevation, so this variant deliberately
-    /// omits the Web panel's second border and duplicate close button.
-    @ViewBuilder
-    var inlineContent: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let addresses = presentedAddresses
-        VStack(alignment: .leading, spacing: 0) {
-            header(tokens: tokens, showsDismiss: false, showsTitle: false)
+            header(tokens: tokens)
             WarrenDesktopChromeDivider()
             panelContent(addresses: addresses, tokens: tokens)
         }
     }
 
-    private func header(
-        tokens: WarrenColorTokens,
-        showsDismiss: Bool,
-        showsTitle: Bool
-    ) -> some View {
+    private func header(tokens: WarrenColorTokens) -> some View {
         HStack(spacing: WarrenSpacing.small) {
-            if showsTitle {
-                Image(systemName: "globe")
-                    .font(WarrenTypography.navigationGroup)
-                    .foregroundStyle(tokens.foreground)
-                    .accessibilityHidden(true)
-                Text("Web")
-                    .font(WarrenTypography.popoverTitle)
-                    .foregroundStyle(tokens.foreground)
-            }
             Spacer()
             WarrenStatusIndicator(
                 color: status.isRunning ? tokens.success : tokens.mutedForeground,
@@ -300,14 +271,6 @@ public struct WarrenDesktopWebPanel: View {
             Text(status.isRunning ? "Running" : "Stopped")
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(tokens.mutedForeground)
-            if showsDismiss {
-                WarrenDesktopWebIconButton(
-                    systemImage: "xmark",
-                    accessibilityLabel: "Close Web panel",
-                    accessibilityHint: "Dismiss the Web panel",
-                    action: onDismiss
-                )
-            }
         }
         .padding(.horizontal, WarrenSpacing.medium)
         .padding(.vertical, WarrenSpacing.compact)
@@ -597,6 +560,6 @@ private struct WarrenDesktopWebIconButton: View {
         .foregroundStyle(tokens.mutedForeground)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityHint(accessibilityHint)
-        .help(accessibilityLabel)
+        .warrenTooltip(accessibilityLabel)
     }
 }

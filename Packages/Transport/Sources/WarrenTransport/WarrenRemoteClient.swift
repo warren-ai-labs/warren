@@ -96,6 +96,10 @@ private actor WarrenRemoteSocket {
     /// short interactive RPC deadline.
     private static let requestsWithoutTimeout: Set<String> = ["usage.rebuild"]
     static let defaultHeartbeatInterval: Duration = .seconds(20)
+    /// Received output acknowledged at once, without waiting for the delay.
+    static let outputAckBytes = 32 * 1024
+    /// Longest wait before a small amount of received output is acknowledged.
+    static let outputAckDelay: Duration = .milliseconds(50)
     /// How long an app-level ping may go unanswered. Generous relative to the
     /// interval because the Host answers control frames one at a time per
     /// stream, so a slow request can legitimately delay a pong.
@@ -109,7 +113,9 @@ private actor WarrenRemoteSocket {
     /// a multiple of the round trips this socket has actually measured, so a
     /// dead LAN socket is replaced in half a second instead of five, while a
     /// slow Relay link still gets room to answer. A false failure costs one
-    /// ordinary reconnect.
+    /// ordinary reconnect, which over a slow Relay is several round trips, so
+    /// the ceiling grows to two measured round trips when those are slower
+    /// than it, up to the ordinary probe timeout.
     static let resumeProbeFloor: Duration = .milliseconds(500)
     static let resumeProbeCeiling: Duration = .milliseconds(1500)
     private static let resumeProbeRoundTrips = 4
@@ -138,6 +144,10 @@ private actor WarrenRemoteSocket {
     /// Taken from the welcome so the heartbeat decision stays local to the
     /// socket that negotiated it.
     private var supportsAppHeartbeat = false
+    /// output-ack-v1: received terminal output is acknowledged per Session.
+    private var supportsOutputAck = false
+    private var outputAcks: [String: PendingOutputAck] = [:]
+    private var outputAckFlushTask: Task<Void, Never>?
     private var heartbeatSequence = 0
     private var pendingHeartbeatID: String?
     /// The latest app ping and when it left, kept apart from
@@ -332,7 +342,8 @@ private actor WarrenRemoteSocket {
     var resumeProbeTimeout: Duration {
         guard let slowest = recentRoundTrips.max() else { return Self.resumeProbeCeiling }
         let scaled = slowest * Self.resumeProbeRoundTrips
-        return min(max(scaled, Self.resumeProbeFloor), Self.resumeProbeCeiling)
+        let ceiling = min(max(Self.resumeProbeCeiling, slowest * 2), Self.defaultProbeTimeout)
+        return min(max(scaled, Self.resumeProbeFloor), ceiling)
     }
 
     private func recordPong(id: String?) {
@@ -357,6 +368,57 @@ private actor WarrenRemoteSocket {
         armLivenessDeadline(at: .now + timeout)
         sendProtocolPing()
         sendApplicationHeartbeat(strict: strict)
+    }
+
+    /// Acknowledges terminal output as it arrives off the socket. The Host
+    /// holds output back once about one round trip of it is unacknowledged,
+    /// so acks are sent promptly: every `outputAckBytes`, or after
+    /// `outputAckDelay` for a trickle. They are fire-and-forget and need no
+    /// response; a lost one is superseded by the next.
+    private func noteOutputReceived(sessionID: String, epoch: UInt64, sequence: UInt64, byteCount: Int) {
+        guard supportsOutputAck, !isClosed, byteCount > 0 else { return }
+        let end = sequence &+ UInt64(byteCount)
+        var pending = outputAcks[sessionID] ?? PendingOutputAck(epoch: epoch, sequence: end, unsentBytes: 0)
+        if pending.epoch != epoch || end > pending.sequence {
+            pending.epoch = epoch
+            pending.sequence = end
+        }
+        pending.unsentBytes += byteCount
+        outputAcks[sessionID] = pending
+        if pending.unsentBytes >= Self.outputAckBytes {
+            sendOutputAck(sessionID: sessionID)
+        } else if outputAckFlushTask == nil {
+            outputAckFlushTask = Task { [weak self] in
+                try? await Task.sleep(for: Self.outputAckDelay)
+                await self?.flushOutputAcks()
+            }
+        }
+    }
+
+    private func flushOutputAcks() {
+        outputAckFlushTask = nil
+        for sessionID in outputAcks.keys {
+            sendOutputAck(sessionID: sessionID)
+        }
+    }
+
+    private func sendOutputAck(sessionID: String) {
+        guard var pending = outputAcks[sessionID], pending.unsentBytes > 0, !isClosed else { return }
+        pending.unsentBytes = 0
+        outputAcks[sessionID] = pending
+        let text = Self.json([
+            "t": "request",
+            "method": "session.ack",
+            "params": ["id": sessionID, "epoch": pending.epoch, "sequence": pending.sequence],
+        ])
+        let adapter = adapter
+        Task { [weak self] in
+            do {
+                try await adapter.send(.text(text))
+            } catch {
+                await self?.fail(error)
+            }
+        }
     }
 
     private func sendProtocolPing() {
@@ -629,12 +691,19 @@ private actor WarrenRemoteSocket {
                         guard let sessionID = UUID(uuidString: frame.header.sessionID.description) else {
                             throw WarrenRemoteClientError.invalidResponse
                         }
+                        let outputSessionID = sessionID.uuidString.lowercased()
                         _ = continuation?.yield(.output(WarrenRemoteOutputFrame(
-                            sessionID: sessionID.uuidString.lowercased(),
+                            sessionID: outputSessionID,
                             epoch: frame.header.epoch,
                             sequence: frame.header.sequence,
                             payload: frame.payload
                         )))
+                        noteOutputReceived(
+                            sessionID: outputSessionID,
+                            epoch: frame.header.epoch,
+                            sequence: frame.header.sequence,
+                            byteCount: frame.payload.count
+                        )
                     case .atomicState(let frame):
                         guard let sessionID = UUID(uuidString: frame.header.sessionID.description) else {
                             throw WarrenRemoteClientError.invalidResponse
@@ -750,6 +819,7 @@ private actor WarrenRemoteSocket {
             }
             let capabilities = (object["capabilities"] as? [String]) ?? []
             supportsAppHeartbeat = capabilities.contains(WarrenRemoteCapability.appHeartbeat)
+            supportsOutputAck = capabilities.contains(WarrenRemoteCapability.outputAck)
             _ = continuation?.yield(.welcome(version: version, capabilities: capabilities))
         case "response":
             guard let id = object["id"] as? String else { return }
@@ -1023,6 +1093,7 @@ public actor WarrenRemoteClient {
             WarrenRemoteAgentCapability.config,
             WarrenRemoteCapability.appHeartbeat,
             WarrenRemoteCapability.agentCausation,
+            WarrenRemoteCapability.outputAck,
         ] + additionalCapabilities
         self.clientID = clientID ?? configuration.clientID
         self.codec = codec
@@ -1323,12 +1394,11 @@ public actor WarrenRemoteClient {
         return data
     }
 
-    /// Creates a Host-owned session in a workspace, terminal group, or the
-    /// Host's default terminal group when neither scope is supplied.
+    /// Creates a Host-owned session in a workspace. The Host requires the
+    /// workspace and rejects a request without one.
     @discardableResult
     public func createSession(
         workspaceID: String? = nil,
-        terminalGroupID: String? = nil,
         command: String? = nil,
         kind: String? = nil,
         agentHandler: String? = nil,
@@ -1337,7 +1407,6 @@ public actor WarrenRemoteClient {
     ) async throws -> WarrenRemoteSession {
         var params: [String: String] = [:]
         if let workspaceID, !workspaceID.isEmpty { params["workspace"] = workspaceID }
-        if let terminalGroupID, !terminalGroupID.isEmpty { params["group"] = terminalGroupID }
         if let command { params["command"] = command }
         if let kind { params["kind"] = kind }
         if let agentHandler { params["agentHandler"] = agentHandler }
@@ -2036,7 +2105,8 @@ public actor WarrenRemoteClient {
                 emit(.disconnected(reason: error.localizedDescription))
                 return
             }
-            if configuration.isRelay, accessToken.isEmpty {
+            if configuration.isRelay,
+               Self.relayAccessTokenNeedsRefresh(accessToken, now: Date()) {
                 notePhase("token")
                 notePhase(await refreshRelayAccessToken() ? "token-ok" : "token-failed")
                 if relayIdentityCorrectionRequested {
@@ -2217,6 +2287,33 @@ public actor WarrenRemoteClient {
 
     private enum RelayRefreshOutcome { case rotated, rejected, unreachable }
 
+    /// How long before its expiry a Relay access capability is replaced
+    /// instead of presented.
+    static let relayAccessRefreshMargin: TimeInterval = 60
+
+    /// Whether the access capability must be rotated before dialing. Relay
+    /// capabilities live for minutes, so a phone returning after a longer
+    /// absence would otherwise spend a whole TLS and WebSocket handshake on a
+    /// refusal before refreshing and dialing again. The capability is
+    /// `base64url(claims).signature`; only its `exp` claim is read. A token
+    /// whose claims cannot be read is presented as before and Relay decides.
+    static func relayAccessTokenNeedsRefresh(_ token: String, now: Date) -> Bool {
+        guard !token.isEmpty else { return true }
+        guard let encoded = token.split(separator: ".", omittingEmptySubsequences: false).first else {
+            return false
+        }
+        var base64 = encoded
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        guard let data = Data(base64Encoded: base64),
+              let claims = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let expiry = (claims["exp"] as? NSNumber)?.doubleValue else {
+            return false
+        }
+        return expiry - relayAccessRefreshMargin <= now.timeIntervalSince1970
+    }
+
     /// Posts one refresh request to the host-scoped Relay endpoint. A `nil`
     /// refresh token sends no body, which makes Foundation attach the stored
     /// HttpOnly cookie instead.
@@ -2368,50 +2465,71 @@ public actor WarrenRemoteClient {
         // collection being iterated. The final request still uses the socket
         // captured for this connection and cannot affect a newer socket.
         let pending = subscriptions
-        for (sessionID, subscription) in pending.sorted(by: { $0.key < $1.key }) {
-            guard running, self.socket === socket else { return }
-            guard let current = subscriptions[sessionID],
-                  current.size == subscription.size,
-                  current.claimControl == subscription.claimControl,
-                  current.generation == subscription.generation else { continue }
-            // Restore visibility for every retained Session, but reclaim the
-            // control lease only for the one that still holds it. A passive
-            // restore also drops the viewport: the Host applies a size only
-            // together with a claim, and sending one per Session would hand the
-            // shared runtime a queue of conflicting SIGWINCHes.
-            let claimsControl = sessionID == controlSessionID
-            let size = claimsControl ? subscription.size : nil
-            let anchor = anchors[sessionID]
-            do {
-                _ = try await subscribe(
+        // The Session holding the control lease goes first and alone: it is
+        // the one on screen, and its input is refused until its attachment is
+        // back. The rest only restore visibility and the Host serves each
+        // subscribe independently, so they share one round trip instead of
+        // taking one each.
+        let controlID = controlSessionID
+        if let controlID, let control = pending[controlID] {
+            await restoreSubscription(sessionID: controlID, subscription: control, on: socket)
+        }
+        await withTaskGroup(of: Void.self) { group in
+            for (sessionID, subscription) in pending where sessionID != controlID {
+                group.addTask {
+                    await self.restoreSubscription(sessionID: sessionID, subscription: subscription, on: socket)
+                }
+            }
+        }
+    }
+
+    private func restoreSubscription(
+        sessionID: String,
+        subscription: Subscription,
+        on socket: WarrenRemoteSocket
+    ) async {
+        guard running, self.socket === socket else { return }
+        guard let current = subscriptions[sessionID],
+              current.size == subscription.size,
+              current.claimControl == subscription.claimControl,
+              current.generation == subscription.generation else { return }
+        // Restore visibility for every retained Session, but reclaim the
+        // control lease only for the one that still holds it. A passive
+        // restore also drops the viewport: the Host applies a size only
+        // together with a claim, and sending one per Session would hand the
+        // shared runtime a queue of conflicting SIGWINCHes.
+        let claimsControl = sessionID == controlSessionID
+        let size = claimsControl ? subscription.size : nil
+        let anchor = anchors[sessionID]
+        do {
+            _ = try await subscribe(
+                sessionID: sessionID,
+                size: size,
+                anchor: anchor,
+                claimControl: claimsControl,
+                record: false,
+                socket: socket
+            )
+        } catch {
+            // A Host may evict an old ring or cursor after a restart. In
+            // that case the anchor is only a hint; retry without it so
+            // protocol 4 can deliver a fresh atomic checkpoint. Other
+            // failures (for example an ended Session) retain the intent
+            // for a later roster/reconnect without issuing a second
+            // request immediately.
+            if anchor != nil,
+               Self.isRecoveryAnchorFailure(error),
+               running,
+               self.socket === socket,
+               subscriptions[sessionID]?.generation == subscription.generation {
+                _ = try? await subscribe(
                     sessionID: sessionID,
                     size: size,
-                    anchor: anchor,
+                    anchor: nil,
                     claimControl: claimsControl,
                     record: false,
                     socket: socket
                 )
-            } catch {
-                // A Host may evict an old ring or cursor after a restart. In
-                // that case the anchor is only a hint; retry without it so
-				// protocol 4 can deliver a fresh atomic checkpoint. Other
-                // failures (for example an ended Session) retain the intent
-                // for a later roster/reconnect without issuing a second
-                // request immediately.
-                if anchor != nil,
-                   Self.isRecoveryAnchorFailure(error),
-                   running,
-                   self.socket === socket,
-                   subscriptions[sessionID]?.generation == subscription.generation {
-                    _ = try? await subscribe(
-                        sessionID: sessionID,
-                        size: size,
-                        anchor: nil,
-                        claimControl: claimsControl,
-                        record: false,
-                        socket: socket
-                    )
-                }
             }
         }
     }
@@ -2445,4 +2563,10 @@ public actor WarrenRemoteClient {
     private func emit(_ event: WarrenRemoteEvent) {
         _ = eventContinuation?.yield(event)
     }
+}
+
+private struct PendingOutputAck {
+    var epoch: UInt64
+    var sequence: UInt64
+    var unsentBytes: Int
 }

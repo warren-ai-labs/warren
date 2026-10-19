@@ -49,27 +49,59 @@ struct WarrenDesktopSidebarEmptyState: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-            Text(title)
-                .font(WarrenTypography.navigationItem)
-                .foregroundStyle(titleColor(tokens))
-                .fixedSize(horizontal: false, vertical: true)
+            if isStarter {
+                // The first-run case gets a mark of its own: it is the one
+                // empty state that is a beginning rather than a problem.
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(tokens.treeSecondaryText)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(tokens.treeRowHover)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(tokens.cardBorder, lineWidth: 1)
+                    )
+                    .padding(.bottom, WarrenSpacing.compact)
+                    .accessibilityHidden(true)
+            }
+
+            HStack(spacing: 6) {
+                if isWarning {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .accessibilityHidden(true)
+                }
+                Text(title)
+                    .font(isStarter ? Font.system(size: 13, weight: .medium) : WarrenTypography.navigationItem)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .foregroundStyle(titleColor(tokens))
 
             if let detail {
                 Text(detail)
                     .font(WarrenTypography.navigationMeta)
                     .foregroundStyle(detailColor(tokens))
+                    .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             if let action {
                 Button(action: action.perform) {
-                    Text(action.label)
-                        .font(WarrenTypography.navigationMeta)
+                    HStack(spacing: 5) {
+                        if let symbol = action.systemImage {
+                            Image(systemName: symbol)
+                                .font(.system(size: 9.5, weight: .semibold))
+                        }
+                        Text(action.label)
+                            .font(.system(size: 12, weight: .medium))
+                    }
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(tokens.highlight)
+                .buttonStyle(WarrenDesktopSidebarEmptyActionStyle(isFocused: isActionFocused))
                 .focused($isActionFocused)
-                .padding(.top, WarrenSpacing.xxs)
+                .padding(.top, WarrenSpacing.compact)
                 .warrenSemanticElement(
                     id: "\(semanticIDPrefix).\(action.semanticID)",
                     role: .button,
@@ -80,10 +112,21 @@ struct WarrenDesktopSidebarEmptyState: View {
         }
         .padding(.leading, leadingInset)
         .padding(.trailing, WarrenSpacing.medium)
-        .padding(.vertical, WarrenSpacing.compact)
+        .padding(.vertical, isStarter ? WarrenSpacing.standard : WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var isWarning: Bool {
+        if case .hostUnavailable = reason { return true }
+        return false
+    }
+
+    /// Whether this is the Host's first run: no projects, and a way to add one.
+    private var isStarter: Bool {
+        if case .noProjects(let canAddProject, _) = reason { return canAddProject }
+        return false
     }
 
     // MARK: Content
@@ -101,7 +144,7 @@ struct WarrenDesktopSidebarEmptyState: View {
         case .filteredByActiveOnly:
             "No active workspaces"
         case .noProjects:
-            "No projects"
+            "No projects yet"
         }
     }
 
@@ -117,7 +160,9 @@ struct WarrenDesktopSidebarEmptyState: View {
                 : "No workspace has a running session"
         case .noProjects(let canAddProject, let hostName):
             if canAddProject {
-                "Add a project or drop a Git repository folder"
+                // The sidebar takes no folder drops, so the copy names only
+                // the path that exists.
+                "Add a Git repository to list its worktrees and Sessions here."
             } else if let hostName, !hostName.isEmpty {
                 "Add one from the CLI on \(hostName)"
             } else {
@@ -129,6 +174,7 @@ struct WarrenDesktopSidebarEmptyState: View {
     private struct Action {
         let label: String
         let semanticID: String
+        var systemImage: String? = nil
         let perform: () -> Void
     }
 
@@ -139,6 +185,7 @@ struct WarrenDesktopSidebarEmptyState: View {
             return Action(
                 label: "Retry",
                 semanticID: "retry",
+                systemImage: "arrow.clockwise",
                 perform: onRetry
             )
         case .filteredByActiveOnly:
@@ -153,6 +200,7 @@ struct WarrenDesktopSidebarEmptyState: View {
             return Action(
                 label: "Add Project…",
                 semanticID: "add-project",
+                systemImage: "plus",
                 perform: onAddProject
             )
         }
@@ -178,5 +226,126 @@ struct WarrenDesktopSidebarEmptyState: View {
 
     private var accessibilityLabel: String {
         [title, detail].compactMap { $0 }.joined(separator: ". ")
+    }
+}
+
+/// The empty state's one action: a small bordered capsule in the tree's own
+/// colours, so the way out reads as a control rather than as orange link text
+/// that looks like a status.
+private struct WarrenDesktopSidebarEmptyActionStyle: ButtonStyle {
+    var isFocused = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        ActionBody(configuration: configuration, isFocused: isFocused)
+    }
+
+    private struct ActionBody: View {
+        let configuration: Configuration
+        let isFocused: Bool
+
+        @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.warrenWindowMaterial) private var windowMaterial
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @State private var isHovered = false
+
+        var body: some View {
+            let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+            let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+            configuration.label
+                .foregroundStyle(isHovered ? tokens.treeSessionSelectedText : tokens.treeSessionText)
+                .padding(.horizontal, 9)
+                .frame(height: 24)
+                .background(shape.fill(isHovered || configuration.isPressed ? tokens.treeRowSelected : tokens.treeRowHover))
+                .overlay(shape.strokeBorder(isFocused ? tokens.focusRing : tokens.cardBorder, lineWidth: 1))
+                .opacity(configuration.isPressed ? 0.85 : 1)
+                .contentShape(shape)
+                .onHover { isHovered = $0 }
+                .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: isHovered)
+        }
+    }
+}
+
+/// The tree's placeholder while a Host is still connecting and has sent no
+/// projects yet: project-shaped rows with Session lines under them, in the
+/// sidebar's own metrics.
+///
+/// Before it, a single-Host sidebar said "No projects" for the second it took
+/// to attach, and an aggregated Host showed nothing under its heading. Rows in
+/// the tree's shape say what is coming and keep the list from jumping when it
+/// lands.
+struct WarrenDesktopSidebarSkeleton: View {
+    var projectCount = 3
+    /// Places the rows beneath a Host heading in the aggregated sidebar.
+    var isNestedUnderHost = false
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+
+    /// Session lines per project, and the width of each title, so the block
+    /// reads as a tree of different names rather than a grid.
+    private static let sessionCounts = [2, 1, 2]
+    private static let projectWidths: [CGFloat] = [0.46, 0.62, 0.38]
+    private static let sessionWidths: [CGFloat] = [0.70, 0.52, 0.64, 0.58, 0.74]
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.groupSpacing) {
+            ForEach(0..<projectCount, id: \.self) { project in
+                VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.groupContentSpacing) {
+                    projectRow(project)
+                    ForEach(0..<Self.sessionCounts[project % Self.sessionCounts.count], id: \.self) { session in
+                        sessionRow(project: project, session: session)
+                    }
+                }
+            }
+        }
+        .padding(.leading, isNestedUnderHost ? WarrenDesktopSidebarIndent.hostEmptyState : WarrenDesktopSidebarIndent.project)
+        .padding(.trailing, WarrenSpacing.medium)
+        .padding(.vertical, WarrenSpacing.xxs)
+        .warrenSkeletonTint(tokens.treeRowSelected)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading projects")
+    }
+
+    private func projectRow(_ index: Int) -> some View {
+        let phase = Double(index) * 0.18
+        return HStack(spacing: 8) {
+            WarrenSkeletonBar(phase: phase)
+                .frame(width: 16, height: 16)
+            GeometryReader { proxy in
+                WarrenSkeletonBar(phase: phase)
+                    .frame(width: proxy.size.width * Self.projectWidths[index % Self.projectWidths.count], height: 9)
+                    .frame(maxHeight: .infinity, alignment: .center)
+            }
+        }
+        .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
+        .frame(height: WarrenDesktopSidebarMetrics.groupRowHeight)
+    }
+
+    private func sessionRow(project: Int, session: Int) -> some View {
+        let phase = Double(project) * 0.18 + Double(session + 1) * 0.06
+        let width = Self.sessionWidths[(project * 2 + session) % Self.sessionWidths.count]
+        return HStack(spacing: 8) {
+            WarrenSkeletonBar(phase: phase)
+                .frame(width: 6, height: 6)
+                .clipShape(Circle())
+                .frame(width: 16)
+            GeometryReader { proxy in
+                WarrenSkeletonBar(phase: phase)
+                    .frame(width: proxy.size.width * width, height: 7)
+                    .frame(maxHeight: .infinity, alignment: .center)
+            }
+        }
+        .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
+        .frame(height: WarrenDesktopSidebarMetrics.worktreeRowHeight)
+    }
+}
+
+extension WarrenDesktopConnectionState {
+    /// Still on its way to attached: the tree it will show has not arrived,
+    /// so an empty roster is not yet a fact worth stating.
+    var isSettling: Bool {
+        self == .connecting || self == .reconnecting
     }
 }

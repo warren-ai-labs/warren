@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/abcdlsj/warren/Headless/internal/settings"
 )
@@ -23,6 +24,7 @@ func (s *Service) SettingsSnapshot() settings.Settings {
 		value.DefaultRuntime = s.DefaultRuntime
 	}
 	value.RuntimeEnv = cloneStringMap(value.RuntimeEnv)
+	value.ACPCommands = cloneStringMap(value.ACPCommands)
 	value.PairedClients = clonePairedClients(value.PairedClients)
 	return value
 }
@@ -135,6 +137,37 @@ func (s *Service) PublicAccessEnabled() bool {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()
 	return s.Settings.PublicTunnel.Enabled
+}
+
+// SetACPCommands records the per-provider ACP server overrides used for chat
+// Sessions created afterwards. Existing Sessions keep the command they were
+// created with. An empty entry removes the override for that provider.
+func (s *Service) SetACPCommands(commands map[string]string) error {
+	cleaned := make(map[string]string, len(commands))
+	for kind, command := range commands {
+		normalized := normalizeProviderKind(kind)
+		if !ACPProviderAvailable(normalized) {
+			return fmt.Errorf("acp is not available for provider %s", kind)
+		}
+		command = strings.TrimSpace(command)
+		if command == "" {
+			continue
+		}
+		if err := validateACPCommand(command); err != nil {
+			return fmt.Errorf("acp command for %s: %w", kind, err)
+		}
+		cleaned[normalized] = command
+	}
+	if len(cleaned) == 0 {
+		cleaned = nil
+	}
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	s.Settings.ACPCommands = cloneStringMap(cleaned)
+	if s.SettingsPath != "" {
+		return settings.Save(s.SettingsPath, s.Settings)
+	}
+	return nil
 }
 
 // SetAutoOpenShell records whether opening an empty workspace creates a Shell

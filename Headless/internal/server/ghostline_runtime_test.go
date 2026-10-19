@@ -290,3 +290,77 @@ func TestGhostlineRuntimeShellIntegrationReportsDirectory(t *testing.T) {
 		})
 	}
 }
+
+// TestGhostlineRuntimeMetadataReportsShellPromptState drives a real login shell
+// through the runtime adapter and checks the OSC 133 prompt state the roster
+// projects: at the prompt, the last command, and its exit status. HOME is
+// isolated so a developer's dotfiles cannot change the shell under test.
+func TestGhostlineRuntimeMetadataReportsShellPromptState(t *testing.T) {
+	for _, shellName := range []string{"zsh", "fish"} {
+		shell, err := exec.LookPath(shellName)
+		if err != nil {
+			t.Logf("%s is not installed; skipping", shellName)
+			continue
+		}
+		t.Run(shellName, func(t *testing.T) {
+			integrationDir := t.TempDir()
+			t.Setenv(warrenruntime.ShellIntegrationDirEnv, integrationDir)
+			t.Setenv("SHELL", shell)
+			t.Setenv("ZDOTDIR", "")
+			if err := warrenruntime.WriteShellIntegration(integrationDir); err != nil {
+				t.Fatalf("WriteShellIntegration: %v", err)
+			}
+
+			runtimeAdapter, _ := startGhostlineRuntimeWithOptions(t, ghostline.Options{
+				OutputDir:       t.TempDir(),
+				ProbeForeground: true,
+			})
+			ctx := context.Background()
+			name := "warren_ghost_shell_state"
+			if err := runtimeAdapter.Create(ctx, name, t.TempDir(), "", []string{"HOME=" + t.TempDir()}); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			t.Cleanup(func() { _ = runtimeAdapter.Kill(context.Background(), name) })
+
+			waitShell := func(what string, done func(*warrenruntime.ShellMetadata) bool) *warrenruntime.ShellMetadata {
+				t.Helper()
+				deadline := time.Now().Add(10 * time.Second)
+				var last *warrenruntime.ShellMetadata
+				for time.Now().Before(deadline) {
+					metadata, metadataErr := runtimeAdapter.Metadata(ctx, name)
+					if metadataErr == nil {
+						last = metadata.Shell
+						if last != nil && done(last) {
+							return last
+						}
+					}
+					time.Sleep(50 * time.Millisecond)
+				}
+				t.Fatalf("shell metadata did not converge for %s; last %+v", what, last)
+				return nil
+			}
+
+			waitShell("the first prompt", func(shell *warrenruntime.ShellMetadata) bool {
+				return shell.AtPrompt
+			})
+			if err := runtimeAdapter.Input(ctx, name, []byte("echo hi\r")); err != nil {
+				t.Fatalf("Input echo: %v", err)
+			}
+			waitShell("a successful command", func(shell *warrenruntime.ShellMetadata) bool {
+				return shell.LastCommand == "echo hi" && shell.LastExitCode != nil && *shell.LastExitCode == 0
+			})
+			if err := runtimeAdapter.Input(ctx, name, []byte("false\r")); err != nil {
+				t.Fatalf("Input false: %v", err)
+			}
+			failed := waitShell("a failing command", func(shell *warrenruntime.ShellMetadata) bool {
+				return shell.LastCommand == "false" && shell.LastExitCode != nil && *shell.LastExitCode == 1
+			})
+			if !failed.AtPrompt {
+				t.Fatalf("AtPrompt = false after the failing command finished: %+v", failed)
+			}
+			if failed.LastExitAt == nil {
+				t.Fatal("LastExitAt = nil after a command finished")
+			}
+		})
+	}
+}

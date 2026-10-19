@@ -2,6 +2,10 @@
 
 - Status: Implemented (layout ownership and persistence superseded by
   [RFC 0020](0020-host-owned-pane-groups.md))
+- Amended 2026-10-15: Terminal Groups were removed ([RFC 0003](0003-terminal-groups.md),
+  withdrawn). Every Session belongs to a Workspace; the Terminal
+  Group owner, `terminalGroup`/`scope` fields, and `--group` flags described
+  below no longer exist.
 - Owner: Warren Desktop, Ghostty Adapter, and Headless
 - Created: 2026-08-25
 - Scope: macOS Desktop presentation for Warren Terminal Sessions

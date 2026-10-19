@@ -1,7 +1,6 @@
 package server
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,21 +42,6 @@ func regularFileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func normalizeTerminalGroupHome(home string) (string, error) {
-	home = strings.TrimSpace(home)
-	if home == "" {
-		return "", nil
-	}
-	resolved, err := filepath.Abs(expandHome(home))
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(resolved)
-	if err != nil || !info.IsDir() {
-		return "", fmt.Errorf("terminal group home is not a directory: %s", resolved)
-	}
-	return resolved, nil
-}
 func samePath(left, right string) bool {
 	return normalizedPathKey(left) == normalizedPathKey(right)
 }

@@ -1,10 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img" aria-labelledby="title desc">
   <title id="title">Warren app icon, micro</title>
-  <desc id="desc">A micro slanted straight-line W on a charcoal rounded tile.</desc>
-  <rect x="0" y="0" width="16" height="16" rx="3" fill="#121110"/>
-  <rect x="1" y="1" width="14" height="14" rx="2" fill="#1c1918"/>
-  <polygon points="10.5,12.7 13.8,3.6 12.3,3.2 10.0,12.6" fill="#8a8376"/>
-  <polygon points="10.9,12.5 8.6,4.3 8.1,4.5 9.6,12.8" fill="#d8d2c3"/>
-  <polygon points="8.1,4.3 2.6,12.3 3.9,13.0 8.5,4.5" fill="#d8d2c3"/>
-  <polygon points="4.0,12.7 4.2,3.4 3.7,3.4 2.5,12.6" fill="#8a8376"/>
+  <desc id="desc">A cream single-stroke W whose last stroke flicks out into an ember dot, on a caramel-brown tile.</desc>
+  <rect x="0" y="0" width="16" height="16" rx="3" fill="#2d1912"/>
+  <g transform="scale(0.16)">
+    <polyline points="17.5,30.5 31.5,72.5 47.5,43.5 63.5,72.5 76.5,33.5" fill="none" stroke="#f7ebe2" stroke-width="13.05" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="82.27" cy="16.16" r="7.75" fill="#ff8a5b"/>
+  </g>
 </svg>

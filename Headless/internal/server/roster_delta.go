@@ -11,16 +11,15 @@ import (
 // client-known Store revision. Order is sent separately because an entity can
 // move without any of its visible fields changing.
 type rosterDeltaMessage struct {
-	Type         string                                `json:"t"`
-	BaseRevision uint64                                `json:"baseRevision"`
-	Revision     uint64                                `json:"revision"`
-	Host         *api.Host                             `json:"host,omitempty"`
-	Tasks        *rosterEntityDelta[api.Task]          `json:"tasks,omitempty"`
-	Projects     *rosterEntityDelta[api.Project]       `json:"projects,omitempty"`
-	Workspaces   *rosterEntityDelta[api.Workspace]     `json:"workspaces,omitempty"`
-	Groups       *rosterEntityDelta[api.TerminalGroup] `json:"terminalGroups,omitempty"`
-	PaneGroups   *rosterEntityDelta[api.PaneGroup]     `json:"paneGroups,omitempty"`
-	Sessions     *rosterEntityDelta[api.Session]       `json:"sessions,omitempty"`
+	Type         string                            `json:"t"`
+	BaseRevision uint64                            `json:"baseRevision"`
+	Revision     uint64                            `json:"revision"`
+	Host         *api.Host                         `json:"host,omitempty"`
+	Tasks        *rosterEntityDelta[api.Task]      `json:"tasks,omitempty"`
+	Projects     *rosterEntityDelta[api.Project]   `json:"projects,omitempty"`
+	Workspaces   *rosterEntityDelta[api.Workspace] `json:"workspaces,omitempty"`
+	PaneGroups   *rosterEntityDelta[api.PaneGroup] `json:"paneGroups,omitempty"`
+	Sessions     *rosterEntityDelta[api.Session]   `json:"sessions,omitempty"`
 	// SessionMetadata carries high-frequency foreground metadata that changes
 	// on every prompt or `cd`. Keeping it out of the Session entity keeps a
 	// directory change from retransmitting the whole Session and its agent
@@ -43,10 +42,11 @@ type rosterSessionMetadataDelta struct {
 }
 
 type rosterSessionMetadata struct {
-	ID          string `json:"id"`
-	Process     string `json:"process,omitempty"`
-	CommandLine string `json:"commandLine,omitempty"`
-	Directory   string `json:"directory,omitempty"`
+	ID          string            `json:"id"`
+	Process     string            `json:"process,omitempty"`
+	CommandLine string            `json:"commandLine,omitempty"`
+	Directory   string            `json:"directory,omitempty"`
+	Shell       *api.SessionShell `json:"shell,omitempty"`
 }
 
 func makeRosterDelta(before, after api.State, baseRevision, revision uint64) rosterDeltaMessage {
@@ -67,9 +67,6 @@ func makeRosterDelta(before, after api.State, baseRevision, revision uint64) ros
 	}
 	if delta := rosterEntries(before.Workspaces, after.Workspaces, func(value api.Workspace) string { return value.ID }); delta.hasChanges() {
 		result.Workspaces = &delta
-	}
-	if delta := rosterEntries(before.TerminalGroups, after.TerminalGroups, func(value api.TerminalGroup) string { return value.ID }); delta.hasChanges() {
-		result.Groups = &delta
 	}
 	if delta := rosterEntries(before.PaneGroups, after.PaneGroups, func(value api.PaneGroup) string { return value.ID }); delta.hasChanges() {
 		result.PaneGroups = &delta
@@ -93,8 +90,8 @@ func makeRosterDelta(before, after api.State, baseRevision, revision uint64) ros
 // re-render the Session entity. The foreground metadata is excluded because it
 // travels in the dedicated metadata delta.
 func sessionsEqualIgnoringMetadata(a, b api.Session) bool {
-	a.Process, a.CommandLine, a.Directory = "", "", ""
-	b.Process, b.CommandLine, b.Directory = "", "", ""
+	a.Process, a.CommandLine, a.Directory, a.Shell = "", "", "", nil
+	b.Process, b.CommandLine, b.Directory, b.Shell = "", "", "", nil
 	return reflect.DeepEqual(a, b)
 }
 
@@ -121,7 +118,8 @@ func rosterSessionMetadataChanges(before, after []api.Session, entityUpsert []ap
 		}
 		if previous.Process == session.Process &&
 			previous.CommandLine == session.CommandLine &&
-			previous.Directory == session.Directory {
+			previous.Directory == session.Directory &&
+			reflect.DeepEqual(previous.Shell, session.Shell) {
 			continue
 		}
 		result.Upsert = append(result.Upsert, rosterSessionMetadata{
@@ -129,13 +127,26 @@ func rosterSessionMetadataChanges(before, after []api.Session, entityUpsert []ap
 			Process:     session.Process,
 			CommandLine: session.CommandLine,
 			Directory:   session.Directory,
+			Shell:       session.Shell,
 		})
 	}
 	return result
 }
 
+// hasChanges reports whether the delta carries any entity. It reads the
+// optional fields by kind rather than listing them: a field added to the struct
+// is counted the moment it is added, instead of being computed and then
+// silently dropped from the stream because a second hand-written list was not
+// updated with it. Every optional field is a pointer; the identity fields are
+// always set and are skipped by kind.
 func (m rosterDeltaMessage) hasChanges() bool {
-	return m.Host != nil || m.Tasks != nil || m.Projects != nil || m.Workspaces != nil || m.Groups != nil || m.Sessions != nil || m.SessionMetadata != nil
+	value := reflect.ValueOf(m)
+	for index := 0; index < value.NumField(); index++ {
+		if field := value.Field(index); field.Kind() == reflect.Pointer && !field.IsNil() {
+			return true
+		}
+	}
+	return false
 }
 
 func (d rosterEntityDelta[T]) hasChanges() bool {

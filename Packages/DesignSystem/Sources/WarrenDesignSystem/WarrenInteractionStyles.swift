@@ -27,7 +27,6 @@ public enum WarrenInteractionState: Equatable, Sendable {
 
 private struct WarrenInteractiveBody: View {
     let configuration: ButtonStyle.Configuration
-    let tokens: WarrenColorTokens
     let selected: Bool
     let focused: Bool
     let cornerRadius: CGFloat
@@ -41,9 +40,15 @@ private struct WarrenInteractiveBody: View {
 
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var hovered = false
 
     var body: some View {
+        // Resolved here rather than passed in: these styles draw in both
+        // appearances, and a fixed palette lost the hover and selection washes
+        // on paper.
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let state = WarrenInteractionState.resolve(
             disabled: !isEnabled,
             pressed: configuration.isPressed,
@@ -52,7 +57,7 @@ private struct WarrenInteractiveBody: View {
             hovered: hovered
         )
         configuration.label
-            .background(background(for: state))
+            .background(background(for: state, tokens: tokens))
             .opacity(state == .disabled ? 0.42 : (state == .pressed ? pressedOpacity : 1))
             .clipShape(.rect(cornerRadius: cornerRadius))
             .overlay {
@@ -68,11 +73,11 @@ private struct WarrenInteractiveBody: View {
                         .padding(.vertical, 4)
                 }
             }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: state)
+            .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: state)
             .onHover { hovered = $0 }
     }
 
-    private func background(for state: WarrenInteractionState) -> Color {
+    private func background(for state: WarrenInteractionState, tokens: WarrenColorTokens) -> Color {
         if state == .hovered, !showsHoverBackground { return .clear }
         return tokens.interactionBackground(for: state)
     }
@@ -102,7 +107,6 @@ public struct WarrenInteractiveRowStyle: ButtonStyle {
     public func makeBody(configuration: Configuration) -> some View {
         WarrenInteractiveBody(
             configuration: configuration,
-            tokens: .dark,
             selected: isSelected,
             focused: isFocused,
             cornerRadius: cornerRadius,
@@ -123,28 +127,6 @@ public struct WarrenChromeButtonStyle: ButtonStyle {
     public func makeBody(configuration: Configuration) -> some View {
         WarrenInteractiveBody(
             configuration: configuration,
-            tokens: .dark,
-            selected: false,
-            focused: isFocused,
-            cornerRadius: WarrenRadius.small,
-            pressedOpacity: 0.82,
-            showsHoverBackground: true
-        )
-    }
-}
-
-/// Presets retain their selected/pressed wash without any scale animation.
-public struct WarrenPresetButtonStyle: ButtonStyle {
-    public var isFocused: Bool
-
-    public init(isFocused: Bool = false) {
-        self.isFocused = isFocused
-    }
-
-    public func makeBody(configuration: Configuration) -> some View {
-        WarrenInteractiveBody(
-            configuration: configuration,
-            tokens: .dark,
             selected: false,
             focused: isFocused,
             cornerRadius: WarrenRadius.small,
@@ -198,7 +180,7 @@ public struct WarrenPrimaryButtonStyle: ButtonStyle {
                         .stroke(state == .focused ? tokens.focusRing : .clear, lineWidth: state == .focused ? 1 : 0)
                 }
                 .opacity(state == .disabled ? 0.42 : 1)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: state)
+                .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: state)
                 .onHover { hovered = $0 }
         }
     }

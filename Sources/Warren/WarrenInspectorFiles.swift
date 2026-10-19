@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WarrenDesktop
 import WarrenDesignSystem
 import WarrenTransport
 
@@ -118,7 +119,8 @@ struct WarrenInspectorFiles: View {
                     .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
                     .padding(WarrenSpacing.compact)
                     if !loaded {
-                        ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        WarrenSkeletonRows(count: 10, shape: .file)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     } else if paths.isEmpty {
                         WarrenInspectorEmpty(symbol: "folder", title: "No files", detail: "This checkout has no files Git can see.")
                     } else if !filter.isEmpty {
@@ -179,13 +181,13 @@ struct WarrenInspectorFiles: View {
                 WarrenFileIcon(name: node.name, isDirectory: node.isDirectory, open: isOpen)
                 Text(node.name)
                     .font(.system(size: 12.5))
-                    .foregroundStyle(status != nil ? statusTint(status!, tokens: tokens) : tokens.foreground.opacity(0.9))
+                    .foregroundStyle(status != nil ? WarrenInspectorStatus.tint(for: status!, tokens: tokens) : tokens.foreground.opacity(0.9))
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if let status {
                     Text(status == "?" ? "U" : String(status.prefix(1)))
                         .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(statusTint(status, tokens: tokens))
+                        .foregroundStyle(WarrenInspectorStatus.tint(for: status, tokens: tokens))
                 } else if containsChange {
                     Circle().fill(tokens.warning.opacity(0.8)).frame(width: 5, height: 5)
                 }
@@ -195,16 +197,15 @@ struct WarrenInspectorFiles: View {
             .frame(height: 26)
             .contentShape(Rectangle())
         }
-        .buttonStyle(WarrenFileRowStyle())
-        .contextMenu {
-            Button("Copy Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(node.id, forType: .string)
-            }
-            Button("Reveal in Finder") {
+        .buttonStyle(WarrenInspectorRowStyle(cornerRadius: 6, inset: WarrenSpacing.xs))
+        .warrenContextMenu([
+            .button(title: "Copy Path") {
+                WarrenCopyFeedback.shared.copy(node.id, announcing: "Copied path")
+            },
+            .button(title: "Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: inspector.path).appendingPathComponent(node.id)])
-            }
-        }
+            },
+        ])
     }
 
     private func filtered(tokens: WarrenColorTokens) -> some View {
@@ -235,35 +236,10 @@ struct WarrenInspectorFiles: View {
                         .frame(height: 26)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(WarrenFileRowStyle())
+                    .buttonStyle(WarrenInspectorRowStyle(cornerRadius: 6, inset: WarrenSpacing.xs))
                 }
             }
         }
-    }
-
-    private func statusTint(_ status: String, tokens: WarrenColorTokens) -> Color {
-        switch status.prefix(1) {
-        case "A", "?", "U": tokens.success
-        case "D": tokens.destructive
-        default: tokens.warning
-        }
-    }
-}
-
-private struct WarrenFileRowStyle: ButtonStyle {
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-    @State private var hovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        configuration.label
-            .background(
-                (configuration.isPressed || hovering) ? tokens.fillHover : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-            )
-            .padding(.horizontal, WarrenSpacing.xs)
-            .onHover { hovering = $0 }
     }
 }
 
@@ -303,7 +279,7 @@ struct WarrenFileEditor: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Back to files")
+                .warrenTooltip("Back to files")
                 WarrenFileIcon(name: (relativePath as NSString).lastPathComponent, isDirectory: false)
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 5) {
@@ -312,7 +288,7 @@ struct WarrenFileEditor: View {
                             .foregroundStyle(tokens.foreground)
                             .lineLimit(1)
                         if dirty {
-                            Circle().fill(tokens.foreground.opacity(0.7)).frame(width: 6, height: 6).help("Unsaved changes")
+                            Circle().fill(tokens.foreground.opacity(0.7)).frame(width: 6, height: 6).warrenTooltip("Unsaved changes")
                         }
                         if readOnly {
                             Text("Read-only").font(.system(size: 10.5)).foregroundStyle(tokens.mutedForeground)
@@ -346,7 +322,7 @@ struct WarrenFileEditor: View {
                 .buttonStyle(.plain)
                 .disabled(!dirty)
                 .keyboardShortcut("s", modifiers: .command)
-                .help("Save (⌘S)")
+                .warrenTooltip("Save", shortcut: "⌘S")
             }
             .padding(.horizontal, WarrenSpacing.compact)
             .frame(height: 44)
@@ -369,7 +345,9 @@ struct WarrenFileEditor: View {
                     dark: colorScheme == .dark
                 )
             } else {
-                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+                WarrenSkeletonRows(count: 12, shape: .init(showsDot: false, showsMeta: false, rowHeight: 20))
+                    .padding(.top, WarrenSpacing.compact)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
         .task { load() }

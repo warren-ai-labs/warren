@@ -404,6 +404,8 @@ type qoderRecord struct {
 	IsSidechain     bool            `json:"isSidechain"`
 	Message         json.RawMessage `json:"message"`
 	ToolUseResult   json.RawMessage `json:"toolUseResult"`
+	// AITitle carries the conversation name Qoder generated for itself.
+	AITitle string `json:"aiTitle"`
 	// Error records carry the failure at the record level (the message
 	// content is the human-readable fallback text).
 	IsAPIErrorMessage bool   `json:"isApiErrorMessage"`
@@ -439,6 +441,9 @@ type qoderParser struct {
 	qoderEffort       string
 	qoderCallTool     map[string]string
 	qoderInteractions map[string]string
+	// qoderTitle is the conversation name Qoder generated for itself. It is
+	// consumed once by TakeTitle and never enters the visible transcript.
+	qoderTitle string
 }
 
 func newQoderParser(contentLimit int) *qoderParser {
@@ -457,6 +462,13 @@ func (p *qoderParser) parse(line []byte) []api.AgentEvent {
 	return p.Parse(line)
 }
 
+// TakeTitle returns the name Qoder generated for this conversation, once.
+func (p *qoderParser) TakeTitle() string {
+	title := p.qoderTitle
+	p.qoderTitle = ""
+	return title
+}
+
 // parseQoder projects one Qoder record onto the normalized agent event stream
 // understood by the transcription tracker.
 func (p *qoderParser) parseQoder(line []byte) []api.AgentEvent {
@@ -472,7 +484,14 @@ func (p *qoderParser) parseQoder(line []byte) []api.AgentEvent {
 		return []api.AgentEvent{*structured}
 	}
 	switch record.Type {
-	case "workspace-directories", "active-leaf", "ai-title",
+	case "ai-title":
+		// Qoder names its own conversation; the name is the session's title,
+		// not a transcript row.
+		if title := strings.TrimSpace(record.AITitle); title != "" {
+			p.qoderTitle = title
+		}
+		return nil
+	case "workspace-directories", "active-leaf",
 		"last-prompt", "file-history-snapshot":
 		// Metadata records do not participate in the visible conversation.
 		return nil

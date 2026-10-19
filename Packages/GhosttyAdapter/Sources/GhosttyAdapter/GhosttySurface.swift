@@ -355,9 +355,9 @@ public final class GhosttySurface: Identifiable {
             // golden yellow background for candidate matches, and on Warren's
             // orange accent for the focused match. The previous near-black
             // candidate background was almost invisible on the terminal grid.
-            builder.withCustom("search-foreground", "#151110")
+            builder.withCustom("search-foreground", "#0b0b0b")
             builder.withCustom("search-background", "#ffe082")
-            builder.withCustom("search-selected-foreground", "#151110")
+            builder.withCustom("search-selected-foreground", "#0b0b0b")
             builder.withCustom("search-selected-background", "#e07850")
             builder.withWindowPaddingX(0)
             builder.withWindowPaddingY(0)
@@ -418,13 +418,13 @@ public final class GhosttySurface: Identifiable {
         TerminalConfiguration { builder in
             switch appearance {
             case .dark:
-                builder.withBackground("#151110")
-                builder.withForeground("#eae8e6")
+                builder.withBackground("#0b0b0b")
+                builder.withForeground("#ededed")
                 builder.withCursorColor("#e07850")
-                builder.withCursorText("#151110")
+                builder.withCursorText("#0b0b0b")
                 // Ghostty colors carry no alpha; blend Superset's 25% orange
-                // selection over #151110 instead of using its rgba() value.
-                builder.withSelectionBackground("#482b20")
+                // selection over #0b0b0b instead of using its rgba() value.
+                builder.withSelectionBackground("#40261c")
                 // Match xterm.js drawBoldTextInBrightColors: bold takes the
                 // bright palette, which on a dark ground is the louder half.
                 builder.withBoldColor("bright")

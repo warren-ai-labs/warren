@@ -6,16 +6,14 @@ import Foundation
 /// lowercase and stable so links can survive copy changes and localization.
 public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Sendable {
     case appearance = "Appearance"
-    case terminalFont = "Font"
-    case terminalTitle = "Title"
-    case terminalRuntime = "Terminal runtime"
+    case terminal = "Terminal"
     case splits = "Splits"
-    case aiTitles = "AI titles"
-    case presets = "Presets"
-    case workspaces = "Workspaces"
+    case presets = "Launch Commands"
+    case externalIDEs = "Editors"
     case notifications = "Notifications"
-    case externalIDEs = "External IDEs"
-    case usageOverview = "Overview"
+    case workspaces = "Workspaces"
+    case terminalRuntime = "Terminal Runtime"
+    case aiTitles = "AI Titles"
     case usage = "Usage"
     case relay = "Relay"
     case lanPairing = "LAN Pairing"
@@ -23,19 +21,29 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
 
     public var id: String { rawValue }
 
+    /// Whether the page edits a preference on this Mac or a value stored on the
+    /// selected Host. The navigation reads the two scopes as separate groups,
+    /// which is what keeps "which machine am I editing" answerable at a glance.
+    public var scope: WarrenDesktopSettingsScope {
+        switch self {
+        case .appearance, .terminal, .splits, .presets, .externalIDEs, .notifications:
+            .thisMac
+        case .workspaces, .terminalRuntime, .aiTitles, .usage, .relay, .lanPairing, .publicAccess:
+            .host
+        }
+    }
+
     public var deepLinkValue: String {
         switch self {
         case .appearance: "appearance"
-        case .terminalFont: "terminal-font"
-        case .terminalTitle: "terminal-title"
-        case .terminalRuntime: "terminal-runtime"
+        case .terminal: "terminal"
         case .splits: "splits"
-        case .aiTitles: "ai-titles"
         case .presets: "presets"
-        case .workspaces: "workspaces"
-        case .notifications: "notifications"
         case .externalIDEs: "external-ides"
-        case .usageOverview: "usage-overview"
+        case .notifications: "notifications"
+        case .workspaces: "workspaces"
+        case .terminalRuntime: "terminal-runtime"
+        case .aiTitles: "ai-titles"
         case .usage: "usage"
         case .relay: "relay"
         case .lanPairing: "lan-pairing"
@@ -43,26 +51,36 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         }
     }
 
+    /// Parses a deep-link value. `terminal-font` and `terminal-title` still
+    /// resolve to the merged Terminal page, and `usage-overview` to Usage, so
+    /// links copied before the redesign keep working.
     public init?(deepLinkValue: String) {
         switch deepLinkValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "appearance", "theme", "light", "dark": self = .appearance
-        case "terminal-font", "font": self = .terminalFont
-        case "terminal-title", "title": self = .terminalTitle
-        case "terminal-runtime", "runtime": self = .terminalRuntime
+        case "terminal", "terminal-font", "terminal-title", "font", "title": self = .terminal
         case "splits", "split", "panes": self = .splits
-        case "ai-titles", "ai-title", "openai", "openai-titles": self = .aiTitles
-        case "presets": self = .presets
-        case "workspaces", "workspace": self = .workspaces
+        case "presets", "launch-commands", "launch": self = .presets
+        case "external-ides", "external-ide", "ides", "editors": self = .externalIDEs
         case "notifications", "notification": self = .notifications
-        case "external-ides", "external-ide", "ides": self = .externalIDEs
-        case "usage-overview", "overview", "usage-summary": self = .usageOverview
-        case "usage", "stats", "usage-stats", "cost": self = .usage
+        case "workspaces", "workspace": self = .workspaces
+        case "terminal-runtime", "runtime": self = .terminalRuntime
+        case "ai-titles", "ai-title", "openai", "openai-titles": self = .aiTitles
+        case "usage", "usage-overview", "overview", "usage-summary", "stats", "usage-stats", "cost":
+            self = .usage
         case "relay": self = .relay
         case "lan-pairing", "lan-pairing-window", "pairing": self = .lanPairing
         case "public-access", "publicaccess", "public": self = .publicAccess
         default: return nil
         }
     }
+}
+
+/// Which store a Settings page writes to.
+public enum WarrenDesktopSettingsScope: Sendable {
+    /// `@AppStorage` preferences that belong to this Mac alone.
+    case thisMac
+    /// Values kept on the selected Host's daemon.
+    case host
 }
 
 /// Relay join values carried by a Warren settings link. The enrollment key is

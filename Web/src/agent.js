@@ -1774,24 +1774,60 @@ export function extractActivePlan(events = []) {
   return null;
 }
 
+// structuredEventKind reduces a canonical lifecycle type (`subagent.updated`) to
+// the card kind (`subagent`) so extraction works on raw canonical history and on
+// already-normalized presentation rows alike.
+function structuredEventKind(type) {
+  const normalized = normalizeAgentEventType(type);
+  return normalized.endsWith(".updated") ? normalized.slice(0, -8) : normalized;
+}
+
 /** Extracts unique active subagents from agent events. */
 export function extractActiveSubagents(events = []) {
   if (!Array.isArray(events)) return [];
   const byId = new Map();
   for (const event of events) {
     if (!event) continue;
-    const type = normalizeAgentEventType(event.type);
-    if (type === "subagent") {
-      const payload = event.payload && typeof event.payload === "object" ? event.payload : event;
-      const id = String(event.id || payload.subagentId || `subagent-${event.sequence}`);
-      byId.set(id, {
-        id,
-        title: payload.title || payload.label || "Subagent",
-        summary: payload.summary || event.content || "",
-        state: payload.state || "running",
-        timestamp: event.timestamp,
-      });
-    }
+    if (structuredEventKind(event.type) !== "subagent") continue;
+    const payload = event.payload && typeof event.payload === "object" ? event.payload : event;
+    const id = String(payload.subagentId || event.id || `subagent-${event.sequence}`);
+    const previous = byId.get(id) || {};
+    byId.set(id, {
+      id,
+      parentCallId: payload.parentCallId || previous.parentCallId || "",
+      title: payload.title || payload.label || previous.title || "Subagent",
+      summary: payload.summary || event.content || previous.summary || "",
+      state: payload.state || previous.state || "running",
+      timestamp: event.timestamp || event.occurredAt || previous.timestamp,
+    });
   }
   return Array.from(byId.values());
+}
+
+/**
+ * Returns the most recent activity for each subagent, keyed by its stable
+ * identity. Child tool calls carry payload.subagentId, so a sidebar row can
+ * show what the subagent is doing without inferring it from text.
+ */
+export function extractSubagentActivity(events = []) {
+  const byId = new Map();
+  if (!Array.isArray(events)) return byId;
+  for (const event of events) {
+    if (!event) continue;
+    const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+    const id = String(payload.subagentId || "").trim();
+    if (!id) continue;
+    const toolName = payload.toolName || event.toolName || "";
+    const detail = payload.toolDetail || event.toolDetail || "";
+    if (!toolName && !detail) continue;
+    byId.set(id, {
+      subagentId: id,
+      toolName: String(toolName),
+      toolKind: String(payload.toolKind || event.toolKind || ""),
+      detail: String(detail),
+      status: payload.toolStatus || event.toolStatus || "",
+      timestamp: event.timestamp || event.occurredAt,
+    });
+  }
+  return byId;
 }

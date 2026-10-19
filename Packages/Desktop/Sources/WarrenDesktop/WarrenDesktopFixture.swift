@@ -103,36 +103,11 @@ public struct WarrenDesktopWorktreeCandidate: Identifiable, Hashable, Sendable {
     }
 }
 
-/// A Host-owned terminal group and its derived desktop session metrics.
-public struct WarrenDesktopTerminalGroup: Identifiable, Hashable, Sendable {
-    public let group: TerminalGroup
-    public let sessions: [WarrenDesktopSession]
-
-    public var id: TerminalGroupID { group.id }
-
-    public var runningSessionCount: Int {
-        sessions.filter { $0.state.isActive }.count
-    }
-
-    /// The most actionable mark among this Group's Sessions.
-    public var mark: WarrenActivityMark? {
-        sessions.compactMap(\.activityMark).max()
-    }
-
-    public var activity: AgentActivityState? { mark?.activityState }
-
-    public init(group: TerminalGroup, sessions: [WarrenDesktopSession] = []) {
-        self.group = group
-        self.sessions = sessions
-    }
-}
-
 /// Desktop read model for a Host-owned Warren Terminal Session. `tabID` is
 /// present only when the current Window Layout contains an entry for it.
 public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     public let id: TerminalSessionID
     public let workspaceID: WorkspaceID?
-    public let terminalGroupID: TerminalGroupID?
     public let tabID: String?
     public let title: String
     public let customTitle: String?
@@ -152,11 +127,16 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     /// separate from `AgentStatus`, whose wire representation has no
     /// activity timestamp.
     public let activityUpdatedAt: Date?
+    /// When the Host created the Session, for the "nothing run yet" duration.
+    public let createdAt: Date?
     public let runtimeProcess: String
     /// The foreground command line including arguments, e.g. `npm run dev`.
     /// Empty when the Host has no foreground probe data.
     public let runtimeCommandLine: String
     public let workingDirectory: String
+    /// The shell's live OSC 133 prompt state. Nil when the shell reported no
+    /// marker, which is not the same as sitting at an empty prompt.
+    public let shellState: WarrenDesktopShellState?
     /// The lifecycle this person has already seen for this Session, on this
     /// device.
     ///
@@ -165,6 +145,44 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     /// business storing. It retires a completion notice and nothing else — see
     /// `WarrenActivityMark.isAcknowledgeable`.
     public let acknowledgedActivity: AgentActivityState?
+    /// A working Agent's current step, and the last primary fact the row
+    /// showed for it. The second line keeps `primaryLine` when a turn has
+    /// neither a tool step nor a plan entry, so the row holds its previous
+    /// text instead of falling to a foreground command or a past turn.
+    public let currentStep: String?
+    /// The last non-empty primary fact a working row showed. Carried forward
+    /// while the Session works; see `currentStep`.
+    public let primaryLine: String?
+    /// What the Session last did, as one line in the past tense ("Ran swift
+    /// test", "Worked 1m 12s"), folded on this client from the same event stream
+    /// and frozen when the turn ends.
+    ///
+    /// `currentStep` answers "what is it doing" and is cleared at every turn
+    /// boundary; this answers "what did it last do", which is what a resting
+    /// row has left to say. Nil until the Session has done anything this client
+    /// has seen.
+    public let lastActivity: String?
+    /// The Host's sentence for the last completed turn ("Fixed the resize
+    /// race, added 3 tests"). A resting Agent row prefers it to its counts;
+    /// nil whenever the Host could not ask a model, which is why the counts
+    /// stay as the fallback rather than as a footnote.
+    public let resultSentence: String?
+    /// The Session's plan and context, and this turn's action counts, folded
+    /// on this client from the same event stream as `currentStep`. They are the
+    /// sidebar's second line's numbers; see `secondLine`.
+    public let plan: WarrenDesktopPlanProgress?
+    public let context: WarrenDesktopContextUsage?
+    /// This turn's action counts, heaviest first by the sidebar's own priority
+    /// (Edited > Ran > Fetched > Searched > Read). Empty until the turn has
+    /// settled a countable action.
+    public let turnCounts: [String]
+    /// When the current turn started, so a running row can show how long it has
+    /// run. Nil when the client's history starts mid-turn, because a duration
+    /// measured from a guessed start is worse than none.
+    public let turnStartedAt: Date?
+    /// The subagents this Session spawned, in first-seen order. They are the
+    /// Session's children, not Sessions of their own; see `WarrenDesktopSubagent`.
+    public let subagents: [WarrenDesktopSubagent]
 
     public var activity: AgentActivityState? { agentStatus?.activity }
 
@@ -175,17 +193,7 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     /// plain terminal. Behavior that depends on what Warren launched must keep
     /// using `kind`.
     public var presentedKind: TerminalSessionKind {
-        guard let agentProvider else { return kind }
-        switch kind {
-        case .shell, .custom:
-            return agentProvider
-        case .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae:
-            return kind
-        case .browser:
-            // A browser never carries a provider binding, so a promoted Agent is
-            // impossible here and the durable kind is the whole answer.
-            return kind
-        }
+        SessionTitle.presentedKind(kind, agentProvider: agentProvider)
     }
 
     /// Warren's structured Agent view is available for integrated providers
@@ -211,7 +219,6 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     public init(
         id: TerminalSessionID,
         workspaceID: WorkspaceID? = nil,
-        terminalGroupID: TerminalGroupID? = nil,
         tabID: String? = nil,
         title: String,
         customTitle: String? = nil,
@@ -222,18 +229,24 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         activity: AgentActivityState? = nil,
         agentStatus: AgentStatus? = nil,
         activityUpdatedAt: Date? = nil,
+        createdAt: Date? = nil,
         runtimeProcess: String = "",
         runtimeCommandLine: String = "",
         workingDirectory: String = "",
-        acknowledgedActivity: AgentActivityState? = nil
+        shellState: WarrenDesktopShellState? = nil,
+        acknowledgedActivity: AgentActivityState? = nil,
+        currentStep: String? = nil,
+        resultSentence: String? = nil,
+        primaryLine: String? = nil,
+        lastActivity: String? = nil,
+        plan: WarrenDesktopPlanProgress? = nil,
+        context: WarrenDesktopContextUsage? = nil,
+        turnCounts: [String] = [],
+        turnStartedAt: Date? = nil,
+        subagents: [WarrenDesktopSubagent] = []
     ) {
-        precondition(
-            (workspaceID == nil) != (terminalGroupID == nil),
-            "A terminal session must belong to exactly one context."
-        )
         self.id = id
         self.workspaceID = workspaceID
-        self.terminalGroupID = terminalGroupID
         self.tabID = tabID
         self.title = title
         self.customTitle = customTitle
@@ -243,10 +256,21 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         self.state = state
         self.agentStatus = agentStatus ?? activity.map { AgentStatus(activity: $0) }
         self.activityUpdatedAt = activityUpdatedAt
+        self.createdAt = createdAt
         self.runtimeProcess = runtimeProcess
         self.runtimeCommandLine = runtimeCommandLine
         self.workingDirectory = workingDirectory
+        self.shellState = shellState
         self.acknowledgedActivity = acknowledgedActivity
+        self.currentStep = currentStep
+        self.primaryLine = primaryLine
+        self.lastActivity = lastActivity
+        self.resultSentence = resultSentence
+        self.plan = plan
+        self.context = context
+        self.turnCounts = turnCounts
+        self.turnStartedAt = turnStartedAt
+        self.subagents = subagents
     }
 
     public func withActivity(_ activity: AgentActivityState?) -> Self {
@@ -260,7 +284,6 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         Self(
             id: id,
             workspaceID: workspaceID,
-            terminalGroupID: terminalGroupID,
             tabID: tabID,
             title: title,
             customTitle: customTitle,
@@ -270,10 +293,21 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             state: state,
             agentStatus: agentStatus,
             activityUpdatedAt: activityUpdatedAt ?? self.activityUpdatedAt,
+            createdAt: createdAt,
             runtimeProcess: runtimeProcess,
             runtimeCommandLine: runtimeCommandLine,
             workingDirectory: workingDirectory,
-            acknowledgedActivity: acknowledgedActivity
+            shellState: shellState,
+            acknowledgedActivity: acknowledgedActivity,
+            currentStep: currentStep,
+            resultSentence: resultSentence,
+            primaryLine: primaryLine,
+            lastActivity: lastActivity,
+            plan: plan,
+            context: context,
+            turnCounts: turnCounts,
+            turnStartedAt: turnStartedAt,
+            subagents: subagents
         )
     }
 
@@ -281,7 +315,6 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         Self(
             id: id,
             workspaceID: workspaceID,
-            terminalGroupID: terminalGroupID,
             tabID: tabID,
             title: title,
             customTitle: customTitle,
@@ -291,10 +324,113 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             state: state,
             agentStatus: agentStatus,
             activityUpdatedAt: activityUpdatedAt,
+            createdAt: createdAt,
             runtimeProcess: runtimeProcess,
             runtimeCommandLine: runtimeCommandLine,
             workingDirectory: workingDirectory,
-            acknowledgedActivity: activity
+            shellState: shellState,
+            acknowledgedActivity: activity,
+            currentStep: currentStep,
+            resultSentence: resultSentence,
+            primaryLine: primaryLine,
+            lastActivity: lastActivity,
+            plan: plan,
+            context: context,
+            turnCounts: turnCounts,
+            turnStartedAt: turnStartedAt,
+            subagents: subagents
+        )
+    }
+
+    public func withCurrentStep(_ step: String?) -> Self {
+        Self(
+            id: id,
+            workspaceID: workspaceID,
+            tabID: tabID,
+            title: title,
+            customTitle: customTitle,
+            pinned: pinned,
+            kind: kind,
+            agentProvider: agentProvider,
+            state: state,
+            agentStatus: agentStatus,
+            activityUpdatedAt: activityUpdatedAt,
+            createdAt: createdAt,
+            runtimeProcess: runtimeProcess,
+            runtimeCommandLine: runtimeCommandLine,
+            workingDirectory: workingDirectory,
+            shellState: shellState,
+            acknowledgedActivity: acknowledgedActivity,
+            currentStep: step,
+            resultSentence: resultSentence,
+            primaryLine: primaryLine,
+            lastActivity: lastActivity,
+            plan: plan,
+            context: context,
+            turnCounts: turnCounts,
+            turnStartedAt: turnStartedAt,
+            subagents: subagents
+        )
+    }
+
+    public func withPrimaryLine(_ line: String?) -> Self {
+        Self(
+            id: id,
+            workspaceID: workspaceID,
+            tabID: tabID,
+            title: title,
+            customTitle: customTitle,
+            pinned: pinned,
+            kind: kind,
+            agentProvider: agentProvider,
+            state: state,
+            agentStatus: agentStatus,
+            activityUpdatedAt: activityUpdatedAt,
+            createdAt: createdAt,
+            runtimeProcess: runtimeProcess,
+            runtimeCommandLine: runtimeCommandLine,
+            workingDirectory: workingDirectory,
+            shellState: shellState,
+            acknowledgedActivity: acknowledgedActivity,
+            currentStep: currentStep,
+            resultSentence: resultSentence,
+            primaryLine: line,
+            lastActivity: lastActivity,
+            plan: plan,
+            context: context,
+            turnCounts: turnCounts,
+            turnStartedAt: turnStartedAt,
+            subagents: subagents
+        )
+    }
+
+    public func withLastActivity(_ activity: String?) -> Self {
+        Self(
+            id: id,
+            workspaceID: workspaceID,
+            tabID: tabID,
+            title: title,
+            customTitle: customTitle,
+            pinned: pinned,
+            kind: kind,
+            agentProvider: agentProvider,
+            state: state,
+            agentStatus: agentStatus,
+            activityUpdatedAt: activityUpdatedAt,
+            createdAt: createdAt,
+            runtimeProcess: runtimeProcess,
+            runtimeCommandLine: runtimeCommandLine,
+            workingDirectory: workingDirectory,
+            shellState: shellState,
+            acknowledgedActivity: acknowledgedActivity,
+            currentStep: currentStep,
+            primaryLine: primaryLine,
+            lastActivity: activity,
+            plan: plan,
+            context: context,
+            turnCounts: turnCounts,
+            turnStartedAt: turnStartedAt,
+            subagents: subagents
         )
     }
 
@@ -344,18 +480,15 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     public struct ReconciliationKey: Sendable, Hashable {
         public let projectIDs: [ProjectID]
         public let workspaceIDs: [WorkspaceID]
-        public let terminalGroupIDs: [TerminalGroupID]
         public let tabIDs: [String]
         public let sessionIDs: [TerminalSessionID]
         fileprivate init(
             groups: [WarrenDesktopProjectGroup],
-            terminalGroups: [TerminalGroup],
             sessions: [WarrenDesktopSession],
             tabs: [ClientTab]
         ) {
             self.projectIDs = groups.map(\.project.id)
             self.workspaceIDs = groups.flatMap { $0.workspaces.map(\.id) }
-            self.terminalGroupIDs = terminalGroups.map(\.id)
             self.tabIDs = tabs.map(\.id)
             self.sessionIDs = sessions.map(\.id)
         }
@@ -364,16 +497,13 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     public let host: WarrenDomain.Host
     public let taskGroups: [WarrenDesktopTaskGroup]
     public let groups: [WarrenDesktopProjectGroup]
-    public let terminalGroups: [TerminalGroup]
     public let sessions: [WarrenDesktopSession]
     public let tabs: [ClientTab]
     public let sessionWorkspaceIDs: [TerminalSessionID: WorkspaceID]
-    public let sessionTerminalGroupIDs: [TerminalSessionID: TerminalGroupID]
     /// The Host's durable split arrangements. They belong to the Host, so every
     /// client reads the same shape and a WebSocket peer never has to report one.
     public let paneGroups: [PaneGroup]
     public let tabWorkspaceIDs: [String: WorkspaceID]
-    public let tabTerminalGroupIDs: [String: TerminalGroupID]
     public let reconciliationKey: ReconciliationKey
     /// Lookup tables are built once at the projection boundary. SwiftUI can
     /// ask for the same relationship many times while reconciling a frame;
@@ -381,15 +511,11 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     private let workspacesByID: [WorkspaceID: Workspace]
     private let sessionsByID: [TerminalSessionID: WarrenDesktopSession]
     private let tabsByWorkspaceID: [WorkspaceID: [ClientTab]]
-    private let sessionsByTerminalGroupID: [TerminalGroupID: [WarrenDesktopSession]]
-    private let tabsByTerminalGroupID: [TerminalGroupID: [ClientTab]]
     private let firstWorkspaceID: WorkspaceID?
     private let firstWorkspaceIDByProjectID: [ProjectID: WorkspaceID]
     private let markByWorkspaceID: [WorkspaceID: WarrenActivityMark]
     private let workspaceActivitySummariesByID: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary]
     private let activeSessionsByWorkspaceIDStorage: [WorkspaceID: [WarrenDesktopSession]]
-    private let markByTerminalGroupID: [TerminalGroupID: WarrenActivityMark]
-    private let terminalGroupsByID: [TerminalGroupID: TerminalGroup]
     public let connectionState: WarrenDesktopConnectionState
 
     public var isConnected: Bool {
@@ -418,11 +544,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     /// The arrangements of one Workspace, in draw order.
     public func paneGroups(in workspaceID: WorkspaceID) -> [PaneGroup] {
         paneGroups.filter { $0.workspaceID == workspaceID }
-    }
-
-    /// The arrangements of one Terminal Group, in draw order.
-    public func paneGroups(in terminalGroupID: TerminalGroupID) -> [PaneGroup] {
-        paneGroups.filter { $0.terminalGroupID == terminalGroupID }
     }
 
     public func paneGroup(id: PaneGroupID) -> PaneGroup? {
@@ -465,13 +586,10 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         lhs.host == rhs.host
             && lhs.taskGroups == rhs.taskGroups
             && lhs.groups == rhs.groups
-            && lhs.terminalGroups == rhs.terminalGroups
             && lhs.sessions == rhs.sessions
             && lhs.tabs == rhs.tabs
             && lhs.sessionWorkspaceIDs == rhs.sessionWorkspaceIDs
-            && lhs.sessionTerminalGroupIDs == rhs.sessionTerminalGroupIDs
             && lhs.tabWorkspaceIDs == rhs.tabWorkspaceIDs
-            && lhs.tabTerminalGroupIDs == rhs.tabTerminalGroupIDs
             && lhs.paneGroups == rhs.paneGroups
             && lhs.connectionState == rhs.connectionState
             && lhs.unreadNoticeCount == rhs.unreadNoticeCount
@@ -481,13 +599,10 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         hasher.combine(host)
         hasher.combine(taskGroups)
         hasher.combine(groups)
-        hasher.combine(terminalGroups)
         hasher.combine(sessions)
         hasher.combine(tabs)
         hasher.combine(sessionWorkspaceIDs)
-        hasher.combine(sessionTerminalGroupIDs)
         hasher.combine(tabWorkspaceIDs)
-        hasher.combine(tabTerminalGroupIDs)
         hasher.combine(paneGroups)
         hasher.combine(connectionState)
         hasher.combine(unreadNoticeCount)
@@ -502,9 +617,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         sessionWorkspaceIDs: [TerminalSessionID: WorkspaceID] = [:],
         tabWorkspaceIDs: [String: WorkspaceID] = [:],
         connectionState: WarrenDesktopConnectionState = .attached,
-        terminalGroups: [TerminalGroup] = [],
-        sessionTerminalGroupIDs: [TerminalSessionID: TerminalGroupID] = [:],
-        tabTerminalGroupIDs: [String: TerminalGroupID] = [:],
         paneGroups: [PaneGroup] = [],
         unreadNoticeCount: Int = 0
     ) {
@@ -530,7 +642,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
                 workspaces: Self.pinnedFirst(workspacesByTaskID[task.id] ?? []) { $0.pinned }
             )
         }
-        self.terminalGroups = terminalGroups
         self.sessions = Self.pinnedFirst(sessions) { $0.pinned }
         self.tabs = Self.pinnedFirst(tabs) { tab in
             tab.sessionID.flatMap { pinnedBySessionID[$0] } ?? false
@@ -541,14 +652,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             }),
             uniquingKeysWith: { explicit, _ in explicit }
         )
-        let resolvedSessionTerminalGroupIDs = sessionTerminalGroupIDs.merging(
-            Dictionary(uniqueKeysWithValues: sessions.compactMap { session in
-                session.terminalGroupID.map { (session.id, $0) }
-            }),
-            uniquingKeysWith: { explicit, _ in explicit }
-        )
         self.sessionWorkspaceIDs = resolvedSessionWorkspaceIDs
-        self.sessionTerminalGroupIDs = resolvedSessionTerminalGroupIDs
         // Draw order is the Host's order, then creation, then ID, so two clients
         // that never reorder agree on which group sits where.
         self.paneGroups = paneGroups.sorted { first, second in
@@ -562,14 +666,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             }),
             uniquingKeysWith: { explicit, _ in explicit }
         )
-        let resolvedTabTerminalGroupIDs = tabTerminalGroupIDs.merging(
-            Dictionary(uniqueKeysWithValues: tabs.compactMap { tab in
-                tab.sessionID.flatMap { resolvedSessionTerminalGroupIDs[$0] }.map { (tab.id, $0) }
-            }),
-            uniquingKeysWith: { explicit, _ in explicit }
-        )
         self.tabWorkspaceIDs = resolvedTabWorkspaceIDs
-        self.tabTerminalGroupIDs = resolvedTabTerminalGroupIDs
 
         // Assign the notice count from the projection boundary
         self.unreadNoticeCount = unreadNoticeCount
@@ -600,20 +697,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             tabsByWorkspaceID[workspaceID, default: []].append(tab)
         }
         self.tabsByWorkspaceID = tabsByWorkspaceID
-
-        var sessionsByTerminalGroupID: [TerminalGroupID: [WarrenDesktopSession]] = [:]
-        for session in self.sessions {
-            guard let groupID = resolvedSessionTerminalGroupIDs[session.id] else { continue }
-            sessionsByTerminalGroupID[groupID, default: []].append(session)
-        }
-        self.sessionsByTerminalGroupID = sessionsByTerminalGroupID
-
-        var tabsByTerminalGroupID: [TerminalGroupID: [ClientTab]] = [:]
-        for tab in tabs {
-            guard let groupID = resolvedTabTerminalGroupIDs[tab.id] else { continue }
-            tabsByTerminalGroupID[groupID, default: []].append(tab)
-        }
-        self.tabsByTerminalGroupID = tabsByTerminalGroupID
 
         // The rollup is `max()` over the shared mark, whose case order *is* the
         // priority order. It used to run over a Desktop-local copy of that
@@ -654,18 +737,9 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         self.workspaceActivitySummariesByID = workspaceActivitySummariesByID
         self.activeSessionsByWorkspaceIDStorage = activeSessionsByWorkspaceID
 
-        var markByTerminalGroupID: [TerminalGroupID: WarrenActivityMark] = [:]
-        for session in sessions {
-            guard let groupID = session.terminalGroupID,
-                  let mark = session.activityMark else { continue }
-            markByTerminalGroupID[groupID] = max(markByTerminalGroupID[groupID] ?? mark, mark)
-        }
-        self.markByTerminalGroupID = markByTerminalGroupID
-        self.terminalGroupsByID = Dictionary(uniqueKeysWithValues: terminalGroups.map { ($0.id, $0) })
         self.connectionState = connectionState
         self.reconciliationKey = ReconciliationKey(
             groups: groups,
-            terminalGroups: terminalGroups,
             sessions: sessions,
             tabs: tabs
         )
@@ -683,9 +757,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         sessionWorkspaceIDs: [TerminalSessionID: WorkspaceID] = [:],
         tabWorkspaceIDs: [String: WorkspaceID] = [:],
         connectionState: WarrenDesktopConnectionState = .attached,
-        terminalGroups: [TerminalGroup] = [],
-        sessionTerminalGroupIDs: [TerminalSessionID: TerminalGroupID] = [:],
-        tabTerminalGroupIDs: [String: TerminalGroupID] = [:],
         paneGroups: [PaneGroup] = [],
         unreadNoticeCount: Int = 0
     ) {
@@ -708,9 +779,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             sessionWorkspaceIDs: sessionWorkspaceIDs,
             tabWorkspaceIDs: tabWorkspaceIDs,
             connectionState: connectionState,
-            terminalGroups: terminalGroups,
-            sessionTerminalGroupIDs: sessionTerminalGroupIDs,
-            tabTerminalGroupIDs: tabTerminalGroupIDs,
             paneGroups: paneGroups,
             unreadNoticeCount: unreadNoticeCount
         )
@@ -744,25 +812,12 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         return workspacesByID[workspaceID]
     }
 
-    public func terminalGroup(id: TerminalGroupID) -> TerminalGroup? {
-        terminalGroupsByID[id]
-    }
-
-    public func terminalGroup(for sessionID: TerminalSessionID) -> TerminalGroup? {
-        guard let groupID = sessionTerminalGroupIDs[sessionID] else { return nil }
-        return terminalGroupsByID[groupID]
-    }
-
     public func session(id: TerminalSessionID) -> WarrenDesktopSession? {
         sessionsByID[id]
     }
 
     public func workspaceID(forTabID tabID: String) -> WorkspaceID? {
         tabWorkspaceIDs[tabID]
-    }
-
-    public func terminalGroupID(forTabID tabID: String) -> TerminalGroupID? {
-        tabTerminalGroupIDs[tabID]
     }
 
     /// Tabs are workspace-local UI. The Host may keep tabs from several
@@ -777,14 +832,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         return tabs(in: workspaceID)
     }
 
-    public func tabs(in terminalGroupID: TerminalGroupID) -> [ClientTab] {
-        tabsByTerminalGroupID[terminalGroupID] ?? []
-    }
-
-    public func sessions(in terminalGroupID: TerminalGroupID) -> [WarrenDesktopSession] {
-        sessionsByTerminalGroupID[terminalGroupID] ?? []
-    }
-
     /// Returns the most actionable state for a Workspace. A failure or input
     /// request must remain visible even when another Session is still working.
     public func activity(in workspaceID: WorkspaceID) -> AgentActivityState? {
@@ -795,23 +842,11 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         workspaceID.flatMap(activity(in:))
     }
 
-    public func activity(in terminalGroupID: TerminalGroupID) -> AgentActivityState? {
-        mark(in: terminalGroupID)?.activityState
-    }
-
     /// The mark itself, for a caller that draws the rollup rather than compares
     /// it. The lifecycle accessors above drop what is being asked; a row does
     /// not get to.
     public func mark(in workspaceID: WorkspaceID) -> WarrenActivityMark? {
         markByWorkspaceID[workspaceID]
-    }
-
-    public func mark(in terminalGroupID: TerminalGroupID) -> WarrenActivityMark? {
-        markByTerminalGroupID[terminalGroupID]
-    }
-
-    public func runningSessionCount(in terminalGroupID: TerminalGroupID) -> Int {
-        sessions(in: terminalGroupID).filter { $0.state.isActive }.count
     }
 
     /// Returns a projection with one session's client-local activity
@@ -824,17 +859,94 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         withSessionAgentStatus(activity.map { AgentStatus(activity: $0) }, for: sessionID)
     }
 
-    /// Replaces one Session's acknowledgment without touching anything else.
-    public func withSessionAcknowledgedActivity(
-        _ activity: AgentActivityState?,
+    /// Replaces one Session's two activity lines: what it is doing now, and what
+    /// it last did. They move together because one event batch usually decides
+    /// both, and a projection carries the whole tree to rebuild. `primaryLine`
+    /// is the sticky copy the second line holds when both are absent.
+    public func withSessionActivityLines(
+        currentStep: String?,
+        primaryLine: String?,
+        lastActivity: String?,
         for id: TerminalSessionID
     ) -> Self {
         guard let index = sessions.firstIndex(where: { $0.id == id }),
-              sessions[index].acknowledgedActivity != activity else {
+              sessions[index].currentStep != currentStep
+                || sessions[index].primaryLine != primaryLine
+                || sessions[index].lastActivity != lastActivity else {
             return self
         }
+        return copyingSessions { sessions in
+            sessions[index] = sessions[index]
+                .withCurrentStep(currentStep)
+                .withPrimaryLine(primaryLine)
+                .withLastActivity(lastActivity)
+        }
+    }
+
+    /// Replaces one Session's plan, context, turn counts, and subagents. They
+    /// move together because the same Agent event batch usually decides all of
+    /// them, and a projection carries the whole tree to rebuild.
+    public func withSessionSummary(
+        plan: WarrenDesktopPlanProgress?,
+        context: WarrenDesktopContextUsage?,
+        turnCounts: [String],
+        turnStartedAt: Date?,
+        subagents: [WarrenDesktopSubagent],
+        for id: TerminalSessionID
+    ) -> Self {
+        guard let index = sessions.firstIndex(where: { $0.id == id }),
+              sessions[index].plan != plan
+                || sessions[index].context != context
+                || sessions[index].turnCounts != turnCounts
+                || sessions[index].turnStartedAt != turnStartedAt
+                || sessions[index].subagents != subagents else {
+            return self
+        }
+        return copyingSessions { sessions in
+            let existing = sessions[index]
+            sessions[index] = WarrenDesktopSession(
+                id: existing.id,
+                workspaceID: existing.workspaceID,
+                tabID: existing.tabID,
+                title: existing.title,
+                customTitle: existing.customTitle,
+                pinned: existing.pinned,
+                kind: existing.kind,
+                agentProvider: existing.agentProvider,
+                state: existing.state,
+                agentStatus: existing.agentStatus,
+                activityUpdatedAt: existing.activityUpdatedAt,
+                createdAt: existing.createdAt,
+                runtimeProcess: existing.runtimeProcess,
+                runtimeCommandLine: existing.runtimeCommandLine,
+                workingDirectory: existing.workingDirectory,
+                shellState: existing.shellState,
+                acknowledgedActivity: existing.acknowledgedActivity,
+                currentStep: existing.currentStep,
+                resultSentence: existing.resultSentence,
+                primaryLine: existing.primaryLine,
+                lastActivity: existing.lastActivity,
+                plan: plan,
+                context: context,
+                turnCounts: turnCounts,
+                turnStartedAt: turnStartedAt,
+                subagents: subagents
+            )
+        }
+    }
+
+    /// A projection whose only change is its Session list.
+    ///
+    /// Every field a Session mutator does not touch has to be carried over
+    /// explicitly, and one that is forgotten is silently reset: a passed-through
+    /// copy that dropped `paneGroups` would erase the Host's arrangements from
+    /// the client on every Agent step. Building the copy in one place keeps that
+    /// from depending on which mutator was called.
+    private func copyingSessions(
+        _ transform: (inout [WarrenDesktopSession]) -> Void
+    ) -> Self {
         var nextSessions = sessions
-        nextSessions[index] = nextSessions[index].acknowledgingActivity(activity)
+        transform(&nextSessions)
         return Self(
             host: host,
             groups: groups,
@@ -844,10 +956,23 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             sessionWorkspaceIDs: sessionWorkspaceIDs,
             tabWorkspaceIDs: tabWorkspaceIDs,
             connectionState: connectionState,
-            terminalGroups: terminalGroups,
-            sessionTerminalGroupIDs: sessionTerminalGroupIDs,
-            tabTerminalGroupIDs: tabTerminalGroupIDs
+            paneGroups: paneGroups,
+            unreadNoticeCount: unreadNoticeCount
         )
+    }
+
+    /// Replaces one Session's acknowledgment without touching anything else.
+    public func withSessionAcknowledgedActivity(
+        _ activity: AgentActivityState?,
+        for id: TerminalSessionID
+    ) -> Self {
+        guard let index = sessions.firstIndex(where: { $0.id == id }),
+              sessions[index].acknowledgedActivity != activity else {
+            return self
+        }
+        return copyingSessions { sessions in
+            sessions[index] = sessions[index].acknowledgingActivity(activity)
+        }
     }
 
     public func withSessionAgentStatus(
@@ -865,23 +990,11 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
             || sessions[index].acknowledgedActivity != acknowledgedActivity else {
             return self
         }
-        var nextSessions = sessions
-        nextSessions[index] = nextSessions[index]
-            .withAgentStatus(agentStatus, activityUpdatedAt: nextActivityUpdatedAt)
-            .acknowledgingActivity(acknowledgedActivity)
-        return Self(
-            host: host,
-            groups: groups,
-            tasks: taskGroups.map(\.task),
-            sessions: nextSessions,
-            tabs: tabs,
-            sessionWorkspaceIDs: sessionWorkspaceIDs,
-            tabWorkspaceIDs: tabWorkspaceIDs,
-            connectionState: connectionState,
-            terminalGroups: terminalGroups,
-            sessionTerminalGroupIDs: sessionTerminalGroupIDs,
-            tabTerminalGroupIDs: tabTerminalGroupIDs
-        )
+        return copyingSessions { sessions in
+            sessions[index] = sessions[index]
+                .withAgentStatus(agentStatus, activityUpdatedAt: nextActivityUpdatedAt)
+                .acknowledgingActivity(acknowledgedActivity)
+        }
     }
 }
 
@@ -892,7 +1005,6 @@ public struct WarrenDesktopFixture: Sendable {
 
     public var host: WarrenDomain.Host { projection.host }
     public var groups: [WarrenDesktopProjectGroup] { projection.groups }
-    public var terminalGroups: [TerminalGroup] { projection.terminalGroups }
     public var sessions: [WarrenDesktopSession] { projection.sessions }
     public var tabs: [ClientTab] { projection.tabs }
     public var isConnected: Bool { projection.isConnected }
@@ -906,7 +1018,6 @@ public struct WarrenDesktopFixture: Sendable {
         groups: [WarrenDesktopProjectGroup],
         tabs: [ClientTab] = [],
         isConnected: Bool = true,
-        terminalGroups: [TerminalGroup] = [],
         sessions: [WarrenDesktopSession] = []
     ) {
         self.init(
@@ -915,8 +1026,7 @@ public struct WarrenDesktopFixture: Sendable {
                 groups: groups,
                 sessions: sessions,
                 tabs: tabs,
-                connectionState: isConnected ? .attached : .disconnected,
-                terminalGroups: terminalGroups
+                connectionState: isConnected ? .attached : .disconnected
             )
         )
     }
@@ -927,7 +1037,6 @@ public struct WarrenDesktopFixture: Sendable {
         workspaces: [Workspace],
         tabs: [ClientTab] = [],
         isConnected: Bool = true,
-        terminalGroups: [TerminalGroup] = [],
         sessions: [WarrenDesktopSession] = []
     ) {
         self.init(
@@ -937,8 +1046,7 @@ public struct WarrenDesktopFixture: Sendable {
                 workspaces: workspaces,
                 sessions: sessions,
                 tabs: tabs,
-                connectionState: isConnected ? .attached : .disconnected,
-                terminalGroups: terminalGroups
+                connectionState: isConnected ? .attached : .disconnected
             )
         )
     }
@@ -1034,7 +1142,10 @@ public struct WarrenDesktopFixture: Sendable {
                 // An unread completion, so the preview exercises the
                 // acknowledgment path a real Host produces rather than only the
                 // plain-shell case.
-                activity: .ready
+                activity: .ready,
+                // ...and a last activity, so the preview shows the resting second
+                // line a finished Session keeps.
+                lastActivity: "Ran swift test"
             ),
             // A second Agent Session on the Workspace the probe expands, so the
             // real artifact shows an unread completion beside a running one
@@ -1045,7 +1156,8 @@ public struct WarrenDesktopFixture: Sendable {
                 tabID: "tab-agent",
                 title: "migrate schema",
                 kind: .codex,
-                activity: .ready
+                activity: .ready,
+                lastActivity: "Edited Patch.swift"
             ),
             WarrenDesktopSession(
                 id: TerminalSessionID(rawValue: Self.uuid("A0000000-0000-4000-8000-00000000000A")),
@@ -1053,7 +1165,9 @@ public struct WarrenDesktopFixture: Sendable {
                 tabID: "tab-agent-working",
                 title: "build docs",
                 kind: .codex,
-                activity: .working
+                activity: .working,
+                currentStep: "Running swift build",
+                lastActivity: "Ran swift build"
             ),
         ]
 
@@ -1086,7 +1200,6 @@ public struct WarrenDesktopFixture: Sendable {
 public enum WarrenDesktopSidebarSelection: Hashable, Sendable {
     case project(ProjectID)
     case workspace(WorkspaceID)
-    case terminalGroup(TerminalGroupID)
 
     public var serializedKey: String {
         switch self {
@@ -1094,8 +1207,6 @@ public enum WarrenDesktopSidebarSelection: Hashable, Sendable {
             return "workspace:\(id.description)"
         case .project(let id):
             return "project:\(id.description)"
-        case .terminalGroup(let id):
-            return "terminal-group:\(id.description)"
         }
     }
 
@@ -1109,20 +1220,16 @@ public enum WarrenDesktopSidebarSelection: Hashable, Sendable {
         case "project":
             guard let id = ProjectID(uuidString: parts[1]) else { return nil }
             self = .project(id)
-        case "terminal-group":
-            guard let id = TerminalGroupID(uuidString: parts[1]) else { return nil }
-            self = .terminalGroup(id)
         default:
             return nil
         }
     }
 }
 
-/// The Host context a Session can be moved into. Workspace and Terminal Group
-/// remain mutually exclusive destinations, matching the daemon protocol.
+/// The Host context a Session can be moved into: always a Workspace,
+/// matching the daemon protocol.
 public enum WarrenDesktopSessionMoveDestination: Hashable, Sendable {
     case workspace(WorkspaceID)
-    case terminalGroup(TerminalGroupID)
 }
 
 /// A selectable destination shown in the tab context menu. `id` is stable for
@@ -1172,7 +1279,6 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     /// Opens a workspace from a double-click/explicit open gesture. Any
     /// default Shell creation is decided by the host setting at the root.
     case openWorkspace(WorkspaceID)
-    case selectTerminalGroup(TerminalGroupID)
     case moveProject(ProjectID, before: ProjectID?)
     case moveWorkspace(WorkspaceID, before: WorkspaceID?)
     case openSession(TerminalSessionID)
@@ -1185,13 +1291,6 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     case moveSession(TerminalSessionID, to: WarrenDesktopSessionMoveDestination)
     case requestNewSession(WorkspaceID)
     case launchSession(WorkspaceID, TerminalSessionLaunchRequest)
-    case requestNewTerminalGroupSession(TerminalGroupID)
-    case launchTerminalGroupSession(TerminalGroupID, TerminalSessionLaunchRequest)
-    case createTerminalGroup(String, home: String?)
-    case renameTerminalGroup(TerminalGroupID, String)
-    case setTerminalGroupHome(TerminalGroupID, String?)
-    case deleteTerminalGroup(TerminalGroupID)
-    case moveTerminalGroup(TerminalGroupID, before: TerminalGroupID?)
     case restoreNavigation(WarrenDesktopNavigationState)
     case toggleSidebar
     case openNotifications
@@ -1222,7 +1321,6 @@ public struct WarrenDesktopActions {
 /// contains a process, transport, or persistence dependency.
 public struct WarrenDesktopTerminalContext: Hashable, Sendable {
     public let workspace: Workspace?
-    public let terminalGroup: TerminalGroup?
     public let tab: ClientTab
     public let font: TerminalFontPreference
     /// Whether the injected terminal surface should own AppKit keyboard focus.
@@ -1231,44 +1329,16 @@ public struct WarrenDesktopTerminalContext: Hashable, Sendable {
     public let wantsTerminalFocus: Bool
 
     public var scopeID: String {
-        workspace?.id.description ?? terminalGroup?.id.description ?? "none"
-    }
-
-    public init(
-        workspace: Workspace,
-        tab: ClientTab,
-        font: TerminalFontPreference = .init(),
-        wantsTerminalFocus: Bool = true
-    ) {
-        self.workspace = workspace
-        self.terminalGroup = nil
-        self.tab = tab
-        self.font = font
-        self.wantsTerminalFocus = wantsTerminalFocus
-    }
-
-    public init(
-        terminalGroup: TerminalGroup,
-        tab: ClientTab,
-        font: TerminalFontPreference = .init(),
-        wantsTerminalFocus: Bool = true
-    ) {
-        self.workspace = nil
-        self.terminalGroup = terminalGroup
-        self.tab = tab
-        self.font = font
-        self.wantsTerminalFocus = wantsTerminalFocus
+        workspace?.id.description ?? "none"
     }
 
     public init(
         workspace: Workspace?,
-        terminalGroup: TerminalGroup?,
         tab: ClientTab,
         font: TerminalFontPreference = .init(),
         wantsTerminalFocus: Bool = true
     ) {
         self.workspace = workspace
-        self.terminalGroup = terminalGroup
         self.tab = tab
         self.font = font
         self.wantsTerminalFocus = wantsTerminalFocus

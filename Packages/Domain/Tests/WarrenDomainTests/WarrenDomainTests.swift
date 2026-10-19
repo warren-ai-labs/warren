@@ -106,24 +106,6 @@ final class WarrenDomainTests: XCTestCase {
         )
     }
 
-    func testTerminalGroupAndSessionScopeRoundTripThroughJSON() throws {
-        let host = Host(name: "Mac")
-        let group = TerminalGroup(hostID: host.id, name: "Inbox", home: "/Users/test")
-        let scope = TerminalSessionScope.terminalGroup(group.id)
-
-        let decodedGroup = try JSONDecoder().decode(
-            TerminalGroup.self,
-            from: JSONEncoder().encode(group)
-        )
-        let decodedScope = try JSONDecoder().decode(
-            TerminalSessionScope.self,
-            from: JSONEncoder().encode(scope)
-        )
-
-        XCTAssertEqual(decodedGroup, group)
-        XCTAssertEqual(decodedScope, scope)
-    }
-
     func testSizeConstraintsRejectNonPositiveValues() {
         XCTAssertNotNil(LayoutSize(width: 320, height: 240))
         XCTAssertNil(LayoutSize(width: 0, height: 240))

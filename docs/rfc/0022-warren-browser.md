@@ -1,6 +1,10 @@
 # RFC 0022: Warren Browser — an embedded Chromium runtime with an agent action surface
 
 - Status: Draft
+- Amended 2026-10-15: Terminal Groups were removed ([RFC 0003](0003-terminal-groups.md),
+  withdrawn). Every Session, browser Sessions included, belongs to a Workspace;
+  the Terminal Group owner, `terminalGroup`/`scope` fields, and `--group` flags
+  described below no longer exist.
 - Owner: Warren Host (Headless), Warren Desktop, Warren CLI
 - Created: 2026-09-20
 - Scope: add a Host-owned browser runtime controlled over the existing protocol, a

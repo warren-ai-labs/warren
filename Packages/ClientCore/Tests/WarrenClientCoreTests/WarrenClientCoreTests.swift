@@ -62,37 +62,6 @@ final class WarrenClientCoreTests: XCTestCase {
         XCTAssertEqual(window.workspaceView(for: secondWorkspaceID)?.activeTabID, "tab-b")
     }
 
-    func testTerminalGroupViewsKeepIndependentTabOrderAndSelection() async throws {
-        let groupID = TerminalGroupID()
-        let secondGroupID = TerminalGroupID()
-        let secondSessionID = TerminalSessionID()
-        let layouts = try ClientLayoutStore(clientID: clientID, defaultWindowID: windowID)
-        try await layouts.start()
-
-        try await layouts.upsertTab(
-            ClientTab(id: "group-tab-a", title: "A", sessionID: sessionID),
-            terminalGroupID: groupID,
-            select: true,
-            in: windowID
-        )
-        try await layouts.upsertTab(
-            ClientTab(id: "group-tab-b", title: "B", sessionID: secondSessionID),
-            terminalGroupID: secondGroupID,
-            select: true,
-            in: windowID
-        )
-        try await layouts.selectTerminalGroup(groupID, in: windowID)
-        try await layouts.selectTab("group-tab-a", terminalGroupID: groupID, in: windowID)
-
-        let window = await layouts.window(id: windowID)
-        XCTAssertEqual(window.activeTerminalGroupID, groupID)
-        XCTAssertNil(window.activeWorkspaceID)
-        XCTAssertEqual(window.terminalGroupView(for: groupID)?.tabs.map(\.id), ["group-tab-a"])
-        XCTAssertEqual(window.terminalGroupView(for: groupID)?.activeTabID, "group-tab-a")
-        XCTAssertEqual(window.terminalGroupView(for: secondGroupID)?.tabs.map(\.id), ["group-tab-b"])
-        XCTAssertEqual(window.terminalGroupView(for: secondGroupID)?.activeTabID, "group-tab-b")
-    }
-
     func testMovingTabsKeepsSelectionAndSessionBindings() async throws {
         let thirdSessionID = TerminalSessionID()
         let layouts = try ClientLayoutStore(clientID: clientID, defaultWindowID: windowID)

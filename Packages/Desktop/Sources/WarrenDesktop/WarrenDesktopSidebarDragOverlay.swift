@@ -68,10 +68,10 @@ enum WarrenSidebarDragPresentation {
 
     static func isExpanded(
         _ projectID: ProjectID,
-        persistedExpansions: Set<ProjectID>,
+        persistedCollapses: Set<ProjectID>,
         autoCollapse: WarrenSidebarDragAutoCollapse?
     ) -> Bool {
-        guard persistedExpansions.contains(projectID) else { return false }
+        guard !persistedCollapses.contains(projectID) else { return false }
         switch autoCollapse {
         case nil:
             return true

@@ -43,6 +43,12 @@ const (
 	// it, the only available correlation is comparing message text, which cannot
 	// distinguish two identical prompts.
 	CapabilityAgentCausation = "agent-causation-v1"
+	// CapabilityOutputAck advertises that the client reports how much terminal
+	// output it has received (`session.ack`). The Host then keeps only a bounded
+	// amount of output in flight per subscription instead of queueing whatever
+	// the PTY produces, so keystroke echo and Agent events do not wait behind
+	// seconds of backlog on a slow link.
+	CapabilityOutputAck = "output-ack-v1"
 )
 
 var (
@@ -78,6 +84,7 @@ func HostCapabilities() []string {
 	result = append(result, CapabilityAgentCausation)
 	result = append(result, AgentViewCapabilities...)
 	result = append(result, CapabilityAgentStreams)
+	result = append(result, CapabilityOutputAck)
 	return result
 }
 

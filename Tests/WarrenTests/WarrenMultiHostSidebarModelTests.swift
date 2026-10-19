@@ -6,14 +6,23 @@ import WarrenDomain
 import WarrenTransport
 
 final class WarrenMultiHostSidebarModelTests: XCTestCase {
-    func testResolveAliasesPreservesOrderWithoutAddingCurrentHost() {
+    func testResolveAliasesLeadsWithCurrentHostThenAddedHosts() {
         let resolved = WarrenMultiHostSidebarModel.resolveAliases(
             display: WarrenDisplayConfiguration(endpoints: ["dev", "dev", "prod"]),
             current: "local"
         )
 
-        XCTAssertEqual(resolved.aliases, ["dev", "prod"])
+        XCTAssertEqual(resolved.aliases, ["local", "dev", "prod"])
         XCTAssertNil(resolved.error)
+
+        // Switching to a Host already in the sidebar moves it to the top
+        // rather than listing it twice.
+        let switched = WarrenMultiHostSidebarModel.resolveAliases(
+            display: WarrenDisplayConfiguration(endpoints: ["local", "prod"]),
+            current: "prod"
+        )
+        XCTAssertEqual(switched.aliases, ["prod", "local"])
+        XCTAssertNil(switched.error)
 
         let legacy = WarrenMultiHostSidebarModel.resolveAliases(
             display: nil,

@@ -69,13 +69,39 @@ public enum WarrenDesktopEndpointCapabilitiesNotification {
 }
 
 public struct WarrenDesktopEndpointOption: Identifiable, Hashable, Sendable {
+    /// Asks the shell to probe every Host. Posted with `forceProbeKey: true`
+    /// it probes even when the last results are fresh.
     public static let probeRequested = Notification.Name("WarrenDesktopEndpoint.probeRequested")
+    public static let forceProbeKey = "force"
+
+    public static func requestProbe(force: Bool) {
+        NotificationCenter.default.post(
+            name: probeRequested,
+            object: nil,
+            userInfo: [forceProbeKey: force]
+        )
+    }
+
+    public static func isForcedProbe(_ note: Notification) -> Bool {
+        note.userInfo?[forceProbeKey] as? Bool ?? true
+    }
+
+    /// What the Host's dot shows. Only a result draws a colour; a Host the
+    /// probe cannot judge draws nothing.
+    public enum ProbeState: Hashable, Sendable {
+        case checking
+        case reachable
+        case failed
+        case unknown
+    }
+
     public let id: String
     public let label: String
     public let isLocal: Bool
     public let detail: String?
     public let probeStatus: String?
     public let probeFailed: Bool
+    public let probeState: ProbeState
     public let connectionError: String?
     /// Whether this endpoint was explicitly added to the Desktop sidebar
     /// display set. The selected foreground endpoint is intentionally
@@ -90,6 +116,7 @@ public struct WarrenDesktopEndpointOption: Identifiable, Hashable, Sendable {
         detail: String? = nil,
         probeStatus: String? = nil,
         probeFailed: Bool = false,
+        probeState: ProbeState? = nil,
         connectionError: String? = nil,
         isDisplayedInSidebar: Bool = false,
         capabilities: WarrenDesktopEndpointCapabilities? = nil
@@ -100,6 +127,7 @@ public struct WarrenDesktopEndpointOption: Identifiable, Hashable, Sendable {
         self.detail = detail
         self.probeStatus = probeStatus
         self.probeFailed = probeFailed
+        self.probeState = probeState ?? (probeFailed ? .failed : (probeStatus == nil ? .unknown : .reachable))
         self.connectionError = connectionError
         self.isDisplayedInSidebar = isDisplayedInSidebar
         self.capabilities = capabilities ?? (isLocal ? .local : .remote)

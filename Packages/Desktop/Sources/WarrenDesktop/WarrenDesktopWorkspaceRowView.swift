@@ -5,19 +5,15 @@ import WarrenObservation
 
 /// The leading glyph a workspace row draws.
 ///
-/// Two things read this value: the row, which draws the glyph, and the tree
-/// rail, whose top tick has to reach it. The three glyphs are different widths
-/// inside the same 18pt slot, so the reach differs per kind; keeping one switch
-/// here is what stops the row and the guide from disagreeing.
+/// Every kind draws inside the same 18pt slot, so the titles beside them start
+/// on one column.
 enum WarrenDesktopWorkspaceGlyph: Equatable, Sendable {
     /// The main checkout: a laptop glyph.
     case checkout
     /// A worktree already merged to its default branch: the merge glyph.
     case mergedWorktree
-    /// Any other worktree: a plain 5pt dot.
+    /// Any other worktree: the branch glyph.
     case worktree
-    /// A standalone terminal group: stacked squares glyph.
-    case terminalGroup
 
     init(_ workspace: Workspace) {
         if workspace.branch == nil {
@@ -38,7 +34,6 @@ struct WarrenDesktopWorkspaceRow: View {
     let semanticScope: String
     let mark: WarrenActivityMark?
     let activeTabCount: Int
-    let isCollapsed: Bool
     let isSelected: Bool
     /// True when this workspace is the navigation scope but one of its Session
     /// leaves owns the selection.
@@ -83,9 +78,15 @@ struct WarrenDesktopWorkspaceRow: View {
     /// the user into one of the leaves they can already see and click. Double
     /// click still opens the workspace, as it does in compact mode.
     var showsSessionChildren: Bool = false
+    /// Folds this row's Session leaves away, or `nil` when it lists none.
+    ///
+    /// A row that offers it spends its click on folding: its leaves already
+    /// do the navigating, and a folded row keeps one dot per Session in place
+    /// of the aggregate marker.
+    var leafDisclosure: WarrenDesktopLeafDisclosure? = nil
     /// The tree's row rhythm, owned by the display mode so a workspace, its
     /// project, and its Session leaves stay on one grid.
-    var rowHeight: CGFloat = WarrenLayoutMetrics.sidebarWorkspaceRowHeight
+    var rowHeight: CGFloat = WarrenDesktopSidebarMetrics.worktreeRowHeight
     /// The task label is supplied only when this workspace is rendered in the
     /// project list. Task-list rows already sit beneath their task heading.
     let taskName: String?
@@ -107,197 +108,148 @@ struct WarrenDesktopWorkspaceRow: View {
     @State private var isHovered = false
 
     var body: some View {
-        if isCollapsed {
-            collapsedRow
-        } else {
-            expandedRow
-        }
-    }
-
-    private var collapsedRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        return Button(action: {
-            guard !isSelectionDisabled else { return }
-            onSelect()
-        }) {
-            ZStack(alignment: .topTrailing) {
-                workspaceGlyph(tokens: tokens)
-                // The icon rail has no room for leaves, so the aggregate marker
-                // is the only signal a workspace has work in it. It is never
-                // redundant here, however the tree is configured.
-                if let mark {
-                    WarrenDesktopWorkspaceActivityIndicator(
-                        mark: mark,
-                        activeTabCount: activeTabCount,
-                        isCompact: true
-                    )
-                        .offset(x: 5, y: -3)
-                }
-                if isDeleting {
-                    WarrenBrailleSpinner(size: 12, accessibilityLabel: "Deleting workspace")
-                        .background(tokens.cardSurface, in: Circle())
-                        .offset(x: 5, y: 5)
-                }
-            }
-        }
-        .buttonStyle(WarrenInteractiveRowStyle(
-            isSelected: isSelected && !isSelectionDisabled,
-            isFocused: isFocused
-        ))
-        .disabled(isInteractionDisabled || isSelectionDisabled)
-        .frame(width: 32, height: 32)
-        .contentShape(.rect)
-        .foregroundStyle(tokens.mutedForeground)
-        .opacity(isInteractionDisabled ? 0.62 : 1)
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
-        .help(taskName.map { "Task: \($0)" } ?? "")
-        .overlay(alignment: .topTrailing) {
-            taskLinkButton
-                .offset(x: 2, y: -2)
-        }
-        .accessibilityLabel("Workspace \(workspace.name)")
-        .accessibilityValue(workspaceAccessibilityValue)
-        .accessibilityAddTraits(isSelected && !isSelectionDisabled ? .isSelected : [])
-        .warrenSemanticElement(
-            id: "workspace.\(semanticScope).\(workspace.id.description)",
-            role: .button,
-            label: "Workspace \(workspace.name)",
-            value: workspaceAccessibilityValue,
-            isEnabled: !isInteractionDisabled && !isSelectionDisabled,
-            isSelected: isSelected && !isSelectionDisabled,
-            action: {
-                if !isInteractionDisabled && !isSelectionDisabled { onSelect() }
-            }
-        )
-        .focused($isFocused)
-        .simultaneousGesture(TapGesture(count: 2).onEnded {
-            if !isInteractionDisabled && !isSelectionDisabled { onDoubleClick() }
-        })
-        .contextMenu {
-            if !isInteractionDisabled && !isMutationDisabled {
-                WarrenDesktopContextMenu(contextMenuActions)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.horizontal, WarrenSpacing.compact)
+        expandedRow
     }
 
     private var expandedRow: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        return Button(action: {
-            // See showsSessionChildren: a row that lists its Sessions does not
-            // navigate, so a single click is inert. The leaves, the context
-            // menu, and the double-click open stay live.
-            guard !isSelectionDisabled, !showsSessionChildren else { return }
-            onSelect()
-        }) {
-            HStack(spacing: WarrenSpacing.compact) {
-                workspaceGlyph(tokens: tokens)
-                    .frame(width: WarrenLayoutMetrics.sidebarRowIconSlotSize,
-                           height: WarrenLayoutMetrics.sidebarRowIconSlotSize)
+        return HStack(spacing: WarrenDesktopSidebarMetrics.worktreeIconSpacing) {
+            Button(action: {
+                // A row that lists its Sessions spends its click on folding
+                // them; the leaves do the navigating. The context menu and the
+                // double-click open stay live.
+                if let leafDisclosure {
+                    leafDisclosure.toggle()
+                    return
+                }
+                guard !isSelectionDisabled, !showsSessionChildren else { return }
+                onSelect()
+            }) {
+                HStack(spacing: WarrenDesktopSidebarMetrics.worktreeIconSpacing) {
+                    workspaceGlyph(tokens: tokens)
+                        .frame(width: 12, height: 12)
 
-                Text(workspace.name.isEmpty ? "Workspace" : workspace.name)
-                    .font(WarrenTypography.navigationItem)
-                    // At rest the title keeps the workspace tier; the pointer or
-                    // the selection lifts it to the project/task foreground so
-                    // the active worktree stays legible on the glass coat. Hover
-                    // is the row's, not the rail's, when the row lists sessions.
-                    .foregroundStyle(
-                        isSelectionDisabled
-                            ? tokens.mutedForeground.opacity(0.62)
-                            : isSelected || containsSelection
-                            || ((isHovered || forceHover) && !showsSessionChildren)
-                            ? tokens.projectText
-                            : tokens.workspaceText
+                    // A branch name stays quiet whatever it holds; the
+                    // selected Session below says where the work is. Its
+                    // type prefix is dimmer still, so the eye lands on the
+                    // rest.
+                    WarrenDesktopBranchNameLabel(
+                        name: workspace.name.isEmpty ? "Workspace" : workspace.name,
+                        leafColor: isSelectionDisabled ? tokens.treeQuietText : tokens.treeSecondaryText,
+                        prefixColor: isSelectionDisabled ? tokens.treeFaintText : tokens.treeQuietText,
+                        font: WarrenDesktopTreeTypography.branchName
                     )
-                    .lineLimit(1)
-                    .truncationMode(.middle)
 
-                if isDeleting {
-                    deletionStatus(tokens: tokens)
+                    if isDeleting {
+                        deletionStatus(tokens: tokens)
+                    }
+
+                    // With no Session leaves under it, the row itself says how
+                    // its Sessions are doing.
+                    if let mark, !showsSessionChildren, leafDisclosure == nil {
+                        WarrenDesktopStatusDot(
+                            mark: mark,
+                            size: WarrenDesktopSidebarMetrics.foldDotSize,
+                            ring: nil,
+                            tokens: tokens
+                        )
+                    }
+
+                    if isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(tokens.treeQuietText)
+                            .accessibilityHidden(true)
+                    }
+
+                    Spacer(minLength: 0)
                 }
-
-                if let mark, !showsSessionChildren {
-                    WarrenDesktopWorkspaceActivityIndicator(
-                        mark: mark,
-                        activeTabCount: activeTabCount,
-                        isCompact: false
-                    )
-                }
-
-                if isPinned {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(tokens.mutedForeground)
-                        .accessibilityHidden(true)
-                }
-
-                Spacer(minLength: 0)
+                .frame(height: rowHeight)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
             }
-            // The indent lives inside the button, as it does on a project row,
-            // so nesting a workspace deeper never shrinks the row's hit area.
-            .padding(.leading, WarrenDesktopSidebarIndent.workspace)
-            // Leave the trailing accessories their own room. The name truncates
-            // against this inset instead of running under them, and the row
-            // itself still fills the rail: the frame below is unchanged, so the
-            // whole width stays clickable.
-            .padding(.trailing, trailingAccessoryInset)
-            .frame(minHeight: rowHeight)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(.rect)
+            .buttonStyle(.plain)
+            .disabled(isInteractionDisabled || isSelectionDisabled)
+            .focused($isFocused)
+            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                if !isInteractionDisabled && !isSelectionDisabled { onDoubleClick() }
+            })
+            .accessibilityLabel("Workspace \(workspace.name)")
+            .accessibilityValue(workspaceAccessibilityValue)
+            .accessibilityAddTraits(isSelected && !isSelectionDisabled ? .isSelected : [])
+            .warrenSemanticElement(
+                id: "workspace.\(semanticScope).\(workspace.id.description)",
+                role: .button,
+                label: "Workspace \(workspace.name)",
+                value: workspaceAccessibilityValue,
+                isEnabled: !isInteractionDisabled && !isSelectionDisabled,
+                isSelected: isSelected && !isSelectionDisabled,
+                action: {
+                    if !isInteractionDisabled && !isSelectionDisabled { onSelect() }
+                }
+            )
+
+            // The accessories sit beside the row's Button rather than inside
+            // its label: a Button nested in another Button's label never
+            // receives the click on macOS.
+            editorEntry
+            taskLinkButton
+            if let leafDisclosure {
+                WarrenDesktopLeafDisclosureAccessory(
+                    disclosure: leafDisclosure,
+                    isRevealed: true,
+                    label: "workspace \(workspace.name)",
+                    semanticID: "workspace-leaves.\(semanticScope).\(workspace.id.description)",
+                    isEnabled: !isInteractionDisabled,
+                    chevronColor: tokens.treeChevron.opacity(0.8)
+                )
+            }
         }
-        .buttonStyle(WarrenInteractiveRowStyle(
-            isSelected: isSelected && !isSelectionDisabled,
-            isFocused: isFocused,
-            // Hover belongs to the rail this row hangs from; see
-            // WarrenDesktopSessionLeafGroup.
-            showsHoverBackground: !showsSessionChildren
-        ))
-        .disabled(isInteractionDisabled || isSelectionDisabled)
-        .focused($isFocused)
-        .simultaneousGesture(TapGesture(count: 2).onEnded {
-            if !isInteractionDisabled && !isSelectionDisabled { onDoubleClick() }
-        })
-        .accessibilityLabel("Workspace \(workspace.name)")
-        .accessibilityValue(workspaceAccessibilityValue)
-        .accessibilityAddTraits(isSelected && !isSelectionDisabled ? .isSelected : [])
-        .warrenSemanticElement(
-            id: "workspace.\(semanticScope).\(workspace.id.description)",
-            role: .button,
-            label: "Workspace \(workspace.name)",
-            value: workspaceAccessibilityValue,
-            isEnabled: !isInteractionDisabled && !isSelectionDisabled,
-            isSelected: isSelected && !isSelectionDisabled,
-            action: {
-                if !isInteractionDisabled && !isSelectionDisabled { onSelect() }
-            }
-        )
+        .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
         .frame(maxWidth: .infinity, minHeight: rowHeight)
-        .padding(.trailing, WarrenSpacing.compact)
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
+        .background(
+            isSelected && !isSelectionDisabled
+                ? tokens.treeRowSelected
+                : ((isHovered || isFocused) && (leafDisclosure != nil || !showsSessionChildren)
+                    ? tokens.treeRowHover
+                    : .clear),
+            in: RoundedRectangle(cornerRadius: WarrenDesktopSidebarMetrics.rowRadius, style: .continuous)
+        )
         .contentShape(.rect)
-        // Both accessories sit outside the row's Button rather than inside its
-        // label: a Button nested in another Button's label never receives the
-        // click on macOS, the outer one swallows it.
-        .overlay(alignment: .trailing) {
-            HStack(spacing: WarrenSpacing.xs) {
-                editorEntry
-                taskLinkButton
-            }
-            .padding(.trailing, WarrenSpacing.compact)
-        }
-        .contextMenu {
-            if !isInteractionDisabled && !isMutationDisabled {
-                WarrenDesktopContextMenu(contextMenuActions)
-            }
-        }
-        .padding(.horizontal, WarrenSpacing.compact)
-        .help(taskName.map { "Task: \($0)" } ?? "")
+        .warrenContextMenu(
+            !isInteractionDisabled && !isMutationDisabled ? contextMenuActions : []
+        )
+        // A long name truncates to one line; the whole name is on hover.
+        .help(taskName.map { "\(workspace.name) · Task: \($0)" } ?? workspace.name)
         .accessibilityElement(children: .contain)
         .onHover { isHovered = $0 }
     }
 
     private var contextMenuActions: [WarrenDesktopContextMenuAction] {
+        Self.contextMenuActions(
+            workspace: workspace,
+            isPinned: isPinned,
+            tasks: tasks,
+            onTogglePin: onTogglePin,
+            onRename: onRename,
+            onAttachToTask: onAttachToTask,
+            onDetachFromTask: onDetachFromTask,
+            onDelete: onDelete
+        )
+    }
+
+    /// The Workspace's menu. Shared with a project that lists its only
+    /// Workspace's Sessions directly and so has no Workspace row to hold it.
+    static func contextMenuActions(
+        workspace: Workspace,
+        isPinned: Bool,
+        tasks: [WarrenTask],
+        onTogglePin: @escaping () -> Void,
+        onRename: @escaping () -> Void,
+        onAttachToTask: @escaping (TaskID) -> Void,
+        onDetachFromTask: @escaping (TaskID) -> Void,
+        onDelete: @escaping () -> Void
+    ) -> [WarrenDesktopContextMenuAction] {
         var actions: [WarrenDesktopContextMenuAction] = [
             .button(title: isPinned ? "Unpin Workspace" : "Pin Workspace", action: onTogglePin),
             .button(title: "Rename Workspace", action: onRename),
@@ -316,13 +268,6 @@ struct WarrenDesktopWorkspaceRow: View {
             .button(title: "Delete Workspace…", destructive: true, action: onDelete),
         ])
         return actions
-    }
-
-    private var trailingAccessoryInset: CGFloat {
-        WarrenDesktopWorkspaceRowAccessories.inset(
-            isEditorMarked: isEditorMarked,
-            showsTaskLink: taskID != nil && taskName != nil
-        )
     }
 
     /// The marked Workspace's editor entry.
@@ -353,7 +298,7 @@ struct WarrenDesktopWorkspaceRow: View {
                 .disabled(isInteractionDisabled)
                 .accessibilityLabel(label)
                 .accessibilityValue("Show the editor")
-                .help("Show the editor")
+                .warrenTooltip("Show the editor")
                 .warrenSemanticElement(
                     id: "workspace-editor-entry.\(semanticScope).\(workspace.id.description)",
                     role: .button,
@@ -368,7 +313,7 @@ struct WarrenDesktopWorkspaceRow: View {
                 glyph
                     .frame(width: WarrenDesktopWorkspaceRowAccessories.editorEntryWidth, height: 18)
                     .accessibilityHidden(true)
-                    .help(label)
+                    .warrenTooltip(label)
             }
         }
     }
@@ -453,38 +398,39 @@ struct WarrenDesktopWorkspaceRow: View {
         .accessibilityHidden(true)
     }
 
-    /// Superset renders local worktrees as a plain dot; the main workspace gets
-    /// a laptop glyph. A merged worktree uses the native merge glyph while
-    /// other branch rows retain the plain dot.
-    @ViewBuilder
     private func workspaceGlyph(tokens: WarrenColorTokens) -> some View {
+        WarrenDesktopWorkspaceGlyphView(workspace: workspace, isDisabled: isSelectionDisabled)
+    }
+}
+
+/// The main workspace gets a laptop glyph, a merged worktree the merge glyph,
+/// and any other worktree the branch glyph.
+struct WarrenDesktopWorkspaceGlyphView: View {
+    let workspace: Workspace
+    var isDisabled = false
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let disabledColor = tokens.mutedForeground.opacity(0.62)
         switch WarrenDesktopWorkspaceGlyph(workspace) {
         case .checkout:
             Image(systemName: "laptopcomputer")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(isSelectionDisabled ? disabledColor : tokens.mutedForeground)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(isDisabled ? disabledColor : tokens.treeQuietText)
                 .accessibilityHidden(true)
         case .mergedWorktree:
             Image(systemName: "arrow.triangle.merge")
-                .font(.system(size: 12, weight: .regular))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(
-                    isSelectionDisabled ? disabledColor : tokens.success.opacity(0.8)
+                    isDisabled ? disabledColor : tokens.success.opacity(0.8)
                 )
                 .accessibilityHidden(true)
         case .worktree:
-            Circle()
-                .strokeBorder(
-                    isSelectionDisabled ? disabledColor : tokens.mutedForeground.opacity(0.9),
-                    lineWidth: WarrenSpacing.hairline
-                )
-                .frame(width: 5, height: 5)
-                .accessibilityHidden(true)
-        case .terminalGroup:
-            Image(systemName: "square.3.stack.3d")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(isSelectionDisabled ? disabledColor : tokens.mutedForeground)
-                .accessibilityHidden(true)
+            WarrenDesktopViewBoxGlyph.worktreeBranch(size: WarrenDesktopSidebarMetrics.worktreeIconSize)
+                .foregroundStyle(isDisabled ? disabledColor : tokens.treeQuietText)
         }
     }
 }
@@ -510,87 +456,5 @@ struct WarrenDesktopActivityIndicator: View {
             color: mark.color(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)),
             dotSize: dotSize
         )
-    }
-}
-
-/// Shows concurrent working tabs as a compact, unboxed dot cluster. A
-/// higher-priority failure or input state remains visible beside the orange
-/// working marker.
-struct WarrenDesktopWorkspaceActivityIndicator: View {
-    let mark: WarrenActivityMark
-    let activeTabCount: Int
-    let isCompact: Bool
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-
-    private var showsMultipleWorkingTabs: Bool {
-        mark == .working && activeTabCount > 1
-    }
-
-    private var showsMixedActivity: Bool {
-        mark != .working && activeTabCount > 0
-    }
-
-    private var visibleDotCount: Int {
-        min(activeTabCount, 2)
-    }
-
-    private var usesCountLabel: Bool {
-        activeTabCount > visibleDotCount
-    }
-
-    var body: some View {
-        if showsMultipleWorkingTabs {
-            activeTabCluster
-        } else if showsMixedActivity {
-            HStack(spacing: WarrenSpacing.xxs) {
-                WarrenDesktopActivityIndicator(mark: mark)
-                activeTabCluster
-                    .accessibilityHidden(true)
-            }
-        } else {
-            WarrenDesktopActivityIndicator(mark: mark)
-        }
-    }
-
-    private var activeTabCluster: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let dotSize: CGFloat = isCompact ? 4.5 : 5.5
-        let dotSlotSize = dotSize * 1.6
-        return HStack(spacing: 0) {
-            WarrenStatusIndicator(
-                color: tokens.amber,
-                isActive: true,
-                size: dotSize,
-                accessibilityLabel: accessibilityLabel
-            )
-            if !usesCountLabel {
-                ForEach(1..<visibleDotCount, id: \.self) { _ in
-                    Circle()
-                        .fill(tokens.amber)
-                        .frame(width: dotSize, height: dotSize)
-                        .frame(width: dotSlotSize, height: dotSlotSize)
-                        .accessibilityHidden(true)
-                }
-            } else {
-                Text("\(activeTabCount)")
-                    .font(WarrenTypography.activityChip)
-                    .foregroundStyle(tokens.amber)
-                    .monospacedDigit()
-                    .padding(.leading, WarrenSpacing.xxs)
-                    .accessibilityHidden(true)
-            }
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel)
-        .help(accessibilityLabel)
-    }
-
-    private var accessibilityLabel: String {
-        activeTabCount == 1
-            ? "1 tab active"
-            : "\(activeTabCount) tabs active"
     }
 }

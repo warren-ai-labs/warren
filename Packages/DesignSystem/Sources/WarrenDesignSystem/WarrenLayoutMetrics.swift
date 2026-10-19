@@ -5,8 +5,10 @@ import CoreGraphics
 /// can change a token instead of chasing literals through view code.
 public enum WarrenLayoutMetrics {
     // Superset workspace sidebar state.
-    public static let sidebarExpandedWidth: CGFloat = 280
-    public static let sidebarCollapsedWidth: CGFloat = 52
+    public static let sidebarExpandedWidth: CGFloat = 300
+    /// A collapsed sidebar renders no rail at all: the content card moves to
+    /// the window inset and the sidebar is reached by peeking from the edge.
+    public static let sidebarCollapsedWidth: CGFloat = 0
     public static let sidebarMinimumWidth: CGFloat = 220
     public static let sidebarMaximumWidth: CGFloat = 400
     public static let sidebarSnapThreshold: CGFloat = 120
@@ -36,7 +38,7 @@ public enum WarrenLayoutMetrics {
     /// user was already working in when they opened a file — the smaller one.
     /// Half and half favors neither, and the divider settles the rest.
     public static let editorSplitDefaultRatio: Double = 0.5
-    public static let editorSplitDividerWidth: CGFloat = 6
+    public static let editorSplitDividerWidth: CGFloat = 8
 
     /// Returns the Terminal's width for a proposed central split, or `nil` when
     /// the available width cannot seat both regions at their minimums.
@@ -68,47 +70,66 @@ public enum WarrenLayoutMetrics {
     public static let inspectorSplitDefaultRatio: Double = 0.62
 
     // Superset chrome and pane measurements.
-    /// The desktop workspace chrome is a 48pt row above the session tabs.
-    public static let workspaceBarHeight: CGFloat = 48
-    public static let workspaceBarProjectWidth: CGFloat = 160
-    public static let workspaceBarWorkspaceWidth: CGFloat = 240
     public static let topBarHeight: CGFloat = 48
-    /// Slightly more compact than Superset's 40pt row; keeps the same dense
-    /// workspace chrome while giving content a little more vertical room.
-    public static let tabBarHeight: CGFloat = 36
-    /// Superset's pinned command preset row is `h-8`; Warren keeps the bar
-    /// slightly flatter so the command row reads as chrome, not a toolbar.
-    public static let presetBarHeight: CGFloat = 28
+    /// The only chrome row above the Terminal: tabs on the leading side, the
+    /// panels and "+" buttons on the trailing side. The presets that used to
+    /// be a second row live behind "+", so one compact row is enough.
+    public static let tabBarHeight: CGFloat = 32
+    /// The window is a dark backdrop with cards on it: the sidebar, the tab
+    /// capsule, and every pane. This is the backdrop's inset from the window
+    /// edge and the gutter between neighbouring cards.
+    public static let windowInset: CGFloat = 8
+    public static let cardGap: CGFloat = 8
+    public static let cardRadius: CGFloat = 12
+    /// The capsule that holds the Tabs, and the one that holds the panels and
+    /// "+" buttons, sit inside the 32pt row with a 3pt inner padding.
+    public static let tabCapsulePadding: CGFloat = 3
+    public static let tabCapsuleRadius: CGFloat = 9
+    public static let tabPillHeight: CGFloat = 24
+    public static let tabPillRadius: CGFloat = 7
+    /// The lone pane's title. The design caps the title capsule at 360pt; long
+    /// Session names earn a little more room, so the title alone may take 345 —
+    /// with the badge, the hover controls, and the paddings, the pill lands near
+    /// 420 — while a shorter name hugs its own width.
+    public static let soloPillTitleMaxWidth: CGFloat = 345
     /// A touch narrower than Superset's 160pt tab; titles still fit while more
     /// tabs stay visible before overflow kicks in.
     public static let tabWidth: CGFloat = 150
-    /// Superset keeps the add-tab affordance in a fixed `w-10` slot.
-    public static let tabAddButtonSlotWidth: CGFloat = 40
-    /// The close control is a 20pt button inside a 28pt accessory column.
-    public static let tabCloseButtonSize: CGFloat = 20
+    /// A Tab's ceiling: a few Tabs get the room a long title needs.
+    public static let tabWidthMax: CGFloat = 200
+    /// A Tab's floor: past this the track scrolls rather than shrinking further.
+    public static let tabWidthMin: CGFloat = 96
     public static let tabAccessoryColumnWidth: CGFloat = 28
-    /// A split group's mark: the layout glyph that labels the run.
-    ///
-    /// The mark owns a slot of its own before the group's first Tab rather
-    /// than living inside that Tab, so the first member keeps its full title
-    /// width. The slot is therefore added once to the track's width and to
-    /// every Tab origin behind it. The glyph scales from its own 12pt design
-    /// square, so this value sets the whole mark's weight.
+    /// A split group's layout glyph, as drawn by `WarrenDesktopSplitGroupGlyph`.
+    /// The glyph scales from its own 12pt design square, so this value sets the
+    /// whole mark's weight.
     public static let tabGroupMarkSize: CGFloat = 15
+    /// The room a drawn group's mark takes in the track, including the gap
+    /// that separates it from the Tab that follows.
     public static let tabGroupMarkLeadingInset: CGFloat = 6
     public static let tabGroupMarkTrailingInset: CGFloat = 6
     public static let tabGroupMarkSlotWidth: CGFloat = tabGroupMarkSize
         + tabGroupMarkLeadingInset + tabGroupMarkTrailingInset
-    /// The group rule binds its members to the mark without competing with the
-    /// active Tab's own selection rule, which sits on the same pixel row.
-    public static let tabGroupRuleHeight: CGFloat = 1
-    public static let tabGroupRuleOpacity: Double = 0.5
+    /// A split group is one fixed-width pill. Its width never changes while
+    /// the group lifts or its control shelf opens, so nothing beside it moves.
+    public static let tabGroupPillWidth: CGFloat = 196
+    /// The group's Session icons, stacked at rest with each one tucked behind
+    /// the next and spread apart while the pointer lifts them.
+    public static let tabGroupIconSize: CGFloat = 16
+    public static let tabGroupIconRestPitch: CGFloat = 5
+    public static let tabGroupIconLiftedPitch: CGFloat = 22
+    /// How far every icon rises once lifted, and how far the one under the
+    /// pointer rises and grows on top of that.
+    public static let tabGroupIconLift: CGFloat = 3
+    public static let tabGroupIconHotLift: CGFloat = 6
+    public static let tabGroupIconHotScale: CGFloat = 1.18
+    /// The control shelf that drops below the group pill.
+    public static let tabGroupShelfWidth: CGFloat = 340
+    /// The gap between the bottom of the tab bar and the shelf.
+    public static let tabGroupShelfGap: CGFloat = 4
     /// Compact action controls used by popovers and dense chrome rows.
     public static let compactControlHeight: CGFloat = 28
-    /// The Web popover needs room for a tokenized URL and its adjacent
-    /// actions, without reading like a persistent side panel.
-    public static let webPopoverWidth: CGFloat = 288
-    public static let paneHeaderHeight: CGFloat = 28
+    public static let paneHeaderHeight: CGFloat = 32
     public static let paneMinimumWidth: CGFloat = 260
     public static let paneMinimumHeight: CGFloat = 160
 
@@ -118,32 +139,8 @@ public enum WarrenLayoutMetrics {
     public static let sidebarSectionLabelHeight: CGFloat = 32
     /// Host labels are subordinate tree-group controls, not resource rows.
     public static let sidebarHostHeaderHeight: CGFloat = 24
-    /// The active tab's selection rule.
-    ///
-    /// Selection is a permanent state rather than an alert, so the rule stays
-    /// thin and neutral: enough to win a squint against the 7/255 background
-    /// difference it replaces, without pulling the eye to the top of the window
-    /// the way an accent-colored bar does.
-    public static let activeTabIndicatorHeight: CGFloat = 1.5
 
-    public static let sidebarRowIconSlotSize: CGFloat = 18
-    /// Leaf rows use a smaller glyph slot than the resource rows above them.
-    ///
-    /// A leaf is the densest row in the rail — icon, title, state marker, and
-    /// often a reason — so its icon is sized to identify a provider at a glance
-    /// rather than to anchor a tier. Matching the 18pt resource slot here is
-    /// what made the leaf read as cramped: the glyph filled the row's height
-    /// and left the title with no visual margin.
-    public static let sidebarLeafIconSlotSize: CGFloat = 14
     public static let sidebarActionButtonSize: CGFloat = 24
-    /// One rail width for every vertical line in the sidebar tree.
-    ///
-    /// A Host section rule and a workspace-to-Session guide are the same kind
-    /// of line at two nesting levels, so they share one width and differ only
-    /// in hue. Giving the Host rule its own 2pt weight made the sidebar read as
-    /// two unrelated structures, and made the thinner Session rail look faint
-    /// beside it.
-    public static let sidebarRailWidth: CGFloat = 1.5
 
     /// One indent step in the sidebar tree.
     ///
@@ -182,26 +179,12 @@ public enum WarrenLayoutMetrics {
     public static let externalIDEIconSize: CGFloat = chromeIconSize * externalIDEIconScale
     public static let macTrafficLightInset: CGFloat = 80
     public static let expandedSidebarChromeInset: CGFloat = 16
-    /// Superset's macOS traffic-light/navigation row is `h-8`.
-    public static let sidebarTrafficRowHeight: CGFloat = 32
     public static let sidebarHeaderRowHeight: CGFloat = 32
-    public static let sidebarHeaderTopPadding: CGFloat = 8
-    public static let sidebarHeaderBottomGap: CGFloat = 12
 
     // Superset settings and command-palette measurements.
-    /// Superset's settings sidebar is `w-56`.
-    public static let settingsNavigationWidth: CGFloat = 224
-    /// Superset's settings content column is `max-w-4xl` (896) or `max-w-5xl` (1024) for wide views.
-    public static let settingsContentMaxWidth: CGFloat = 896
-    public static let settingsContentWideMaxWidth: CGFloat = 1024
     /// Superset's command dialog uses `max-w-[720px]`.
     public static let commandPaletteWidth: CGFloat = 720
     public static let commandPaletteResultsMaxHeight: CGFloat = 560
-    /// The active-session switcher follows the command palette width so its
-    /// search field and result rows share the same visual rhythm.
-    public static let activeSessionsPopoverWidth: CGFloat = commandPaletteWidth
-    public static let activeSessionsPopoverResultsMaxHeight: CGFloat =
-        commandPaletteResultsMaxHeight
     public static let commandPaletteInputHorizontalPadding: CGFloat = 14
     public static let commandPaletteResultsPadding: CGFloat = 6
     public static let commandPaletteItemHorizontalPadding: CGFloat = 10
@@ -213,8 +196,6 @@ public enum WarrenLayoutMetrics {
     /// ancestry, and the field that explains the match side by side, so height
     /// buys nothing and costs the number of results a user can see at once.
     public static let commandPaletteRowHeight: CGFloat = 28
-    /// Superset's settings search field is `h-8`.
-    public static let settingsSearchHeight: CGFloat = 32
 
     // Presentation surface geometry. Business surfaces use a documented width
     // instead of inheriting arbitrary frame values from individual screens.
@@ -225,9 +206,6 @@ public enum WarrenLayoutMetrics {
     public static let compactDialogWidth: CGFloat = 400
     public static let standardDialogWidth: CGFloat = 480
 #endif
-    public static let wideSheetWidth: CGFloat = 720
-    public static let desktopSheetMaximumHeight: CGFloat = 680
-    public static let mobileActionRowHeight: CGFloat = 44
 
     /// Returns the width Superset's resize policy would display for a drag.
     /// Values below the snap threshold collapse the rail; other values are
@@ -254,9 +232,6 @@ public enum WarrenSpacing {
     public static let large: CGFloat = 24
     /// Extra-large spacing for calm, breathing settings layouts.
     public static let xlarge: CGFloat = 32
-    /// The largest shared spacing tier; settings detail sections use it so each
-    /// page reads as a calm, isolated block.
-    public static let xxlarge: CGFloat = 40
 }
 
 /// Shared corner-radius tokens. `base` is the confirmed Superset radius
@@ -269,6 +244,9 @@ public enum WarrenRadius {
     public static let medium: CGFloat = 8
     public static let base: CGFloat = 10
     public static let large: CGFloat = 12
+    /// The Conversation composer: the kit's `composer` radius, one step louder
+    /// than a card because it is the one control the person writes in.
+    public static let composer: CGFloat = 16
     /// Mobile sheets round only their top edge at this larger radius.
     public static let sheet: CGFloat = 16
 }

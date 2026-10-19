@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
+	"github.com/abcdlsj/warren/Headless/internal/runtime"
 	"github.com/abcdlsj/warren/Headless/internal/store"
 	"github.com/gorilla/websocket"
 )
@@ -24,8 +25,7 @@ func TestMakeRosterDeltaIncludesOnlyChangedEntities(t *testing.T) {
 			{ID: "project-a", Name: "A", CreatedAt: createdAt},
 			{ID: "project-b", Name: "B", CreatedAt: createdAt},
 		},
-		Workspaces:     []api.Workspace{{ID: "workspace-old", ProjectID: "project-a", CreatedAt: createdAt}},
-		TerminalGroups: []api.TerminalGroup{{ID: "group-a", Name: "A", CreatedAt: createdAt}},
+		Workspaces: []api.Workspace{{ID: "workspace-old", ProjectID: "project-a", CreatedAt: createdAt}},
 		Sessions: []api.Session{
 			{ID: "session-a", Title: "A", WorkspaceID: "workspace-old", CreatedAt: createdAt},
 			{ID: "session-b", Title: "B", WorkspaceID: "workspace-old", CreatedAt: createdAt},
@@ -41,8 +41,7 @@ func TestMakeRosterDeltaIncludesOnlyChangedEntities(t *testing.T) {
 			{ID: "project-b", Name: "B", CreatedAt: createdAt},
 			{ID: "project-a", Name: "A renamed", CreatedAt: createdAt},
 		},
-		Workspaces:     []api.Workspace{{ID: "workspace-new", ProjectID: "project-a", CreatedAt: createdAt}},
-		TerminalGroups: []api.TerminalGroup{{ID: "group-a", Name: "A", CreatedAt: createdAt}},
+		Workspaces: []api.Workspace{{ID: "workspace-new", ProjectID: "project-a", CreatedAt: createdAt}},
 		Sessions: []api.Session{
 			{ID: "session-b", Title: "B updated", WorkspaceID: "workspace-new", CreatedAt: createdAt},
 			{ID: "session-a", Title: "A", WorkspaceID: "workspace-new", CreatedAt: createdAt},
@@ -71,8 +70,8 @@ func TestMakeRosterDeltaIncludesOnlyChangedEntities(t *testing.T) {
 	if got, want := delta.Workspaces.Remove, []string{"workspace-old"}; !sameStrings(got, want) {
 		t.Fatalf("workspace removals = %#v, want %#v", got, want)
 	}
-	if delta.Groups != nil {
-		t.Fatalf("unchanged terminal groups produced a delta: %#v", delta.Groups)
+	if delta.PaneGroups != nil {
+		t.Fatalf("unchanged pane groups produced a delta: %#v", delta.PaneGroups)
 	}
 	if delta.Sessions == nil || len(delta.Sessions.Upsert) != 2 {
 		t.Fatalf("session upserts = %#v", delta.Sessions)
@@ -102,6 +101,37 @@ func TestRosterDeltaSkipsIdenticalRoster(t *testing.T) {
 	state := api.State{Host: api.Host{ID: "host", Name: "Host"}}
 	if delta := makeRosterDelta(state, state, 3, 3); delta.hasChanges() {
 		t.Fatalf("identical roster produced delta: %#v", delta)
+	}
+}
+
+// A pane-group-only change has to reach a delta client on its own. The entity
+// was computed but omitted from hasChanges, so the Host swallowed the update
+// until some unrelated entity changed and the client saw the arrangement arrive
+// late, in the same burst as whatever else had moved.
+func TestRosterDeltaIncludesPaneGroupOnlyChange(t *testing.T) {
+	createdAt := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	group := api.PaneGroup{
+		ID:          "group-a",
+		WorkspaceID: "workspace-a",
+		Tree:        api.PaneNode{PaneID: "pane-a", SessionID: "session-a"},
+		Revision:    1,
+		CreatedAt:   createdAt,
+		UpdatedAt:   createdAt,
+	}
+	before := api.State{PaneGroups: []api.PaneGroup{group}}
+	group.Name = "renamed"
+	after := api.State{PaneGroups: []api.PaneGroup{group}}
+
+	delta := makeRosterDelta(before, after, 1, 2)
+	if !delta.hasChanges() {
+		t.Fatal("a pane-group-only change produced no delta")
+	}
+	if delta.PaneGroups == nil || len(delta.PaneGroups.Upsert) != 1 || delta.PaneGroups.Upsert[0].Name != "renamed" {
+		t.Fatalf("pane group delta = %#v", delta.PaneGroups)
+	}
+	if delta.Host != nil || delta.Tasks != nil || delta.Projects != nil || delta.Workspaces != nil ||
+		delta.Sessions != nil || delta.SessionMetadata != nil {
+		t.Fatalf("unrelated entities appeared in the delta: %#v", delta)
 	}
 }
 
@@ -191,6 +221,103 @@ func TestRosterDeltaStreamUsesInitialRevisionAndChangedEntities(t *testing.T) {
 	}
 }
 
+// The stream, not just makeRosterDelta, has to carry a pane-group-only change.
+// This is the regression the Desktop hit: a CLI split edited the Host's
+// arrangement and the client learned about it only when some unrelated entity
+// happened to move in the same batch.
+func TestRosterDeltaStreamSendsPaneGroupOnlyChange(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	groupID := store.NewID()
+	if err := state.Update(func(value *api.State) error {
+		value.PaneGroups = append(value.PaneGroups, api.PaneGroup{
+			ID:          groupID,
+			WorkspaceID: store.NewID(),
+			Tree:        api.PaneNode{PaneID: store.NewID(), SessionID: store.NewID()},
+			Revision:    1,
+			CreatedAt:   time.Now().UTC(),
+			UpdatedAt:   time.Now().UTC(),
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &Service{Store: state, Runtime: &memoryRuntime{sessions: map[string][]byte{}}}
+	httpServer := httptest.NewServer(NewHTTPServer(service, "secret", nil).Handler())
+	defer httpServer.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/v1/ws"
+	connection, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if err := connection.WriteJSON(api.Envelope{
+		Type:                 "auth",
+		Token:                "secret",
+		Version:              api.Version,
+		Capabilities:         []string{"roster-delta", "pane-groups-v1"},
+		TerminalStateFormats: []string{terminalStateFormatANSI},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var welcome map[string]any
+	if err := connection.ReadJSON(&welcome); err != nil {
+		t.Fatal(err)
+	}
+	if welcome["t"] != "welcome" {
+		t.Fatalf("welcome = %#v", welcome)
+	}
+	var initial struct {
+		Type  string    `json:"t"`
+		State api.State `json:"state"`
+	}
+	if err := connection.ReadJSON(&initial); err != nil {
+		t.Fatal(err)
+	}
+	if initial.Type != "roster" {
+		t.Fatalf("initial message = %#v", initial)
+	}
+
+	if err := state.Update(func(value *api.State) error {
+		for index := range value.PaneGroups {
+			if value.PaneGroups[index].ID == groupID {
+				value.PaneGroups[index].Name = "renamed"
+				value.PaneGroups[index].Revision = 2
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	defer connection.SetReadDeadline(time.Time{})
+	for {
+		kind, data, err := connection.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kind != websocket.TextMessage {
+			continue
+		}
+		var delta rosterDeltaMessage
+		if json.Unmarshal(data, &delta) != nil || delta.Type != "roster.delta" {
+			continue
+		}
+		if delta.PaneGroups == nil || len(delta.PaneGroups.Upsert) != 1 {
+			continue
+		}
+		if got := delta.PaneGroups.Upsert[0]; got.ID != groupID || got.Name != "renamed" || got.Revision != 2 {
+			t.Fatalf("pane group upsert = %#v", got)
+		}
+		return
+	}
+}
+
 func sameStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
@@ -212,6 +339,7 @@ func TestMakeRosterDeltaSplitsHighFrequencyMetadata(t *testing.T) {
 	after := api.State{Sessions: []api.Session{{
 		ID: "session-a", Title: "Shell", Process: "npm", CommandLine: "npm run dev",
 		Directory: "/work/new", CreatedAt: createdAt,
+		Shell: &api.SessionShell{AtPrompt: true, LastCommand: "npm run dev"},
 	}}}
 
 	delta := makeRosterDelta(before, after, 1, 2)
@@ -225,7 +353,36 @@ func TestMakeRosterDeltaSplitsHighFrequencyMetadata(t *testing.T) {
 	if got.ID != "session-a" || got.Process != "npm" || got.CommandLine != "npm run dev" || got.Directory != "/work/new" {
 		t.Fatalf("metadata upsert = %#v", got)
 	}
+	if got.Shell == nil || !got.Shell.AtPrompt || got.Shell.LastCommand != "npm run dev" {
+		t.Fatalf("metadata upsert shell = %#v, want atPrompt with lastCommand npm run dev", got.Shell)
+	}
 }
+
+func TestMakeRosterDeltaCarriesAShellOnlyMetadataChange(t *testing.T) {
+	createdAt := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	before := api.State{Sessions: []api.Session{{
+		ID: "session-a", Title: "Shell", CreatedAt: createdAt,
+		Shell: &api.SessionShell{AtPrompt: true, LastCommand: "swift build", LastExitCode: intPointer(0)},
+	}}}
+	after := api.State{Sessions: []api.Session{{
+		ID: "session-a", Title: "Shell", CreatedAt: createdAt,
+		Shell: &api.SessionShell{AtPrompt: false, RunningCommand: "swift test"},
+	}}}
+
+	delta := makeRosterDelta(before, after, 1, 2)
+	if delta.Sessions != nil {
+		t.Fatalf("shell-only change produced a session entity delta: %#v", delta.Sessions)
+	}
+	if delta.SessionMetadata == nil || len(delta.SessionMetadata.Upsert) != 1 {
+		t.Fatalf("session metadata delta = %#v", delta.SessionMetadata)
+	}
+	got := delta.SessionMetadata.Upsert[0].Shell
+	if got == nil || got.AtPrompt || got.RunningCommand != "swift test" || got.LastExitCode != nil {
+		t.Fatalf("shell metadata upsert = %#v, want a running command with no exit code", got)
+	}
+}
+
+func intPointer(value int) *int { return &value }
 
 func TestMakeRosterDeltaEntityUpsertCarriesMetadataOnce(t *testing.T) {
 	createdAt := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
@@ -246,5 +403,29 @@ func TestMakeRosterDeltaEntityUpsertCarriesMetadataOnce(t *testing.T) {
 	}
 	if delta.SessionMetadata != nil {
 		t.Fatalf("metadata duplicated beside the entity upsert: %#v", delta.SessionMetadata)
+	}
+}
+
+func TestRosterSessionShellMetadataMapsEveryField(t *testing.T) {
+	at := time.Date(2026, 8, 25, 1, 2, 3, 0, time.UTC)
+	code := 1
+	mapped := sessionShellMetadata(&runtime.ShellMetadata{
+		AtPrompt:       false,
+		RunningCommand: "swift test",
+		LastCommand:    "swift build",
+		LastExitCode:   &code,
+		LastExitAt:     &at,
+	})
+	if mapped == nil || mapped.AtPrompt || mapped.RunningCommand != "swift test" || mapped.LastCommand != "swift build" {
+		t.Fatalf("mapped shell = %#v", mapped)
+	}
+	if mapped.LastExitCode == nil || *mapped.LastExitCode != 1 {
+		t.Fatalf("last exit code = %v, want 1", mapped.LastExitCode)
+	}
+	if mapped.LastExitAt == nil || !mapped.LastExitAt.Equal(at) {
+		t.Fatalf("last exit at = %v, want %v", mapped.LastExitAt, at)
+	}
+	if sessionShellMetadata(nil) != nil {
+		t.Fatal("a nil runtime shell must stay nil so the client can tell unknown from at-prompt")
 	}
 }

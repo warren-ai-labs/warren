@@ -16,12 +16,12 @@ func TestSessionMoveCASPreflightAndUndo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	source := api.Workspace{ID: "workspace-source", ProjectID: "project-1", Name: "source", Path: t.TempDir(), Kind: "root"}
 	workspace := api.Workspace{ID: "workspace-target", ProjectID: "project-1", Name: "target", Path: t.TempDir(), Kind: "root"}
 	if err := state.Update(func(value *api.State) error {
-		value.Workspaces = append(value.Workspaces, workspace)
+		value.Workspaces = append(value.Workspaces, source, workspace)
 		value.Sessions = append(value.Sessions, api.Session{
-			ID: "session-1", TerminalGroupID: value.TerminalGroups[0].ID,
-			Scope: api.SessionScopeTerminalGroup, AgentSessionID: "thread-1", Lifecycle: "running",
+			ID: "session-1", WorkspaceID: source.ID, AgentSessionID: "thread-1", Lifecycle: "running",
 		})
 		return nil
 	}); err != nil {
@@ -29,22 +29,22 @@ func TestSessionMoveCASPreflightAndUndo(t *testing.T) {
 	}
 	service := &Service{Store: state}
 
-	expectedWorkspace := ""
+	expectedWorkspace := source.ID
 	expectedAgent := "thread-1"
-	preflight, err := service.PreflightSessionMove("session-1", workspace.ID, "", SessionMoveExpectations{
+	preflight, err := service.PreflightSessionMove("session-1", workspace.ID, SessionMoveExpectations{
 		WorkspaceID: &expectedWorkspace, AgentSessionID: &expectedAgent,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !preflight.Allowed || preflight.SourceTerminalGroupID == "" || preflight.DestinationWorkspaceID != workspace.ID {
+	if !preflight.Allowed || preflight.SourceWorkspaceID != source.ID || preflight.DestinationWorkspaceID != workspace.ID {
 		t.Fatalf("preflight = %#v", preflight)
 	}
 	if got := len(state.Snapshot().Operations); got != 0 {
 		t.Fatalf("preflight changed operation log: %d", got)
 	}
 
-	moved, err := service.MoveSessionWithExpectations(context.Background(), "session-1", workspace.ID, "", SessionMoveExpectations{
+	moved, err := service.MoveSessionWithExpectations(context.Background(), "session-1", workspace.ID, SessionMoveExpectations{
 		WorkspaceID: &expectedWorkspace, AgentSessionID: &expectedAgent,
 	})
 	if err != nil {
@@ -56,7 +56,7 @@ func TestSessionMoveCASPreflightAndUndo(t *testing.T) {
 	operationID := moved.OperationID
 
 	staleWorkspace := "stale-workspace"
-	if _, err := service.MoveSessionWithExpectations(context.Background(), "session-1", "", state.Snapshot().TerminalGroups[0].ID, SessionMoveExpectations{WorkspaceID: &staleWorkspace}); err == nil || !strings.Contains(err.Error(), "stale session context") {
+	if _, err := service.MoveSessionWithExpectations(context.Background(), "session-1", source.ID, SessionMoveExpectations{WorkspaceID: &staleWorkspace}); err == nil || !strings.Contains(err.Error(), "stale session context") {
 		t.Fatalf("stale move error = %v, want actionable CAS error", err)
 	}
 	current, ok := service.Session("session-1")
@@ -68,7 +68,7 @@ func TestSessionMoveCASPreflightAndUndo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reverted.TerminalGroupID == "" || reverted.WorkspaceID != "" || reverted.OperationID == "" {
+	if reverted.WorkspaceID != source.ID || reverted.OperationID == "" {
 		t.Fatalf("reverted = %#v", reverted)
 	}
 	if _, err := service.UndoSessionMove(operationID); err == nil || !strings.Contains(err.Error(), "already reverted") {
@@ -88,17 +88,17 @@ func TestSessionUndoFailsClosedAfterInterveningMove(t *testing.T) {
 	secondWorkspace := api.Workspace{ID: "workspace-second", ProjectID: "project-1", Name: "second", Path: t.TempDir(), Kind: "root"}
 	if err := state.Update(func(value *api.State) error {
 		value.Workspaces = append(value.Workspaces, firstWorkspace, secondWorkspace)
-		value.Sessions = append(value.Sessions, api.Session{ID: "session-2", WorkspaceID: firstWorkspace.ID, Scope: api.SessionScopeWorkspace, Lifecycle: "running"})
+		value.Sessions = append(value.Sessions, api.Session{ID: "session-2", WorkspaceID: firstWorkspace.ID, Lifecycle: "running"})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	service := &Service{Store: state}
-	moved, err := service.MoveSession(context.Background(), "session-2", secondWorkspace.ID, "")
+	moved, err := service.MoveSession(context.Background(), "session-2", secondWorkspace.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.MoveSession(context.Background(), "session-2", firstWorkspace.ID, ""); err != nil {
+	if _, err := service.MoveSession(context.Background(), "session-2", firstWorkspace.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.UndoSessionMove(moved.OperationID); err == nil || !strings.Contains(err.Error(), "context changed") {
@@ -115,11 +115,11 @@ func TestSessionSafetyMethodsOverWebSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	source := api.Workspace{ID: "workspace-source", ProjectID: "project-1", Name: "source", Path: t.TempDir(), Kind: "root"}
 	workspace := api.Workspace{ID: "workspace-api", ProjectID: "project-1", Name: "api", Path: t.TempDir(), Kind: "root"}
-	group := state.Snapshot().TerminalGroups[0]
 	if err := state.Update(func(value *api.State) error {
-		value.Workspaces = append(value.Workspaces, workspace)
-		value.Sessions = append(value.Sessions, api.Session{ID: "session-api", TerminalGroupID: group.ID, Scope: api.SessionScopeTerminalGroup, AgentSessionID: "thread-api", Lifecycle: "running"})
+		value.Workspaces = append(value.Workspaces, source, workspace)
+		value.Sessions = append(value.Sessions, api.Session{ID: "session-api", WorkspaceID: source.ID, AgentSessionID: "thread-api", Lifecycle: "running"})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -135,19 +135,19 @@ func TestSessionSafetyMethodsOverWebSocket(t *testing.T) {
 		t.Fatalf("current session = %#v", current)
 	}
 	preflight := requestResult[api.SessionMovePreflight](t, connection, "session.move.preflight", map[string]any{
-		"id": "session-api", "workspace": workspace.ID, "expectedWorkspace": "", "expectedAgentSession": "thread-api",
+		"id": "session-api", "workspace": workspace.ID, "expectedWorkspace": source.ID, "expectedAgentSession": "thread-api",
 	})
-	if !preflight.Allowed || preflight.SourceTerminalGroupID != group.ID {
+	if !preflight.Allowed || preflight.SourceWorkspaceID != source.ID {
 		t.Fatalf("preflight = %#v", preflight)
 	}
 	moved := requestResult[api.Session](t, connection, "session.move", map[string]any{
-		"id": "session-api", "workspace": workspace.ID, "expectedWorkspace": "", "expectedAgentSession": "thread-api",
+		"id": "session-api", "workspace": workspace.ID, "expectedWorkspace": source.ID, "expectedAgentSession": "thread-api",
 	})
 	if moved.OperationID == "" {
 		t.Fatalf("move result missing operation ID: %#v", moved)
 	}
 	reverted := requestResult[api.Session](t, connection, "session.undo", map[string]any{"operation": moved.OperationID})
-	if reverted.TerminalGroupID != group.ID || reverted.WorkspaceID != "" {
+	if reverted.WorkspaceID != source.ID {
 		t.Fatalf("undo result = %#v", reverted)
 	}
 }

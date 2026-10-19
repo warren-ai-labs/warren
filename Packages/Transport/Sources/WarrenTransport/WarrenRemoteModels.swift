@@ -590,6 +590,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let autoImportGitWorktrees: Bool
         public let pinned: Bool
         public let order: Int
+        public let activeSince: String?
 
         public init(
             id: String,
@@ -598,7 +599,8 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             setupScript: String? = nil,
             autoImportGitWorktrees: Bool = false,
             pinned: Bool = false,
-            order: Int = 0
+            order: Int = 0,
+            activeSince: String? = nil
         ) {
             self.id = id
             self.name = name
@@ -607,10 +609,11 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.autoImportGitWorktrees = autoImportGitWorktrees
             self.pinned = pinned
             self.order = order
+            self.activeSince = activeSince
         }
 
         private enum CodingKeys: String, CodingKey {
-            case id, name, path, setupScript, autoImportGitWorktrees, pinned, order
+            case id, name, path, setupScript, autoImportGitWorktrees, pinned, order, activeSince
         }
 
         public init(from decoder: Decoder) throws {
@@ -622,6 +625,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             autoImportGitWorktrees = try values.decodeIfPresent(Bool.self, forKey: .autoImportGitWorktrees) ?? false
             pinned = try values.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
             order = try values.decodeIfPresent(Int.self, forKey: .order) ?? 0
+            activeSince = try values.decodeIfPresent(String.self, forKey: .activeSince)
         }
     }
 
@@ -638,6 +642,8 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let pinned: Bool
         public let order: Int
         public let mergeState: String?
+        public let createdAt: String?
+        public let lastActivityAt: String?
 
         public init(
             id: String,
@@ -651,7 +657,9 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             worktreeLocked: Bool = false,
             pinned: Bool = false,
             order: Int = 0,
-            mergeState: String? = nil
+            mergeState: String? = nil,
+            createdAt: String? = nil,
+            lastActivityAt: String? = nil
         ) {
             self.id = id
             self.projectID = projectID
@@ -665,6 +673,8 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.pinned = pinned
             self.order = order
             self.mergeState = mergeState
+            self.createdAt = createdAt
+            self.lastActivityAt = lastActivityAt
         }
 
         private enum CodingKeys: String, CodingKey {
@@ -672,6 +682,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             case projectID = "project"
             case taskID = "task"
             case name, path, branch, kind, managedWorktree, worktreeLocked, pinned, order, mergeState
+            case createdAt, lastActivityAt
         }
 
         public init(from decoder: Decoder) throws {
@@ -688,39 +699,14 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             pinned = try values.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
             order = try values.decodeIfPresent(Int.self, forKey: .order) ?? 0
             mergeState = try values.decodeIfPresent(String.self, forKey: .mergeState)
-        }
-    }
-
-    public struct TerminalGroup: Codable, Equatable, Hashable, Sendable, Identifiable {
-        public let id: String
-        public let name: String
-        public let home: String?
-        public let order: Int
-        public let createdAt: String?
-
-        public init(id: String, name: String, home: String? = nil, order: Int = 0, createdAt: String? = nil) {
-            self.id = id
-            self.name = name
-            self.home = home
-            self.order = order
-            self.createdAt = createdAt
-        }
-
-        private enum CodingKeys: String, CodingKey { case id, name, home, order, createdAt }
-
-        public init(from decoder: Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            id = try values.decode(String.self, forKey: .id)
-            name = try values.decodeIfPresent(String.self, forKey: .name) ?? id
-            home = try values.decodeIfPresent(String.self, forKey: .home)
-            order = try values.decodeIfPresent(Int.self, forKey: .order) ?? 0
             createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
+            lastActivityAt = try values.decodeIfPresent(String.self, forKey: .lastActivityAt)
         }
     }
 
     /// One whole-screen arrangement of running Sessions. The Host owns it, so any
     /// client reads the same shape and several arrangements can coexist in one
-    /// Workspace or Terminal Group. Pane order is preorder leaf order.
+    /// Workspace. Pane order is preorder leaf order.
     ///
     /// The wire shape is flat: a leaf carries `paneId`/`sessionId`, a split
     /// carries `axis`/`ratio`/`first`/`second`. `paneId` is optional on the way
@@ -824,8 +810,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
     public struct PaneGroup: Codable, Equatable, Hashable, Sendable, Identifiable {
         public let id: String
         public let workspace: String?
-        public let terminalGroup: String?
-        public let scope: String?
         public let name: String?
         public let order: Int
         public let tree: PaneNode
@@ -838,8 +822,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public init(
             id: String,
             workspace: String? = nil,
-            terminalGroup: String? = nil,
-            scope: String? = nil,
             name: String? = nil,
             order: Int = 0,
             tree: PaneNode,
@@ -849,8 +831,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         ) {
             self.id = id
             self.workspace = workspace
-            self.terminalGroup = terminalGroup
-            self.scope = scope
             self.name = name
             self.order = order
             self.tree = tree
@@ -860,7 +840,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         }
 
         private enum CodingKeys: String, CodingKey {
-            case id, workspace, terminalGroup, scope, name, order, tree, revision, createdAt, updatedAt
+            case id, workspace, name, order, tree, revision, createdAt, updatedAt
         }
 
         /// The Host omits an empty name, a zero order, and a zero revision, so
@@ -871,8 +851,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             id = try values.decode(String.self, forKey: .id)
             workspace = try values.decodeIfPresent(String.self, forKey: .workspace)
-            terminalGroup = try values.decodeIfPresent(String.self, forKey: .terminalGroup)
-            scope = try values.decodeIfPresent(String.self, forKey: .scope)
             name = try values.decodeIfPresent(String.self, forKey: .name)
             order = try values.decodeIfPresent(Int.self, forKey: .order) ?? 0
             tree = try values.decode(PaneNode.self, forKey: .tree)
@@ -881,15 +859,8 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             updatedAt = try values.decodeIfPresent(String.self, forKey: .updatedAt)
         }
 
-        /// The Workspace or Terminal Group that owns the arrangement.
-        public var ownerID: String { workspace ?? terminalGroup ?? "" }
-
-        public var ownerScope: SessionScope {
-            if let scope, let parsed = SessionScope(rawValue: scope) {
-                return parsed
-            }
-            return terminalGroup == nil ? .workspace : .terminalGroup
-        }
+        /// The Workspace that owns the arrangement.
+        public var ownerID: String { workspace ?? "" }
 
         public var paneCount: Int { tree.paneCount }
 
@@ -898,22 +869,15 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         }
     }
 
-    public enum SessionScope: String, Codable, Hashable, Sendable {
-        case workspace
-        case terminalGroup
-        case unknown
-    }
-
-    /// A Host-owned terminal session. Workspace and terminal-group ownership
-    /// stay separate so a standalone shell is never accidentally projected as
-    /// a workspace session.
+    /// A Host-owned terminal session. Every Session belongs to a Workspace.
     public struct Session: Codable, Equatable, Hashable, Sendable, Identifiable {
         public let id: String
         public let workspaceID: String?
-        public let terminalGroupID: String?
-        public let scope: SessionScope
         public let title: String
         public let customTitle: String?
+        /// The Host's one-line account of the last completed turn, when it
+        /// asked a model for one. Absent on a Host with no title endpoint.
+        public let resultSentence: String?
         public let kind: String
         public let agentProvider: String?
         public let agentHandler: String?
@@ -921,6 +885,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public var commandLine: String?
         public var process: String?
         public var directory: String?
+        public var shell: ShellMetadata?
         public let runtime: String?
         public let runtimeKind: String?
         public let lifecycle: String
@@ -942,10 +907,9 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public init(
             id: String,
             workspaceID: String? = nil,
-            terminalGroupID: String? = nil,
-            scope: SessionScope? = nil,
             title: String = "",
             customTitle: String? = nil,
+            resultSentence: String? = nil,
             kind: String = "shell",
             agentProvider: String? = nil,
             agentHandler: String? = nil,
@@ -953,6 +917,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             commandLine: String? = nil,
             process: String? = nil,
             directory: String? = nil,
+            shell: ShellMetadata? = nil,
             runtime: String? = nil,
             runtimeKind: String? = nil,
             lifecycle: String = "running",
@@ -970,14 +935,9 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         ) {
             self.id = id
             self.workspaceID = workspaceID
-            self.terminalGroupID = terminalGroupID
-            self.scope = scope ?? {
-                if terminalGroupID != nil { return .terminalGroup }
-                if workspaceID != nil { return .workspace }
-                return .unknown
-            }()
             self.title = title
             self.customTitle = customTitle
+            self.resultSentence = resultSentence
             self.kind = kind
             self.agentProvider = agentProvider
             self.agentHandler = agentHandler
@@ -985,6 +945,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.commandLine = commandLine
             self.process = process
             self.directory = directory
+            self.shell = shell
             self.runtime = runtime
             self.runtimeKind = runtimeKind
             self.lifecycle = lifecycle
@@ -1071,8 +1032,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         private enum CodingKeys: String, CodingKey {
             case id
             case workspaceID = "workspace"
-            case terminalGroupID = "terminalGroup"
-            case scope, title, customTitle, kind, agentProvider, agentHandler, command, commandLine, process, directory, runtime, runtimeKind
+            case title, customTitle, resultSentence, kind, agentProvider, agentHandler, command, commandLine, process, directory, shell, runtime, runtimeKind
             case lifecycle, epoch, sequence, pinned
             case agentSessionID = "agentSessionId"
             case agentExecutionID = "agentExecutionId"
@@ -1083,19 +1043,9 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             id = try values.decode(String.self, forKey: .id)
             workspaceID = try values.decodeIfPresent(String.self, forKey: .workspaceID)
-            terminalGroupID = try values.decodeIfPresent(String.self, forKey: .terminalGroupID)
-            let rawScope = try values.decodeIfPresent(String.self, forKey: .scope)
-            if let rawScope, let parsed = SessionScope(rawValue: rawScope) {
-                scope = parsed
-            } else if terminalGroupID != nil {
-                scope = .terminalGroup
-            } else if workspaceID != nil {
-                scope = .workspace
-            } else {
-                scope = .unknown
-            }
             title = try values.decodeIfPresent(String.self, forKey: .title) ?? ""
             customTitle = try values.decodeIfPresent(String.self, forKey: .customTitle)
+            resultSentence = try values.decodeIfPresent(String.self, forKey: .resultSentence)
             kind = try values.decodeIfPresent(String.self, forKey: .kind) ?? "shell"
             agentProvider = try values.decodeIfPresent(String.self, forKey: .agentProvider)
             agentHandler = try values.decodeIfPresent(String.self, forKey: .agentHandler)
@@ -1103,6 +1053,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             commandLine = try values.decodeIfPresent(String.self, forKey: .commandLine)
             process = try values.decodeIfPresent(String.self, forKey: .process)
             directory = try values.decodeIfPresent(String.self, forKey: .directory)
+            shell = try values.decodeIfPresent(ShellMetadata.self, forKey: .shell)
             runtime = try values.decodeIfPresent(String.self, forKey: .runtime)
             runtimeKind = try values.decodeIfPresent(String.self, forKey: .runtimeKind)
             lifecycle = try values.decodeIfPresent(String.self, forKey: .lifecycle) ?? "running"
@@ -1171,6 +1122,32 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         }
     }
 
+    /// The OSC 133 semantic prompt state of a shell Session. Every field is
+    /// reported live by the Host and is never persisted. A `nil` Session
+    /// `shell` means the shell never emitted a marker, so no part of the state
+    /// is known.
+    public struct ShellMetadata: Codable, Equatable, Hashable, Sendable {
+        public let atPrompt: Bool
+        public let runningCommand: String?
+        public let lastCommand: String?
+        public let lastExitCode: Int?
+        public let lastExitAt: String?
+
+        public init(
+            atPrompt: Bool = false,
+            runningCommand: String? = nil,
+            lastCommand: String? = nil,
+            lastExitCode: Int? = nil,
+            lastExitAt: String? = nil
+        ) {
+            self.atPrompt = atPrompt
+            self.runningCommand = runningCommand
+            self.lastCommand = lastCommand
+            self.lastExitCode = lastExitCode
+            self.lastExitAt = lastExitAt
+        }
+    }
+
     /// One Session's high-frequency foreground metadata, projected separately
     /// so a directory change does not retransmit the whole Session entity.
     public struct SessionMetadata: Codable, Equatable, Hashable, Sendable {
@@ -1178,17 +1155,20 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let process: String?
         public let commandLine: String?
         public let directory: String?
+        public let shell: ShellMetadata?
 
         public init(
             id: String,
             process: String? = nil,
             commandLine: String? = nil,
-            directory: String? = nil
+            directory: String? = nil,
+            shell: ShellMetadata? = nil
         ) {
             self.id = id
             self.process = process
             self.commandLine = commandLine
             self.directory = directory
+            self.shell = shell
         }
     }
 
@@ -1222,7 +1202,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let tasks: EntityChanges<Task>?
         public let projects: EntityChanges<Project>?
         public let workspaces: EntityChanges<Workspace>?
-        public let terminalGroups: EntityChanges<TerminalGroup>?
         public let paneGroups: EntityChanges<PaneGroup>?
         public let sessions: EntityChanges<Session>?
         public let sessionMetadata: SessionMetadataChanges?
@@ -1234,7 +1213,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             tasks: EntityChanges<Task>? = nil,
             projects: EntityChanges<Project>? = nil,
             workspaces: EntityChanges<Workspace>? = nil,
-            terminalGroups: EntityChanges<TerminalGroup>? = nil,
             paneGroups: EntityChanges<PaneGroup>? = nil,
             sessions: EntityChanges<Session>? = nil,
             sessionMetadata: SessionMetadataChanges? = nil
@@ -1245,7 +1223,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.tasks = tasks
             self.projects = projects
             self.workspaces = workspaces
-            self.terminalGroups = terminalGroups
             self.paneGroups = paneGroups
             self.sessions = sessions
             self.sessionMetadata = sessionMetadata
@@ -1253,9 +1230,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
 
         private enum CodingKeys: String, CodingKey {
             case baseRevision, revision, host, tasks, projects, workspaces
-            case terminalGroups
             case paneGroups
-            case groups
             case sessions
             case sessionMetadata
         }
@@ -1268,8 +1243,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             tasks = try values.decodeIfPresent(EntityChanges<Task>.self, forKey: .tasks)
             projects = try values.decodeIfPresent(EntityChanges<Project>.self, forKey: .projects)
             workspaces = try values.decodeIfPresent(EntityChanges<Workspace>.self, forKey: .workspaces)
-            terminalGroups = try values.decodeIfPresent(EntityChanges<TerminalGroup>.self, forKey: .terminalGroups)
-                ?? values.decodeIfPresent(EntityChanges<TerminalGroup>.self, forKey: .groups)
             paneGroups = try values.decodeIfPresent(EntityChanges<PaneGroup>.self, forKey: .paneGroups)
             sessions = try values.decodeIfPresent(EntityChanges<Session>.self, forKey: .sessions)
             sessionMetadata = try values.decodeIfPresent(SessionMetadataChanges.self, forKey: .sessionMetadata)
@@ -1283,7 +1256,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             try values.encodeIfPresent(tasks, forKey: .tasks)
             try values.encodeIfPresent(projects, forKey: .projects)
             try values.encodeIfPresent(workspaces, forKey: .workspaces)
-            try values.encodeIfPresent(terminalGroups, forKey: .terminalGroups)
             try values.encodeIfPresent(paneGroups, forKey: .paneGroups)
             try values.encodeIfPresent(sessions, forKey: .sessions)
             try values.encodeIfPresent(sessionMetadata, forKey: .sessionMetadata)
@@ -1314,7 +1286,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
     public let tasks: [Task]
     public let projects: [Project]
     public let workspaces: [Workspace]
-    public let terminalGroups: [TerminalGroup]
     public let paneGroups: [PaneGroup]
     public let sessions: [Session]
 
@@ -1325,7 +1296,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         tasks: [Task] = [],
         projects: [Project] = [],
         workspaces: [Workspace] = [],
-        terminalGroups: [TerminalGroup] = [],
         paneGroups: [PaneGroup] = [],
         sessions: [Session] = []
     ) {
@@ -1335,13 +1305,12 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         self.tasks = tasks
         self.projects = projects
         self.workspaces = workspaces
-        self.terminalGroups = terminalGroups
         self.paneGroups = paneGroups
         self.sessions = sessions
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schema, revision, host, tasks, projects, workspaces, terminalGroups, paneGroups, sessions
+        case schema, revision, host, tasks, projects, workspaces, paneGroups, sessions
     }
 
     public init(from decoder: Decoder) throws {
@@ -1352,7 +1321,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         tasks = try values.decodeIfPresent([Task].self, forKey: .tasks) ?? []
         projects = try values.decodeIfPresent([Project].self, forKey: .projects) ?? []
         workspaces = try values.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
-        terminalGroups = try values.decodeIfPresent([TerminalGroup].self, forKey: .terminalGroups) ?? []
         paneGroups = try values.decodeIfPresent([PaneGroup].self, forKey: .paneGroups) ?? []
         sessions = try values.decodeIfPresent([Session].self, forKey: .sessions) ?? []
     }
@@ -1368,7 +1336,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             tasks: Self.applying(tasks, changes: delta.tasks, id: \.id),
             projects: Self.applying(projects, changes: delta.projects, id: \.id),
             workspaces: Self.applying(workspaces, changes: delta.workspaces, id: \.id),
-            terminalGroups: Self.applying(terminalGroups, changes: delta.terminalGroups, id: \.id),
             paneGroups: Self.applying(paneGroups, changes: delta.paneGroups, id: \.id),
             sessions: Self.applying(
                 Self.applyingMetadata(sessions, changes: delta.sessionMetadata),
@@ -1395,6 +1362,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             updated.process = change.process
             updated.commandLine = change.commandLine
             updated.directory = change.directory
+            updated.shell = change.shell
             return updated
         }
     }
@@ -1437,7 +1405,6 @@ public typealias WarrenRemoteHost = WarrenRemoteRoster.Host
 public typealias WarrenRemoteTask = WarrenRemoteRoster.Task
 public typealias WarrenRemoteProject = WarrenRemoteRoster.Project
 public typealias WarrenRemoteWorkspace = WarrenRemoteRoster.Workspace
-public typealias WarrenRemoteTerminalGroup = WarrenRemoteRoster.TerminalGroup
 public typealias WarrenRemoteSession = WarrenRemoteRoster.Session
 
 /// Result returned by `workspace.create`. The Host embeds the created
@@ -1674,6 +1641,10 @@ public enum WarrenRemoteCapability {
     /// available correlation is comparing message text, which cannot tell two
     /// identical prompts apart.
     public static let agentCausation = "agent-causation-v1"
+    /// The client acknowledges received terminal output with `session.ack`, so
+    /// the Host keeps a bounded amount in flight instead of queueing whatever
+    /// the PTY produces behind a slow link.
+    public static let outputAck = "output-ack-v1"
 }
 
 public extension WarrenRemoteAgentEvent {

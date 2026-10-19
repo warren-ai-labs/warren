@@ -112,6 +112,12 @@ func ReadTranscriptUsage(ctx context.Context, provider, path string) ([]api.Agen
 				}
 			}
 		}
+		if errors.Is(readErr, errTranscriptLineTooLong) {
+			// One multi-megabyte line -- a tool dump, not a usage event -- must
+			// not make the whole transcript unreadable. readBoundedLine already
+			// skipped it, so the observations around it are still counted.
+			continue
+		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}

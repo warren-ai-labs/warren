@@ -24,20 +24,21 @@ enum WarrenDesktopWorkspaceRowAccessories {
     /// The Task link is wider because it carries the word "Task", not a glyph.
     static let taskLinkWidth: CGFloat = 32
 
-    static func inset(isEditorMarked: Bool, showsTaskLink: Bool) -> CGFloat {
-        var inset: CGFloat = 0
-        if isEditorMarked {
-            inset += editorEntryWidth
-        }
-        if showsTaskLink {
-            inset += taskLinkWidth
-        }
+    static func inset(
+        isEditorMarked: Bool,
+        showsTaskLink: Bool,
+        disclosureWidth: CGFloat = 0
+    ) -> CGFloat {
+        let widths = [
+            isEditorMarked ? editorEntryWidth : 0,
+            showsTaskLink ? taskLinkWidth : 0,
+            disclosureWidth,
+        ].filter { $0 > 0 }
         // A row with no accessories keeps its full width; an inset here would
         // truncate names for space nothing occupies.
-        guard inset > 0 else { return 0 }
-        if isEditorMarked, showsTaskLink {
-            inset += WarrenSpacing.xs
-        }
+        guard !widths.isEmpty else { return 0 }
+        let inset = widths.reduce(0, +)
+            + CGFloat(widths.count - 1) * WarrenSpacing.xs
         // The overlay's own trailing padding, so the inset reaches where the
         // accessories actually start rather than where their frames do.
         return inset + WarrenSpacing.compact

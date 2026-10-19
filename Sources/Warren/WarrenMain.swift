@@ -110,6 +110,7 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         // Before the first window is built, so the initial paint is already in
         // the chosen appearance rather than flashing the default one.
         WarrenDesktopAppearance.applyStoredMode()
+        WarrenDesktopDockIcon.applyStoredColorway()
         launchDaemonMenuBar()
         presentMainWindowIfNeeded()
         NSApp.mainMenu = buildMainMenu(target: self)
@@ -588,6 +589,14 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         checkForUpdates.target = target
         updateMenuItem = checkForUpdates
         appMenu.addItem(.separator())
+        let settingsItem = appMenu.addItem(
+            withTitle: "Settings…",
+            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            keyEquivalent: ","
+        )
+        settingsItem.target = target
+        settingsItem.representedObject = WarrenDesktopCommand.openSettings.rawValue
+        appMenu.addItem(.separator())
         appMenu.addItem(
             withTitle: "Quit Warren",
             action: #selector(NSApplication.terminate(_:)),
@@ -667,8 +676,18 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         )
         sidebarItem.target = target
         sidebarItem.representedObject = WarrenDesktopCommand.toggleSidebar.rawValue
+        // The dwell-free entry to the collapsed sidebar. It stays off Esc and
+        // the shell's own chords, and the button's hover still peeks.
+        let peekSidebarItem = sessionMenu.addItem(
+            withTitle: "Reveal Sidebar",
+            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            keyEquivalent: "s"
+        )
+        peekSidebarItem.target = target
+        peekSidebarItem.keyEquivalentModifierMask = [.control, .command]
+        peekSidebarItem.representedObject = WarrenDesktopCommand.peekSidebar.rawValue
         let inspectorItem = sessionMenu.addItem(
-            withTitle: "Toggle Inspector",
+            withTitle: "Toggle Right Sidebar",
             action: #selector(WarrenAppDelegate.postCommand(_:)),
             keyEquivalent: "b"
         )

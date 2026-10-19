@@ -59,8 +59,8 @@ func agentCreateCommand(args []string) error {
 	if len(positions) > 1 {
 		return newUsageError("agent create accepts at most one workspace ID", agentCreateUsageText())
 	}
-	if len(positions) > 0 && stringValue(params, "group") != "" {
-		return newUsageError("workspace and --group are mutually exclusive", agentCreateUsageText())
+	if len(positions) == 0 && stringValue(params, "workspace") == "" {
+		return newUsageError("missing WORKSPACE_ID", agentCreateUsageText())
 	}
 	provider := strings.ToLower(strings.TrimSpace(stringValue(params, "provider")))
 	if provider != "codex" && provider != "claude" && provider != "opencode" && provider != "pi" && provider != "qoder" && provider != "antigravity" {
@@ -1123,7 +1123,7 @@ var agentReadBooleanFlags = map[string]bool{
 
 var agentCreateValueFlags = map[string]bool{
 	"provider": true, "agent-handler": true, "command": true, "prompt": true, "title": true,
-	"group": true, "runtime-kind": true, "timeout": true,
+	"runtime-kind": true, "timeout": true,
 }
 
 var agentCreateBooleanFlags = map[string]bool{

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -39,6 +41,19 @@ type claudeParser struct {
 	// queueId to remove.
 	claudeQueue      []claudeQueuedPrompt
 	claudeQueueCount int
+	// claudeTitle is the conversation name Claude generated for itself. It is
+	// consumed once by TakeTitle and never enters the visible transcript.
+	claudeTitle string
+	// claudeSubagentCalls holds a spawned Agent/Task call until its result names
+	// the child agent, because the spawn row carries only presentation metadata.
+	claudeSubagentCalls map[string]claudeSubagentCall
+	// subagentsDir is where Claude Code stores child transcripts for this
+	// session. It is empty for a parser that never emits subagent rows.
+	subagentsDir string
+	// childTranscript marks a parser reading a subagent's own transcript. Every
+	// record there is sidechain, so its messages must project as the child's
+	// activity rather than re-emit a second subagent row for the child itself.
+	childTranscript bool
 }
 
 type claudeQueuedPrompt struct {
@@ -60,13 +75,26 @@ type claudeTaskCall struct {
 
 func newClaudeParser(contentLimit int) *claudeParser {
 	return &claudeParser{
-		baseParser:         newBaseParser(contentLimit),
-		claudeCallTool:     make(map[string]string),
-		claudeInteractions: make(map[string]string),
-		claudeCountedUsage: make(map[string]struct{}),
-		claudeTaskCalls:    make(map[string]claudeTaskCall),
-		claudeProposals:    make(map[string]api.AgentEvent),
+		baseParser:          newBaseParser(contentLimit),
+		claudeCallTool:      make(map[string]string),
+		claudeInteractions:  make(map[string]string),
+		claudeCountedUsage:  make(map[string]struct{}),
+		claudeTaskCalls:     make(map[string]claudeTaskCall),
+		claudeProposals:     make(map[string]api.AgentEvent),
+		claudeSubagentCalls: make(map[string]claudeSubagentCall),
 	}
+}
+
+// SetSubagentsDir tells the parser where Claude Code stores this session's child
+// transcripts. The Watcher sets it from the main transcript path so a spawn can
+// be matched to the child's own transcript by tool_use id.
+func (p *claudeParser) SetSubagentsDir(dir string) {
+	p.subagentsDir = dir
+}
+
+// SetChildTranscript marks a parser that reads one subagent's own transcript.
+func (p *claudeParser) SetChildTranscript(child bool) {
+	p.childTranscript = child
 }
 
 // claudeUsageOnce returns the usage for an assistant message the first time that
@@ -110,6 +138,15 @@ func (p *claudeParser) parse(line []byte) []api.AgentEvent {
 	return p.Parse(line)
 }
 
+// TakeTitle returns the name Claude generated for this conversation, once.
+// Claude writes it as its own transcript record, so Warren reports it instead
+// of spending a second model call on the same conversation.
+func (p *claudeParser) TakeTitle() string {
+	title := p.claudeTitle
+	p.claudeTitle = ""
+	return title
+}
+
 type claudeToolUseResult struct {
 	FilePath        string          `json:"filePath"`
 	StructuredPatch json.RawMessage `json:"structuredPatch"`
@@ -141,13 +178,17 @@ func (r *claudeToolUseResult) UnmarshalJSON(data []byte) error {
 }
 
 type claudeRecord struct {
-	Type             string          `json:"type"`
-	Subtype          string          `json:"subtype"`
-	Timestamp        string          `json:"timestamp"`
-	UUID             string          `json:"uuid"`
-	SessionID        string          `json:"sessionId"`
-	DurationMs       int64           `json:"durationMs"`
-	IsSidechain      bool            `json:"isSidechain"`
+	Type        string `json:"type"`
+	Subtype     string `json:"subtype"`
+	Timestamp   string `json:"timestamp"`
+	UUID        string `json:"uuid"`
+	SessionID   string `json:"sessionId"`
+	DurationMs  int64  `json:"durationMs"`
+	IsSidechain bool   `json:"isSidechain"`
+	// AgentID is Claude's stable identity for the subagent that wrote a sidechain
+	// record. Modern Claude Code writes child transcripts to their own files, and
+	// every record there carries it; the value is empty on the main conversation.
+	AgentID          string          `json:"agentId"`
 	IsMeta           bool            `json:"isMeta"`
 	IsCompactSummary bool            `json:"isCompactSummary"`
 	Content          json.RawMessage `json:"content"`
@@ -165,7 +206,10 @@ type claudeRecord struct {
 	ToolOutput    json.RawMessage     `json:"tool_output"`
 	ToolUseID     string              `json:"tool_use_id"`
 	CallID        string              `json:"call_id"`
-	Attachment    struct {
+	// AITitle carries the conversation name Claude generated for itself. It is
+	// metadata about the session, not a conversation turn.
+	AITitle    string `json:"aiTitle"`
+	Attachment struct {
 		Type      string          `json:"type"`
 		HookName  string          `json:"hookName"`
 		HookEvent string          `json:"hookEvent"`
@@ -203,7 +247,14 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 		return []api.AgentEvent{*structured}
 	}
 	switch record.Type {
-	case "summary", "last-prompt", "ai-title", "pr-link",
+	case "ai-title":
+		// Claude names its own conversation; the name is the session's title,
+		// not a transcript row.
+		if title := strings.TrimSpace(record.AITitle); title != "" {
+			p.claudeTitle = title
+		}
+		return nil
+	case "summary", "last-prompt", "pr-link",
 		"permission-mode", "mode", "file-history-snapshot":
 		return nil
 	case "user":
@@ -249,6 +300,15 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 						})
 					}
 					continue
+				}
+				if call, ok := p.claudeSubagentCalls[block.ToolUseID]; ok {
+					delete(p.claudeSubagentCalls, block.ToolUseID)
+					if subagent, ok := p.claudeSubagentEvent(block, call, timestamp); ok {
+						events = append(events, subagent)
+						continue
+					}
+					// A synchronous Task result names no child agent; keep the normal
+					// tool_output so an older transcript still shows its answer.
 				}
 				output := p.content(block.Content)
 				event := api.AgentEvent{
@@ -396,10 +456,12 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 			}
 			switch block.Type {
 			case "text":
-				if record.IsSidechain {
+				if record.IsSidechain && !p.childTranscript {
+					subagentID := firstNonEmpty(record.AgentID, record.UUID)
+					event.ID = subagentID
 					event.Type = "subagent"
 					event.Payload = map[string]any{
-						"subagentId": record.UUID,
+						"subagentId": subagentID,
 						"label":      "Subagent",
 						"state":      "completed",
 						"summary":    p.clip(block.Text),
@@ -470,6 +532,20 @@ func (p *claudeParser) parseClaude(line []byte) []api.AgentEvent {
 					if block.ID != "" {
 						p.claudeInteractions[block.ID] = "plan"
 					}
+				case "subagent":
+					// The row is emitted from the result, which carries the child's
+					// identity; this call only records the presentation metadata.
+					input, _ := rawToAny(block.Input, p.contentLimit).(map[string]any)
+					if block.ID != "" {
+						p.claudeSubagentCalls[block.ID] = claudeSubagentCall{
+							Label:   firstNonEmpty(stringValue(input["subagent_type"]), stringValue(input["agent_type"]), "Subagent"),
+							Summary: firstNonEmpty(stringValue(input["description"]), stringValue(input["prompt"])),
+						}
+					}
+					event.Type = "tool_call"
+					event.ToolName = canonicalName
+					event.CallID = block.ID
+					event.ToolInput = input
 				default:
 					event.Type = "tool_call"
 					event.ToolName = canonicalName
@@ -779,6 +855,86 @@ func claudePermissionPayload(requestID string, input map[string]any) map[string]
 		},
 		"state": "pending",
 	}
+}
+
+// claudeAgentIDPattern reads the child agent id from an async-launch result.
+// The main transcript has no structured field for it, so the metadata line is
+// the only fallback when the child's .meta.json is not readable yet.
+var claudeAgentIDPattern = regexp.MustCompile(`(?i)agentId:\s*([A-Za-z0-9_-]+)`)
+
+// claudeSubagentEvent projects a spawned Agent/Task result as a subagent row.
+// The child's .meta.json is authoritative because it links the tool_use id to
+// the child identity; text parsing is only a fallback.
+func (p *claudeParser) claudeSubagentEvent(block claudeBlock, call claudeSubagentCall, timestamp time.Time) (api.AgentEvent, bool) {
+	id, label, summary, ok := p.claudeSubagentMeta(block.ToolUseID)
+	if !ok {
+		id = claudeAgentIDFromOutput(p.content(block.Content))
+		if id == "" {
+			return api.AgentEvent{}, false
+		}
+		label, summary = call.Label, call.Summary
+	}
+	if label == "" {
+		label = "Subagent"
+	}
+	return api.AgentEvent{
+		Provider: "claude",
+		ID:       id,
+		CallID:   block.ToolUseID,
+		Type:     "subagent",
+		Payload: map[string]any{
+			"subagentId":   id,
+			"parentCallId": block.ToolUseID,
+			"title":        label,
+			"label":        label,
+			"state":        "running",
+			"summary":      p.clip(summary),
+		},
+		Timestamp: timestamp,
+	}, true
+}
+
+// claudeSubagentMeta resolves a spawn call to its child transcript metadata by
+// reading the .meta.json Claude Code writes beside it.
+func (p *claudeParser) claudeSubagentMeta(toolUseID string) (id, label, summary string, ok bool) {
+	toolUseID = strings.TrimSpace(toolUseID)
+	if p.subagentsDir == "" || toolUseID == "" {
+		return "", "", "", false
+	}
+	entries, err := os.ReadDir(p.subagentsDir)
+	if err != nil {
+		return "", "", "", false
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "agent-") || !strings.HasSuffix(name, ".meta.json") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(p.subagentsDir, name))
+		if err != nil {
+			continue
+		}
+		var meta struct {
+			AgentType   string `json:"agentType"`
+			Description string `json:"description"`
+			ToolUseID   string `json:"toolUseId"`
+		}
+		if json.Unmarshal(raw, &meta) != nil || meta.ToolUseID != toolUseID {
+			continue
+		}
+		id = strings.TrimSuffix(strings.TrimPrefix(name, "agent-"), ".meta.json")
+		return id, meta.AgentType, meta.Description, true
+	}
+	return "", "", "", false
+}
+
+// claudeAgentIDFromOutput extracts the async-launch agent id from result text.
+func claudeAgentIDFromOutput(output string) string {
+	match := claudeAgentIDPattern.FindStringSubmatch(output)
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
 }
 
 const claudePlanFeedbackMarker = "the user said:"

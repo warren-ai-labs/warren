@@ -199,7 +199,7 @@ capability 通过现有认证/hello 协商字段声明，客户端只使用 Host
 | `todo` | `todoId`、`items[]`、`state` | Checklist 或 Plan 内的 Todo 进度 |
 | `activity` | `activityId`、`label`、`state`、可选 `detail` | 时间线中的活动/进度行 |
 | `plugin` | `pluginId`、`name`、`state`、可选 `summary` | Plugin 活动卡片或折叠行 |
-| `subagent` | `subagentId`、`label`、`state`、可选 `summary` | 子 Agent 摘要行；不在本期展开独立 Session UI |
+| `subagent` | `subagentId`、可选 `parentCallId`、`label`、`state`、可选 `summary` | 子 Agent 摘要行；不在本期展开独立 Session UI |
 | `attachment` | `attachmentId`、`name`、`mime`、`size`、`state` | 消息或活动中的附件行 |
 
 ### Question payload
@@ -230,6 +230,18 @@ Permission 的 `action` 只放可向用户展示的脱敏摘要，例如工具�
 
 `plan`、`todo`、`activity`、`plugin` 和 `subagent` 都是只读事件。本 RFC 不
 要求客户端编辑它们，也不允许客户端从 tool call 的等待时间推导这些事件。
+
+### Subagent payload
+
+`subagentId` 是子 Agent 自身的稳定身份（Claude 为 `agentId`，Codex 为子线程
+`agent_id`），不是父侧 spawn 调用的 id；`parentCallId` 可选，用来关联父会话
+里那条 spawn 调用行。只读。
+
+子 Agent 的自身活动由 Host 归因：其 tool call 等事件进入同一条 Host 事件流，
+但 payload 带同一个 `subagentId`，并标记 `sidechain`。客户端按 `subagentId`
+分组即可显示某个子行正在执行的命令，不需要从自然语言里推断，也不应把子
+Agent 的 turn、attention 或用量当成父会话的状态。Claude 与 Codex 支持该归因；
+不提供子转录的 provider 只产出 spawn 行。
 
 ## 七项功能设计
 

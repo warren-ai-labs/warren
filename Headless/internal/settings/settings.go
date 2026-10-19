@@ -30,6 +30,12 @@ type Settings struct {
 	// shells. The daemon itself never applies these values to its process
 	// environment. An empty value requests an unset in the session shell.
 	RuntimeEnv map[string]string `json:"runtimeEnv,omitempty"`
+	// ACPCommands overrides the ACP server command per provider family
+	// ("claude", "codex", "opencode") for chat Sessions created afterwards. A
+	// missing or empty entry keeps the built-in adapter. The value names one
+	// program with arguments, so a Host can route chat Sessions through a
+	// wrapper that injects that provider's credentials.
+	ACPCommands map[string]string `json:"acpCommands,omitempty"`
 	// Relay contains the non-secret Relay lifecycle and route metadata. The
 	// canonical daemon token remains in token-file/platform credentials and is
 	// never duplicated here.
@@ -44,10 +50,13 @@ type Settings struct {
 	// OpenAIBaseURL, OpenAIModel, and OpenAIKey configure the optional
 	// capability used for automatic session titles. The key is never returned
 	// by the settings APIs.
-	OpenAIBaseURL      string `json:"openaiBaseURL,omitempty"`
-	OpenAIModel        string `json:"openaiModel,omitempty"`
-	OpenAIKey          string `json:"openaiKey,omitempty"`
-	OpenAITitleEnabled bool   `json:"openaiTitleEnabled"`
+	OpenAIBaseURL string `json:"openaiBaseURL,omitempty"`
+	OpenAIModel   string `json:"openaiModel,omitempty"`
+	OpenAIKey     string `json:"openaiKey,omitempty"`
+	// OpenAITitleEnabled adds a title from the endpoint above whenever an agent
+	// has not named its own conversation. Providers that do name one (Codex,
+	// Claude Code, OpenCode, Qoder) are used as-is whether this is on or off.
+	OpenAITitleEnabled bool `json:"openaiTitleEnabled"`
 	// PairedClients contains metadata for explicitly paired native clients.
 	// Only a SHA-256 token hash is persisted; bearer tokens are returned once
 	// over the temporary LAN pairing exchange and remain on the client.

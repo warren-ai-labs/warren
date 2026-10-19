@@ -325,8 +325,8 @@ public enum WarrenUsageCurveBuilder {
             aggregate[slot] = WarrenUsageCurvePoint(
                 day: day,
                 minute: slot,
-                buckets: add(current.buckets, interval.buckets),
-                cost: add(current.cost, interval.cost)
+                buckets: current.buckets.adding(interval.buckets),
+                cost: current.cost.adding(interval.cost)
             )
         }
 
@@ -335,42 +335,6 @@ public enum WarrenUsageCurveBuilder {
         return stride(from: 0, through: effectiveMax, by: step).map { minute in
             aggregate[minute] ?? WarrenUsageCurvePoint(day: day, minute: minute)
         }
-    }
-
-    private static func add(
-        _ left: WarrenUsageBuckets,
-        _ right: WarrenUsageBuckets
-    ) -> WarrenUsageBuckets {
-        WarrenUsageBuckets(
-            freshInput: left.freshInput + right.freshInput,
-            cacheWrite: left.cacheWrite + right.cacheWrite,
-            cacheRead: left.cacheRead + right.cacheRead,
-            output: left.output + right.output,
-            reasoning: left.reasoning + right.reasoning
-        )
-    }
-
-    private static func add(
-        _ left: WarrenUsageCost,
-        _ right: WarrenUsageCost
-    ) -> WarrenUsageCost {
-        WarrenUsageCost(
-            nanoUSD: left.nanoUSD + right.nanoUSD,
-            calls: left.calls + right.calls,
-            pricedCalls: left.pricedCalls + right.pricedCalls,
-            unmeasuredProviders: Array(
-                Set(left.unmeasuredProviders).union(right.unmeasuredProviders)
-            ).sorted(),
-            unpricedModels: Array(
-                Set(left.unpricedModels).union(right.unpricedModels)
-            ).sorted(),
-            byBucket: WarrenUsageBucketCost(
-                freshInput: left.byBucket.freshInput + right.byBucket.freshInput,
-                cacheWrite: left.byBucket.cacheWrite + right.byBucket.cacheWrite,
-                cacheRead: left.byBucket.cacheRead + right.byBucket.cacheRead,
-                output: left.byBucket.output + right.byBucket.output
-            )
-        )
     }
 }
 

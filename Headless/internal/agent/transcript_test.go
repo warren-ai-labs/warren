@@ -1708,15 +1708,28 @@ func TestCodexUpdatePlanAndSpawnAgent(t *testing.T) {
 		t.Errorf("unexpected first item: %#v", items[0])
 	}
 
+	// The spawn call records presentation metadata; the durable child identity
+	// arrives in the result, which is where the subagent row is emitted.
 	spawnLine := []byte(`{"timestamp":"2025-09-24T06:05:38Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"call_spawn_1","arguments":"{\"agent_type\":\"CodeReviewer\",\"prompt\":\"Review changed files\"}"}}`)
-	events = p.Parse(spawnLine)
+	if events = p.Parse(spawnLine); len(events) != 0 {
+		t.Fatalf("spawn call emitted %d events, want 0", len(events))
+	}
+
+	spawnResult := []byte(`{"timestamp":"2025-09-24T06:05:39Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn_1","output":"{\"agent_id\":\"019f385d-1533-7122-be0d-f9a4cfd73ab9\",\"nickname\":\"Gibbs\"}"}}`)
+	events = p.Parse(spawnResult)
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
 	if events[0].Type != "subagent" {
 		t.Errorf("expected type subagent, got %s", events[0].Type)
 	}
-	if events[0].Payload["label"] != "CodeReviewer" || events[0].Payload["summary"] != "Review changed files" {
+	if events[0].Payload["subagentId"] != "019f385d-1533-7122-be0d-f9a4cfd73ab9" {
+		t.Errorf("unexpected subagentId: %#v", events[0].Payload["subagentId"])
+	}
+	if events[0].Payload["parentCallId"] != "call_spawn_1" {
+		t.Errorf("unexpected parentCallId: %#v", events[0].Payload["parentCallId"])
+	}
+	if events[0].Payload["label"] != "Gibbs" || events[0].Payload["summary"] != "Review changed files" {
 		t.Errorf("unexpected subagent payload: %#v", events[0].Payload)
 	}
 }
@@ -2575,5 +2588,53 @@ func TestCodexThreadIDFromTranscriptPath(t *testing.T) {
 	}
 	if got := codexThreadIDFromTranscriptPath("/tmp/transcript.jsonl"); got != "" {
 		t.Fatalf("non-Codex path produced thread ID %q", got)
+	}
+}
+
+func TestToolDetailNamesTheSkillAToolCallUses(t *testing.T) {
+	event := api.AgentEvent{
+		Type:      "tool_call",
+		Provider:  "claude",
+		ToolName:  "Skill",
+		ToolInput: map[string]any{"skill": "bilibili-backend-platform:observability-query", "args": "--prod"},
+	}
+	enrichToolSemantics(&event)
+	if event.ToolKind != "skill" || event.ToolDetail != "bilibili-backend-platform:observability-query" {
+		t.Fatalf("kind=%q detail=%q", event.ToolKind, event.ToolDetail)
+	}
+	if got := api.CanonicalAgentEventFromObservation(event, "s", "s", 0, time.Now()).Payload["toolDetail"]; got != "bilibili-backend-platform:observability-query" {
+		t.Fatalf("canonical detail=%v", got)
+	}
+	event.ToolDetail = ""
+	if got := api.CanonicalAgentEventFromObservation(event, "s", "s", 0, time.Now()).Payload["toolDetail"]; got != "bilibili-backend-platform:observability-query" {
+		t.Fatalf("canonical fallback detail=%v", got)
+	}
+}
+
+func TestWatcherPokeReadsAtFastInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-poke.jsonl")
+	writeLines(t, path, `{"timestamp":"2026-08-16T10:00:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello"}]}}`)
+
+	arrived := make(chan time.Time, 4)
+	watcher := Start("session-1", "codex", path, func(events []api.AgentEvent, _ api.AgentStatus) {
+		arrived <- time.Now()
+	}, nil, nil)
+	defer watcher.Close()
+	if err := watcher.WaitReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-arrived
+
+	watcher.Poke()
+	appended := time.Now()
+	appendLine(t, path, `{"timestamp":"2026-08-16T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"live"}]}}`)
+	select {
+	case at := <-arrived:
+		// The idle interval is 500ms; after a poke the row must not wait for it.
+		if delay := at.Sub(appended); delay >= 300*time.Millisecond {
+			t.Fatalf("poked watcher delivered after %v", delay)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("live event never arrived")
 	}
 }

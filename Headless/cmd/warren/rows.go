@@ -15,15 +15,14 @@ import (
 // JSON payload backward compatible while adding the resolved names/paths.
 type SessionRow struct {
 	api.Session
-	WarrenSessionID   string `json:"warrenSessionId"`
-	AgentThreadID     string `json:"agentThreadId,omitempty"`
-	ProjectID         string `json:"projectId,omitempty"`
-	ProjectName       string `json:"projectName,omitempty"`
-	WorkspaceName     string `json:"workspaceName,omitempty"`
-	TerminalGroupName string `json:"terminalGroupName,omitempty"`
-	Branch            string `json:"branch,omitempty"`
-	Path              string `json:"path,omitempty"`
-	Current           bool   `json:"current"`
+	WarrenSessionID string `json:"warrenSessionId"`
+	AgentThreadID   string `json:"agentThreadId,omitempty"`
+	ProjectID       string `json:"projectId,omitempty"`
+	ProjectName     string `json:"projectName,omitempty"`
+	WorkspaceName   string `json:"workspaceName,omitempty"`
+	Branch          string `json:"branch,omitempty"`
+	Path            string `json:"path,omitempty"`
+	Current         bool   `json:"current"`
 }
 
 func sessionActivity(session api.Session) string {
@@ -70,15 +69,6 @@ func sessionRowsForCurrent(state api.State, includeEnded, onlyEnded bool, curren
 			if project, ok := projects[workspace.ProjectID]; ok {
 				row.ProjectID = project.ID
 				row.ProjectName = project.Name
-			}
-		}
-		for _, group := range state.TerminalGroups {
-			if group.ID == session.TerminalGroupID {
-				row.TerminalGroupName = group.Name
-				if row.Path == "" {
-					row.Path = group.Home
-				}
-				break
 			}
 		}
 		rows = append(rows, row)
@@ -259,10 +249,6 @@ func filterSessionRows(rows []SessionRow, params map[string]any, currentID strin
 	if projectFilter == "" {
 		projectFilter = strings.TrimSpace(stringValue(params, "project-id"))
 	}
-	groupFilter := strings.TrimSpace(stringValue(params, "group"))
-	if groupFilter == "" {
-		groupFilter = strings.TrimSpace(stringValue(params, "group-id"))
-	}
 	kindFilter := strings.ToLower(strings.TrimSpace(stringValue(params, "kind")))
 	if kindFilter == "" {
 		kindFilter = strings.ToLower(strings.TrimSpace(stringValue(params, "provider")))
@@ -309,11 +295,6 @@ func filterSessionRows(rows []SessionRow, params map[string]any, currentID strin
 				continue
 			}
 		}
-		if groupFilter != "" {
-			if !strings.EqualFold(row.TerminalGroupID, groupFilter) && !strings.EqualFold(row.TerminalGroupName, groupFilter) {
-				continue
-			}
-		}
 		if kindFilter != "" {
 			if !strings.EqualFold(row.Kind, kindFilter) {
 				continue
@@ -335,10 +316,6 @@ func filterSessionRows(rows []SessionRow, params map[string]any, currentID strin
 		if filterByCurrent {
 			if currentSession.WorkspaceID != "" {
 				if row.WorkspaceID != currentSession.WorkspaceID {
-					continue
-				}
-			} else if currentSession.TerminalGroupID != "" {
-				if row.TerminalGroupID != currentSession.TerminalGroupID {
 					continue
 				}
 			} else if row.ID != currentSession.ID {
@@ -496,25 +473,6 @@ func filterProjectRows(rows []ProjectRow, params map[string]any) ([]ProjectRow, 
 			}
 		}
 		result = append(result, row)
-	}
-	return result, nil
-}
-
-func filterTerminalGroupRows(groups []api.TerminalGroup, params map[string]any) ([]api.TerminalGroup, error) {
-	search := strings.ToLower(strings.TrimSpace(stringValue(params, "search")))
-	if search == "" {
-		search = strings.ToLower(strings.TrimSpace(stringValue(params, "query")))
-	}
-	if search == "" {
-		return groups, nil
-	}
-	result := make([]api.TerminalGroup, 0, len(groups))
-	for _, group := range groups {
-		if strings.Contains(strings.ToLower(group.ID), search) ||
-			strings.Contains(strings.ToLower(group.Name), search) ||
-			strings.Contains(strings.ToLower(group.Home), search) {
-			result = append(result, group)
-		}
 	}
 	return result, nil
 }

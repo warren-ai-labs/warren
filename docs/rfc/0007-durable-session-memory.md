@@ -54,8 +54,7 @@ The feature must satisfy three user needs:
 
 ## Goals
 
-- Keep recoverable ended Sessions visible in their original Workspace or
-  Terminal Group.
+- Keep recoverable ended Sessions visible in their original Workspace.
 - Render a bounded, read-only terminal checkpoint without a live Runtime.
 - Read an ended Agent's transcript directly from its persisted JSONL file.
 - Generate provider-correct, shell-escaped Codex and Claude resume commands.
@@ -237,7 +236,7 @@ the Host may replay a complete, bounded spool segment from byte zero as a
 best-effort fallback and must report that fallback in recovery metadata. It
 must never feed an arbitrary byte suffix to a fresh terminal renderer.
 
-Explicit Session, Workspace, or Terminal Group removal deletes the associated
+Explicit Session or Workspace removal deletes the associated
 checkpoint, spool, archives, hook binding, and Warren-owned recovery metadata.
 Ended Session memory has no automatic TTL in the first implementation.
 
@@ -459,7 +458,7 @@ must not attempt a live attach to them.
 7. Resuming creates a new linked Warren Session and rejects a second running
    owner of the same provider conversation.
 8. Shell and custom Sessions never execute the old command automatically.
-9. Explicit Session, Workspace, and Terminal Group removal cleans up the
+9. Explicit Session and Workspace removal cleans up the
    corresponding Warren-owned history artifacts.
 10. Schema 1 migrates atomically to schema 2; a failed migration leaves the
     original state file usable.

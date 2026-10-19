@@ -1,17 +1,50 @@
 import SwiftUI
 import WarrenDesignSystem
 
-/// The pane group the pane bar draws.
+/// One pane group the pane bar draws.
 ///
-/// A scope owns one split tree, so the bar draws at most one group at a time.
-/// The value exists so the bar, the track's width, and the scroll follower all
-/// read one membership and one mark slot instead of each recomputing them from
-/// a bare set of Tab IDs.
+/// A scope can own several arrangements, so the bar draws one group per drawn
+/// arrangement. The value exists so the bar, the track's width, and the scroll
+/// follower all read one membership and one mark slot instead of each
+/// recomputing them from a bare set of Tab IDs.
 struct WarrenDesktopSplitGroup: Equatable {
-    /// The scope that owns the tree — a Workspace or a Terminal Group. The
+    /// The Host arrangement this mark names. Unique among a scope's groups, so
+    /// the track can key each run by it and give each its own hue.
+    let id: String
+    /// The scope that owns the tree — a Workspace. The
     /// group's color is derived from it, so the same scope keeps its hue.
     let scopeKey: String
     let tree: SplitLayoutTree
+    /// The group's name in the top bar: its arrangement's name, or the scope's.
+    var title: String = ""
+    /// Where the group lives, e.g. "warren · feat/workbench-cards".
+    var context: String = ""
+    /// The member the layout last had active.
+    var activeTabID: String? = nil
+    /// One line per member on what its Session is doing, keyed by Tab.
+    var activity: [String: String] = [:]
+    /// Each member's app icon, resolved from its Session like the sidebar's.
+    var icons: [String: WarrenDesktopAppIcon] = [:]
+
+    init(
+        id: String? = nil,
+        scopeKey: String,
+        tree: SplitLayoutTree,
+        title: String = "",
+        context: String = "",
+        activeTabID: String? = nil,
+        activity: [String: String] = [:],
+        icons: [String: WarrenDesktopAppIcon] = [:]
+    ) {
+        self.id = id ?? scopeKey
+        self.scopeKey = scopeKey
+        self.tree = tree
+        self.title = title
+        self.context = context
+        self.activeTabID = activeTabID
+        self.activity = activity
+        self.icons = icons
+    }
 
     var tabIDs: [String] { tree.allTabIDs }
 
@@ -184,18 +217,3 @@ struct WarrenDesktopSplitGroupGlyph: View {
     }
 }
 
-/// The mark that labels a pane group from the front of its tabs.
-///
-/// It is the glyph alone, in the group's hue, with no box behind it. The shape
-/// already says "these panes are one panel", and the rule already runs under
-/// them; a tinted chip around the glyph would be a third statement of the same
-/// fact, and a louder one than either.
-struct WarrenDesktopSplitGroupMark: View {
-    let tree: SplitLayoutTree
-    let color: Color
-
-    var body: some View {
-        WarrenDesktopSplitGroupGlyph(tree: tree, color: color)
-            .accessibilityHidden(true)
-    }
-}

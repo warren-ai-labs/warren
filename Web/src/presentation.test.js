@@ -53,6 +53,54 @@ test("style uses semantic layer variables for z-index", () => {
   assert.match(css, /--layer-(content|inline|inline-overlay|drawer|popover|command|modal|menu):/);
 });
 
+test("chrome borders stay hairline on Retina", () => {
+  const css = read("style.css");
+  assert.match(css, /--border-hairline: 1px;/);
+  assert.match(css, /@media \(min-resolution: 2dppx\)[\s\S]*?--border-hairline: 0\.5px;/);
+  assert.match(css, /@media \(min-resolution: 3dppx\)[\s\S]*?--border-hairline: 0\.3333px;/);
+  // Structural chrome separators opt into the hairline token; the spacing
+  // token it was cloned from stays at 1px for Swift parity.
+  assert.match(css, /border-inline-end: var\(--border-hairline\) solid var\(--color-border-separator\)/);
+  assert.match(css, /border-bottom: var\(--border-hairline\) solid var\(--color-border-separator\)/);
+});
+
+test("chrome scroll edges use the 7-stop ramp and drift with the scroll offset", () => {
+  const css = read("style.css");
+  // Non-linear sampling of the alpha ramp, rather than transparent -> black.
+  for (const stop of ["#0000000d", "#00000026", "#0000004d", "#00000080", "#000000b3", "#000000d9"]) {
+    assert.ok(css.includes(stop), stop);
+  }
+  // The fade distance is a registered length so the offset can interpolate it.
+  assert.match(css, /@property --scroll-fade-top \{[\s\S]*?syntax: "<length>"/);
+  // Zero-JS scroll-driven masks, gated on real overflow so a short list is
+  // never faded.
+  assert.match(css, /animation-timeline: scroll\(self block\)/);
+  assert.match(css, /animation-timeline: scroll\(self inline\)/);
+  assert.match(css, /\.sidebar-scroll\[data-overflow="true"\]/);
+});
+
+test("chrome press feedback and focus halo share the spring and accent tokens", () => {
+  const css = read("style.css");
+  assert.match(css, /--ease-spring: linear\(0, 0\.2459/);
+  assert.match(css, /--shadow-focus-halo:/);
+  assert.match(css, /\.chrome-button:active:not\(:disabled\)[\s\S]*?scale: 0\.94;/);
+  // Dark-only client: medium/semibold are nudged down to counter bloom.
+  assert.match(css, /--weight-medium: 465;/);
+  assert.match(css, /--weight-semibold: 560;/);
+});
+
+test("composite chrome strips expose a single roving tab stop", () => {
+  const components = read("components.jsx");
+  assert.match(components, /import \{ rovingIndex, rovingTabIndex \} from "\.\/roving\.js";/);
+  assert.match(components, /function useRovingFocus\(/);
+  assert.match(components, /node\.tabIndex = index === active \? 0 : -1;/);
+  // Desktop and mobile tab strips are both ARIA tablists; exactly the selected
+  // tab stays in the Tab order.
+  const stops = components.match(/tabIndex=\{active \? 0 : -1\}/g) || [];
+  assert.equal(stops.length, 2);
+  assert.match(components, /data-overflow=\{scrollOverflows \? "true" : undefined\}/);
+});
+
 test("agent surfaces keep semantic state aliases and touch-safe tablet/mobile contracts", () => {
   const css = read("style.css");
   for (const token of [
@@ -186,14 +234,18 @@ test("macOS app surfaces avoid native business sheets and alerts", () => {
     assert.doesNotMatch(content, /\.sheet\s*\(/, relative);
     assert.doesNotMatch(content, /NSAlert\(\)/, relative);
   }
-  // The SSH host picker is an OS-adjacent configuration flow that remains a
-  // native sheet by design. Keep the broad alert guard above while scoping
-  // this sheet assertion to Warren-owned business surfaces.
+  // The SSH host picker is a Workbench menu page, not a native sheet: the
+  // Host panel drills into it and the Desktop draws it on the shared menu
+  // surface. The app only supplies the catalog through a page model.
   const compositionRoot = readFileSync(resolve(repoRoot, "Sources/Warren/WarrenCompositionRoot.swift"), "utf8");
   assert.doesNotMatch(compositionRoot, /NSAlert\(\)/, "Sources/Warren/WarrenCompositionRoot.swift");
-  assert.match(compositionRoot, /if isSSHHostPickerPresented/);
-  assert.match(compositionRoot, /WarrenSheetSurface\s*\{[\s\S]*WarrenSSHHostPicker\(/);
-  assert.match(compositionRoot, /WarrenSSHHostPicker\(/);
+  assert.match(compositionRoot, /sshHostPage/);
+  assert.doesNotMatch(compositionRoot, /WarrenSSHHostPicker\(/);
+  const hostPage = readFileSync(
+    resolve(repoRoot, "Packages/Desktop/Sources/WarrenDesktop/WarrenDesktopSSHHostPage.swift"),
+    "utf8",
+  );
+  assert.match(hostPage, /WarrenDesktopSSHHostListView/);
 });
 
 test("presentation stack keeps the topmost role", () => {

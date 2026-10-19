@@ -63,12 +63,10 @@ func (m *Manager) SetEndHandler(handler func(sessionID string)) {
 
 // StartOptions describes a browser Session to create.
 type StartOptions struct {
-	SessionID       string
-	WorkspaceID     string
-	TerminalGroupID string
-	Scope           string
-	Headless        bool
-	Viewport        api.BrowserViewport
+	SessionID   string
+	WorkspaceID string
+	Headless    bool
+	Viewport    api.BrowserViewport
 }
 
 // Start creates the runtime for one Warren Session and launches Chromium. It is
@@ -84,7 +82,7 @@ func (m *Manager) Start(ctx context.Context, options StartOptions) (*Session, er
 		m.mu.Unlock()
 		return nil, fmt.Errorf("browser session already running: %s", options.SessionID)
 	}
-	session := newSession(m, options.SessionID, options.WorkspaceID, options.TerminalGroupID, options.Scope, options.Headless, options.Viewport)
+	session := newSession(m, options.SessionID, options.WorkspaceID, options.Headless, options.Viewport)
 	m.sessions[options.SessionID] = session
 	m.mu.Unlock()
 

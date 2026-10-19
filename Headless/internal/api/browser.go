@@ -14,12 +14,9 @@ type BrowserSession struct {
 	// ID is the Warren Session ID. A browser is a Session, not a parallel
 	// resource with a parallel ID space.
 	ID string `json:"id"`
-	// WorkspaceID and TerminalGroupID are mutually exclusive owners, exactly as
-	// they are for a Session.
-	WorkspaceID     string `json:"workspace,omitempty"`
-	TerminalGroupID string `json:"terminalGroup,omitempty"`
-	Scope           string `json:"scope,omitempty"`
-	Title           string `json:"title"`
+	// WorkspaceID is the owner, exactly as it is for a Session.
+	WorkspaceID string `json:"workspace,omitempty"`
+	Title       string `json:"title"`
 
 	// Executable is the resolved Chromium binary. Empty when Phase is
 	// unavailable.

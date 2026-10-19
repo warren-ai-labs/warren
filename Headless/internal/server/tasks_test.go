@@ -187,7 +187,7 @@ func TestRemoveTaskOnlyDetachesWorkspaces(t *testing.T) {
 	}
 	if err := service.Store.Update(func(state *api.State) error {
 		state.Sessions = append(state.Sessions, api.Session{
-			ID: "session-a", WorkspaceID: "workspace-a", Scope: "workspace", Lifecycle: "running", CreatedAt: time.Now().UTC(),
+			ID: "session-a", WorkspaceID: "workspace-a", Lifecycle: "running", CreatedAt: time.Now().UTC(),
 		})
 		return nil
 	}); err != nil {

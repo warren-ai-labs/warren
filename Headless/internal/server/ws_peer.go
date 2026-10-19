@@ -179,6 +179,33 @@ func (p *wsPeer) beginPendingSubscription(parent context.Context, sessionID stri
 	return subscriptionContext, finish
 }
 
+// beginIdlePendingSubscription is beginPendingSubscription for Host-initiated
+// re-anchoring: it reports false instead of cancelling a subscription already
+// in flight for sessionID.
+func (p *wsPeer) beginIdlePendingSubscription(parent context.Context, sessionID string) (context.Context, func(), bool) {
+	p.subscriptionMu.Lock()
+	if p.pendingSubscriptions[sessionID] != nil {
+		p.subscriptionMu.Unlock()
+		return nil, nil, false
+	}
+	subscriptionContext, cancel := context.WithCancel(parent)
+	pending := &pendingSubscription{cancel: cancel, done: make(chan struct{})}
+	if p.pendingSubscriptions == nil {
+		p.pendingSubscriptions = make(map[string]*pendingSubscription)
+	}
+	p.pendingSubscriptions[sessionID] = pending
+	p.subscriptionMu.Unlock()
+	finish := func() {
+		p.subscriptionMu.Lock()
+		if p.pendingSubscriptions[sessionID] == pending {
+			delete(p.pendingSubscriptions, sessionID)
+		}
+		pending.doneOnce.Do(func() { close(pending.done) })
+		p.subscriptionMu.Unlock()
+	}
+	return subscriptionContext, finish, true
+}
+
 // cancelPendingSubscription stops and joins an in-flight subscription before
 // the caller detaches its output stream. Joining is what makes unsubscribe a
 // usable lifecycle boundary for clients that switch sessions quickly.

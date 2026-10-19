@@ -35,8 +35,7 @@ const scopeOrder = {
   session: 1,
   workspace: 2,
   project: 3,
-  terminalGroup: 4,
-  tab: 5,
+  tab: 4,
 };
 
 const scopeLabels = {
@@ -44,7 +43,6 @@ const scopeLabels = {
   session: "Session",
   workspace: "Workspace",
   project: "Project",
-  terminalGroup: "Terminal Group",
   tab: "Tab",
 };
 
@@ -59,8 +57,6 @@ const scopeKeywords = {
   branch: "workspace",
   p: "project",
   project: "project",
-  g: "terminalGroup",
-  group: "terminalGroup",
   tab: "tab",
 };
 

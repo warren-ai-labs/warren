@@ -154,13 +154,13 @@ func TestBrowserRowsKeepsOnlyRunningBrowserSessions(t *testing.T) {
 func TestBrowserRowsFilterByScopeAndSearch(t *testing.T) {
 	state := api.State{Sessions: []api.Session{
 		{ID: "b-1", Kind: "browser", Lifecycle: "running", WorkspaceID: "w-1", Title: "Login flow"},
-		{ID: "b-2", Kind: "browser", Lifecycle: "running", TerminalGroupID: "g-1", CustomTitle: "Docs"},
+		{ID: "b-2", Kind: "browser", Lifecycle: "running", WorkspaceID: "w-2", CustomTitle: "Docs"},
 	}}
 	if rows := browserRows(state, map[string]any{"workspace": "w-1"}); len(rows) != 1 || rows[0].ID != "b-1" {
 		t.Fatalf("workspace filter rows = %+v, want b-1", rows)
 	}
-	if rows := browserRows(state, map[string]any{"group": "g-1"}); len(rows) != 1 || rows[0].ID != "b-2" {
-		t.Fatalf("group filter rows = %+v, want b-2", rows)
+	if rows := browserRows(state, map[string]any{"workspace": "w-2"}); len(rows) != 1 || rows[0].ID != "b-2" {
+		t.Fatalf("second workspace filter rows = %+v, want b-2", rows)
 	}
 	if rows := browserRows(state, map[string]any{"search": "docs"}); len(rows) != 1 || rows[0].ID != "b-2" {
 		t.Fatalf("search rows = %+v, want b-2 by custom title", rows)

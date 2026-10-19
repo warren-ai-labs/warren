@@ -54,7 +54,7 @@ func toolInputDetail(input any) string {
 	case string:
 		detail = strings.TrimSpace(value)
 	case map[string]any:
-		for _, key := range []string{"command", "cmd", "CommandLine", "code", "script", "path", "file_path", "filePath", "filepath", "AbsolutePath", "TargetFile", "file", "filename", "target", "query", "pattern", "url", "Url", "prompt", "instruction"} {
+		for _, key := range []string{"command", "cmd", "CommandLine", "code", "script", "path", "file_path", "filePath", "filepath", "AbsolutePath", "TargetFile", "file", "filename", "target", "query", "pattern", "url", "Url", "prompt", "instruction", "skill"} {
 			if candidate, ok := value[key].(string); ok && strings.TrimSpace(candidate) != "" {
 				detail = strings.TrimSpace(candidate)
 				break

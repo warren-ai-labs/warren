@@ -492,6 +492,30 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
         XCTAssertEqual(divider?.totalLength, 995)
     }
 
+    /// The view identity a pane renders under follows the Session, not the
+    /// Host-assigned pane id. Adopting the Host's arrangement replaces a pane's
+    /// local fallback identity with the one the Host assigned; keying the view
+    /// by the slot would re-create the terminal for that change alone, which
+    /// reads as a flash and a replay.
+    func testPaneRenderIdentityFollowsTheSessionNotThePaneID() {
+        let size = CGSize(width: 800, height: 400)
+        let fallback = SplitLayoutTree.leaf(
+            SplitPaneItem(id: "fallback-pane-a", tabID: "a")
+        )
+        let adopted = SplitLayoutTree.leaf(
+            SplitPaneItem(id: "host-pane-a", tabID: "a")
+        )
+
+        XCTAssertEqual(
+            fallback.placement(in: size).panes[0].renderID,
+            adopted.placement(in: size).panes[0].renderID
+        )
+        XCTAssertNotEqual(
+            fallback.placement(in: size).panes[0].id,
+            adopted.placement(in: size).panes[0].id
+        )
+    }
+
     func testVerticalPlacementSplitsAlongTheOtherAxis() {
         let tree = SplitLayoutTree.split(
             axis: .vertical,
@@ -675,12 +699,207 @@ final class WarrenDesktopSplitLayoutTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Hold and fold
+
+    /// Past a pane's minimum the divider holds and the drag becomes a pull,
+    /// measured in points from the stop. Inside the bounds there is no pull.
+    func testDividerPullMeasuresTheOvershootPastEitherMinimum() {
+        let total: CGFloat = 1_000
+        XCTAssertNil(
+            SplitLayoutTree.dividerPull(for: 0.5, totalLength: total, minimum: 0.26, maximum: 0.74)
+        )
+        XCTAssertNil(
+            SplitLayoutTree.dividerPull(for: 0.26, totalLength: total, minimum: 0.26, maximum: 0.74)
+        )
+
+        let held = SplitLayoutTree.dividerPull(for: 0.21, totalLength: total, minimum: 0.26, maximum: 0.74)
+        XCTAssertEqual(held?.side, .first)
+        XCTAssertEqual(held?.overshoot ?? 0, 50, accuracy: 0.001)
+        XCTAssertEqual(held?.reachesFold, false)
+
+        let folding = SplitLayoutTree.dividerPull(for: 0.84, totalLength: total, minimum: 0.26, maximum: 0.74)
+        XCTAssertEqual(folding?.side, .second)
+        XCTAssertEqual(folding?.overshoot ?? 0, 100, accuracy: 0.001)
+        XCTAssertEqual(folding?.reachesFold, true)
+
+        // A container that has not been laid out cannot be pulled.
+        XCTAssertNil(
+            SplitLayoutTree.dividerPull(for: 0.1, totalLength: 0, minimum: 0.26, maximum: 0.74)
+        )
+        XCTAssertNil(
+            SplitLayoutTree.dividerPull(for: .nan, totalLength: total, minimum: 0.26, maximum: 0.74)
+        )
+    }
+
+    /// Letting go folds only past the threshold, and only a side that holds a
+    /// single pane.
+    func testReleaseFoldsALeafOnlyPastTheThreshold() {
+        let threshold = SplitLayoutTree.foldOvershoot
+        let past = SplitDividerPull(side: .first, overshoot: threshold + 1)
+        let atThreshold = SplitDividerPull(side: .first, overshoot: threshold)
+
+        XCTAssertEqual(SplitLayoutTree.foldSide(releasing: past, foldable: [.first, .second]), .first)
+        XCTAssertNil(
+            SplitLayoutTree.foldSide(releasing: atThreshold, foldable: [.first, .second]),
+            "Reaching the threshold exactly still holds"
+        )
+        XCTAssertNil(
+            SplitLayoutTree.foldSide(releasing: past, foldable: [.second]),
+            "A subtree on the held side holds rather than folds"
+        )
+        XCTAssertNil(SplitLayoutTree.foldSide(releasing: nil, foldable: [.first, .second]))
+    }
+
+    /// A folded pane is drawn as a rail as thick as a pane header, its sibling
+    /// takes the rest, and the pane keeps the frame it would have had as the
+    /// place its terminal is parked. The ratio is untouched: folding is view
+    /// state, not a layout change.
+    func testFoldedPlacementDrawsARailAndParksThePane() {
+        let tree = SplitLayoutTree.split(
+            axis: .horizontal,
+            ratio: 0.5,
+            first: .leaf(SplitPaneItem(id: "pane-a", tabID: "a")),
+            second: .leaf(SplitPaneItem(id: "pane-b", tabID: "b"))
+        )
+        let size = CGSize(width: 1_000, height: 400)
+        let rail = SplitLayoutTree.foldedRailThickness
+
+        let second = tree.placement(in: size, foldedPaneID: "pane-b")
+        XCTAssertEqual(second.panes.map(\.id), ["pane-a", "pane-b"])
+        XCTAssertEqual(second.panes[0].frame, CGRect(x: 0, y: 0, width: 1_000 - 5 - rail, height: 400))
+        XCTAssertNil(second.panes[0].parkedFrame)
+        XCTAssertEqual(second.panes[1].frame, CGRect(x: 1_000 - rail, y: 0, width: rail, height: 400))
+        XCTAssertEqual(second.panes[1].parkedFrame, CGRect(x: 503, y: 0, width: 497, height: 400))
+        XCTAssertEqual(second.dividers.first?.foldedSide, .second)
+        XCTAssertEqual(second.dividers.first?.ratio, 0.5)
+
+        let first = tree.placement(in: size, foldedPaneID: "pane-a")
+        XCTAssertEqual(first.panes[0].frame, CGRect(x: 0, y: 0, width: rail, height: 400))
+        XCTAssertEqual(first.panes[0].parkedFrame, CGRect(x: 0, y: 0, width: 498, height: 400))
+        XCTAssertEqual(first.panes[1].frame, CGRect(x: rail + 5, y: 0, width: 1_000 - 5 - rail, height: 400))
+        XCTAssertEqual(first.dividers.first?.foldedSide, .first)
+
+        // The rail, the divider band, and the sibling still tile the container.
+        let area = second.panes.reduce(CGFloat.zero) { $0 + $1.frame.width * $1.frame.height }
+            + second.dividers.reduce(CGFloat.zero) { $0 + $1.frame.width * $1.frame.height }
+        XCTAssertEqual(area, size.width * size.height, accuracy: 0.01)
+    }
+
+    /// A nested pane folds within its own split, and a row split folds into a
+    /// header-high strip. Ancestors are laid out as they were.
+    func testFoldedPlacementFoldsANestedRowIntoAStrip() {
+        let tree = SplitLayoutTree.split(
+            axis: .horizontal,
+            ratio: 0.5,
+            first: .leaf(SplitPaneItem(id: "pane-a", tabID: "a")),
+            second: .split(
+                axis: .vertical,
+                ratio: 0.5,
+                first: .leaf(SplitPaneItem(id: "pane-b", tabID: "b")),
+                second: .leaf(SplitPaneItem(id: "pane-c", tabID: "c"))
+            )
+        )
+        let rail = SplitLayoutTree.foldedRailThickness
+        let placement = tree.placement(in: CGSize(width: 1_000, height: 400), foldedPaneID: "pane-b")
+
+        XCTAssertEqual(placement.panes.map(\.id), ["pane-a", "pane-b", "pane-c"])
+        XCTAssertEqual(placement.panes[0].frame, CGRect(x: 0, y: 0, width: 498, height: 400))
+        XCTAssertEqual(placement.panes[1].frame, CGRect(x: 503, y: 0, width: 497, height: rail))
+        XCTAssertEqual(placement.panes[1].parkedFrame, CGRect(x: 503, y: 0, width: 497, height: 198))
+        XCTAssertEqual(placement.panes[2].frame, CGRect(x: 503, y: rail + 5, width: 497, height: 400 - rail - 5))
+        XCTAssertEqual(placement.dividers.map(\.foldedSide), [nil, .first])
+    }
+
+    /// Only a leaf beside a divider folds. A pane that is not in the layout,
+    /// a lone pane, and a container too small for a rail and a sibling all lay
+    /// out unfolded.
+    func testFoldIsIgnoredWhereNoRailCanBeDrawn() {
+        let tree = SplitLayoutTree.split(
+            axis: .horizontal,
+            ratio: 0.5,
+            first: .leaf(SplitPaneItem(id: "pane-a", tabID: "a")),
+            second: .split(
+                axis: .vertical,
+                ratio: 0.5,
+                first: .leaf(SplitPaneItem(id: "pane-b", tabID: "b")),
+                second: .leaf(SplitPaneItem(id: "pane-c", tabID: "c"))
+            )
+        )
+        let size = CGSize(width: 1_000, height: 400)
+        XCTAssertTrue(tree.canFold(paneID: "pane-a"))
+        XCTAssertTrue(tree.canFold(paneID: "pane-c"))
+        XCTAssertFalse(tree.canFold(paneID: "missing"))
+        XCTAssertEqual(tree.placement(in: size, foldedPaneID: "missing"), tree.placement(in: size))
+
+        let lone = SplitLayoutTree.leaf(SplitPaneItem(id: "pane-a", tabID: "a"))
+        XCTAssertFalse(lone.canFold(paneID: "pane-a"))
+        XCTAssertNil(lone.placement(in: size, foldedPaneID: "pane-a").panes.first?.parkedFrame)
+
+        let cramped = CGSize(width: SplitLayoutTree.foldedRailThickness * 2, height: 400)
+        XCTAssertTrue(tree.placement(in: cramped, foldedPaneID: "pane-a").panes.allSatisfy { !$0.isFolded })
+
+        // The root divider can fold the single pane on its leading side, never
+        // the subtree on its trailing side.
+        let root = tree.placement(in: size).dividers[0]
+        XCTAssertEqual(root.foldableSides, [.first])
+        XCTAssertEqual(root.leafID(on: .first), "pane-a")
+        XCTAssertNil(root.leafID(on: .second))
+    }
+
+    func testPullIndicatorGrowsWithThePullAndStopsShort() {
+        XCTAssertEqual(WarrenDesktopSplitDivider.pullIndicatorLength(for: 0), 0)
+        XCTAssertEqual(WarrenDesktopSplitDivider.pullIndicatorLength(for: -10), 0)
+        XCTAssertEqual(WarrenDesktopSplitDivider.pullIndicatorLength(for: 40), 14, accuracy: 0.001)
+        XCTAssertEqual(WarrenDesktopSplitDivider.pullIndicatorLength(for: 1_000), 48)
+    }
 }
 
 /// Pane groups are Host state, so the projection carries them and answers the
 /// questions a renderer asks: which arrangements belong to this scope, which one
 /// shows a Session, and in what order.
 final class WarrenDesktopPaneGroupProjectionTests: XCTestCase {
+    private func projection() -> (WarrenDesktopProjection, TerminalSessionID) {
+        let hostID = HostID()
+        let workspaceID = WorkspaceID()
+        let sessionID = TerminalSessionID()
+        let value = WarrenDesktopProjection(
+            host: WarrenDomain.Host(id: hostID, name: "projection"),
+            projects: [],
+            workspaces: [
+                Workspace(id: workspaceID, projectID: ProjectID(), name: "main", path: "/tmp")
+            ],
+            sessions: [
+                WarrenDesktopSession(id: sessionID, workspaceID: workspaceID, title: "shell")
+            ],
+            tabs: [ClientTab(id: "tab", title: "shell", sessionID: sessionID)],
+            paneGroups: [
+                PaneGroup(
+                    id: PaneGroupID(),
+                    hostID: hostID,
+                    workspaceID: workspaceID,
+                    tree: .leaf(sessionID: sessionID)
+                )
+            ]
+        )
+        return (value, sessionID)
+    }
+
+    func testActivityUpdateKeepsPaneGroups() {
+        let (value, sessionID) = projection()
+        let updated = value.withSessionActivity(.working, for: sessionID)
+
+        XCTAssertEqual(updated.session(id: sessionID)?.activity, .working)
+        XCTAssertEqual(updated.paneGroups, value.paneGroups)
+    }
+
+    func testAcknowledgmentUpdateKeepsPaneGroups() {
+        let (value, sessionID) = projection()
+        let updated = value.withSessionAcknowledgedActivity(.working, for: sessionID)
+
+        XCTAssertEqual(updated.paneGroups, value.paneGroups)
+    }
+
     func testProjectionCarriesHostPaneGroupsInHostOrder() {
         let hostID = HostID()
         let workspaceID = WorkspaceID()

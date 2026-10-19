@@ -67,16 +67,14 @@ test("catalog keeps agent binding fields on sessions", () => {
   assert.deepEqual(session.agentTurn, { id: 2, status: "started" });
 });
 
-test("roster normalizes revision, terminal-group scope, and running sessions", () => {
+test("roster normalizes revision and running sessions", () => {
   const roster = rosterFromMessage({
     state: {
       revision: 7,
-      terminalGroups: [{ id: "group", name: "Inbox" }],
       sessions: [
         {
           id: "workspace-session",
           workspace: "workspace",
-          scope: "workspace",
           lifecycle: "running",
           kind: "shell",
         },
@@ -91,9 +89,9 @@ test("roster normalizes revision, terminal-group scope, and running sessions", (
   });
 
   assert.equal(roster.revision, 7);
-  assert.deepEqual(roster.terminalGroups, [{ id: "group", name: "Inbox" }]);
   assert.deepEqual(roster.tabs.map(tab => tab.session), ["workspace-session"]);
-  assert.equal(roster.tabs[0].scope, "workspace");
+  assert.equal(roster.tabs[0].workspace, "workspace");
+  assert.equal(Object.hasOwn(roster, "terminalGroups"), false);
 });
 
 test("roster delta applies entity changes and session lifecycle updates", () => {
@@ -103,7 +101,6 @@ test("roster delta applies entity changes and session lifecycle updates", () => 
       host: { id: "host", name: "before" },
       projects: [{ id: "project-a", name: "A" }, { id: "project-b", name: "B" }],
       workspaces: [{ id: "workspace-a", project: "project-a" }],
-      terminalGroups: [{ id: "group-a", name: "A" }],
       sessions: [
         { id: "session-a", workspace: "workspace-a", lifecycle: "running", kind: "shell" },
         { id: "session-b", workspace: "workspace-a", lifecycle: "running", kind: "shell" },
@@ -121,7 +118,6 @@ test("roster delta applies entity changes and session lifecycle updates", () => 
       upsert: [{ id: "workspace-b", project: "project-b" }],
       order: ["workspace-b", "workspace-a"],
     },
-    terminalGroups: { upsert: [{ id: "group-b", name: "B" }], remove: ["group-a"] },
     sessions: {
       upsert: [
         { id: "session-a", workspace: "workspace-a", lifecycle: "exited", kind: "shell" },
@@ -135,7 +131,6 @@ test("roster delta applies entity changes and session lifecycle updates", () => 
   assert.equal(updated.host.name, "after");
   assert.deepEqual(updated.projects.map(project => project.id), ["project-b", "project-a"]);
   assert.deepEqual(updated.workspaces.map(workspace => workspace.id), ["workspace-b", "workspace-a"]);
-  assert.deepEqual(updated.terminalGroups.map(group => group.id), ["group-b"]);
   assert.deepEqual(updated.tabs.map(tab => tab.session), ["session-c", "session-b"]);
   assert.equal(updated.tabs[0].workspace, "workspace-b");
 });

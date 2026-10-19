@@ -54,8 +54,38 @@ func TestNormalizeBoundsAndStripsWrappers(t *testing.T) {
 	if !strings.HasSuffix(got, "…") {
 		t.Fatalf("normalized title = %q, want ellipsis", got)
 	}
-	if len([]rune(got)) != maxTitle {
-		t.Fatalf("normalized rune count = %d, want %d", len([]rune(got)), maxTitle)
+	if width := displayWidth(got); width > maxTitleWidth {
+		t.Fatalf("normalized width = %d, want at most %d", width, maxTitleWidth)
+	}
+	if width := displayWidth(got); width < maxTitleWidth-1 {
+		t.Fatalf("normalized width = %d, want the budget used", width)
+	}
+}
+
+/// A CJK title and a latin one are held to the same row, so the budget counts
+/// width rather than runes.
+func TestNormalizeCountsWideCharactersAsTwoCells(t *testing.T) {
+	if got := Normalize(strings.Repeat("a", 30)); got != strings.Repeat("a", 30) {
+		t.Fatalf("latin title = %q, want it kept whole", got)
+	}
+	latin := Normalize(strings.Repeat("ab ", 20))
+	if width := displayWidth(latin); width > maxTitleWidth {
+		t.Fatalf("latin width = %d, want at most %d (%q)", width, maxTitleWidth, latin)
+	}
+	if strings.HasSuffix(latin, "b…") && !strings.HasSuffix(strings.TrimSuffix(latin, "…"), "ab") {
+		t.Fatalf("latin title = %q, want the cut on a word boundary", latin)
+	}
+	for _, word := range strings.Fields(strings.TrimSuffix(latin, "…")) {
+		if word != "ab" {
+			t.Fatalf("latin title = %q, want whole words", latin)
+		}
+	}
+	cjk := Normalize(strings.Repeat("长", 40))
+	if width := displayWidth(cjk); width > maxTitleWidth {
+		t.Fatalf("cjk width = %d, want at most %d", width, maxTitleWidth)
+	}
+	if runes := len([]rune(cjk)); runes > maxTitleWidth/2+1 {
+		t.Fatalf("cjk title = %q (%d runes), want about half the latin budget", cjk, runes)
 	}
 }
 

@@ -11,7 +11,7 @@ Warren is a development workbench that stays running on the user's own machine, 
 The macOS Desktop connects to a local `warren-headless` daemon by default, and can also connect to `warren-headless` running on a VPS or remote server. Users can switch between Local and Server to manage Tasks, Projects, Workspaces, Git worktrees, and Terminal Sessions on the target Host, with persistent terminal interaction through Ghostty. The CLI uses the same remote API and provides SSH bootstrap and port-forwarding entry points.
 
 Warren defines a clear three-surface client hierarchy:
-1. **macOS Desktop (Primary First-Class Surface)**: Native AppKit and SwiftUI components, keyboard-driven navigation, low-latency Ghostty terminal rendering, embedded workspace editor (`code-server`), and Raycast integration.
+1. **macOS Desktop (Primary First-Class Surface)**: Native AppKit and SwiftUI components, keyboard-driven navigation, low-latency Ghostty terminal rendering, embedded workspace editor (`code-server`), and `warren://` deep links for external launchers.
 2. **Web / PWA (Remote & Fallback Surface)**: Lightweight remote viewer, browser access, and execution control through the Relay Service under Public Access.
 3. **iOS Mobile (Native Companion)**: Companion mobile client in active development, distributed separately as a proprietary client.
 
@@ -20,7 +20,7 @@ Web reachability and Public Access are enabled explicitly by the user; neither t
 ## 2. First Principles
 
 1. Sessions belong to Hosts, Tabs belong to Windows, Runtimes belong to Sessions. An open Tab holds one Session; closing the Tab also ends that Session and its Runtime.
-2. Workspaces and Terminal Groups are the isolation boundaries for terminal Tabs; Workspaces remain the isolation boundary for Git-aware async commands.
+2. Workspaces are the isolation boundary for terminal Tabs and for Git-aware async commands.
 3. Ghostline v1 is the sole terminal Runtime; server-side PTY emulation via `libghostty-vt` provides deterministic output streaming and checkpoint recovery.
 4. In Warren, an open Tab corresponds to one Warren Terminal Session; closing a Tab explicitly terminates that Session's Runtime. Switching Workspaces or quitting the Client does not terminate Sessions retained in the Host layout.
 5. Only Close Tab or an explicit Terminate Session ends a Runtime; switching Workspaces, detaching, and quitting the Client never end a still-running Session.
@@ -42,11 +42,7 @@ Web reachability and Public Access are enabled explicitly by the user; neither t
 
 **Workspace**: a concrete, accessible local working directory under a Project, together with its Git context. The main checkout and worktrees are both Workspaces. A Workspace may additionally belong to one Task for cross-Project aggregation. A Workspace ID is stable identity; branch and path are mutable attributes.
 
-**Terminal Group**: Host-owned ordered container for standalone terminal Sessions that are not tied to a Project or Workspace. The first Group is the default destination for newly created standalone Sessions. A Group may define a default startup directory; otherwise the Host user's home directory is used.
-
-**Session Scope**: the single ownership context of a Terminal Session. A Scope is either a Workspace or a Terminal Group; a Session never belongs to both.
-
-**Terminal Session**: interactive terminal context on a Host. It belongs to exactly one Session Scope and is accessed through an open Tab; closing the Tab ends the Session. Sessions still running when the Client quits are kept by the Host and restored after restart.
+**Terminal Session**: interactive terminal context on a Host. It belongs to exactly one Workspace and is accessed through an open Tab; closing the Tab ends the Session. Sessions still running when the Client quits are kept by the Host and restored after restart.
 
 **Runtime Binding**: persistent mapping from a Terminal Session to its Ghostline PTY. The binding is recovery metadata, not a second terminal resource.
 
@@ -56,11 +52,9 @@ Web reachability and Public Access are enabled explicitly by the user; neither t
 
 **Client Instance**: one run of the app. It is invalidated when the app quits.
 
-**Client Window**: independent navigation and layout scope. Each Window independently stores its Active Session Context and Workspace or Terminal Group Views.
+**Client Window**: independent navigation and layout scope. Each Window independently stores its Active Session Context and Workspace Views.
 
 **Workspace View**: local presentation state a Window keeps for a Workspace, including ordered Tabs and the Active Tab.
-
-**Terminal Group View**: local presentation state a Window keeps for a Terminal Group, including ordered Tabs and the Active Tab.
 
 **Tab**: local entry in a Workspace View that points to a Terminal Session. In Warren, an open Tab corresponds to one Session; closing a Tab terminates that Session's Runtime. The same active Session is not opened twice within one Workspace View.
 
@@ -88,9 +82,6 @@ Selected Host
 │   └── Workspace
 │       └── Terminal Session
 │           └── Runtime Binding
-└── Terminal Group
-    └── Terminal Session
-        └── Runtime Binding
 
 Presentation Authority
 Device
@@ -98,7 +89,7 @@ Device
     └── Client Window
         ├── Active Workspace
         ├── Active Session Context
-        └── Workspace / Terminal Group Views
+        └── Workspace Views
             └── Tabs / Active Tab
 
 Connection Authority
@@ -110,11 +101,11 @@ Terminal Session
 
 | State | Single authority | Persisted |
 | :--- | :--- | :--- |
-| Tasks, Projects, Workspaces, Terminal Groups, Sessions | Host Store | Yes |
-| Task, Project, Workspace, and Terminal Group sidebar order | Host Store | Yes |
+| Tasks, Projects, Workspaces, Sessions | Host Store | Yes |
+| Task, Project, and Workspace sidebar order | Host Store | Yes |
 | Runtime Bindings, Session state | Host Store | Yes |
 | PTY output recovery position | Host Output Store | Yes |
-| Windows, Workspace / Terminal Group Views, Tabs | Client Layout Store | Yes, device-local |
+| Windows, Workspace Views, Tabs | Client Layout Store | Yes, device-local |
 | Attachments, Leases, Viewport Owners | Host in-memory state | No |
 | Agent status (activity plus human attention) | Host in-memory state | No |
 | Surfaces, focus, measured size | Renderer Coordinator | No |
@@ -126,23 +117,21 @@ Terminal Session
 2. A Task may aggregate Workspaces from any Project on the same Host but never changes their Project ownership.
 3. A Task's `source` and `externalID` are either both absent or both present; their pair is unique within a Host.
 4. Deleting a Task only detaches its Workspaces and never deletes Workspaces, Sessions, files, or Git worktrees.
-5. A Terminal Session belongs to exactly one Session Scope: a Workspace or a Terminal Group.
-6. A Tab belongs to exactly one Window's Workspace View or Terminal Group View and references only Sessions in that context.
+5. A Terminal Session belongs to exactly one Workspace.
+6. A Tab belongs to exactly one Window's Workspace View and references only Sessions in that Workspace.
 7. The top Tab bar shows only Tabs of the Active Session Context.
-8. Switching Workspaces or Terminal Groups must atomically switch Tabs, the Active Tab, and the Renderer Set.
+8. Switching Workspaces must atomically switch Tabs, the Active Tab, and the Renderer Set.
 9. A Window has exactly one Active Session Context; each context View has at most one Active Tab.
-10. Background Workspaces and Terminal Groups mount no Surfaces and send no input or resize.
+10. Background Workspaces mount no Surfaces and send no input or resize.
 11. A Session has at most one Input Lease and one Canonical Viewport Owner.
 12. Closing a Tab terminates its Runtime; it is not merely a detach. Ended Session records without a Tab can be retained for history and later cleanup.
-13. Adding a Project creates a Workspace; adding a Workspace or Terminal Group Tab-bar entry creates a Session.
-14. Creating a Session must carry a fixed Session Scope and Request ID; the same Request ID creates at most one Session.
+13. Adding a Project creates a Workspace; adding a Workspace Tab-bar entry creates a Session.
+14. Creating a Session must carry a fixed Workspace and Request ID; the same Request ID creates at most one Session.
 15. App initialization must not auto-create shell, Codex, or Claude Sessions.
-16. Selecting a Workspace with no Tabs may idempotently create its default Shell Tab; selecting an empty Terminal Group does not start a process until the user creates a Terminal.
+16. Selecting a Workspace with no Tabs may idempotently create its default Shell Tab.
 17. The app allows only one foreground Client Instance; repeated launches activate the existing instance and then exit.
 18. Quitting the app must end the Client process but must not kill created Runtime sessions (ghostline PTYs).
 19. Import must not modify Superset data, Git repositories, worktrees, or runtimes.
-20. A Host always has at least one Terminal Group when a standalone Session is created; the first ordered Group is the default.
-21. Deleting a Terminal Group must not silently terminate its running Sessions; Sessions must be moved to another Group or explicitly terminated.
 
 ## 6. Architecture and Module Boundaries
 
@@ -213,7 +202,7 @@ Default files under `~/.warren/`:
 
 `state.json` maintains:
 - Host identity and display name.
-- Tasks, Projects, Workspaces, Terminal Groups, and sidebar order.
+- Tasks, Projects, Workspaces, and sidebar order.
 - Terminal Sessions with output monotonic positions (`epoch`/`sequence`).
 - Runtime Bindings with Ghostline runtime identifiers and recovery metadata.
 - Import Receipts and idempotency receipts.
@@ -254,11 +243,11 @@ differs, and the output is screencast frames rather than PTY bytes.
 One Terminal Session maps to one Ghostline PTY. Runtime IDs are derived from Warren Session IDs, never from user titles or branch names.
 
 ```text
-CreateSession(sessionScope, launchSpec, requestID)
-→ validate Workspace or Terminal Group and request idempotency
+CreateSession(workspace, launchSpec, requestID)
+→ validate Workspace and request idempotency
 → subscribe to Runtime output
 → create the Ghostline PTY
-→ resolve Group home or Workspace path, set working directory, TERM, size, and shell environment
+→ resolve Workspace path, set working directory, TERM, size, and shell environment
 → start cursor output subscription
 → persist Session and Runtime Binding
 → return resource events
@@ -285,26 +274,49 @@ CreateSession(sessionScope, launchSpec, requestID)
 
 The information architecture organizes resources hierarchically:
 ```text
-Window
+Window (a dark backdrop; the sidebar, the tab row's capsules, and every pane are cards on it)
 ├── Sidebar
-│   ├── Terminal Groups (fixed height, scrolls internally)
+│   ├── Host row (the Host this window works on, its connection dot, search)
 │   ├── Tasks (aggregating Workspaces across Projects)
-│   └── Projects (Git repositories)
-│       └── Workspaces (main checkout & worktrees)
+│   ├── Projects (Git repositories; a Task's Workspaces are listed only under the Task;
+│   │   │         a hairline between projects; one worktree draws no row of its own;
+│   │   │         pinned first, then projects with an open Session in the order they
+│   │   │         became active, then one folded "N inactive projects" row listing the
+│   │   │         rest with their last activity; a project with no Session is its row alone)
+│   │   └── Workspaces (main checkout & worktrees, branch names in monospace with the
+│   │       │          type prefix dimmed and a long name cut in the middle; worktrees
+│   │       │          with Sessions keep their order, the rest fold into one
+│   │       │          "N idle worktrees" row with their last activity)
+│   │       └── Sessions (title, plus an activity line while there is one)
+│   ├── Other Hosts (one row each, a dot while a Session there needs someone)
+│   └── Bottom row (the notification bell in the corner: unread dot, struck
+│       through while muted, opening the notice center upward; the update
+│       badge beside it)
 └── Session Context Screen
-    ├── Top Bar & Trailing Controls (IDE, Endpoint, Public Access, Notifications, Settings)
-    ├── Context-scoped Tab Bar
-    ├── Preset Bar (Terminal / Editor modes, Agent activity indicators)
-    └── Active Workspace Content
+    ├── Tab Bar (one row: context-scoped tabs as pills in a capsule, split groups
+    │   as stacked badges, the "N waiting" approval pill when there is one, and
+    │   a trailing capsule with the notification bell while the sidebar is
+    │   hidden, the right sidebar's toggle, and a "+" menu holding the Session presets: Shell, then
+    │   AGENTS, then Browser, under a header naming the Workspace, with
+    │   Terminal and Chat on an ACP-capable row's hover)
+    └── Active Workspace Content (each pane a card with its own title row)
         ├── Terminal (Ghostty Native Surface)
         ├── Conversation (ACP Sessions; RFC 0023 §9)
         ├── Embedded Editor (code-server WebView)
         └── Browser (Chromium viewer, beside the Terminal)
 ```
 
+Outside the window, the current Host's Sessions an Agent has stopped for are
+counted on the Dock icon, and each new request posts one macOS notification
+while Warren is not the active app. The population is the approval tray's, the
+current Tab included. A notification is withdrawn once nobody is asking, on
+whichever client the request was answered, and an approval this client holds
+can be allowed or rejected from it through the tray's Host request. Muting the
+notice center silences the notifications; the badge has its own switch.
+
 ### 10.1 Embedded Editor (`code-server`)
 
-- Local-endpoint workspaces can toggle between Terminal and Editor from the top-right control.
+- Local-endpoint workspaces can toggle between Terminal and Editor from the top-right panels menu.
 - Terminal surface remains mounted behind Editor so mode switching preserves terminal grid, scrollback, and focus.
 - Starts a managed `code-server` process bound to a random loopback port on demand, isolated to `~/Library/Application Support/Warren/EmbeddedEditor`.
 - Uses Warren Ember dark palette, positions File Explorer on the right, and suppresses duplicate global chrome.
@@ -354,10 +366,10 @@ resource.
   is selected. Closing it takes the viewer off screen; the browser keeps running
   and stays reachable as an ordinary Tab.
 
-### 10.4 Raycast Integration
+### 10.4 Deep Links
 
-- Warren registers the `warren://terminal?group=Inbox` URI protocol and provides a dedicated Raycast extension and Script Command fallback.
-- External launchers can trigger immediate terminal opening without bringing up window chrome manually.
+- Warren registers the `warren://terminal` URI protocol. A link names a Project, Workspace, or Session by its current name or ID (`warren://terminal?project=Warren&workspace=main`), and Warren focuses that target against the live roster.
+- External launchers can focus a target without bringing up window chrome manually.
 
 ## 11. Web/PWA Interaction Design
 
@@ -372,7 +384,7 @@ The Web client mirrors the Desktop resource model:
 Appearance is per-surface, not global, and it is always client-local: it describes the screen in front of you, never the Host or the Sessions running on it.
 
 - **macOS Desktop**: ships both appearances. `WarrenColorTokens.resolved(for:)` answers the ambient color scheme with Ember (dark) or Ember Paper (light). Settings offers System, Light, and Dark; the default is Dark, because Warren shipped dark-only and a new preference should be discoverable rather than retroactive. The authority is `NSApplication.appearance`, not SwiftUI's `preferredColorScheme`: menus, scrollers, selection highlights, and the open/save panels read the AppKit appearance and never see a SwiftUI environment value, and only a `nil` override keeps following macOS through a mid-session change or its Auto schedule.
-- **macOS Desktop window material**: Opaque by default, with an opt-in Translucent Window setting under Appearance. Glass makes the window itself the material: a behind-window blur with one translucent coat of `background` drawn once at the root, every region (sidebar, top bar, tabs, panes, settings) painting nothing of its own, and anything raised (composer, cards, inputs, floating surfaces) taking the same Ember tone made denser. Floating surfaces add an in-window blur so the content under them cannot compete with their text. Reduce Transparency forces the window back to opaque whatever the preference says. The preference is off by default for the same reason the appearance default is Dark: a new look should be discoverable, not retroactive. The same switch also turns on the arrangement designed with it, which Reduce Transparency does not undo because it is layout rather than translucency: in a Conversation, everything waiting on the person stacks on the composer (a problem banner, the decision, the plan and the queued follow-ups, which can be edited or dropped there), the transcript scrolls beneath that stack, a sent message can be brought back into the composer, and a long message folds after eight lines.
+- **macOS Desktop window material**: Opaque by default, with an opt-in Translucent Window setting under Appearance. Glass makes the window itself the material: a behind-window blur with one translucent coat of `background` drawn once at the root, every region (sidebar, top bar, tabs, panes, settings) painting nothing of its own, and anything raised (composer, cards, inputs, floating surfaces) taking the same Ember tone made denser. Floating surfaces add an in-window blur so the content under them cannot compete with their text. Reduce Transparency forces the window back to opaque whatever the preference says. The preference is off by default for the same reason the appearance default is Dark: a new look should be discoverable, not retroactive. The switch changes material only, never layout: the Conversation's arrangement, where everything waiting on the person stacks on the composer (a problem banner, the decision, the plan and the queued follow-ups, which can be edited or dropped there), the transcript scrolls beneath that stack, a sent message can be brought back into the composer, and a long message folds after eight lines, is the same on an opaque window.
 - **Web/PWA**: dark only. `color-scheme: dark` is declared at `:root`, and there is no light branch.
 - **iOS**: follows the system appearance by default, with the same two palettes and the same three explicit modes. iOS owns its own design semantics in `IOSDesignTokens.swift` and does not consume the shared color tokens; the two files agree on the palette values, not on the code.
 

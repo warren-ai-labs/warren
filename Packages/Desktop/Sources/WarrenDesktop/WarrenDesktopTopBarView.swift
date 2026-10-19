@@ -7,6 +7,8 @@ struct WarrenDesktopTopBar: View {
     let hostName: String
     let isSidebarCollapsed: Bool
     let onToggleSidebar: () -> Void
+    var sidebarAttentionMark: WarrenActivityMark? = nil
+    var onSidebarButtonHover: ((Bool) -> Void)? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
@@ -24,8 +26,15 @@ struct WarrenDesktopTopBar: View {
                 systemImage: isSidebarCollapsed ? "sidebar.left" : "sidebar.leading",
                 label: isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar",
                 hint: isSidebarCollapsed ? "Show the project and workspace list" : "Hide the project and workspace list",
-                action: onToggleSidebar
+                action: onToggleSidebar,
+                shortcut: "⌘B"
             )
+            .overlay(alignment: .topTrailing) {
+                if isSidebarCollapsed, let sidebarAttentionMark {
+                    WarrenDesktopSidebarAttentionDot(mark: sidebarAttentionMark)
+                }
+            }
+            .onHover { onSidebarButtonHover?($0) }
 
             Text(hostName)
                 .font(WarrenTypography.chromeLabel)

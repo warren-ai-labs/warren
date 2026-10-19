@@ -211,8 +211,8 @@ func (handle *acpAgentHandle) createTerminal(params acp.CreateTerminalRequest) (
 	ctx, cancel := context.WithTimeout(context.Background(), acpTerminalCreateTimeout)
 	defer cancel()
 	created, err := handle.service.createSessionWith(ctx, sessionCreateRequest{
-		workspaceID: owner.WorkspaceID, groupID: owner.TerminalGroupID,
-		command: display, kind: "shell", title: clipACPText(display, acpTerminalTitleLimit),
+		workspaceID: owner.WorkspaceID,
+		command:     display, kind: "shell", title: clipACPText(display, acpTerminalTitleLimit),
 		processArgv: acpTerminalArgv(shell, command, params.Args), processDirectory: directory, processEnv: env,
 	})
 	if err != nil {

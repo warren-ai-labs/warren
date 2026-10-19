@@ -1,45 +1,7 @@
 import SwiftUI
 import WarrenDesignSystem
-
-struct WarrenDesktopNoticeButton: View {
-    let unreadCount: Int
-    let isPresented: Bool
-    let isMuted: Bool
-    let action: () -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let bellColor = isMuted
-            ? tokens.mutedForeground
-            : (isPresented
-                ? tokens.foreground
-                : (unreadCount > 0 ? tokens.highlight.opacity(0.78) : tokens.mutedForeground))
-        Button(action: action) {
-            Image(systemName: isMuted ? "bell.slash" : "bell")
-                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .regular))
-                .foregroundStyle(bellColor)
-                .accessibilityHidden(true)
-                .frame(width: 28, height: 28)
-        }
-        .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
-        .frame(width: 28, height: 28)
-        .contentShape(.rect)
-        .fixedSize(horizontal: true, vertical: false)
-        .focused($isFocused)
-        .foregroundStyle(bellColor)
-        .accessibilityLabel("Notifications")
-        .accessibilityValue(
-            isMuted
-                ? "Muted"
-                : (unreadCount > 0 ? "\(unreadCount) unread" : "No unread notifications")
-        )
-        .accessibilityHint("Show system messages and errors")
-    }
-}
+import WarrenDomain
+import WarrenObservation
 
 struct WarrenDesktopNoticeTitleActions: View {
     let unreadCount: Int
@@ -83,6 +45,7 @@ struct WarrenDesktopNoticePopover: View {
     let onMarkAllRead: () -> Void
     let onDismiss: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var selectedID: WarrenDesktopNotice.ID?
 
     private var selectedNotice: WarrenDesktopNotice? {
@@ -90,19 +53,27 @@ struct WarrenDesktopNoticePopover: View {
         return notices.first { $0.id == selectedID }
     }
 
+    /// Bare content: the window's menu layer owns the surface, so the panel
+    /// does not draw one of its own.
     var body: some View {
-        WarrenDesktopChromePopoverSurface(
-            title: selectedNotice == nil ? "Notifications" : "Notification details",
-            width: 360,
-            onDismiss: onDismiss,
-            titleTrailing: AnyView(
-                WarrenDesktopNoticeTitleActions(
-                    unreadCount: notices.filter(\.isUnread).count,
-                    isMuted: $isMuted,
-                    onMarkAllRead: onMarkAllRead
+        VStack(alignment: .leading, spacing: 0) {
+            if selectedNotice == nil {
+                WarrenDesktopMenuGroupHeader(title: "NOTIFICATIONS") {
+                    WarrenDesktopNoticeTitleActions(
+                        unreadCount: notices.filter(\.isUnread).count,
+                        isMuted: $isMuted,
+                        onMarkAllRead: onMarkAllRead
+                    )
+                }
+            } else {
+                WarrenDesktopMenuBackRow(
+                    title: "Notification",
+                    backLabel: "Back to notifications",
+                    onBack: { selectedID = nil }
                 )
-            )
-        ) {
+                WarrenDesktopMenuDivider()
+            }
+
             WarrenDesktopNoticeContent(
                 notices: notices,
                 selectedID: $selectedID,
@@ -147,6 +118,7 @@ struct WarrenDesktopNoticeContent: View {
 
     private var listView: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
         return Group {
             if notices.isEmpty {
                 VStack(spacing: WarrenSpacing.compact) {
@@ -171,13 +143,13 @@ struct WarrenDesktopNoticeContent: View {
                                 onRead(notice.id)
                                 selectedID = notice.id
                             } label: {
-                                HStack(alignment: .top, spacing: WarrenSpacing.compact) {
+                                HStack(alignment: .top, spacing: WarrenDesktopMenuMetrics.iconSpacing) {
                                     WarrenNoticeToneIcon(kind: notice.kind)
                                     VStack(alignment: .leading, spacing: 3) {
                                         HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.xs) {
                                             Text(notice.title)
-                                                .font(WarrenTypography.popoverItem)
-                                                .foregroundStyle(tokens.foreground)
+                                                .font(.system(size: 13))
+                                                .foregroundStyle(palette.rowText)
                                                 .lineLimit(1)
                                             if notice.isUnread {
                                                 Circle()
@@ -187,22 +159,22 @@ struct WarrenDesktopNoticeContent: View {
                                             }
                                             Spacer(minLength: 0)
                                             Text(relativeDate(notice.createdAt))
-                                                .font(WarrenTypography.popoverMeta)
-                                                .foregroundStyle(tokens.mutedForeground)
+                                                .font(.system(size: 11.5))
+                                                .foregroundStyle(palette.meta)
                                         }
                                         Text(notice.message)
-                                            .font(WarrenTypography.popoverMeta)
-                                            .foregroundStyle(tokens.mutedForeground)
+                                            .font(.system(size: 11.5))
+                                            .foregroundStyle(palette.meta)
                                             .lineLimit(2)
                                             .multilineTextAlignment(.leading)
                                     }
                                     Spacer(minLength: 0)
                                 }
-                                .padding(.horizontal, WarrenSpacing.standard)
-                                .padding(.vertical, WarrenSpacing.compact)
+                                .padding(.horizontal, WarrenDesktopMenuMetrics.rowHorizontalPadding)
+                                .padding(.vertical, 8)
                                 .contentShape(.rect)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(WarrenDesktopMenuRowStyle())
                             .accessibilityLabel(notice.title)
                             .accessibilityValue(notice.isUnread ? "Unread" : "Read")
                         }
@@ -216,16 +188,9 @@ struct WarrenDesktopNoticeContent: View {
     private func detailView(_ notice: WarrenDesktopNotice) -> some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
+            // The surrounding page's back row already leads home, so the
+            // detail opens on the notice's tone and age alone.
             HStack(spacing: WarrenSpacing.compact) {
-                Button {
-                    selectedID = nil
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .frame(width: 22, height: 22)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(tokens.mutedForeground)
-                .accessibilityLabel("Back to notifications")
                 WarrenNoticeToneIcon(kind: notice.kind)
                 Text(relativeDate(notice.createdAt))
                     .font(WarrenTypography.popoverMeta)
@@ -268,62 +233,163 @@ struct WarrenDesktopNoticeContent: View {
     }
 }
 
-/// More needs an independent selection state because the parent overflow menu
-/// does not otherwise own notice-detail navigation.
-struct WarrenDesktopNoticeInlineContent: View {
-    let notices: [WarrenDesktopNotice]
-    let onRead: (WarrenDesktopNotice.ID) -> Void
-    let onDismissNotice: (WarrenDesktopNotice.ID) -> Void
-    let onDismiss: () -> Void
-
-    @State private var selectedID: WarrenDesktopNotice.ID?
-
-    var body: some View {
-        WarrenDesktopNoticeContent(
-            notices: notices,
-            selectedID: $selectedID,
-            onRead: onRead,
-            onDismissNotice: onDismissNotice,
-            onDismiss: onDismiss
-        )
-        .onChange(of: notices) { current in
-            if let selectedID, !current.contains(where: { $0.id == selectedID }) {
-                self.selectedID = nil
-            }
-        }
-    }
-}
-
-private struct WarrenNoticeToneIcon: View {
+/// A notice's tone: a filled disc in the tone's colour with a small glyph
+/// knocked out of it. The toast, the list and the detail all draw this one
+/// mark, so a notice looks the same wherever it is met.
+struct WarrenNoticeToneIcon: View {
     let kind: WarrenDesktopNotice.Kind
+    var size: CGFloat = WarrenDesktopMenuMetrics.iconSize
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        Image(systemName: iconName)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(toneColor(tokens))
-            .frame(width: 18, height: 18)
+        Image(systemName: Self.glyph(of: kind))
+            .font(.system(size: size * 0.5, weight: .bold))
+            .foregroundStyle(tokens.background)
+            .frame(width: size, height: size)
+            .background(Self.tone(of: kind, tokens: tokens), in: Circle())
             .accessibilityHidden(true)
     }
 
-    private var iconName: String {
+    static func glyph(of kind: WarrenDesktopNotice.Kind) -> String {
         switch kind {
-        case .error: "xmark.octagon.fill"
-        case .warning: "exclamationmark.triangle.fill"
-        case .info: "info.circle.fill"
-        case .success: "checkmark.circle.fill"
+        case .error: "exclamationmark"
+        case .warning: "exclamationmark"
+        case .info: "info"
+        case .success: "checkmark"
         }
     }
 
-    private func toneColor(_ tokens: WarrenColorTokens) -> Color {
+    static func tone(of kind: WarrenDesktopNotice.Kind, tokens: WarrenColorTokens) -> Color {
         switch kind {
         case .error: tokens.destructive
         case .warning: tokens.warning
         case .info: tokens.info
         case .success: tokens.success
         }
+    }
+}
+
+/// The bell: the way into the notice center.
+///
+/// It sits at the sidebar's bottom-left corner, and in the top bar's trailing
+/// capsule while the sidebar is hidden, so it is always on screen. A dot on its shoulder says something is unread; muting
+/// swaps the glyph for the struck-through bell so the state reads without
+/// opening the panel. A notice that arrives while unmuted swings the bell
+/// once, which is the only motion it makes.
+struct WarrenDesktopNoticeBell: View {
+    let notices: [WarrenDesktopNotice]
+    @Binding var isPresented: Bool
+    let onRead: (WarrenDesktopNotice.ID) -> Void
+    let onDismissNotice: (WarrenDesktopNotice.ID) -> Void
+    let onMarkAllRead: () -> Void
+    /// Which way the notice center opens: up from the sidebar's foot, down
+    /// from the top bar.
+    var panelEdge: WarrenDesktopMenuEdge = .below
+
+    @AppStorage(WarrenPreferenceKey.noticeMuted)
+    private var isMuted = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.warrenMenuCenter) private var menuCenter: WarrenDesktopMenuCenter?
+    @State private var swing: Double = 0
+
+    static let panelWidth: CGFloat = 360
+
+    private var unreadCount: Int {
+        notices.filter(\.isUnread).count
+    }
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let label = accessibilityLabel
+        Button(action: toggle) {
+            Image(systemName: isMuted ? "bell.slash" : "bell")
+                .font(.system(size: 13, weight: .regular))
+                .rotationEffect(.degrees(swing), anchor: .top)
+                .frame(width: 28, height: WarrenLayoutMetrics.tabPillHeight)
+                .overlay(alignment: .topTrailing) {
+                    if unreadCount > 0 {
+                        Circle()
+                            .fill(isMuted ? tokens.mutedForeground : tokens.info)
+                            .frame(width: 6, height: 6)
+                            .padding(1.5)
+                            .background(Circle().fill(tokens.workbenchCardFill))
+                            .offset(x: -6, y: 5)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .contentShape(.rect)
+                .accessibilityHidden(true)
+        }
+        .buttonStyle(WarrenChromeButtonStyle())
+        .frame(width: 28, height: WarrenLayoutMetrics.tabPillHeight)
+        .background(
+            isPresented ? tokens.selectedTabPillFill : .clear,
+            in: RoundedRectangle(cornerRadius: WarrenLayoutMetrics.tabPillRadius, style: .continuous)
+        )
+        .foregroundStyle(isPresented ? tokens.foreground : tokens.mutedForeground)
+        .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: unreadCount > 0)
+        .warrenTooltip(isMuted ? "Notifications (muted)" : "Notifications")
+        .accessibilityLabel(label)
+        .accessibilityHint("Show notifications")
+        .warrenSemanticElement(
+            id: "notifications.bell",
+            role: .button,
+            label: label,
+            value: "\(unreadCount)",
+            isSelected: isPresented,
+            action: toggle
+        )
+        .warrenMenuPanel(
+            isPresented: $isPresented,
+            width: Self.panelWidth,
+            edge: panelEdge
+        ) {
+            WarrenDesktopNoticePopover(
+                notices: notices,
+                onRead: onRead,
+                onDismissNotice: onDismissNotice,
+                isMuted: $isMuted,
+                onMarkAllRead: onMarkAllRead,
+                onDismiss: dismiss
+            )
+        }
+        .onChange(of: unreadCount) { [oldCount = unreadCount] newCount in
+            guard newCount > oldCount, !isMuted, !reduceMotion else { return }
+            ring()
+        }
+    }
+
+    private var accessibilityLabel: String {
+        let base = isMuted ? "Notifications, muted" : "Notifications"
+        switch unreadCount {
+        case 0: return base
+        case 1: return "\(base), 1 unread"
+        default: return "\(base), \(unreadCount) unread"
+        }
+    }
+
+    private func toggle() {
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            isPresented.toggle()
+        }
+    }
+
+    private func dismiss() {
+        isPresented = false
+        menuCenter?.dismiss()
+    }
+
+    /// One damped swing about the bell's crown: out, back past centre, rest.
+    private func ring() {
+        let step = Animation.easeInOut(duration: 0.09)
+        withAnimation(step) { swing = 14 }
+        withAnimation(step.delay(0.09)) { swing = -10 }
+        withAnimation(step.delay(0.18)) { swing = 5 }
+        withAnimation(.easeOut(duration: 0.12).delay(0.27)) { swing = 0 }
     }
 }

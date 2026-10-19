@@ -108,6 +108,21 @@ final class WarrenConversationSurfaceTests: XCTestCase {
         window.orderOut(nil)
     }
 
+    func testTypedSendAnswersAQuestionButRejectsAPermission() {
+        XCTAssertEqual(
+            WarrenConversationDecisionReply.reply(kind: "question", typed: "Use the small fixture"),
+            .answer("Use the small fixture")
+        )
+        XCTAssertEqual(
+            WarrenConversationDecisionReply.reply(kind: "permission", typed: "No, target one test"),
+            .rejectThenPrompt("No, target one test")
+        )
+        XCTAssertEqual(
+            WarrenConversationDecisionReply.reply(kind: "confirmation", typed: "Not yet"),
+            .rejectThenPrompt("Not yet")
+        )
+    }
+
     @MainActor
     private func render(_ view: NSView, to path: String) async throws {
         view.layoutSubtreeIfNeeded()

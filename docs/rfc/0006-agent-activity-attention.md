@@ -145,7 +145,7 @@ client-local notification badge. It clears only when the Host observes a
 matching provider resolution, an explicit user answer/approval/cancel, a new
 turn that supersedes the request, or `SessionEnd`.
 
-Workspace and Terminal Group summaries reduce child statuses with the same
+Workspace summaries reduce child statuses with the same
 precedence. If several children are yellow, the summary keeps the highest
 priority reason and the number of affected Sessions remains available to the
 client. A client must not look only at the selected Tab.

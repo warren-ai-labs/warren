@@ -5,11 +5,21 @@ public struct WarrenHostProbe: Equatable, Sendable {
     public let message: String
     public let isFailure: Bool
     public let hostID: String?
+    /// True when the probe could not say either way: the route has no
+    /// health endpoint, or reaching it needs a connection Warren has not
+    /// opened. Such a Host is neither reachable nor failing.
+    public let isInconclusive: Bool
 
-    public init(message: String, isFailure: Bool = false, hostID: String? = nil) {
+    public init(
+        message: String,
+        isFailure: Bool = false,
+        hostID: String? = nil,
+        isInconclusive: Bool = false
+    ) {
         self.message = message
         self.isFailure = isFailure
         self.hostID = hostID
+        self.isInconclusive = isInconclusive && !isFailure
     }
 
     public static func check(
@@ -21,7 +31,7 @@ public struct WarrenHostProbe: Equatable, Sendable {
     ) async -> Self {
         guard !endpoint.isRelay, endpoint.ssh == nil,
               var url = URLComponents(string: endpoint.url) else {
-            return Self(message: "Health probe unavailable for this route")
+            return Self(message: "Health probe unavailable for this route", isInconclusive: true)
         }
         switch url.scheme?.lowercased() {
         case "ws": url.scheme = "http"

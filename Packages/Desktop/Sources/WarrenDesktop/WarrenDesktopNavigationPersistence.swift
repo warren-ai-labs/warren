@@ -6,14 +6,9 @@ import WarrenDomain
 /// been decoded, while callers still validate them against their domain type.
 public struct WarrenDesktopTabOrders: Codable, Hashable, Sendable {
     public var workspace: [String: [String]]
-    public var terminalGroup: [String: [String]]
 
-    public init(
-        workspace: [String: [String]] = [:],
-        terminalGroup: [String: [String]] = [:]
-    ) {
+    public init(workspace: [String: [String]] = [:]) {
         self.workspace = workspace
-        self.terminalGroup = terminalGroup
     }
 }
 
@@ -146,7 +141,7 @@ public enum WarrenDesktopNavigationPersistence {
             return WarrenDesktopTabOrders()
         }
         let legacy = restoreTabOrders(from: defaults)
-        guard !legacy.workspace.isEmpty || !legacy.terminalGroup.isEmpty else {
+        guard !legacy.workspace.isEmpty else {
             return legacy
         }
         values[scope] = legacy

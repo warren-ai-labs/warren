@@ -18,7 +18,6 @@ macOS Desktop ---+
 Web / PWA --------+-- Warren control protocol 4.0 --------> warren-headless
 CLI --------------+                                |
                                                    +-- Projects / Workspaces
-                                                   +-- Terminal Groups
                                                    +-- Terminal Sessions
                                                    +-- JSON Host Store
                                                    +-- Cursor Stream + Output Ring
@@ -41,12 +40,9 @@ Web, CLI, and remote behavior disagree.
 ```text
 Host
 +-- Project
-|   +-- Workspace
-|       +-- Terminal Session
-|           +-- Runtime Binding
-+-- Terminal Group
-    +-- Terminal Session
-        +-- Runtime Binding
+    +-- Workspace
+        +-- Terminal Session
+            +-- Runtime Binding
 ```
 
 - **Host** is one `warren-headless` daemon on a Mac or remote machine.
@@ -54,16 +50,15 @@ Host
   a terminal working directory.
 - **Workspace** is a concrete working directory. The main checkout and Git
   worktrees are both Workspaces.
-- **Terminal Group** owns standalone Sessions that are not attached to a
-  Project or Workspace.
-- **Terminal Session** is Warren's durable terminal resource.
+- **Terminal Session** is Warren's durable terminal resource. Every Session
+  belongs to exactly one Workspace.
 - **Runtime Binding** maps the Warren Session to a concrete Ghostline PTY.
 
 ### 2.2 Client-owned presentation
 
 ```text
 Client Window
-+-- Active Workspace or Terminal Group
++-- Active Workspace
 +-- Context-scoped Tabs
 +-- Active Tab
 +-- Renderer Surface
@@ -79,7 +74,7 @@ The intended authority table is:
 
 | State | Authority | Persistence |
 | --- | --- | --- |
-| Projects, Workspaces, Groups, Sessions | Host Store | Host-local |
+| Projects, Workspaces, Sessions | Host Store | Host-local |
 | Runtime binding and Session lifecycle | Host Store | Host-local |
 | PTY output and recovery cursor | Host Output Store | Host-local |
 | Window navigation and Tabs | Client | Device-local |
@@ -96,7 +91,6 @@ The current source contains implementations for:
 
 - local and remote Git Project registration;
 - main-checkout and Git-worktree Workspaces;
-- standalone Terminal Groups;
 - Shell, Claude, Codex, OpenCode, and custom-command Sessions;
 - Ghostline Runtime adapter;
 - a macOS Ghostty terminal client;
@@ -268,12 +262,12 @@ The production macOS application sends a WebSocket request similar to:
 
 ### 7.2 Host creation
 
-`Headless/internal/server/http.go` selects a Workspace, Terminal Group, or the
-default Group, then calls `Service.createSession`.
+`Headless/internal/server/http.go` resolves the required Workspace, then calls
+`Service.createSession`.
 
 The service:
 
-1. validates that exactly one Session Scope exists;
+1. validates that the Workspace exists;
 2. resolves the working directory;
 3. generates a Warren Session ID and opaque runtime name;
 4. derives a title and Session kind;
@@ -453,9 +447,6 @@ The Web token is read from the URL fragment and persisted in browser local
 storage. PWA offline behavior caches the application shell but does not fake
 Host resources or Session availability.
 
-The current Web catalog remains primarily Workspace-based and does not fully
-project Terminal Groups.
-
 ### 10.3 Relay route reachability
 
 The daemon maintains one outbound Relay connector. Relay routes expose the
@@ -567,13 +558,7 @@ The Swift launch value contains an optional Request ID, but the production
 macOS `session.create` request does not send it and the Go creation path does
 not store a request receipt.
 
-### 12.2 Swift Session scope
-
-The legacy Swift `WarrenDomain.TerminalSession` is Workspace-scoped. Full
-Workspace-or-Terminal-Group ownership is represented in the Go API and the
-Desktop remote projection, not yet consistently in the base Swift model.
-
-### 12.3 shared remote client boundary
+### 12.2 shared remote client boundary
 
 Swift Protocol, ClientCore, and Transport packages now provide the production
 remote transport boundary. `WarrenRemoteApplicationModel` owns application
@@ -584,37 +569,32 @@ New protocol work must extend the shared client and its contract tests. A
 second client-side wire actor or a direct WebSocket path is not a supported
 extension point.
 
-### 12.4 explicit deletion and ended history
+### 12.3 explicit deletion and ended history
 
 The design describes ending a Session and retaining an ended record. Current
 explicit `session.delete` kills the Runtime and filters the Session from the
 Store. Ended records can still arise from runtime reconciliation, but explicit
 Tab close does not implement the full documented history model.
 
-### 12.5 daemon listen documentation
+### 12.4 daemon listen documentation
 
 Some architecture text describes a loopback default, while the current daemon
 flag defaults to `0.0.0.0:8789` and separately serves LAN HTTPS on 8788.
 Bearer-token authentication protects state and WebSocket access, but the
 plain HTTP listener must not be exposed directly to the public Internet.
 
-### 12.6 fixed launch delay
+### 12.5 fixed launch delay
 
 Both Runtime adapters use a fixed 400 ms delay before entering a preset
 command into the login shell. This conflicts with the design goal of a
 reliable launch mechanism that does not depend on timing.
 
-### 12.7 Web Terminal Groups
-
-The Go and macOS models support Terminal Groups, but the current Web catalog
-and navigation remain Workspace-centric.
-
-### 12.8 Relay connector
+### 12.6 Relay connector
 
 The Relay server and Relay-aware Web path exist, but the Host outbound
 connector is not present in the located source path.
 
-### 12.9 large application models
+### 12.7 large application models
 
 `Sources/Warren/WarrenRemoteApplicationModel.swift` and `Web/src/App.jsx`
 both combine several responsibilities and are now large. Personal features
@@ -873,7 +853,7 @@ path before studying client presentation details.
 - HTTP routes and authorization: `Headless/internal/server/http.go`
 - WebSocket peer, queues, and command dispatch: `Headless/internal/server/ws_peer.go`, `ws_dispatch.go`, `ws_agent_commands.go`
 - Service core and lifecycle: `Headless/internal/server/service.go`
-- Resources: `projects.go`, `workspaces.go`, `terminal_groups.go`, `sessions.go`, `roster.go` in `Headless/internal/server/`
+- Resources: `projects.go`, `workspaces.go`, `sessions.go`, `roster.go` in `Headless/internal/server/`
 - Terminal output and peers: `output_cursor.go`, `output_broadcast.go`, `peer_control.go`, `runtime_resize.go` in `Headless/internal/server/`
 - Agent service: `agent_session.go`, `agent_events.go`, `agent_history.go`, `agent_interaction.go`, `agent_state.go` in `Headless/internal/server/`
 - Atomic Host Store: `Headless/internal/store/store.go`

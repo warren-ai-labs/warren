@@ -335,7 +335,6 @@ Consequences:
 - A code-server startup failure still leaves the marker visible, with a
   warning affordance rather than silently filtering the Workspace out.
 - An unmarked Workspace with no running Session remains hidden by the filter.
-- Terminal Groups keep their existing Session-based active rule.
 
 The editor state is an overlay on the Desktop sidebar projection. It does not
 change Host roster ordering or create a fake Warren Session/Tab.

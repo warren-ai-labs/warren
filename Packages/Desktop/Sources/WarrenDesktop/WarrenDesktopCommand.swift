@@ -1,4 +1,5 @@
 import Foundation
+import WarrenDomain
 
 /// Cross-process (within the app) command names used by the AppKit menu. The
 /// Desktop shell observes these so the host executable can own the menu while
@@ -23,6 +24,10 @@ public enum WarrenDesktopCommand {
     public static let settingsDismissed = Notification.Name("WarrenDesktopCommand.settingsDismissed")
     /// Posted to switch the active workspace to Embedded Editor mode.
     public static let openEmbeddedEditor = Notification.Name("WarrenDesktopCommand.openEmbeddedEditor")
+    /// Posted with a `WarrenDesktopReviewFileRequest` to show one changed
+    /// file's diff on the right sidebar's Changes page. The Conversation pane
+    /// raises it when a changed-file card is clicked.
+    public static let reviewFile = Notification.Name("WarrenDesktopCommand.reviewFile")
 
     // Split screen commands (Emacs C-x 2, C-x 3, C-x 0, C-x 1, C-x o)
     public static let splitBelow = Notification.Name("WarrenDesktopCommand.splitBelow")
@@ -35,4 +40,15 @@ public enum WarrenDesktopCommand {
     /// only one is rendered at a time.
     public static let nextPaneGroup = Notification.Name("WarrenDesktopCommand.nextPaneGroup")
     public static let previousPaneGroup = Notification.Name("WarrenDesktopCommand.previousPaneGroup")
+}
+
+/// The payload of `WarrenDesktopCommand.reviewFile`.
+public struct WarrenDesktopReviewFileRequest: Hashable, Sendable {
+    public let workspaceID: WorkspaceID
+    public let path: String
+
+    public init(workspaceID: WorkspaceID, path: String) {
+        self.workspaceID = workspaceID
+        self.path = path
+    }
 }

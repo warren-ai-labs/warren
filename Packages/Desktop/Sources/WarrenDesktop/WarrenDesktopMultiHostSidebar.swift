@@ -38,8 +38,8 @@ public enum WarrenDesktopSidebarResourceSelection: Hashable, Sendable {
 /// The value projection for one endpoint in the aggregated sidebar.
 ///
 /// Projects and Workspaces are the primary rows here. Live Agent session
-/// metadata is carried only for the rich child rows; Tasks, terminal groups,
-/// and the foreground terminal remain owned by the selected endpoint in the
+/// metadata is carried only for the rich child rows; Tasks and the foreground
+/// terminal remain owned by the selected endpoint in the
 /// existing single-host projection.
 public struct WarrenDesktopSidebarHostProjection: Identifiable, Hashable, Sendable {
     public let endpointID: String
@@ -153,8 +153,6 @@ public struct WarrenDesktopSidebarProjection: Equatable, Sendable {
         self.currentEndpointID = currentEndpointID
     }
 
-    public var isMultiHost: Bool { hosts.count > 1 }
-
     public func host(for endpointID: String) -> WarrenDesktopSidebarHostProjection? {
         hosts.first { $0.endpointID == endpointID }
     }
@@ -175,45 +173,34 @@ public struct WarrenDesktopSidebarProjection: Equatable, Sendable {
     }
 }
 
-/// Stable presentation-only Host tint assignment.
+/// Stable presentation-only Host hue assignment.
 ///
 /// The assignment is keyed by endpoint alias, never by array position. The
-/// palette is intentionally low-saturation and is applied by the sidebar as a
-/// plate behind the Host's subtree; it is not persisted in the endpoint
-/// catalog.
+/// palette is intentionally low-saturation and is drawn by the sidebar only in
+/// the foreground — the Host heading's tile, name and rules — so it is not
+/// persisted in the endpoint catalog and never becomes a fill behind rows.
 public enum WarrenDesktopHostTint {
-    /// The plate's wash over the sidebar surface.
-    ///
-    /// A 4% wash resolved to a few units of 255 and did not read as a grouping,
-    /// and a thin leading rule identified the Host without bounding it: two
-    /// adjacent Hosts still read as one list. These values are the lowest that
-    /// separate neighbouring plates at a glance while leaving every tier of row
-    /// text, the selection fill, and the activity marks above their resting
-    /// contrast. Ember needs the larger fraction: its identity hues sit much
-    /// closer to the near-black ground than Paper's sit to the off-white one,
-    /// so the same fraction moves the surface by fewer units.
-    public static func plateOpacity(for colorScheme: ColorScheme) -> Double {
-        colorScheme == .dark ? 0.14 : 0.10
-    }
-
-    /// The plate's outline, which keeps its edge crisp where two plates meet.
-    public static func plateStrokeOpacity(for colorScheme: ColorScheme) -> Double {
-        colorScheme == .dark ? 0.22 : 0.20
-    }
-
-    /// Horizontal inset from the rail edges. Rows inset their own selection
-    /// fill by `WarrenSpacing.compact`, so a smaller plate inset keeps a
-    /// visible band of plate around a selected row instead of touching it.
-    public static let plateInset: CGFloat = WarrenSpacing.xs
-    public static let plateRadius: CGFloat = WarrenRadius.medium
-
-    public static func color(
+    /// The pale foreground hue a Host heading draws its tile, name and rules
+    /// with. Resolved from the same stable hash as the slot allocator, so an
+    /// unallocated Host still keeps one identity across launches.
+    public static func foregroundColor(
         for endpointID: String,
         tokens: WarrenColorTokens
     ) -> Color {
-        let palette = tokens.hostSectionTints
-        guard !palette.isEmpty else { return .clear }
+        let palette = tokens.hostForegroundTints
+        guard !palette.isEmpty else { return tokens.mutedForeground }
         return palette[index(for: endpointID, count: palette.count)]
+    }
+
+    /// The foreground hue for a slot the allocator has already reserved, so a
+    /// visible roster draws distinct hues instead of two hashing to one.
+    public static func foregroundColor(
+        slot: Int,
+        tokens: WarrenColorTokens
+    ) -> Color {
+        let palette = tokens.hostForegroundTints
+        guard palette.indices.contains(slot) else { return tokens.mutedForeground }
+        return palette[slot]
     }
 
     /// Resolves palette collisions for one visible sidebar roster. Sorting the
@@ -228,7 +215,7 @@ public enum WarrenDesktopHostTint {
     }
 
     /// Allocates new aliases without changing slots already assigned to a
-    /// visible alias. This keeps a Host's wash stable when the CLI adds an
+    /// visible alias. This keeps a Host's hue stable when the CLI adds an
     /// alias whose hash collides with an existing one.
     public static func indices(
         for endpointIDs: [String],
@@ -253,18 +240,6 @@ public enum WarrenDesktopHostTint {
             result[endpointID] = candidate
         }
         return result
-    }
-
-    public static func color(
-        for endpointID: String,
-        among endpointIDs: [String],
-        tokens: WarrenColorTokens
-    ) -> Color {
-        let palette = tokens.hostSectionTints
-        guard !palette.isEmpty else { return .clear }
-        let assignments = indices(for: endpointIDs, count: palette.count)
-        let slot = assignments[endpointID] ?? index(for: endpointID, count: palette.count)
-        return palette[slot]
     }
 
     public static func index(for endpointID: String, count: Int) -> Int {

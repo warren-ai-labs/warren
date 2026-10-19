@@ -169,6 +169,25 @@ func (p *wsPeer) detach() {
 	}
 }
 
+// detachIfAttachedTo is detach when the terminal attachment is sessionID,
+// checked and cleared atomically. Unlike detachIfAttached, an Agent-only lease
+// on sessionID without an attachment is kept.
+func (p *wsPeer) detachIfAttachedTo(sessionID string) {
+	p.enqueueMu.Lock()
+	if p.attached == nil || p.attached.ID != sessionID {
+		p.enqueueMu.Unlock()
+		return
+	}
+	controlSessionID := p.controlSession
+	p.attached = nil
+	p.controlSession = ""
+	p.enqueueMu.Unlock()
+	p.server.Service.detachPeer(p, sessionID)
+	if controlSessionID != "" && p.server != nil && p.server.Service != nil {
+		p.server.Service.releaseControlPeer(p, controlSessionID)
+	}
+}
+
 // detachIfAttached releases the control lease only when it still belongs to
 // the requested session. Slow lifecycle mutations run concurrently with
 // attach/focus requests, so a separate check followed by detach could remove

@@ -95,17 +95,23 @@ page_url="file://$work/page.html"
 
 # ---------------------------------------------------------------- scope
 
-# A terminal group rather than a workspace: the browser runtime is scoped like a
-# shell is, and a group needs no repository, which keeps this script runnable
-# from a checkout with no network.
-step "Creating a terminal group"
-group_id="$("${warren[@]}" -q terminal-group create --name browser-smoke)"
-[[ -n "$group_id" ]] || fail "terminal-group create returned no ID"
+# A throwaway local repository: every Session belongs to a Workspace, and a
+# Project added from a local path brings its root Workspace with it, so this
+# script stays runnable from a checkout with no network.
+step "Creating a workspace"
+repository="$work/repository"
+git init -q "$repository"
+git -C "$repository" -c user.name=warren -c user.email=smoke@warren.invalid \
+  commit -q --allow-empty -m "browser smoke"
+project_id="$("${warren[@]}" -q project add "$repository")"
+[[ -n "$project_id" ]] || fail "project add returned no ID"
+workspace_id="$("${warren[@]}" -q workspace list "$project_id" | head -n 1)"
+[[ -n "$workspace_id" ]] || fail "project add created no root workspace"
 
 # ---------------------------------------------------------------- session
 
 step "Creating a browser session"
-session_json="$("${warren[@]}" browser create --group "$group_id" --url "$page_url" --headless)"
+session_json="$("${warren[@]}" browser create --workspace "$workspace_id" --url "$page_url" --headless)"
 session_id="$(printf '%s' "$session_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 [[ -n "$session_id" ]] || fail "browser create returned no ID"
 echo "session: $session_id"
@@ -202,7 +208,7 @@ step "close"
 "${warren[@]}" browser close "$session_id" > /dev/null
 
 step "session is gone from the roster"
-if "${warren[@]}" -q browser list --group "$group_id" | grep -q "$session_id"; then
+if "${warren[@]}" -q browser list --workspace "$workspace_id" | grep -q "$session_id"; then
   fail "closed browser still listed"
 fi
 echo "browser list is empty"

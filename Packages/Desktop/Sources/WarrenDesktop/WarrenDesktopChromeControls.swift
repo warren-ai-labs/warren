@@ -7,10 +7,8 @@ struct WarrenDesktopChromeButton: View {
     let hint: String
     let action: () -> Void
     var tint: Color? = nil
-    // Kept source-compatible with older callers while every action now uses
-    // the same fixed slot. Equal slots keep icon baselines and gaps stable
-    // across SF Symbols with different intrinsic widths.
-    var edgeSpaced: Bool = false
+    /// Shown beside the label in the tooltip, e.g. `"⌥⌘B"`.
+    var shortcut: String? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
@@ -29,25 +27,9 @@ struct WarrenDesktopChromeButton: View {
         .fixedSize(horizontal: true, vertical: false)
         .focused($isFocused)
         .foregroundStyle(tint ?? tokens.mutedForeground)
+        .warrenTooltip(label, shortcut: shortcut)
         .accessibilityLabel(label)
         .accessibilityHint(hint)
-    }
-}
-
-struct WarrenDesktopOfflineBadge: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-
-    var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        Text("Offline")
-            .font(WarrenTypography.navigationMeta)
-            .foregroundStyle(tokens.mutedForeground)
-            .padding(.horizontal, WarrenSpacing.compact)
-            .padding(.vertical, WarrenSpacing.xs)
-            .background(tokens.muted)
-            .clipShape(.rect(cornerRadius: WarrenRadius.small))
-            .accessibilityLabel("Offline")
     }
 }
 

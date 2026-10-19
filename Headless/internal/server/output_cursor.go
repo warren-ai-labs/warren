@@ -33,6 +33,8 @@ type peerOutputStream struct {
 	reader CursorOutputReader
 	cancel context.CancelFunc
 	done   chan struct{}
+	// flow is set when the peer negotiated output-ack-v1.
+	flow *outputFlow
 }
 
 // ensureOutput adopts a running Session. Ghostline v1 opens one caller-owned
@@ -270,6 +272,9 @@ func (s *Service) startPeerCursorOutput(
 		cancel: cancel,
 		done:   make(chan struct{}),
 	}
+	if peer.supportsCapability(api.CapabilityOutputAck) {
+		stream.flow = newOutputFlow(epoch, sequence)
+	}
 	s.outputMu.Lock()
 	streams := s.peerOutputs[peer]
 	current, reserved := streams[session.ID]
@@ -296,17 +301,46 @@ func (s *Service) readPeerCursorOutput(
 ) {
 	defer close(stream.done)
 	buffer := make([]byte, 64*1024)
+	flow := stream.flow
 	for {
+		if flow != nil {
+			blocked, allowed, ok := flow.waitForRoom(readerContext)
+			if !ok {
+				return
+			}
+			if flow.shouldSkip(blocked, allowed, time.Now()) {
+				// The client fell behind; what Ghostline still holds is output
+				// it would only scroll past. Hand the subscription a fresh state.
+				go s.skipPeerOutputBacklog(peer, sessionID, stream)
+				return
+			}
+		}
 		count, readErr := reader.Read(buffer)
 		if count > 0 {
 			payload := append([]byte(nil), buffer[:count]...)
 			encoded, encodeErr := output.EncodeOutput(sessionID, epoch, sequence, payload)
-			if encodeErr != nil || !peer.enqueueBinary(encoded) {
+			if encodeErr != nil {
 				return
 			}
 			sequence += uint64(count)
+			// Record before enqueueing: on a fast link the client can ack these
+			// bytes before enqueueBinary returns, and an ack beyond what was
+			// recorded as sent is ignored. Losing the ack that frees a full
+			// window would leave the reader waiting forever.
+			if flow != nil {
+				flow.recordSent(sequence, time.Now())
+			}
+			if !peer.enqueueBinary(encoded) {
+				return
+			}
 		}
 		if readErr != nil {
+			if flow != nil && errors.Is(readErr, ghostline.ErrCursorExpired) && readerContext.Err() == nil {
+				// A paused reader can outlive Ghostline's retention. The client
+				// only needs the current screen, not the pruned bytes.
+				go s.skipPeerOutputBacklog(peer, sessionID, stream)
+				return
+			}
 			// Runtime teardown can close a reader before Service.stopOutput gets
 			// to detach the peer (session.delete and workspace cleanup both kill
 			// the runtime first). io.ErrClosedPipe is therefore a normal reader

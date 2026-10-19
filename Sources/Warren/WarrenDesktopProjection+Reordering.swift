@@ -11,9 +11,7 @@ extension WarrenDesktopProjection {
         let tabsByID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         var orderedTabs = orderedIDs.compactMap { tabsByID[$0] }.makeIterator()
         let reorderedTabs = tabs.map { tab in
-            let sameScope = tabWorkspaceIDs[tab.id] != nil
-                ? tabWorkspaceIDs[tab.id] == tabWorkspaceIDs[tabID]
-                : tabTerminalGroupIDs[tab.id] == tabTerminalGroupIDs[tabID]
+            let sameScope = tabWorkspaceIDs[tab.id] == tabWorkspaceIDs[tabID]
             return sameScope ? (orderedTabs.next() ?? tab) : tab
         }
         return Self(
@@ -25,9 +23,6 @@ extension WarrenDesktopProjection {
             sessionWorkspaceIDs: sessionWorkspaceIDs,
             tabWorkspaceIDs: tabWorkspaceIDs,
             connectionState: connectionState,
-            terminalGroups: terminalGroups,
-            sessionTerminalGroupIDs: sessionTerminalGroupIDs,
-            tabTerminalGroupIDs: tabTerminalGroupIDs,
             paneGroups: paneGroups,
             unreadNoticeCount: unreadNoticeCount
         )
@@ -44,9 +39,6 @@ extension WarrenDesktopProjection {
             sessionWorkspaceIDs: sessionWorkspaceIDs,
             tabWorkspaceIDs: tabWorkspaceIDs,
             connectionState: state,
-            terminalGroups: terminalGroups,
-            sessionTerminalGroupIDs: sessionTerminalGroupIDs,
-            tabTerminalGroupIDs: tabTerminalGroupIDs,
             paneGroups: paneGroups,
             unreadNoticeCount: unreadNoticeCount
         )

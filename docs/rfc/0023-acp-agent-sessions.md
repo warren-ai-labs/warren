@@ -245,7 +245,10 @@ directory, exactly as a TUI Session's shell would see the world:
 
 `--command` (CLI) or the request's `command` overrides the default and is
 validated with the same rule as TUI commands: no shell operators, no command
-substitution. Warren does not download adapters on the user's behalf. When the
+substitution. A Host may also record a per-provider default in `acpCommands`
+(`~/.warren/settings.json`), so Desktop's Chat preset, Web, iOS, and
+`warren agent create` without `--command` all launch the same ACP server; an
+explicit request `command` still wins. Warren does not download adapters on the user's behalf. When the
 default executable is not on the login shell's `PATH`, creation fails with a
 message that names the package to install. An implicit `npx -y` would run
 network-fetched code the user did not choose.

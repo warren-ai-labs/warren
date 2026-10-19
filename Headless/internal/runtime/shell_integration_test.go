@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -78,4 +80,60 @@ func TestSetEnvironmentReplacesEveryDuplicate(t *testing.T) {
 	if len(env) != 2 || env[0] != "A=4" || env[1] != "B=2" {
 		t.Fatalf("setEnvironment = %#v", env)
 	}
+}
+
+// The integration scripts must emit every OSC 133 marker ghostline reads, and
+// must guard against a user prompt that already emits them.
+func TestShellIntegrationScriptsEmitOSC133(t *testing.T) {
+	scripts := map[string]string{
+		"zsh":  readEmbedded(t, "shellintegration/zsh/.zshenv"),
+		"fish": readEmbedded(t, "shellintegration/fish/vendor_conf.d/warren.fish"),
+	}
+	for name, script := range scripts {
+		for _, marker := range []string{"133;A", "133;B", "133;C", "133;D"} {
+			if !strings.Contains(script, marker) {
+				t.Errorf("%s integration does not emit %s", name, marker)
+			}
+		}
+		if !strings.Contains(script, "133;") {
+			t.Errorf("%s integration has no duplicate-marker guard", name)
+		}
+	}
+}
+
+// The scripts are real shell code. Parse-check them with their own shell when
+// it is installed, so a syntax error cannot ship.
+func TestShellIntegrationScriptsParse(t *testing.T) {
+	cases := []struct {
+		shell  string
+		args   []string
+		script string
+	}{
+		{shell: "zsh", args: []string{"-n"}, script: "shellintegration/zsh/.zshenv"},
+		{shell: "fish", args: []string{"--no-execute"}, script: "shellintegration/fish/vendor_conf.d/warren.fish"},
+	}
+	for _, tc := range cases {
+		binary, err := exec.LookPath(tc.shell)
+		if err != nil {
+			t.Logf("skipping %s: not installed", tc.shell)
+			continue
+		}
+		path := filepath.Join(t.TempDir(), filepath.Base(tc.script))
+		if err := os.WriteFile(path, []byte(readEmbedded(t, tc.script)), 0o644); err != nil {
+			t.Fatalf("write %s: %v", tc.script, err)
+		}
+		command := exec.Command(binary, append(tc.args, path)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Errorf("%s %v failed: %v\n%s", binary, tc.args, err, output)
+		}
+	}
+}
+
+func readEmbedded(t *testing.T, path string) string {
+	t.Helper()
+	data, err := shellIntegrationFiles.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
 }

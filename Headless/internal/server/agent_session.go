@@ -46,7 +46,28 @@ type agentSession struct {
 	titleAssistantProvider string
 	titleAssistantID       string
 	titleAssistantComplete bool
+	// turnAssistant is the latest assistant text of the turn in progress. The
+	// result sentence is written from it when the turn completes, so it has to
+	// follow the text rather than keep the turn's first message.
+	turnAssistant string
+	// resultGenerationStarted bounds the one result request per turn.
+	resultGenerationStarted bool
 	titleGenerationStarted bool
+	// cliTitleDeadline is when the Host stops waiting for the agent CLI to name
+	// its own conversation. Zero means no wait is pending.
+	cliTitleDeadline time.Time
+	// cliTitleCaptured records that the agent CLI named this conversation, so
+	// the Host's own title request must not run and a later poll must not
+	// re-apply the same name.
+	cliTitleCaptured bool
+	// titleFallbackFired records that the Host's own title request already ran.
+	// The remaining deadline is then only the window in which a late CLI name
+	// may still replace that title.
+	titleFallbackFired bool
+	// aiTitleValue is the title the Host generated for this conversation. It is
+	// retained so a name the agent CLI reports afterwards can replace it, while
+	// a title the user set can not.
+	aiTitleValue string
 	// hookStateModTime prevents a durable provider hook observation from being
 	// re-applied over newer transcript state on every reconcile tick. Hook
 	// writes use an atomic rename, so the state file's modification time is a
@@ -125,11 +146,7 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 		session.AgentExecutionID = s.ensureAgentExecutionID(state, session.ID, false)
 	}
 
-	workspacePath, pathErr := sessionWorkingDirectory(
-		*state,
-		session.WorkspaceID,
-		session.TerminalGroupID,
-	)
+	workspacePath, pathErr := sessionWorkingDirectory(*state, session.WorkspaceID)
 	if pathErr != nil {
 		s.stopAgent(session.ID)
 		return nil, nil
@@ -444,7 +461,13 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		existing.titleAssistantProvider = ""
 		existing.titleAssistantID = ""
 		existing.titleAssistantComplete = false
+		existing.turnAssistant = ""
+		existing.resultGenerationStarted = false
 		existing.titleGenerationStarted = false
+		existing.cliTitleDeadline = time.Time{}
+		existing.cliTitleCaptured = false
+		existing.titleFallbackFired = false
+		existing.aiTitleValue = ""
 		existing.hookStateModTime = time.Time{}
 		existing.mu.Unlock()
 	} else if existing != nil {
@@ -678,7 +701,7 @@ func (s *Service) boundTranscript(session api.Session, workspacePath string) str
 			}
 		}
 	}
-	// A Session moved between a Workspace and a Terminal Group keeps its old
+	// A Session moved to another Workspace keeps its old
 	// transcript: the persisted path outlives cwd-based discovery and is the
 	// only anchor that still points at the CLI's rollout after the move.
 	if session.TranscriptPath != "" {

@@ -244,7 +244,6 @@ The open-source repository code is licensed under [Apache-2.0](LICENSE). This co
 | `Onboarding/` | Cloudflare Worker onboarding site (React + Vite + Ghostty WASM) |
 | `Assets/Brand/` | App icon, menubar templates, and brand assets |
 | `docs/` | Architecture, [RFCs](docs/rfc/), decisions, runbooks, and screenshot assets |
-| `Support/Raycast/` | Raycast extension and Script Command launcher |
 
 ## Getting Started
 
@@ -332,25 +331,14 @@ The MVP is available for the Local execution endpoint only. Set
 on the app's `PATH`. Remote Host integration requires a Host-owned editor
 service and is not part of this version.
 
-### Raycast
-
-The repository includes a Raycast extension whose command is named **Terminal**.
-Search for `terminal` in Raycast to open a new Warren shell; it defaults to the
-`Inbox` terminal group and can be pointed at another group in its preferences.
-The extension is kept as a separate package so future Warren actions can be
-added as additional Raycast commands without changing the desktop app.
-
-Installation, preferences, and the `warren-terminal.sh` Script Command fallback
-are documented in [Support/Raycast/README.md](Support/Raycast/README.md).
-
 ### Deep links
 
 Warren registers two URL schemes for external launchers. `warren://terminal`
-opens a shell in a named terminal group, and `warren://settings` opens a
-Settings section by its stable `section` value:
+focuses a Project, Workspace, or Session by its current name or ID, and
+`warren://settings` opens a Settings section by its stable `section` value:
 
 ```text
-warren://terminal?group=Inbox
+warren://terminal?project=Warren&workspace=main
 warren://settings?section=public-access
 ```
 
@@ -421,7 +409,6 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 - [Headless/README.md](Headless/README.md) — headless daemon and CLI
 - [RelayService/README.md](RelayService/README.md) — Relay control plane
 - [Web/README.md](Web/README.md) — Web/PWA client
-- [Support/Raycast/README.md](Support/Raycast/README.md) — Raycast extension and Script Command
 - [Assets/Brand/README.md](Assets/Brand/README.md) — brand and icon assets
 
 **Contributing**

@@ -13,7 +13,7 @@ import (
 )
 
 // Pane Groups are durable Host state: one whole-screen arrangement of running
-// Sessions per group, any number of groups per Workspace or Terminal Group.
+// Sessions per group, any number of groups per Workspace.
 //
 // The rules live here rather than in a client because the Host is the only
 // authority both the arrangement and the Sessions can be validated against. A
@@ -64,18 +64,17 @@ func (s *Service) PaneGroup(id string) (api.PaneGroup, bool) {
 // CreatePaneGroup opens a single-pane arrangement around an existing Session.
 // A group never exists without a pane: an empty arrangement would have nothing
 // to render and nothing to own.
-func (s *Service) CreatePaneGroup(ownerScope, ownerID, sessionID, name, before string) (api.PaneGroup, error) {
+func (s *Service) CreatePaneGroup(ownerID, sessionID, name, before string) (api.PaneGroup, error) {
 	name = strings.TrimSpace(name)
 	if len(name) > pane.MaxNameLength {
 		return api.PaneGroup{}, fmt.Errorf("%s: name is longer than %d characters", errPaneGroupInvalidTree, pane.MaxNameLength)
 	}
 	var created api.PaneGroup
 	err := s.Store.Update(func(value *api.State) error {
-		normalizedScope, err := paneGroupOwner(value, ownerScope, ownerID)
-		if err != nil {
+		if err := paneGroupOwner(value, ownerID); err != nil {
 			return err
 		}
-		if err := validatePaneGroupSession(value, sessionID, normalizedScope, ownerID, ""); err != nil {
+		if err := validatePaneGroupSession(value, sessionID, ownerID, ""); err != nil {
 			return err
 		}
 		if count := len(paneGroupsOf(value, ownerID)); count >= pane.MaxGroupsPerOwner {
@@ -83,18 +82,13 @@ func (s *Service) CreatePaneGroup(ownerScope, ownerID, sessionID, name, before s
 		}
 		now := time.Now().UTC()
 		group := api.PaneGroup{
-			ID:        store.NewID(),
-			Scope:     normalizedScope,
-			Name:      name,
-			Tree:      api.PaneNode{PaneID: store.NewID(), SessionID: sessionID},
-			Revision:  1,
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		if normalizedScope == api.SessionScopeTerminalGroup {
-			group.TerminalGroupID = ownerID
-		} else {
-			group.WorkspaceID = ownerID
+			ID:          store.NewID(),
+			WorkspaceID: ownerID,
+			Name:        name,
+			Tree:        api.PaneNode{PaneID: store.NewID(), SessionID: sessionID},
+			Revision:    1,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}
 		value.PaneGroups = append(value.PaneGroups, group)
 		if err := reorderPaneGroups(value, group.ID, before); err != nil {
@@ -196,7 +190,7 @@ func (s *Service) UpdatePaneGroup(id string, tree api.PaneNode, expectedRevision
 			return fmt.Errorf("%s: %w", errPaneGroupInvalidTree, err)
 		}
 		for _, leaf := range pane.Leaves(candidate) {
-			if err := validatePaneGroupSession(value, leaf.SessionID, group.OwnerScope(), group.OwnerID(), id); err != nil {
+			if err := validatePaneGroupSession(value, leaf.SessionID, group.OwnerID(), id); err != nil {
 				return err
 			}
 		}
@@ -233,10 +227,6 @@ func reconcilePaneGroups(state *api.State) bool {
 	for _, workspace := range state.Workspaces {
 		workspaces[workspace.ID] = struct{}{}
 	}
-	groups := make(map[string]struct{}, len(state.TerminalGroups))
-	for _, group := range state.TerminalGroups {
-		groups[group.ID] = struct{}{}
-	}
 	ordered := make([]api.PaneGroup, len(state.PaneGroups))
 	copy(ordered, state.PaneGroups)
 	sortPaneGroups(ordered)
@@ -246,17 +236,10 @@ func reconcilePaneGroups(state *api.State) bool {
 	changed := false
 	for _, group := range ordered {
 		ownerID := group.OwnerID()
-		ownerGone := ownerID == ""
-		if !ownerGone {
-			if group.OwnerScope() == api.SessionScopeTerminalGroup {
-				_, known := groups[ownerID]
-				ownerGone = !known
-			} else {
-				_, known := workspaces[ownerID]
-				ownerGone = !known
-			}
-		}
-		if ownerGone {
+		// A group recorded under a removed Terminal Group decodes with no owner
+		// and goes the same way as one whose Workspace was deleted.
+		_, known := workspaces[ownerID]
+		if ownerID == "" || !known {
 			changed = true
 			continue
 		}
@@ -268,7 +251,7 @@ func reconcilePaneGroups(state *api.State) bool {
 			if !ok {
 				return false
 			}
-			if !sessionBelongsToOwner(session, group.OwnerScope(), ownerID) {
+			if session.WorkspaceID != ownerID {
 				return false
 			}
 			if _, taken := claimed[sessionID]; taken {
@@ -298,37 +281,27 @@ func reconcilePaneGroups(state *api.State) bool {
 	return true
 }
 
-// paneGroupOwner validates the owner and returns its normalized scope.
-func paneGroupOwner(state *api.State, ownerScope, ownerID string) (string, error) {
+// paneGroupOwner validates the owning Workspace.
+func paneGroupOwner(state *api.State, ownerID string) error {
 	ownerID = strings.TrimSpace(ownerID)
 	if ownerID == "" {
-		return "", errors.New("pane group requires a workspace or terminal group")
+		return errors.New("pane group requires a workspace")
 	}
-	switch ownerScope {
-	case api.SessionScopeWorkspace:
-		if !workspaceExists(state, ownerID) {
-			return "", fmt.Errorf("workspace not found: %s", ownerID)
-		}
-		return api.SessionScopeWorkspace, nil
-	case api.SessionScopeTerminalGroup:
-		if !terminalGroupExists(state, ownerID) {
-			return "", fmt.Errorf("terminal group not found: %s", ownerID)
-		}
-		return api.SessionScopeTerminalGroup, nil
-	default:
-		return "", fmt.Errorf("unknown pane group owner scope %q", ownerScope)
+	if !workspaceExists(state, ownerID) {
+		return fmt.Errorf("workspace not found: %s", ownerID)
 	}
+	return nil
 }
 
 // validatePaneGroupSession checks that one Session may be shown by one group of
 // this owner. ignoreGroup exempts the group being updated: its own panes are
 // not "in use" by itself.
-func validatePaneGroupSession(state *api.State, sessionID, ownerScope, ownerID, ignoreGroup string) error {
+func validatePaneGroupSession(state *api.State, sessionID, ownerID, ignoreGroup string) error {
 	session, ok := sessionOfState(state, sessionID)
 	if !ok || session.Lifecycle != "running" {
 		return fmt.Errorf("%s: %s", errPaneGroupSessionGone, sessionID)
 	}
-	if !sessionBelongsToOwner(session, ownerScope, ownerID) {
+	if session.WorkspaceID != ownerID {
 		return fmt.Errorf("pane group session %s does not belong to %s", sessionID, ownerID)
 	}
 	for _, group := range state.PaneGroups {
@@ -342,13 +315,6 @@ func validatePaneGroupSession(state *api.State, sessionID, ownerScope, ownerID, 
 		}
 	}
 	return nil
-}
-
-func sessionBelongsToOwner(session api.Session, ownerScope, ownerID string) bool {
-	if ownerScope == api.SessionScopeTerminalGroup {
-		return session.TerminalGroupID == ownerID
-	}
-	return session.WorkspaceID == ownerID
 }
 
 func sessionOfState(state *api.State, id string) (api.Session, bool) {

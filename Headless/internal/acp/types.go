@@ -243,6 +243,11 @@ type SessionUpdate struct {
 	Size *int64 `json:"size,omitempty"`
 	Cost *Cost  `json:"cost,omitempty"`
 
+	// Extensions. ACP carries provider-specific hints under `_meta`; because
+	// the usage fields have no model of their own, the claude-agent-acp
+	// adapter reports the current turn's concrete model under `_claude/model`.
+	Meta map[string]json.RawMessage `json:"_meta,omitempty"`
+
 	// Session info. Title above is shared with tool calls.
 }
 

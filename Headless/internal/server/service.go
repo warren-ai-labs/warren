@@ -90,8 +90,9 @@ type Service struct {
 	// DefaultRuntime is the engine used for sessions created without an
 	// explicit kind.
 	DefaultRuntime string
-	// Settings holds the persisted headless settings (default runtime and
-	// runtime environment overrides) and is returned by the settings API.
+	// Settings holds the persisted headless settings (default runtime, runtime
+	// environment overrides, and per-provider ACP server overrides) and is
+	// returned by the settings API.
 	Settings settings.Settings
 	// SettingsPath persists settings changes made over the API.
 	SettingsPath string
@@ -175,11 +176,6 @@ type Service struct {
 	// writable profile directory.
 	browserMu sync.Mutex
 	browsers  *browser.Manager
-	// terminalGroupLifecycleMu serializes Group deletion with Group Session
-	// creation. Runtime creation and its durable Session record must observe
-	// the same Group snapshot, otherwise a concurrent forced deletion can
-	// leave an orphan runtime or a Session whose Group no longer exists.
-	terminalGroupLifecycleMu sync.Mutex
 	// workspaceLifecycleMu protects the lazily-created per-project lifecycle
 	// locks. A project write lock serializes workspace/project lifecycle changes;
 	// workspace session creation takes a read lock so independent workspaces in
@@ -674,7 +670,9 @@ func (s *Service) lifecycleLoop(ctx context.Context) {
 	defer reaper.Stop()
 	pruner := time.NewTicker(agentJournalPruneInterval)
 	defer pruner.Stop()
+	s.retireStandaloneSessions(ctx)
 	s.reconcile(ctx)
+	s.pollAgentTitles()
 	s.reapOrphans(ctx)
 	for {
 		select {
@@ -682,6 +680,7 @@ func (s *Service) lifecycleLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.reconcile(ctx)
+			s.pollAgentTitles()
 		case <-reaper.C:
 			s.reapAgentAttachments(time.Now())
 			s.reapOrphans(ctx)

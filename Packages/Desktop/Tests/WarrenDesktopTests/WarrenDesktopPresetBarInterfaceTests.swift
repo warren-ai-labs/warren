@@ -6,7 +6,7 @@ import WarrenDomain
 import WarrenObservation
 @testable import WarrenDesktop
 
-/// The preset bar reads the Settings interface choice: "Ask each time" opens
+/// The preset menu reads the Settings interface choice: "Ask each time" opens
 /// a Terminal/Chat popover on ACP-capable presets, the other two launch
 /// straight away.
 @MainActor
@@ -38,16 +38,15 @@ final class WarrenDesktopPresetBarInterfaceTests: XCTestCase {
         let launches = Launches()
         let bar = WarrenDesktopPresetBar(
             workspace: Workspace(projectID: ProjectID(), name: "demo", path: "/tmp/demo"),
-            terminalGroup: nil,
             isBusy: false,
             canUseEmbeddedBrowser: true,
             onLaunch: { launches.requests.append($0) }
         )
         .warrenSemanticObservationRoot(recorder: recorder)
         .environment(\.warrenSemanticRecorder, recorder)
-        .frame(width: 1_400, height: 40)
+        .frame(width: 400, height: 400)
         let host = NSHostingView(rootView: bar)
-        host.frame = NSRect(x: 0, y: 0, width: 1_400, height: 40)
+        host.frame = NSRect(x: 0, y: 0, width: 400, height: 400)
         // The Terminal/Chat choice is a popover, which only presents from a
         // view that is in a window.
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -63,8 +62,8 @@ final class WarrenDesktopPresetBarInterfaceTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
     }
 
-    /// The choice rows live in a popover, a separate hierarchy the recorder
-    /// cannot see, so this pins the open state and the real popover window.
+    /// The Terminal/Chat choice is a drill-in page of the same menu, so the
+    /// recorder sees it in the one hierarchy.
     func testAskEachTimeOpensTheChoiceInsteadOfLaunching() throws {
         let (host, recorder, launches) = mount(interface: .ask)
         XCTAssertEqual(recorder.snapshot().node(id: "preset.claude")?.isSelected, false)
@@ -73,16 +72,16 @@ final class WarrenDesktopPresetBarInterfaceTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         settle()
         XCTAssertTrue(launches.requests.isEmpty, "The first click only opens the choice")
-        XCTAssertEqual(recorder.snapshot().node(id: "preset.claude")?.isSelected, true)
-        XCTAssertTrue(
-            NSApp.windows.contains { $0.isVisible && String(describing: type(of: $0)).contains("Popover") },
-            "The Terminal/Chat choice opens as a popover"
+        XCTAssertNotNil(
+            recorder.snapshot().node(id: "preset.claude.terminal"),
+            "The Terminal/Chat choice opens as a page"
         )
+        XCTAssertNotNil(recorder.snapshot().node(id: "preset.claude.chat"))
 
-        try recorder.perform(.press, on: "preset.claude")
+        try recorder.perform(.press, on: "preset.claude.terminal")
         settle()
-        XCTAssertEqual(recorder.snapshot().node(id: "preset.claude")?.isSelected, false, "A second click folds it")
-        XCTAssertTrue(launches.requests.isEmpty)
+        XCTAssertEqual(launches.requests.map(\.kind), [.claude])
+        XCTAssertNil(launches.requests.first?.agentHandler, "Terminal uses the provider's own CLI")
     }
 
     func testAskEachTimeLaunchesPresetsWithoutACPDirectly() throws {
@@ -101,5 +100,27 @@ final class WarrenDesktopPresetBarInterfaceTests: XCTestCase {
         try cliRecorder.perform(.press, on: "preset.codex")
         XCTAssertEqual(cliLaunches.requests.map(\.kind), [.codex])
         XCTAssertEqual(cliLaunches.requests.map(\.agentHandler), [nil])
+    }
+
+    /// The menu groups plain launchers, Agents and the Browser apart while
+    /// keeping the person's order inside each group.
+    func testPresetsGroupIntoLaunchersAgentsAndBrowser() {
+        let presets = WarrenDesktopSessionPreset.orderedLaunchable(
+            by: WarrenDesktopSessionPreset.defaultOrderRawValue,
+            hidden: "",
+            embeddedBrowser: true
+        )
+        let groups = WarrenDesktopPresetBar.groups(presets)
+        XCTAssertEqual(groups.map(\.title), [nil, "AGENTS", nil])
+        XCTAssertTrue(groups[0].presets.allSatisfy { !$0.isAI && $0.request.kind != .browser })
+        XCTAssertTrue(groups[1].presets.allSatisfy(\.isAI))
+        XCTAssertEqual(groups[2].presets.map(\.request.kind), [.browser])
+        XCTAssertEqual(
+            groups.flatMap(\.presets).map(\.id).sorted(),
+            presets.map(\.id).sorted()
+        )
+
+        let withoutBrowser = WarrenDesktopPresetBar.groups(presets.filter { $0.request.kind != .browser })
+        XCTAssertEqual(withoutBrowser.map(\.title), [nil, "AGENTS"], "An empty group is dropped")
     }
 }

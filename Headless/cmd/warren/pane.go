@@ -115,22 +115,15 @@ func screenPaneRowCells(row ScreenPaneRow) []string {
 	}
 }
 
-// filterPaneGroupRows applies `--workspace`, `--group`, and `--search` to the
+// filterPaneGroupRows applies `--workspace` and `--search` to the
 // roster's arrangements. It never opens a second request: the roster is the
 // list.
 func filterPaneGroupRows(groups []api.PaneGroup, params map[string]any) ([]api.PaneGroup, error) {
 	workspaceID := stringValue(params, "workspace")
-	groupID := stringValue(params, "group")
-	if workspaceID != "" && groupID != "" {
-		return nil, fmt.Errorf("--workspace and --group are mutually exclusive")
-	}
 	search := strings.ToLower(strings.TrimSpace(stringValue(params, "search")))
 	result := make([]api.PaneGroup, 0, len(groups))
 	for _, group := range groups {
 		if workspaceID != "" && group.WorkspaceID != workspaceID {
-			continue
-		}
-		if groupID != "" && group.TerminalGroupID != groupID {
 			continue
 		}
 		if search != "" {
@@ -145,14 +138,9 @@ func filterPaneGroupRows(groups []api.PaneGroup, params map[string]any) ([]api.P
 }
 
 func paneGroupRowCells(group api.PaneGroup) []string {
-	owner := group.WorkspaceID
-	if group.TerminalGroupID != "" {
-		owner = group.TerminalGroupID
-	}
 	return []string{
 		group.ID,
-		group.OwnerScope(),
-		displayValue(owner),
+		displayValue(group.WorkspaceID),
 		displayValue(group.Name),
 		strconv.Itoa(pane.Count(&group.Tree)),
 		strconv.Itoa(group.Order),

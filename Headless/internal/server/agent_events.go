@@ -579,6 +579,9 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 			}
 			appendTitleMessage(&entry.titleUser, &entry.titleUserProvider, &entry.titleUserID, event)
 		case "assistant":
+			if content := strings.TrimSpace(event.Content); content != "" && !event.Sidechain {
+				entry.turnAssistant = content
+			}
 			appendTitleMessage(&entry.titleAssistant, &entry.titleAssistantProvider, &entry.titleAssistantID, event)
 			// Codex and Claude emit complete assistant messages as ordinary
 			// events. OpenCode emits an initial snapshot followed by deltas;
@@ -732,6 +735,7 @@ func (s *Service) recordAgentTurnsForHandle(sessionID string, expected AgentHand
 		}
 		if observedTurn.Status == api.AgentTurnCompleted {
 			s.tryStartSessionTitle(sessionID)
+			s.tryStartResultSentence(sessionID)
 		}
 	}
 	s.wakeLiveActivity()

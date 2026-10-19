@@ -20,7 +20,7 @@ final class WarrenTerminalLinkParserTests: XCTestCase {
         XCTAssertNil(WarrenTerminalLinkParser.parse("https://github.com/abcdlsj/warren"))
         XCTAssertNil(WarrenTerminalLinkParser.parse("mailto:support@warren.app"))
         XCTAssertNil(WarrenTerminalLinkParser.parse("tel:12345678"))
-        XCTAssertNil(WarrenTerminalLinkParser.parse("warren://terminal?group=Inbox"))
+        XCTAssertNil(WarrenTerminalLinkParser.parse("warren://terminal?workspace=main"))
     }
 
     func testIgnoresEmptyAndNonexistentPaths() {

@@ -18,13 +18,13 @@ first, but they describe no current behavior.
 | **Accepted** | Agreed as the direction. Implementation may be partial or not started. |
 | **Implemented** | Shipped and describing current behavior. |
 | **Superseded** / **Abandoned** | No longer current. Lives in `../archive/rfc/`. |
+| **Withdrawn** | Was implemented, then removed from the product. Kept in place for history; describes no current behavior. |
 
 ## Active
 
 | # | Title | Status | Created |
 | --- | --- | --- | --- |
 | [0002](0002-one-way-desktop-rendering.md) | One-way desktop rendering and terminal lifecycle | Implemented | 2026-08-17 |
-| [0003](0003-terminal-groups.md) | Terminal Groups for standalone shells | Implemented | 2026-08-17 |
 | [0005](0005-resource-links-notice-center.md) | Resource links and the desktop notice center | Implemented | 2026-08-22 |
 | [0006](0006-agent-activity-attention.md) | Agent activity and human attention | Implemented ¹ | 2026-08-22 |
 | [0007](0007-durable-session-memory.md) | Durable Session memory after Host restart | Accepted | 2026-08-24 |
@@ -55,6 +55,7 @@ first, but they describe no current behavior.
 | # | Title | Status |
 | --- | --- | --- |
 | [0001](../archive/rfc/0001-terminal-surface-retention.md) | Retain terminal surfaces across tab switches | Superseded by [0002](0002-one-way-desktop-rendering.md) |
+| [0003](0003-terminal-groups.md) | Terminal Groups for standalone shells | Withdrawn 2026-10-15: Terminal Groups were removed and every Session belongs to a Workspace |
 | [0004](../archive/rfc/0004-headless-flow-orchestration.md) | Headless flow orchestration and optional extensions | Abandoned, superseded by [0014](0014-autonomous-engineering-pipeline.md) |
 | [0011](../archive/rfc/0011-cloud-agent-runs.md) | Cloud Agent runs and runner control plane | Abandoned, superseded by [0015](0015-cloud-agent-daemon-and-scheduled-bots.md) |
 

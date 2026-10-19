@@ -7,7 +7,6 @@ import WarrenObservation
 
 struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
     let workspace: Workspace?
-    let terminalGroup: TerminalGroup?
     let tab: ClientTab?
     let hasProjects: Bool
     let connectionState: WarrenDesktopConnectionState
@@ -21,19 +20,22 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
     let wantsTerminalFocus: Bool
     let splitTree: SplitLayoutTree?
     let activePaneID: String?
+    let zoomedPaneID: String?
+    let foldedPaneID: String?
     let allTabs: [ClientTab]
     let sessionLookup: (TerminalSessionID) -> WarrenDesktopSession?
     let onSelectPane: (String) -> Void
     let onClosePane: (String) -> Void
     let onMaximizePane: (String) -> Void
     let onResizeSplit: ([Bool], Double) -> Void
+    let onFoldPane: (String, [Bool], Double?) -> Void
+    let onUnfoldPane: (String) -> Void
     let onAddProject: () -> Void
     let onImportSuperset: () -> Void
     let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
 
     init(
         workspace: Workspace?,
-        terminalGroup: TerminalGroup?,
         tab: ClientTab?,
         hasProjects: Bool,
         connectionState: WarrenDesktopConnectionState,
@@ -47,18 +49,21 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
         wantsTerminalFocus: Bool,
         splitTree: SplitLayoutTree? = nil,
         activePaneID: String? = nil,
+        zoomedPaneID: String? = nil,
+        foldedPaneID: String? = nil,
         allTabs: [ClientTab] = [],
         sessionLookup: @escaping (TerminalSessionID) -> WarrenDesktopSession? = { _ in nil },
         onSelectPane: @escaping (String) -> Void = { _ in },
         onClosePane: @escaping (String) -> Void = { _ in },
         onMaximizePane: @escaping (String) -> Void = { _ in },
         onResizeSplit: @escaping ([Bool], Double) -> Void = { _, _ in },
+        onFoldPane: @escaping (String, [Bool], Double?) -> Void = { _, _, _ in },
+        onUnfoldPane: @escaping (String) -> Void = { _ in },
         onAddProject: @escaping () -> Void,
         onImportSuperset: @escaping () -> Void,
         terminalSurface: @escaping @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     ) {
         self.workspace = workspace
-        self.terminalGroup = terminalGroup
         self.tab = tab
         self.hasProjects = hasProjects
         self.connectionState = connectionState
@@ -72,12 +77,16 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
         self.wantsTerminalFocus = wantsTerminalFocus
         self.splitTree = splitTree
         self.activePaneID = activePaneID
+        self.zoomedPaneID = zoomedPaneID
+        self.foldedPaneID = foldedPaneID
         self.allTabs = allTabs
         self.sessionLookup = sessionLookup
         self.onSelectPane = onSelectPane
         self.onClosePane = onClosePane
         self.onMaximizePane = onMaximizePane
         self.onResizeSplit = onResizeSplit
+        self.onFoldPane = onFoldPane
+        self.onUnfoldPane = onUnfoldPane
         self.onAddProject = onAddProject
         self.onImportSuperset = onImportSuperset
         self.terminalSurface = terminalSurface
@@ -104,8 +113,9 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                     )
                 ),
                 activePaneID: activePaneID,
+                zoomedPaneID: zoomedPaneID,
+                foldedPaneID: foldedPaneID,
                 workspace: workspace,
-                terminalGroup: nil,
                 allTabs: allTabs,
                 sessionLookup: sessionLookup,
                 hostName: hostName,
@@ -116,41 +126,8 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                 onClosePane: onClosePane,
                 onMaximizePane: onMaximizePane,
                 onResizeSplit: onResizeSplit,
-                terminalSurface: terminalSurface,
-                lonePaneChrome: WarrenDesktopSplitTreeView<TerminalSurface>.LonePaneChrome(
-                    showsHeader: showsPaneHeader,
-                    canClose: resolvedTab.sessionID != nil,
-                    emptyTab: resolvedTab,
-                    session: session
-                )
-            )
-        } else if let terminalGroup {
-            let resolvedTab = tab ?? ClientTab(
-                id: "terminal-group-empty-\(terminalGroup.id.rawValue.uuidString)",
-                title: "No open sessions",
-                sessionID: nil,
-                kind: .shell
-            )
-            WarrenDesktopSplitTreeView(
-                tree: splitTree ?? .leaf(
-                    SplitPaneItem(
-                        id: activePaneID ?? resolvedTab.id,
-                        tabID: resolvedTab.id
-                    )
-                ),
-                activePaneID: activePaneID,
-                workspace: nil,
-                terminalGroup: terminalGroup,
-                allTabs: allTabs.isEmpty ? (tab.map { [$0] } ?? []) : allTabs,
-                sessionLookup: sessionLookup,
-                hostName: hostName,
-                titleTemplate: titleTemplate,
-                terminalFont: terminalFont,
-                wantsTerminalFocus: wantsTerminalFocus,
-                onSelectPane: onSelectPane,
-                onClosePane: onClosePane,
-                onMaximizePane: onMaximizePane,
-                onResizeSplit: onResizeSplit,
+                onFoldPane: onFoldPane,
+                onUnfoldPane: onUnfoldPane,
                 terminalSurface: terminalSurface,
                 lonePaneChrome: WarrenDesktopSplitTreeView<TerminalSurface>.LonePaneChrome(
                     showsHeader: showsPaneHeader,
@@ -162,38 +139,34 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
         } else if workspace == nil, tab == nil,
                   connectionState == .connecting || connectionState == .reconnecting {
             connectionLoadingState(tokens: tokens)
+                .warrenCard()
         } else if workspace == nil, tab == nil,
                   connectionState == .disconnected || connectionState == .failed {
             connectionUnavailableState(tokens: tokens)
+                .warrenCard()
         } else if workspace == nil, tab == nil, !hasProjects {
             emptyWelcome(tokens: tokens)
+                .warrenCard()
         } else {
-            VStack(spacing: WarrenSpacing.standard) {
-                Text("Select a workspace")
-                    .font(WarrenTypography.emptyStateTitle)
-                    .foregroundStyle(tokens.mutedForeground)
-                Text("Choose a workspace to open its terminals")
-                    .font(WarrenTypography.body)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .opacity(0.72)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(WarrenSpacing.small)
-            }
-            .padding(.bottom, emptyStatePageOffset * 2)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityElement(children: .combine)
+            WarrenDesktopEmptyStage(
+                mark: .symbol("sidebar.left"),
+                title: "Select a workspace",
+                message: "Pick a Workspace in the sidebar to open its Sessions here."
+            )
+            .warrenCard()
             .accessibilityLabel("No workspace selected")
         }
     }
 
     private func emptyWelcome(tokens: WarrenColorTokens) -> some View {
-        VStack(spacing: WarrenSpacing.standard) {
-            Text(endpointCapabilities.canAddProject || endpointCapabilities.canImportSuperset
-                ? "Open a project to begin"
-                : "No projects yet")
-                .font(WarrenTypography.emptyStateTitle)
-                .foregroundStyle(tokens.mutedForeground)
-                .multilineTextAlignment(.center)
+        let canStart = endpointCapabilities.canAddProject || endpointCapabilities.canImportSuperset
+        return WarrenDesktopEmptyStage(
+            mark: .symbol("folder.badge.plus"),
+            title: canStart ? "Open a project to begin" : "No projects yet",
+            message: canStart
+                ? "A project is a Git repository. Warren lists its worktrees and keeps a Session's terminals with them."
+                : "Add a project from the remote CLI on \(hostName)."
+        ) {
             if endpointCapabilities.canAddProject {
                 Button(action: onAddProject) {
                     Text("Add Project…")
@@ -221,17 +194,7 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                     action: onImportSuperset
                 )
             }
-            if !endpointCapabilities.canAddProject && !endpointCapabilities.canImportSuperset {
-                Text("Add a project from the remote CLI on the host machine.")
-                    .font(WarrenTypography.body)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
-        .padding(.bottom, emptyStatePageOffset * 2)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityElement(children: .contain)
     }
 
     private func connectionLoadingState(tokens: WarrenColorTokens) -> some View {
@@ -239,47 +202,24 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
             connectionState,
             migratingRuntimeSessions: isMigratingRuntimeSessions
         )
-        return VStack(spacing: WarrenSpacing.standard) {
-            WarrenBrailleSpinner(
-                size: 22,
-                accessibilityLabel: presentation.label
-            )
-            Text(presentation.label)
-                .font(WarrenTypography.emptyStateTitle)
-                .foregroundStyle(tokens.mutedForeground)
-            Text("Waiting for projects and sessions from \(hostName)")
-                .font(WarrenTypography.body)
-                .foregroundStyle(tokens.mutedForeground)
-                .opacity(0.72)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        return WarrenDesktopEmptyStage(
+            mark: .progress,
+            title: presentation.label,
+            message: "Waiting for projects and Sessions from \(hostName)."
+        )
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(presentation.label) Waiting for projects and sessions")
     }
 
     private func connectionUnavailableState(tokens: WarrenColorTokens) -> some View {
         let presentation = WarrenDesktopConnectionPresentation(connectionState)
-        return VStack(spacing: WarrenSpacing.standard) {
-            Image(systemName: "server.rack")
-                .font(.system(size: 22, weight: .light))
-            Text(presentation.label)
-                .font(WarrenTypography.emptyStateTitle)
-            Text("Choose another execution server or wait for this server to return")
-                .font(WarrenTypography.body)
-                .opacity(0.72)
-                .multilineTextAlignment(.center)
-        }
-        .foregroundStyle(tokens.mutedForeground)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        return WarrenDesktopEmptyStage(
+            mark: .warning("bolt.horizontal.circle"),
+            title: presentation.label,
+            message: "Choose another Host from the sidebar's Host menu, or wait for \(hostName) to return."
+        )
         .accessibilityElement(children: .combine)
         .accessibilityLabel(presentation.label)
-    }
-
-    /// The empty state sits inside the content area below the tab and preset
-    /// bars; nudge it up by half that chrome so its visual center lands on the
-    /// whole page's center instead of the terminal pane's center.
-    private var emptyStatePageOffset: CGFloat {
-        (WarrenLayoutMetrics.tabBarHeight + WarrenLayoutMetrics.presetBarHeight) / 2
     }
 
 }
@@ -287,7 +227,6 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
 struct WarrenDesktopPaneView<TerminalSurface: View>: View {
     var paneID: String = ""
     let workspace: Workspace?
-    let terminalGroup: TerminalGroup?
     let tab: ClientTab
     let session: WarrenDesktopSession?
     let hostName: String
@@ -318,97 +257,18 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @State private var isHeaderHovered = false
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(spacing: 0) {
             // The header is chrome, so its presence must not depend on live
             // metadata. Gating it on a rendered title that can transiently be
-            // empty changed the pane's height by 28 pt, which resized the PTY
-            // and made a full-screen TUI repaint end to end — the "replay"
-            // seen while a Session streamed output. The fallback label below
+            // empty changed the pane's height, which resized the PTY and made
+            // a full-screen TUI repaint end to end. The fallback label below
             // keeps the height and the bar itself stable.
             if showsPaneHeader {
-                HStack(spacing: WarrenSpacing.xs) {
-                    // The focus dot answers "which of these panes takes my
-                    // keys", so it only appears once there is more than one —
-                    // and goes dark when the keys are not going to a pane.
-                    if isSplit {
-                        Circle()
-                            .fill(isActive && isKeyboardFocused ? tokens.info : Color.clear)
-                            .frame(width: 6, height: 6)
-                            .padding(.trailing, 2)
-                    }
-                    // With a single pane the bar above shows no chip, so this is
-                    // the primary title and has to name the provider itself.
-                    if let providerPreset {
-                        WarrenDesktopPresetIcon(preset: providerPreset)
-                            .frame(width: 12, height: 12)
-                            .opacity(isActive ? 0.9 : 0.55)
-                            .accessibilityHidden(true)
-                    }
-                    Text(paneHeaderTitle)
-                        .font(.system(size: 11, weight: isActive ? .medium : .regular))
-                        .foregroundStyle(isActive ? tokens.foreground.opacity(0.85) : tokens.mutedForeground.opacity(0.65))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                    Spacer(minLength: 0)
-                    HStack(spacing: 4) {
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(fullDisplayTitle, forType: .string)
-                        } label: {
-                            Image(systemName: "doc.on.doc")
-                                .font(.system(size: 10, weight: .regular))
-                                .foregroundStyle(tokens.mutedForeground.opacity(0.6))
-                                .frame(width: 18, height: 18)
-                                .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Copy Full Title")
-                        .accessibilityLabel("Copy Full Title")
-                        .opacity(0.9)
-
-                        if canMaximize {
-                            Button {
-                                onMaximize()
-                            } label: {
-                                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                    .font(.system(size: 10, weight: .regular))
-                                    .foregroundStyle(tokens.mutedForeground.opacity(0.6))
-                                    .frame(width: 18, height: 18)
-                                    .contentShape(.rect)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Maximize Pane (C-x 1)")
-                            .accessibilityLabel("Maximize Pane")
-                        }
-
-                        if canClose {
-                            Button {
-                                onClose()
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(tokens.mutedForeground.opacity(0.6))
-                                    .frame(width: 18, height: 18)
-                                    .contentShape(.rect)
-                            }
-                            .buttonStyle(.plain)
-                            // Taking the pane off screen; the Session keeps
-                            // running and stays in the sidebar tree.
-                            .help("Close Pane (C-x 0)")
-                            .accessibilityLabel("Close Pane")
-                        }
-                    }
-                }
-                .padding(.horizontal, WarrenSpacing.medium)
-                .frame(height: WarrenLayoutMetrics.paneHeaderHeight)
-                .background(isActive ? tokens.tertiaryWash.opacity(0.06) : tokens.tertiaryWash.opacity(0.02))
-                .help(fullDisplayTitle)
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Pane context \(fullDisplayTitle)")
+                paneHeader(tokens: tokens)
             }
 
             ZStack {
@@ -419,33 +279,25 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                     // larger pane. The pane owns geometry, so the renderer must
                     // accept the entire proposed content size.
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(WarrenSpacing.compact)
-                    .background(tokens.canvas)
+                    .padding(.horizontal, WarrenSpacing.compact)
+                    .padding(.bottom, WarrenSpacing.compact)
+                    .padding(.top, showsPaneHeader ? 0 : WarrenSpacing.compact)
+                    .background(tokens.workbenchCardFill)
 
                 WarrenDesktopSplitDropOverlay(paneID: paneID, canSplit: canSplit)
 
-                // Keep the focused-pane treatment familiar to Ghostty's
-                // split renderer: inactive surfaces remain live and readable,
-                // but a subtle wash makes the keyboard target unambiguous.
+                // Inactive surfaces stay live and readable; a subtle wash and
+                // the dimmer card border make the keyboard target unambiguous.
                 if !isActive, isSplit {
                     tokens.terminalInactiveWash
                         .allowsHitTesting(false)
                 }
             }
-            .overlay {
-                if isSplit {
-                    Rectangle()
-                        .stroke(
-                            isActive && isKeyboardFocused
-                                ? tokens.info.opacity(0.4)
-                                : tokens.border.opacity(0.3),
-                            lineWidth: 1
-                        )
-                }
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(tokens.canvas)
+        // Every pane is its own card on the window backdrop. The one taking
+        // keystrokes gets the brighter border; a lone pane is always it.
+        .warrenCard(isFocused: isActive && isKeyboardFocused)
         .contentShape(Rectangle())
         // A click in the pane chrome (header, padding) selects the pane. It
         // must stay simultaneous so the click still reaches the terminal:
@@ -454,6 +306,81 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
         .simultaneousGesture(TapGesture().onEnded { onFocus() })
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Terminal panel \(tab.title)")
+    }
+
+    /// The card's title row: the Session's kind badge, then what it is working
+    /// on. The badge already carries the kind's mark, so naming the kind again
+    /// in text read as a second icon. Its controls appear on hover.
+    private func paneHeader(tokens: WarrenColorTokens) -> some View {
+        let icon = session.map(WarrenDesktopAppIcon.resolve) ?? WarrenDesktopAppIcon(kind: tab.kind)
+        return HStack(spacing: WarrenSpacing.compact) {
+            // Every pane's header reads at full strength; only the card's
+            // border says which pane takes keystrokes.
+            WarrenDesktopSessionKindBadge(icon: icon, size: 16)
+            Text(paneHeaderTitle)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(tokens.foreground.opacity(0.92))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+            HStack(spacing: 2) {
+                paneHeaderButton(
+                    systemImage: "doc.on.doc",
+                    label: "Copy Full Title",
+                    tokens: tokens
+                ) {
+                    WarrenCopyFeedback.shared.copy(fullDisplayTitle, announcing: "Copied title")
+                }
+                if canMaximize {
+                    paneHeaderButton(
+                        systemImage: "arrow.up.left.and.arrow.down.right",
+                        label: "Maximize Pane",
+                        shortcut: "C-x 1",
+                        tokens: tokens,
+                        action: onMaximize
+                    )
+                }
+                if canClose {
+                    // Taking the pane off screen; the Session keeps running and
+                    // stays in the sidebar tree.
+                    paneHeaderButton(
+                        systemImage: "xmark",
+                        label: "Close Pane",
+                        shortcut: "C-x 0",
+                        tokens: tokens,
+                        action: onClose
+                    )
+                }
+            }
+            .opacity(isHeaderHovered ? 1 : 0)
+        }
+        .padding(.horizontal, WarrenSpacing.medium)
+        .frame(height: WarrenLayoutMetrics.paneHeaderHeight)
+        .contentShape(.rect)
+        .onHover { isHeaderHovered = $0 }
+        .help(fullDisplayTitle)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Pane context \(fullDisplayTitle)")
+    }
+
+    private func paneHeaderButton(
+        systemImage: String,
+        label: String,
+        shortcut: String? = nil,
+        tokens: WarrenColorTokens,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(tokens.mutedForeground.opacity(0.7))
+                .frame(width: 20, height: 20)
+                .contentShape(.rect)
+        }
+        .buttonStyle(WarrenChromeButtonStyle())
+        .warrenTooltip(label, shortcut: shortcut)
+        .accessibilityLabel(label)
     }
 
     private var displayTitle: String {
@@ -466,9 +393,15 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
     /// Session is being rewritten. The header occupies a fixed height, so it
     /// falls back to a stable label instead of disappearing: chrome that comes
     /// and goes with live data moves every pane in the split.
+    ///
+    /// A pane with a Session names it the way its sidebar row does, so the
+    /// header and the row read as the same thing. The terminal's own title,
+    /// with its path and branch, stays in the hover help and the copy button.
     private var paneHeaderTitle: String {
         Self.stablePaneHeaderTitle(
-            rendered: displayTitle,
+            rendered: session.map {
+                WarrenDesktopTabTitle.sessionTitle(for: $0, worktreeRoot: workspace?.path ?? "").title
+            } ?? displayTitle,
             sessionTitle: session?.displayTitle ?? tab.title,
             kindName: (session?.kind ?? tab.kind).displayName
         )
@@ -488,13 +421,6 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
             if !trimmed.isEmpty { return trimmed }
         }
         return kindName
-    }
-
-    /// The catalog entry for the agent bound to this pane's Session, read from
-    /// the binding rather than from what Warren launched.
-    private var providerPreset: WarrenDesktopSessionPreset? {
-        guard let kind = session?.presentedKind else { return nil }
-        return WarrenDesktopSessionPreset.builtIns.first { $0.request.kind == kind }
     }
 
     private var fullDisplayTitle: String {
@@ -518,7 +444,7 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
         )
         let directory = session?.workingDirectory.isEmpty == false
             ? session!.workingDirectory
-            : (workspace?.path ?? terminalGroup?.home ?? "")
+            : (workspace?.path ?? "")
         // A generated or manually renamed session is one placeholder value.
         // The generated default repeats the kind the icon already shows, so it
         // is suppressed whenever the directory or command carries the label.
@@ -527,29 +453,12 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
             session: normalizedCustomTitle ?? ((directory.isEmpty && command.isEmpty) ? generatedTitle : ""),
             command: command,
             directory: directory,
-            workspace: workspace?.name ?? terminalGroup?.name ?? "",
+            workspace: workspace?.name ?? "",
             branch: workspace?.branch ?? "",
             host: hostName,
             user: NSUserName(),
             os: ProcessInfo.processInfo.operatingSystemVersionString
         )
-    }
-}
-
-struct WarrenDesktopEmbeddedEditorPane<Surface: View>: View {
-    let workspace: Workspace
-    let surface: Surface
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-
-    var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        surface
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(tokens.background)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Editor for \(workspace.name)")
     }
 }
 
@@ -572,8 +481,12 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
 
     let tree: SplitLayoutTree
     let activePaneID: String?
+    /// The pane shown alone over the others, which stay mounted beneath it.
+    var zoomedPaneID: String? = nil
+    /// The pane drawn as a rail. Its terminal stays mounted, parked beneath
+    /// its sibling, like the panes a zoom hides.
+    var foldedPaneID: String? = nil
     let workspace: Workspace?
-    let terminalGroup: TerminalGroup?
     let allTabs: [ClientTab]
     let sessionLookup: (TerminalSessionID) -> WarrenDesktopSession?
     let hostName: String
@@ -584,31 +497,78 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
     let onClosePane: (String) -> Void
     let onMaximizePane: (String) -> Void
     let onResizeSplit: ([Bool], Double) -> Void
+    /// Folds a pane into a rail: the pane, its divider's path, and the ratio
+    /// the drag started from.
+    var onFoldPane: (String, [Bool], Double?) -> Void = { _, _, _ in }
+    /// Brings a folded pane back.
+    var onUnfoldPane: (String) -> Void = { _ in }
     let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
     var lonePaneChrome: LonePaneChrome? = nil
 
+    @Environment(\.warrenPaneGroupHover) private var groupHover
+
     var body: some View {
         GeometryReader { proxy in
-            let placement = tree.placement(in: proxy.size)
+            let placement = tree.placement(
+                in: proxy.size,
+                dividerThickness: WarrenLayoutMetrics.cardGap,
+                foldedPaneID: foldedPaneID
+            )
             // Every pane is a sibling here rather than a node in a recursive
             // tree. The shape of the layout therefore changes which frames the
             // panes have, and never which views they are: adding a pane leaves
             // the terminals that were already on screen mounted, so nothing
             // flashes and no pane that did not move is re-attached.
+            //
+            // The view identity follows the Session rather than the pane id.
+            // Adopting the Host's arrangement can replace a pane's local
+            // fallback identity with the one the Host assigned, and keying the
+            // view by the slot would re-create the terminal for that change
+            // alone. Control paths still address the pane by `pane.id`.
             ZStack(alignment: .topLeading) {
-                ForEach(placement.panes) { pane in
-                    paneView(pane)
+                ForEach(placement.panes, id: \.renderID) { pane in
+                    // A zoomed pane takes the whole area. The others keep
+                    // their frames and their terminals, hidden under it, so
+                    // restoring the layout re-attaches nothing.
+                    //
+                    // A folded pane is parked the same way: its terminal stays
+                    // mounted at the frame it would have unfolded, hidden
+                    // beneath its sibling, and only its rail is drawn. The
+                    // surface is never squeezed to the rail's width, so the
+                    // Session is not resized for a fold and comes back as it
+                    // was.
+                    let isZoomed = pane.id == zoomedPaneID
+                    let isParked = pane.isFolded && !isZoomed
+                    let isHidden = (zoomedPaneID != nil && !isZoomed) || isParked
+                    let frame = isZoomed
+                        ? CGRect(origin: .zero, size: proxy.size)
+                        : (pane.parkedFrame ?? pane.frame)
+                    paneView(pane, isParked: isParked)
+                        .warrenPanePeek(tabID: pane.item.tabID, hover: tree.count > 1 ? groupHover : nil)
+                        .frame(width: frame.width, height: frame.height)
+                        .offset(x: frame.minX, y: frame.minY)
+                        .opacity(isHidden ? 0 : 1)
+                        .allowsHitTesting(!isHidden)
+                        .accessibilityHidden(isHidden)
+                        .zIndex(isZoomed ? 1 : (isParked ? -1 : 0))
+                }
+
+                ForEach(zoomedPaneID == nil ? placement.panes.filter(\.isFolded) : [], id: \.renderID) { pane in
+                    foldedRail(pane, in: placement)
                         .frame(width: pane.frame.width, height: pane.frame.height)
                         .offset(x: pane.frame.minX, y: pane.frame.minY)
                 }
 
-                ForEach(placement.dividers) { divider in
+                // A divider beside a rail has nothing to move: the rail is the
+                // way back, and it restores the ratio the divider last held.
+                ForEach(zoomedPaneID == nil ? placement.dividers.filter { $0.foldedSide == nil } : []) { divider in
                     WarrenDesktopSplitDivider(
                         axis: divider.axis,
                         ratio: divider.ratio,
                         minimumRatio: divider.minimumRatio,
                         maximumRatio: divider.maximumRatio,
                         totalLength: divider.totalLength,
+                        foldableSides: divider.foldableSides,
                         onDrag: { ratio in
                             onResizeSplit(
                                 divider.path,
@@ -628,6 +588,10 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
                                     maximum: divider.maximumRatio
                                 )
                             )
+                        },
+                        onFold: { side, restoreRatio in
+                            guard let paneID = divider.leafID(on: side) else { return }
+                            onFoldPane(paneID, divider.path, restoreRatio)
                         }
                     )
                     .frame(width: divider.frame.width, height: divider.frame.height)
@@ -642,10 +606,11 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
         }
     }
 
-    private func paneView(_ pane: SplitLayoutPlacement.Pane) -> some View {
-        let paneCount = tree.count
-        let chrome = paneCount == 1 ? lonePaneChrome : nil
-        let resolvedTab = allTabs.first { $0.id == pane.item.tabID }
+    private func resolvedTab(
+        for pane: SplitLayoutPlacement.Pane,
+        chrome: LonePaneChrome?
+    ) -> ClientTab {
+        allTabs.first { $0.id == pane.item.tabID }
             ?? chrome?.emptyTab
             ?? ClientTab(
                 id: pane.item.tabID,
@@ -653,12 +618,48 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
                 sessionID: nil,
                 kind: .shell
             )
+    }
+
+    /// The rail a folded pane leaves behind. It names the pane the way its
+    /// header does, and a click brings the pane back.
+    private func foldedRail(
+        _ pane: SplitLayoutPlacement.Pane,
+        in placement: SplitLayoutPlacement
+    ) -> some View {
+        let tab = resolvedTab(for: pane, chrome: nil)
+        let session = tab.sessionID.flatMap(sessionLookup)
+        let icon = session.map(WarrenDesktopAppIcon.resolve) ?? WarrenDesktopAppIcon(kind: tab.kind)
+        let title = WarrenDesktopPaneView<TerminalSurface>.stablePaneHeaderTitle(
+            rendered: session.map {
+                WarrenDesktopTabTitle.sessionTitle(for: $0, worktreeRoot: workspace?.path ?? "").title
+            } ?? tab.title,
+            sessionTitle: session?.displayTitle ?? tab.title,
+            kindName: (session?.kind ?? tab.kind).displayName
+        )
+        // The divider beside the rail says which way the split runs: a column
+        // folds into a standing rail, a row into a header-high strip.
+        let axis = placement.dividers.first { divider in
+            divider.foldedSide.flatMap { divider.leafID(on: $0) } == pane.id
+        }?.axis ?? .horizontal
+        return WarrenDesktopFoldedPaneRail(
+            axis: axis,
+            icon: icon,
+            title: title,
+            onRestore: { onUnfoldPane(pane.id) }
+        )
+    }
+
+    private func paneView(_ pane: SplitLayoutPlacement.Pane, isParked: Bool = false) -> some View {
+        let paneCount = tree.count
+        let chrome = paneCount == 1 ? lonePaneChrome : nil
+        let resolvedTab = resolvedTab(for: pane, chrome: chrome)
         let resolvedSession = chrome?.session ?? resolvedTab.sessionID.flatMap(sessionLookup)
-        let isActive = chrome != nil || activePaneID == nil || activePaneID == pane.id
+        // A parked pane never claims the keyboard: its terminal is hidden.
+        let isActive = !isParked
+            && (chrome != nil || activePaneID == nil || activePaneID == pane.id)
         return WarrenDesktopPaneView(
             paneID: pane.id,
             workspace: workspace,
-            terminalGroup: terminalGroup,
             tab: resolvedTab,
             session: resolvedSession,
             hostName: hostName,
@@ -676,7 +677,6 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
             terminalSurface: terminalSurface(
                 WarrenDesktopTerminalContext(
                     workspace: workspace,
-                    terminalGroup: terminalGroup,
                     tab: resolvedTab,
                     font: terminalFont,
                     wantsTerminalFocus: wantsTerminalFocus && isActive
@@ -700,16 +700,29 @@ struct WarrenDesktopSplitDivider: View {
     let minimumRatio: Double
     let maximumRatio: Double
     let totalLength: CGFloat
+    /// The sides whose pane a pull past the minimum may fold.
+    var foldableSides: Set<SplitPaneSide> = []
     let onDrag: (Double) -> Void
     let onAdjust: (Double) -> Void
+    /// Folds the pane on a side; the ratio is the one the drag started from,
+    /// which the rail restores.
+    var onFold: (SplitPaneSide, Double?) -> Void = { _, _ in }
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     @State private var dragStartRatio: Double?
     @State private var snappedTarget: Double?
+    /// The drag's pull past a pane's minimum, while the divider holds there.
+    @State private var pull: SplitDividerPull?
 
     private var isSnapped: Bool { snappedTarget != nil }
+
+    /// True while letting go would fold the held pane.
+    private var releaseFolds: Bool {
+        SplitLayoutTree.foldSide(releasing: pull, foldable: foldableSides) != nil
+    }
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
@@ -719,10 +732,12 @@ struct WarrenDesktopSplitDivider: View {
                 width: axis == .horizontal ? 1 : nil,
                 height: axis == .vertical ? 1 : nil
             )
-            // Overlays never claim layout space, so the snap guides and the
-            // latch highlight cannot shift the panes they are drawn over.
+            // Overlays never claim layout space, so the snap guides, the latch
+            // highlight, and the pull indicator cannot shift the panes they are
+            // drawn over.
             .overlay { snapGuides(tokens) }
             .overlay { latchHighlight(tokens) }
+            .overlay { pullIndicator(tokens) }
             .padding(axis == .horizontal ? .horizontal : .vertical, 2)
             .contentShape(Rectangle())
             .onHover { isHovered = $0 }
@@ -747,6 +762,12 @@ struct WarrenDesktopSplitDivider: View {
                     break
                 }
             }
+            .accessibilityAction(named: Text(foldActionName(.first))) {
+                if foldableSides.contains(.first) { onFold(.first, nil) }
+            }
+            .accessibilityAction(named: Text(foldActionName(.second))) {
+                if foldableSides.contains(.second) { onFold(.second, nil) }
+            }
             .gesture(
                 // The divider is repositioned by the ratio it publishes, so a
                 // local coordinate space would move with it and feed its own
@@ -757,11 +778,7 @@ struct WarrenDesktopSplitDivider: View {
                         if dragStartRatio == nil {
                             dragStartRatio = ratio
                         }
-                        guard let dragStartRatio, totalLength > 0 else { return }
-                        let translation = axis == .horizontal
-                            ? value.translation.width
-                            : value.translation.height
-                        let pointerRatio = dragStartRatio + Double(translation / totalLength)
+                        guard let pointerRatio = pointerRatio(for: value) else { return }
                         let target = SplitLayoutTree.snapTarget(
                             for: pointerRatio,
                             totalLength: totalLength,
@@ -778,18 +795,131 @@ struct WarrenDesktopSplitDivider: View {
                             )
                         }
                         snappedTarget = target
+                        let wasFolding = releaseFolds
+                        pull = SplitLayoutTree.dividerPull(
+                            for: pointerRatio,
+                            totalLength: totalLength,
+                            minimum: minimumRatio,
+                            maximum: maximumRatio
+                        )
+                        // Crossing into the fold is a change of outcome, not of
+                        // position, so it taps at a different level.
+                        if releaseFolds, !wasFolding {
+                            NSHapticFeedbackManager.defaultPerformer.perform(
+                                .levelChange,
+                                performanceTime: .now
+                            )
+                        }
+                        // The caller clamps, so past the minimum the pane holds
+                        // there while the indicator shows the pull.
                         onDrag(target ?? pointerRatio)
                     }
-                    .onEnded { _ in
+                    .onEnded { value in
+                        let startRatio = dragStartRatio
+                        let finalPull = pointerRatio(for: value).flatMap {
+                            SplitLayoutTree.dividerPull(
+                                for: $0,
+                                totalLength: totalLength,
+                                minimum: minimumRatio,
+                                maximum: maximumRatio
+                            )
+                        }
                         dragStartRatio = nil
                         snappedTarget = nil
+                        // Only the indicator animates as it lets go. The panes
+                        // next to it are terminals, whose geometry switches
+                        // without animation.
+                        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+                            pull = nil
+                        }
+                        if let side = SplitLayoutTree.foldSide(releasing: finalPull, foldable: foldableSides) {
+                            onFold(side, startRatio)
+                        }
                     }
             )
     }
 
+    /// The ratio under the pointer, unclamped, for a drag that started at
+    /// `dragStartRatio`.
+    private func pointerRatio(for value: DragGesture.Value) -> Double? {
+        guard let dragStartRatio, totalLength > 0 else { return nil }
+        let translation = axis == .horizontal
+            ? value.translation.width
+            : value.translation.height
+        return dragStartRatio + Double(translation / totalLength)
+    }
+
+    private func foldActionName(_ side: SplitPaneSide) -> String {
+        switch (axis, side) {
+        case (.horizontal, .first): return "Fold Left Pane"
+        case (.horizontal, .second): return "Fold Right Pane"
+        case (.vertical, .first): return "Fold Top Pane"
+        case (.vertical, .second): return "Fold Bottom Pane"
+        }
+    }
+
     private func ruleColor(_ tokens: WarrenColorTokens) -> Color {
+        if releaseFolds { return tokens.warning }
+        if pull != nil { return tokens.mutedForeground.opacity(0.8) }
         if isSnapped { return tokens.info }
-        return isHovered ? tokens.info.opacity(0.8) : tokens.border
+        // At rest the gutter between two cards is the divider; the rule only
+        // appears once the pointer is on it.
+        return isHovered ? tokens.info.opacity(0.8) : .clear
+    }
+
+    /// The length a pull indicator draws for `overshoot`: it grows with the
+    /// pull at a third of its rate, so it reads as tension rather than travel,
+    /// and stops growing well short of the fold so it never crowds the pane.
+    nonisolated static func pullIndicatorLength(for overshoot: CGFloat) -> CGFloat {
+        guard overshoot.isFinite, overshoot > 0 else { return 0 }
+        return min(48, overshoot * 0.35)
+    }
+
+    /// A short rule that reaches from the divider toward the pointer while the
+    /// pane on that side holds at its minimum, with a tag naming what letting
+    /// go does: stay at the minimum, or fold.
+    @ViewBuilder
+    private func pullIndicator(_ tokens: WarrenColorTokens) -> some View {
+        let overshoot = pull?.overshoot ?? 0
+        let length = Self.pullIndicatorLength(for: overshoot)
+        let direction: CGFloat = pull?.side == .second ? 1 : -1
+        let color = releaseFolds ? tokens.warning : tokens.mutedForeground.opacity(0.6)
+        let heldLength = pull.map { pull in
+            pull.side == .first
+                ? CGFloat(minimumRatio) * totalLength
+                : CGFloat(1 - maximumRatio) * totalLength
+        } ?? 0
+        ZStack {
+            Capsule()
+                .fill(color)
+                .frame(
+                    width: axis == .horizontal ? length : 2,
+                    height: axis == .vertical ? length : 2
+                )
+                .offset(
+                    x: axis == .horizontal ? direction * length / 2 : 0,
+                    y: axis == .vertical ? direction * length / 2 : 0
+                )
+            Text(releaseFolds ? "Fold" : "\(Int(heldLength.rounded())) pt")
+                .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                .foregroundStyle(releaseFolds ? tokens.warning : tokens.mutedForeground)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, WarrenSpacing.small)
+                .padding(.vertical, WarrenSpacing.xxs)
+                .background(tokens.popoverSurface, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .strokeBorder(tokens.cardBorder, lineWidth: 1)
+                }
+                .offset(
+                    x: axis == .horizontal ? 0 : 36,
+                    y: axis == .horizontal ? 22 : 0
+                )
+        }
+        .opacity(pull == nil ? 0 : 1)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     /// Dashed lines at every reachable snap target, drawn from hover onwards so

@@ -94,6 +94,8 @@ func (s *Service) AgentViewCapabilities() []string {
 		// agent-backed Session shares, so this is a Host-wide guarantee rather
 		// than a per-Session capability.
 		api.CapabilityAgentCausation,
+		// Output flow control lives on the terminal path every Host has.
+		api.CapabilityOutputAck,
 	}
 	if s == nil {
 		return capabilities
@@ -1012,6 +1014,7 @@ func (s *Service) sendAgentMessage(ctx context.Context, request api.AgentMessage
 			return api.AgentMessageSendResult{}, errors.New("agent message transport is unavailable")
 		}
 		unlock := s.lockAgentSessionAction(request.Session)
+		ctx = s.agentInputContext(ctx, request.Session)
 		text := request.Text
 		if len(request.Attachments) > 0 {
 			text, err = s.agentMessageTextWithAttachments(request)
@@ -1335,7 +1338,20 @@ func appendAgentInteractionAnswers(destination *[]string, value any) {
 	}
 }
 
+// agentInteractionSubmitDelay is the longest pause between writing input and
+// the next key. When the Session's output is observable the pause ends as soon
+// as the TUI has drawn the input and gone quiet (see agentInputContext).
 const agentInteractionSubmitDelay = 300 * time.Millisecond
+
+// agentInteractionQuietWindow is how long output must stay still before the
+// TUI counts as having consumed the input; a large paste can redraw in
+// several bursts, so it gets the longer window.
+const (
+	agentInteractionMinimumDelay    = 30 * time.Millisecond
+	agentInteractionQuietWindow     = 40 * time.Millisecond
+	agentInteractionLargeQuiet      = 100 * time.Millisecond
+	agentInteractionLargeInputBytes = 2 * 1024
+)
 const agentInteractionKeyDelay = 35 * time.Millisecond
 
 func waitAgentTerminalKey(ctx context.Context) error {
@@ -1397,13 +1413,24 @@ func sendTerminalSubmission(ctx context.Context, runtime Runtime, sessionID, tex
 	if err := runtime.Input(ctx, sessionID, encodeTerminalText(text)); err != nil {
 		return err
 	}
-	if err := waitAgentTerminalInput(ctx); err != nil {
+	quiet := agentInteractionQuietWindow
+	if len(text) > agentInteractionLargeInputBytes {
+		quiet = agentInteractionLargeQuiet
+	}
+	if err := waitAgentTerminalSettle(ctx, quiet); err != nil {
 		return err
 	}
 	return runtime.Input(ctx, sessionID, []byte{'\r'})
 }
 
 func waitAgentTerminalInput(ctx context.Context) error {
+	return waitAgentTerminalSettle(ctx, agentInteractionQuietWindow)
+}
+
+func waitAgentTerminalSettle(ctx context.Context, quiet time.Duration) error {
+	if settle, ok := ctx.Value(terminalSettleKey{}).(terminalSettleFunc); ok && settle != nil {
+		return settle(ctx, quiet)
+	}
 	timer := time.NewTimer(agentInteractionSubmitDelay)
 	defer timer.Stop()
 	select {
@@ -1583,6 +1610,7 @@ func (s *Service) respondAgentInteraction(ctx context.Context, request api.Agent
 		}
 		payload := s.agentInteractionPayload(request.Session, request.RequestID, request.Kind)
 		unlock := s.lockAgentSessionAction(request.Session)
+		ctx = s.agentInputContext(ctx, request.Session)
 		err := sendProviderInteractionInput(ctx, runtime, session.Runtime, family, request, payload)
 		unlock()
 		if err != nil {
@@ -1671,6 +1699,7 @@ func (s *Service) setAgentGoal(ctx context.Context, request api.AgentGoalSetRequ
 			return api.AgentGoalResult{}, errors.New("agent goal transport is unavailable")
 		}
 		unlock := s.lockAgentSessionAction(request.Session)
+		ctx = s.agentInputContext(ctx, request.Session)
 		err := sendAgentGoalInputMode(ctx, runtime, session.Runtime, request.Objective, request.ReplaceExisting)
 		unlock()
 		if err != nil {
@@ -1716,6 +1745,7 @@ func (s *Service) clearAgentGoal(ctx context.Context, request api.AgentGoalClear
 			return api.AgentGoalResult{}, errors.New("agent goal transport is unavailable")
 		}
 		unlock := s.lockAgentSessionAction(request.Session)
+		ctx = s.agentInputContext(ctx, request.Session)
 		err := sendAgentGoalInput(ctx, runtime, session.Runtime, "clear")
 		unlock()
 		if err != nil {
@@ -1957,6 +1987,7 @@ func (s *Service) interruptAgentTurn(ctx context.Context, request api.AgentTurnI
 			return api.AgentTurnInterruptResult{}, err
 		}
 		unlock := s.lockAgentSessionAction(request.Session)
+		ctx = s.agentInputContext(ctx, request.Session)
 		var err error
 		if request.Replacement != nil && len(request.Replacement.Attachments) > 0 {
 			text, textErr := s.agentMessageTextWithAttachments(*request.Replacement)

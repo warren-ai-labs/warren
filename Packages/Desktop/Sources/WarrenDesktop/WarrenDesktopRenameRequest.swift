@@ -23,7 +23,7 @@ enum WarrenDesktopRenameRequest: Hashable, Sendable {
         case .project: "Rename Project"
         case .workspace: "Rename Workspace"
         case .session: "Rename Session"
-        case .endpoint: "Customize Server Display Name"
+        case .endpoint: "Rename Host"
         }
     }
 
@@ -38,7 +38,7 @@ enum WarrenDesktopRenameRequest: Hashable, Sendable {
         case .session:
             "Custom titles are stored on the Host and shared by every client."
         case .endpoint:
-            "Only the label shown in Warren changes; the endpoint alias and connection remain unchanged."
+            "Only the label shown in Warren changes; the Host's address and connection stay the same."
         }
     }
 

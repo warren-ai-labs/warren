@@ -270,6 +270,10 @@ method names. They fall into these groups:
 | Session | `session.create`, `session.delete`, `session.delete.preflight`, `session.current`, `session.rename`, `session.pin`, `session.move`, `session.move.preflight`, `session.undo`, `session.attach`, `session.detach`, `session.subscribe`, `session.unsubscribe`, `session.focus`, `session.input`, `session.resize` |
 | Git | `git.panel`, `git.diff`, `git.checkout`, `git.pull`, `git.push`, `git.commit`, `git.pr.create` |
 
+Terminal Groups were removed after this audit: the `terminal-group.*` methods
+no longer exist and every Session belongs to a Workspace (see
+[RFC 0003](rfc/0003-terminal-groups.md), withdrawn).
+
 The schema's `rpcMethods` section stores these as `examples`, not as a
 machine-checkable complete set. At minimum, the following live methods are
 absent from those examples:
