@@ -214,7 +214,8 @@
           "agent-goals-v1",
           "agent-config-v1",
           "agent-streams-v1",
-          "browser-v1"
+          "browser-v1",
+          "output-ack-v1"
         ]
       },
       "uniqueItems": true
@@ -298,14 +299,9 @@
         { "method": "workspace.rename", "paramsRef": "{id: string, name: string}", "resultRef": "void" },
         { "method": "workspace.pin", "paramsRef": "{id: string, pinned: bool}", "resultRef": "void" },
         { "method": "workspace.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
-        { "method": "terminal-group.create", "paramsRef": "{...}", "resultRef": "api.TerminalGroup" },
-        { "method": "terminal-group.remove", "paramsRef": "{id: string, force?: bool}", "resultRef": "void" },
-        { "method": "terminal-group.rename", "paramsRef": "{id: string, name: string}", "resultRef": "void" },
-        { "method": "terminal-group.home", "paramsRef": "{id: string, path: string}", "resultRef": "void" },
-        { "method": "terminal-group.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
         { "method": "session.create", "paramsRef": "{...}", "resultRef": "api.Session" },
-        { "method": "browser.session.create", "paramsRef": "{workspace?: string, group?: string, url?: string, headless?: bool, viewport?: {width: int, height: int}}", "resultRef": "api.BrowserSession" },
-        { "method": "browser.session.list", "paramsRef": "{workspace?: string, group?: string}", "resultRef": "api.BrowserSession[]" },
+        { "method": "browser.session.create", "paramsRef": "{workspace: string, url?: string, headless?: bool, viewport?: {width: int, height: int}}", "resultRef": "api.BrowserSession" },
+        { "method": "browser.session.list", "paramsRef": "{workspace?: string}", "resultRef": "api.BrowserSession[]" },
         { "method": "browser.session.get", "paramsRef": "{id: string}", "resultRef": "api.BrowserSession" },
         { "method": "browser.session.close", "paramsRef": "{id: string}", "resultRef": "void" },
         { "method": "browser.action", "paramsRef": "{id: string, action: api.BrowserAction}", "resultRef": "api.BrowserActionResult" },
@@ -320,9 +316,10 @@
         { "method": "session.undo", "paramsRef": "{id: string}", "resultRef": "void" },
         { "method": "session.subscribe", "paramsRef": "{id: string, cols?: int, rows?: int, claim?: bool, epoch?: uint64, sequence?: uint64}", "resultRef": "{subscribed: bool, attachmentId: string}" },
         { "method": "session.unsubscribe", "paramsRef": "{id: string}", "resultRef": "void" },
+        { "method": "session.ack", "paramsRef": "{id: string, epoch: uint64, sequence: uint64}", "resultRef": "none (no response; requires output-ack-v1)" },
         { "method": "session.focus", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "void" },
         { "method": "session.resize", "paramsRef": "{id: string, cols: int, rows: int}", "resultRef": "void" },
-        { "method": "pane-group.create", "paramsRef": "{workspace?: string, group?: string, session: string, name?: string, before?: string}", "resultRef": "api.PaneGroup" },
+        { "method": "pane-group.create", "paramsRef": "{workspace: string, session: string, name?: string, before?: string}", "resultRef": "api.PaneGroup" },
         { "method": "pane-group.rename", "paramsRef": "{id: string, name: string}", "resultRef": "api.PaneGroup" },
         { "method": "pane-group.move", "paramsRef": "{id: string, before?: string}", "resultRef": "api.PaneGroup" },
         { "method": "pane-group.remove", "paramsRef": "{id: string}", "resultRef": "void" },
@@ -380,7 +377,7 @@
           "notes": "Full roster snapshot. Sent on welcome and on full re-sync."
         },
         "roster.delta": {
-          "fields": { "t": "roster.delta", "baseRevision": "uint64", "revision": "uint64", "host": "api.Host?", "tasks": "EntityChanges<api.Task>?", "projects": "EntityChanges<api.Project>?", "workspaces": "EntityChanges<api.Workspace>?", "terminalGroups": "EntityChanges<api.TerminalGroup>?", "sessions": "EntityChanges<api.Session>?" },
+          "fields": { "t": "roster.delta", "baseRevision": "uint64", "revision": "uint64", "host": "api.Host?", "tasks": "EntityChanges<api.Task>?", "projects": "EntityChanges<api.Project>?", "workspaces": "EntityChanges<api.Workspace>?", "sessions": "EntityChanges<api.Session>?" },
           "notes": "Requires capability 'roster-delta'. Each present collection contains upsert/remove/order arrays; absent collections mean no change. Clients must apply the delta only when baseRevision matches their latest full or delta roster revision. Migration metadata is intentionally absent after the v4 clean break."
         },
         "attached": {

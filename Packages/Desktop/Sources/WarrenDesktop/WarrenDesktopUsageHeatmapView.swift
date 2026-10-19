@@ -17,24 +17,48 @@ struct WarrenDesktopUsageHeatmapView: View {
     /// be tens of thousands of comparisons per frame, on a view that re-renders
     /// whenever the pointer enters a cell.
     private let cellsByPosition: [Int: WarrenUsageHeatmapCell]
+    private let cellsByDay: [String: WarrenUsageHeatmapCell]
+    /// Held in `@State` as a plain reference, so hover never re-renders the grid;
+    /// only the readout layer observes it.
+    @State private var hoverTracker = WarrenUsageHoverTracker()
 
     init(heatmap: WarrenUsageHeatmap, tokens: WarrenColorTokens, selectedDay: Binding<String?>) {
         self.heatmap = heatmap
         self.tokens = tokens
         self._selectedDay = selectedDay
         var index: [Int: WarrenUsageHeatmapCell] = [:]
+        var byDay: [String: WarrenUsageHeatmapCell] = [:]
         index.reserveCapacity(heatmap.cells.count)
+        byDay.reserveCapacity(heatmap.cells.count)
         for cell in heatmap.cells {
             index[cell.week * 7 + cell.weekday] = cell
+            byDay[cell.day] = cell
         }
         self.cellsByPosition = index
+        self.cellsByDay = byDay
     }
 
-    /// Cell edge and gap. Sized so a full year fits the settings content width
-    /// without horizontal scrolling.
-    private let cellSize: CGFloat = 11
-    private let cellGap: CGFloat = 3
+    /// The width the card gives the calendar, measured rather than assumed.
+    ///
+    /// The cell edge used to be a fixed 11pt sized for one settings width, so a
+    /// year (53 columns, ~770pt) overflowed the card whenever the column was
+    /// narrower and sat in a corner of it whenever the window was wider.
+    @State private var availableWidth: CGFloat = 0
+
     private let weekdayLabelWidth: CGFloat = 24
+
+    /// Cell edge: the columns share the measured width, within a range where a
+    /// cell is still a target and a short range does not turn into tiles.
+    private var cellSize: CGFloat {
+        let weeks = CGFloat(max(heatmap.weekCount, 1))
+        guard availableWidth > 0 else { return 11 }
+        let room = availableWidth - weekdayLabelWidth - 3
+        let fitted = (room / weeks - 3).rounded(.down)
+        return min(max(fitted, 6), 16)
+    }
+
+    /// Narrow cells get a narrower gap, so the shade still outweighs the space.
+    private var cellGap: CGFloat { cellSize < 9 ? 2 : 3 }
 
     private var columnWidth: CGFloat { cellSize + cellGap }
 
@@ -45,8 +69,22 @@ struct WarrenDesktopUsageHeatmapView: View {
                 weekdayLabels
                 grid
             }
+            .overlay {
+                WarrenDesktopUsageHeatmapReadout(
+                    tracker: hoverTracker,
+                    cellsByDay: cellsByDay,
+                    tokens: tokens,
+                    gridOrigin: weekdayLabelWidth + cellGap,
+                    cellSize: cellSize,
+                    columnWidth: columnWidth
+                )
+            }
+            // Above the legend, which the readout may overhang.
+            .zIndex(1)
             legend
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .warrenMeasureWidth($availableWidth)
     }
 
     private var monthHeader: some View {
@@ -87,6 +125,7 @@ struct WarrenDesktopUsageHeatmapView: View {
                                 size: cellSize,
                                 tokens: tokens,
                                 isSelected: selectedDay == cell.day,
+                                hoverTracker: hoverTracker,
                                 onSelect: {
                                     // Toggle so clicking the same cell returns
                                     // the detail strip to the range summary.
@@ -149,6 +188,8 @@ private struct WarrenDesktopUsageHeatmapCellView: View {
     let size: CGFloat
     let tokens: WarrenColorTokens
     let isSelected: Bool
+    /// Reported to, never observed: the cell keeps its own hover for its edge.
+    let hoverTracker: WarrenUsageHoverTracker
     let onSelect: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -162,9 +203,11 @@ private struct WarrenDesktopUsageHeatmapCellView: View {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .strokeBorder(borderColor, lineWidth: borderWidth)
             }
-            .onHover { isHovered = $0 }
+            .onHover { inside in
+                isHovered = inside
+                hoverTracker.hover(cell.day, isInside: inside)
+            }
             .onTapGesture(perform: onSelect)
-            .help(tooltip)
             .accessibilityElement()
             .accessibilityLabel(accessibilityText)
             .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
@@ -191,20 +234,6 @@ private struct WarrenDesktopUsageHeatmapCellView: View {
         isSelected ? 1.5 : 1
     }
 
-    private var tooltip: String {
-        let day = WarrenUsageFormatting.dayLabel(cell.day)
-        guard cell.tokens > 0 else { return "\(day) — no activity" }
-        var lines = [
-            day,
-            "\(WarrenUsageFormatting.exact(cell.tokens)) tokens",
-            WarrenUsageFormatting.money(cell.cost),
-        ]
-        if let reason = WarrenUsageFormatting.incompleteReason(cell.cost) {
-            lines.append(reason)
-        }
-        return lines.joined(separator: "\n")
-    }
-
     private var accessibilityText: String {
         guard cell.tokens > 0 else {
             return "\(WarrenUsageFormatting.dayLabel(cell.day)), no activity"
@@ -212,5 +241,43 @@ private struct WarrenDesktopUsageHeatmapCellView: View {
         return "\(WarrenUsageFormatting.dayLabel(cell.day)), "
             + "\(WarrenUsageFormatting.exact(cell.tokens)) tokens, "
             + WarrenUsageFormatting.money(cell.cost)
+    }
+}
+
+/// The heatmap's gliding readout: the same card the daily bars use, beside the
+/// hovered cell. Kept apart from the grid so only this layer redraws on hover.
+private struct WarrenDesktopUsageHeatmapReadout: View {
+    @ObservedObject var tracker: WarrenUsageHoverTracker
+    let cellsByDay: [String: WarrenUsageHeatmapCell]
+    let tokens: WarrenColorTokens
+    /// Where the first grid column starts, past the weekday labels.
+    let gridOrigin: CGFloat
+    let cellSize: CGFloat
+    let columnWidth: CGFloat
+
+    var body: some View {
+        let cell = tracker.last.flatMap { cellsByDay[$0] }
+        WarrenDesktopUsageReadoutLayer(
+            content: cell.map { cell in
+                // Tokens, because tokens are what the cell's shade encodes.
+                WarrenUsageReadoutContent.make(
+                    title: WarrenUsageFormatting.dayLabel(cell.day),
+                    buckets: cell.buckets,
+                    cost: cell.cost,
+                    metric: .tokens,
+                    hint: "Click to open this day"
+                )
+            },
+            anchor: cell.map { cell in
+                CGRect(
+                    x: gridOrigin + CGFloat(cell.week) * columnWidth,
+                    y: CGFloat(cell.weekday) * columnWidth,
+                    width: cellSize,
+                    height: cellSize
+                )
+            } ?? .zero,
+            isVisible: tracker.hovered != nil,
+            tokens: tokens
+        )
     }
 }

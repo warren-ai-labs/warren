@@ -134,6 +134,14 @@ func TestEnsureOpenCodeBindPlugin(t *testing.T) {
 	if !strings.Contains(string(data), "warren-agent-bind-v1") || !strings.Contains(string(data), "WARREN_SESSION_ID") {
 		t.Fatalf("plugin content missing marker: %q", data)
 	}
+	// A delegated child session must be rejected before anything is written, or
+	// a SessionStart for one re-points a live Warren Session at the agent's own
+	// subagent work. Order matters: the guard has to precede the binding write.
+	guard := strings.Index(string(data), "props.info?.parentID")
+	write := strings.Index(string(data), "atomicWrite(bindFile")
+	if guard < 0 || write < 0 || guard > write {
+		t.Fatalf("plugin must reject a child session before binding one: guard=%d write=%d", guard, write)
+	}
 	changed, err = EnsureOpenCodeBindPlugin()
 	if err != nil || changed {
 		t.Fatalf("second install changed=%v err=%v want false", changed, err)

@@ -17,8 +17,11 @@ type codexParser struct {
 	codexCallTool     map[string]string
 	codexGoalCalls    map[string]string
 	codexInteractions map[string]string
-	codexPlanCalls    map[string]struct{}
-	codexTurnFailed   bool
+	// codexSubagentCalls remembers spawned child agents until their output names
+	// the durable child thread, which is the child's stable identity.
+	codexSubagentCalls map[string]codexSubagentCall
+	codexPlanCalls     map[string]struct{}
+	codexTurnFailed    bool
 	// codexTurnPlanMode and codexTurnProposal describe the running turn;
 	// codexPlanPrompt is the "Implement this plan?" picker they opened.
 	codexTurnPlanMode    bool
@@ -52,6 +55,14 @@ type codexParser struct {
 	// timestamp and cwd, and counting both inflated Codex totals by 1.077x.
 	codexSessionKey string
 	codexTokenIndex int64
+
+	// codexHome is the Codex configuration directory that owns the watched
+	// rollout. Codex stores the name it generates for a conversation beside the
+	// sessions tree rather than inside the transcript.
+	codexHome string
+	// codexTitleReported stops the name lookup once it has produced a title;
+	// a thread nobody named must not be re-read on every poll forever.
+	codexTitleReported bool
 }
 
 func newCodexParser(contentLimit int) *codexParser {
@@ -60,6 +71,7 @@ func newCodexParser(contentLimit int) *codexParser {
 		codexCallTool:          make(map[string]string),
 		codexGoalCalls:         make(map[string]string),
 		codexInteractions:      make(map[string]string),
+		codexSubagentCalls:     make(map[string]codexSubagentCall),
 		codexPlanCalls:         make(map[string]struct{}),
 		lastQueuedItemIDs:      make(map[string]struct{}),
 		lastQueuedFingerprints: make(map[string]string),
@@ -68,6 +80,27 @@ func newCodexParser(contentLimit int) *codexParser {
 
 func (p *codexParser) SetThreadID(id string) {
 	p.threadID = id
+}
+
+// SetCodexHome records the Codex configuration directory that owns the watched
+// rollout, which is where the thread name is read from.
+func (p *codexParser) SetCodexHome(home string) {
+	p.codexHome = strings.TrimSpace(home)
+}
+
+// TakeTitle returns the name Codex generated for the watched thread, once.
+// Codex names a thread shortly after its first completed turn, so an early
+// call legitimately returns "".
+func (p *codexParser) TakeTitle() string {
+	if p.codexTitleReported {
+		return ""
+	}
+	title := readCodexThreadName(p.codexHome, p.threadID)
+	if title == "" {
+		return ""
+	}
+	p.codexTitleReported = true
+	return title
 }
 
 func (p *codexParser) SetQueueDBPath(path string) {
@@ -641,30 +674,22 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 				}
 			}
 			if payload.Name == "spawn_agent" {
+				// The child thread's durable identity arrives in the output, so the
+				// row is emitted there; this call only records presentation text.
+				callID := firstNonEmpty(payload.CallID, payload.ID)
 				var spawnArgs struct {
 					AgentType string `json:"agent_type"`
 					Prompt    string `json:"prompt"`
 					Message   string `json:"message"`
 				}
 				_ = json.Unmarshal([]byte(payload.Arguments), &spawnArgs)
-				label := spawnArgs.AgentType
-				if label == "" {
-					label = "Subagent"
+				if callID != "" {
+					p.codexSubagentCalls[callID] = codexSubagentCall{
+						Label:   firstNonEmpty(spawnArgs.AgentType, "Subagent"),
+						Summary: p.clip(firstNonEmpty(spawnArgs.Prompt, spawnArgs.Message)),
+					}
 				}
-				summary := spawnArgs.Prompt
-				if summary == "" {
-					summary = spawnArgs.Message
-				}
-				event.ID = firstNonEmpty(payload.CallID, payload.ID)
-				event.Type = "subagent"
-				event.Payload = map[string]any{
-					"subagentId": event.ID,
-					"title":      label,
-					"label":      label,
-					"state":      "running",
-					"summary":    p.clip(summary),
-				}
-				return []api.AgentEvent{event}
+				return nil
 			}
 			event.ID = payload.ID
 			event.Type = "tool_call"
@@ -738,6 +763,12 @@ func (p *codexParser) parseCodex(line []byte) []api.AgentEvent {
 					return []api.AgentEvent{*goal}
 				}
 				delete(p.codexGoalCalls, payload.CallID)
+			}
+			if call, ok := p.codexSubagentCalls[payload.CallID]; ok {
+				delete(p.codexSubagentCalls, payload.CallID)
+				if subagent, ok := codexSubagentEvent(payload, call, event.Timestamp); ok {
+					return []api.AgentEvent{subagent}
+				}
 			}
 			event.ID = payload.ID
 			event.Type = "tool_output"
@@ -1345,6 +1376,44 @@ func codexReasoningContent(payload codexPayload, limit int) string {
 		return value
 	}
 	return truncate(payload.Text, limit)
+}
+
+// codexSubagentEvent projects a spawn_agent result as a subagent row. Codex
+// returns the child thread id and nickname as a small JSON object; that id is
+// what the child rollout is named after, so it is the stable row identity.
+func codexSubagentEvent(payload codexPayload, call codexSubagentCall, timestamp time.Time) (api.AgentEvent, bool) {
+	raw := payload.Output
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		raw = json.RawMessage(text)
+	}
+	var result struct {
+		AgentID  string `json:"agent_id"`
+		Nickname string `json:"nickname"`
+	}
+	if json.Unmarshal(raw, &result) != nil {
+		return api.AgentEvent{}, false
+	}
+	agentID := strings.TrimSpace(result.AgentID)
+	if agentID == "" {
+		return api.AgentEvent{}, false
+	}
+	label := firstNonEmpty(result.Nickname, call.Label, "Subagent")
+	return api.AgentEvent{
+		Provider: "codex",
+		ID:       agentID,
+		CallID:   payload.CallID,
+		Type:     "subagent",
+		Payload: map[string]any{
+			"subagentId":   agentID,
+			"parentCallId": payload.CallID,
+			"title":        label,
+			"label":        label,
+			"state":        "running",
+			"summary":      call.Summary,
+		},
+		Timestamp: timestamp,
+	}, true
 }
 
 func codexOutputDetails(value json.RawMessage, limit int) (output, status, errorMessage string) {

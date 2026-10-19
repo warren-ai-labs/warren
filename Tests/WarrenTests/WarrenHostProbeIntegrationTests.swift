@@ -11,7 +11,7 @@ final class WarrenHostProbeIntegrationTests: XCTestCase {
         let recorder = WarrenSemanticRecorder()
         var selected: String?
         var visibilityChange: (endpointID: String, isDisplayed: Bool)?
-        let view = WarrenDesktopEndpointPopover(
+        let view = WarrenDesktopEndpointPopoverContent(
             connectionState: .attached,
             endpoints: [.init(id: "dev", label: "Development")],
             selectedID: "local",
@@ -24,6 +24,7 @@ final class WarrenHostProbeIntegrationTests: XCTestCase {
             onStop: {},
             onDismiss: {}
         )
+        .warrenMenuSurface(width: 260)
         .environment(\.colorScheme, .dark)
         .environment(\.warrenSemanticRecorder, recorder)
         .warrenSemanticObservationRoot(recorder: recorder)
@@ -43,7 +44,7 @@ final class WarrenHostProbeIntegrationTests: XCTestCase {
     @MainActor
     func testSelectedEndpointIsImplicitlyInTheSidebar() async throws {
         let recorder = WarrenSemanticRecorder()
-        let view = WarrenDesktopEndpointPopover(
+        let view = WarrenDesktopEndpointPopoverContent(
             connectionState: .attached,
             endpoints: [.init(id: "local", label: "Local")],
             selectedID: "local",
@@ -56,6 +57,7 @@ final class WarrenHostProbeIntegrationTests: XCTestCase {
             onStop: {},
             onDismiss: {}
         )
+        .warrenMenuSurface(width: 260)
         .environment(\.colorScheme, .dark)
         .environment(\.warrenSemanticRecorder, recorder)
         .warrenSemanticObservationRoot(recorder: recorder)
@@ -89,7 +91,7 @@ final class WarrenHostProbeIntegrationTests: XCTestCase {
 
         let recorder = WarrenSemanticRecorder()
         var selected: String?
-        let view = WarrenDesktopEndpointPopover(
+        let view = WarrenDesktopEndpointPopoverContent(
             connectionState: .disconnected,
             endpoints: [.init(id: endpoint.id, label: endpoint.name, detail: "Forwarded Host",
                               probeStatus: result.message, probeFailed: result.isFailure)],
@@ -100,6 +102,7 @@ final class WarrenHostProbeIntegrationTests: XCTestCase {
             },
             onAddSSHHost: {}, onRetry: {}, onStop: {}, onDismiss: {}
         )
+        .warrenMenuSurface(width: 260)
         .environment(\.colorScheme, .dark)
         .environment(\.warrenSemanticRecorder, recorder)
         .warrenSemanticObservationRoot(recorder: recorder)

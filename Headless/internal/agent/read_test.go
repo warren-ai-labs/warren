@@ -54,6 +54,25 @@ func TestReadTranscriptUsageReturnsEveryProviderUsageObservation(t *testing.T) {
 	}
 }
 
+func TestReadTranscriptUsageSkipsOversizedLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude.jsonl")
+	// The oversized line stands in for a multi-megabyte tool dump. It must be
+	// skipped rather than failing the read, and the usage after it must survive.
+	oversized := `{"type":"assistant","uuid":"a2","message":{"id":"msg-2","model":"claude-opus-5","content":[{"type":"text","text":"` + strings.Repeat("x", maxTranscriptLine) + `"}],"usage":{"input_tokens":1,"output_tokens":1}}}`
+	writeReadLines(t, path,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-08-19T00:00:00Z","message":{"id":"msg-1","model":"claude-opus-5","content":[{"type":"text","text":"before"}],"usage":{"input_tokens":100,"output_tokens":20}}}`,
+		oversized,
+		`{"type":"assistant","uuid":"a3","timestamp":"2026-08-19T00:00:02Z","message":{"id":"msg-3","model":"claude-opus-5","content":[{"type":"text","text":"after"}],"usage":{"input_tokens":300,"output_tokens":40}}}`,
+	)
+	events, err := ReadTranscriptUsage(context.Background(), "claude", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Usage.InputTokens != 100 || events[1].Usage.InputTokens != 300 {
+		t.Fatalf("usage events = %#v, want the observations before and after the oversized line", events)
+	}
+}
+
 func TestProjectEventsMatchesTranscriptReadProjection(t *testing.T) {
 	events, err := ProjectEvents([]api.AgentEvent{
 		{Sequence: 1, Type: "usage", Usage: &api.AgentUsage{TotalTokens: 3}},

@@ -9,6 +9,8 @@ public struct WarrenUsageHeatmapCell: Equatable, Sendable, Identifiable {
     public let weekday: Int
     public let tokens: Int64
     public let cost: WarrenUsageCost
+    /// The day's four classes, for the readout. `tokens` is their total.
+    public let buckets: WarrenUsageBuckets
     /// Intensity from 0 to 1 used to pick a shade. Zero-token days are nil so
     /// they render as the empty track rather than the lightest active shade.
     public let intensity: Double?
@@ -21,6 +23,7 @@ public struct WarrenUsageHeatmapCell: Equatable, Sendable, Identifiable {
         weekday: Int,
         tokens: Int64,
         cost: WarrenUsageCost,
+        buckets: WarrenUsageBuckets = WarrenUsageBuckets(),
         intensity: Double?
     ) {
         self.day = day
@@ -28,6 +31,7 @@ public struct WarrenUsageHeatmapCell: Equatable, Sendable, Identifiable {
         self.weekday = weekday
         self.tokens = tokens
         self.cost = cost
+        self.buckets = buckets
         self.intensity = intensity
     }
 
@@ -144,6 +148,7 @@ public enum WarrenUsageHeatmapBuilder {
                     weekday: weekday,
                     tokens: tokens,
                     cost: entry?.cost ?? WarrenUsageCost(),
+                    buckets: entry?.buckets ?? WarrenUsageBuckets(),
                     intensity: intensity(tokens: tokens, peak: peak)
                 )
             )

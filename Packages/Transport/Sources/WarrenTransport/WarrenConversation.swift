@@ -90,6 +90,38 @@ public struct WarrenConversation: Equatable, Sendable {
         public var choice: String = ""
         public var order: UInt64 = 0
 
+        /// Public so the app model can format a child transcript's tool call,
+        /// which arrives as payload fields rather than as a projected step.
+        public init(
+            id: String,
+            kind: Kind,
+            toolKind: String = "tool",
+            title: String = "",
+            detail: String = "",
+            status: Status = .pending,
+            output: String = "",
+            error: String = "",
+            diff: Diff? = nil,
+            terminalSessionID: String? = nil,
+            outcome: String = "",
+            choice: String = "",
+            order: UInt64 = 0
+        ) {
+            self.id = id
+            self.kind = kind
+            self.toolKind = toolKind
+            self.title = title
+            self.detail = detail
+            self.status = status
+            self.output = output
+            self.error = error
+            self.diff = diff
+            self.terminalSessionID = terminalSessionID
+            self.outcome = outcome
+            self.choice = choice
+            self.order = order
+        }
+
         /// The verb and target shown on one line, for example ("Ran", "git status").
         public var line: (verb: String, target: String) { line(relativeTo: nil) }
 
@@ -103,6 +135,11 @@ public struct WarrenConversation: Equatable, Sendable {
             let running = status == .pending || status == .running
             guard let verbs = WarrenConversation.stepVerbs[toolKind] else {
                 return (title.isEmpty ? "Tool" : title, detail != title ? WarrenConversation.displayTarget(detail, root: root) : "")
+            }
+            if toolKind == "skill" {
+                // A plugin skill is `plugin:name`; the name is what was used.
+                let name = detail.split(separator: ":").last.map(String.init) ?? detail
+                return (running ? verbs.0 : verbs.1, name.trimmingCharacters(in: .whitespacesAndNewlines))
             }
             return (running ? verbs.0 : verbs.1, WarrenConversation.displayTarget(detail.isEmpty ? title : detail, root: root))
         }
@@ -215,6 +252,10 @@ public struct WarrenConversation: Equatable, Sendable {
         public var title: String
         public var toolKind: String
         public var detail: String
+        /// Why the Agent is asking, when the provider says. Claude and Codex
+        /// send a `description`; an ACP tool call carries only its `title`,
+        /// which is what the tool is about to do.
+        public var reason: String = ""
         public var diff: Diff?
         public var options: [Option]
         /// The question the dock asks, from the tool kind.
@@ -229,6 +270,25 @@ public struct WarrenConversation: Equatable, Sendable {
             case "mode": "Switch mode?"
             default: "Allow this step?"
             }
+        }
+        /// What the Agent wants to do, as the end of "<Agent> wants to …".
+        public var verbPhrase: String {
+            switch toolKind {
+            case "ran": "run a command"
+            case "edit", "write": "make a change"
+            case "delete": "delete a file"
+            case "move": "move a file"
+            case "read": "read a file"
+            case "fetch": "make a request"
+            case "mode": "switch mode"
+            default: "do this"
+            }
+        }
+        /// The decision's headline. The Conversation's dock and the Desktop's
+        /// approval tray both say it, so a request reads the same wherever it
+        /// is answered.
+        public func ask(providerName: String) -> String {
+            "\(providerName) wants to \(verbPhrase)"
         }
     }
 
@@ -271,6 +331,7 @@ public struct WarrenConversation: Equatable, Sendable {
         "fetch": ("Fetching", "Fetched"),
         "think": ("Thinking", "Thought"),
         "mode": ("Switching mode", "Switched mode"),
+        "skill": ("Using skill", "Used skill"),
     ]
 }
 
@@ -352,27 +413,10 @@ extension WarrenConversation {
             case "tool.started", "tool.updated", "tool.completed", "tool.failed":
                 let index = turnPosition(event)
                 let id = payload.string("callId") ?? event.id
-                var step: Step
                 let position = result.turns[index].steps.firstIndex { $0.kind == .tool && $0.id == id }
-                if let position {
-                    step = result.turns[index].steps[position]
-                } else {
-                    step = Step(id: id, kind: .tool, order: event.sequence)
-                }
-                if let value = payload.string("toolKind"), !value.isEmpty { step.toolKind = value }
-                if let value = payload.string("toolName"), !value.isEmpty { step.title = value }
-                if let value = payload.string("toolDetail"), !value.isEmpty { step.detail = value }
-                if let value = payload.string("output"), !value.isEmpty { step.output = value }
-                if let value = payload.string("error"), !value.isEmpty { step.error = value }
-                if let diff = Self.diff(payload["diff"]) { step.diff = diff }
-                if let value = payload.string("terminalSessionId"), !value.isEmpty { step.terminalSessionID = value }
-                if type == "tool.completed" {
-                    step.status = .completed
-                } else if type == "tool.failed" {
-                    step.status = .failed
-                } else if payload.string("toolStatus") == "in_progress" {
-                    step.status = .running
-                }
+                var step = position.map { result.turns[index].steps[$0] }
+                    ?? Step(id: id, kind: .tool, order: event.sequence)
+                Self.applyTool(type: type, payload: payload, to: &step)
                 if let position {
                     result.turns[index].steps[position] = step
                 } else {
@@ -439,6 +483,86 @@ extension WarrenConversation {
         return result
     }
 
+    /// Merges one `tool.*` event into the step it reports on.
+    private static func applyTool(type: String, payload: [String: WarrenRemoteJSONValue], to step: inout Step) {
+        if let value = payload.string("toolKind"), !value.isEmpty { step.toolKind = value }
+        if let value = payload.string("toolName"), !value.isEmpty { step.title = value }
+        if let value = payload.string("toolDetail"), !value.isEmpty { step.detail = value }
+        if let value = payload.string("output"), !value.isEmpty { step.output = value }
+        if let value = payload.string("error"), !value.isEmpty { step.error = value }
+        if let diff = Self.diff(payload["diff"]) { step.diff = diff }
+        if let value = payload.string("terminalSessionId"), !value.isEmpty { step.terminalSessionID = value }
+        if type == "tool.completed" {
+            step.status = .completed
+        } else if type == "tool.failed" {
+            step.status = .failed
+        } else if payload.string("toolStatus") == "in_progress" {
+            step.status = .running
+        }
+    }
+
+    /// The tool step an Agent is on, folded forward over a batch of events.
+    ///
+    /// A turn boundary clears it, so a new turn never shows the last turn's
+    /// work. A step that starts or updates takes over; a call that merely
+    /// settles while another one is current does not, because parallel
+    /// tools finish out of order and the newest started call is what the
+    /// Agent is doing.
+    public static func currentStep(after current: Step?, applying events: [WarrenRemoteAgentEvent]) -> Step? {
+        var step = current
+        for event in events.sorted(by: { $0.sequence < $1.sequence }) {
+            let type = event.type.lowercased()
+            let payload = event.payload ?? [:]
+            switch type {
+            case "turn.started", "turn.completed", "turn.failed", "turn.cancelled", "turn.interrupted", "turn.aborted":
+                step = nil
+            case "tool.started", "tool.updated", "tool.completed", "tool.failed":
+                let id = payload.string("callId") ?? event.id
+                if var existing = step, existing.id == id {
+                    applyTool(type: type, payload: payload, to: &existing)
+                    step = existing
+                } else if step == nil || type == "tool.started" || type == "tool.updated" {
+                    var next = Step(id: id, kind: .tool, order: event.sequence)
+                    applyTool(type: type, payload: payload, to: &next)
+                    step = next
+                }
+            default:
+                break
+            }
+        }
+        return step
+    }
+
+    /// The steps a turn has taken, folded forward over a batch of events.
+    ///
+    /// `currentStep` answers "what is it on now"; this keeps every call the turn
+    /// made, because a resting row summarizes the whole turn and not just the
+    /// last call. A turn boundary clears the list, and a call updates the step
+    /// with its own id so an update never adds a second row.
+    public static func steps(after current: [Step], applying events: [WarrenRemoteAgentEvent]) -> [Step] {
+        var steps = current
+        for event in events.sorted(by: { $0.sequence < $1.sequence }) {
+            let type = event.type.lowercased()
+            let payload = event.payload ?? [:]
+            switch type {
+            case "turn.started", "turn.completed", "turn.failed", "turn.cancelled", "turn.interrupted", "turn.aborted":
+                steps = []
+            case "tool.started", "tool.updated", "tool.completed", "tool.failed":
+                let id = payload.string("callId") ?? event.id
+                if let position = steps.firstIndex(where: { $0.kind == .tool && $0.id == id }) {
+                    applyTool(type: type, payload: payload, to: &steps[position])
+                } else {
+                    var step = Step(id: id, kind: .tool, order: event.sequence)
+                    applyTool(type: type, payload: payload, to: &step)
+                    steps.append(step)
+                }
+            default:
+                break
+            }
+        }
+        return steps
+    }
+
     private static func finish(_ turn: inout Turn) {
         let lastStep = turn.steps.map(\.order).max() ?? 0
         let visible = turn.messages.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -477,9 +601,22 @@ extension WarrenConversation {
             title: payload.string("title") ?? "Permission",
             toolKind: payload.string("toolKind") ?? "",
             detail: payload.string("toolDetail") ?? "",
+            reason: decisionReason(payload),
             diff: diff(payload["diff"]),
             options: orderedOptions(options(payload["options"]))
         )
+    }
+
+    /// The provider's own sentence for why it is asking, if it has one.
+    ///
+    /// Providers that carry a `description` own the wording. An ACP tool call
+    /// has no description, so its tool `title` is the reason; the "Permission"
+    /// placeholder is not a reason and is dropped.
+    private static func decisionReason(_ payload: [String: WarrenRemoteJSONValue]) -> String {
+        let description = (payload.string("description") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !description.isEmpty { return description }
+        let title = (payload.string("title") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return title == "Permission" ? "" : title
     }
 
     private static func config(_ items: [WarrenRemoteJSONValue]) -> [ConfigOption] {
@@ -545,27 +682,114 @@ extension WarrenConversation {
 
     /// One line for a turn's work: counts by kind of action, in a fixed order.
     public static func summarize(_ steps: [Step]) -> String {
-        let tools = steps.filter { $0.kind == .tool && $0.toolKind != "think" }
-        let groups: [([String], String, (Int) -> String, Bool)] = [
-            (["read"], "Read 1 file", { "Read \($0) files" }, true),
-            (["edit", "write", "delete", "move"], "Edited 1 file", { "Edited \($0) files" }, true),
-            (["ran"], "Ran 1 command", { "Ran \($0) commands" }, false),
-            (["grep", "glob", "search"], "Searched once", { "Searched \($0) times" }, false),
-            (["fetch"], "Fetched 1 page", { "Fetched \($0) pages" }, false),
-        ]
-        var parts: [String] = []
-        var used = Set<String>()
-        for (kinds, one, many, unique) in groups {
-            let matching = tools.filter { kinds.contains($0.toolKind) }
-            matching.forEach { used.insert($0.id) }
-            let count = unique ? Set(matching.map { $0.detail.isEmpty ? $0.id : $0.detail }).count : matching.count
-            if count == 1 { parts.append(one) } else if count > 1 { parts.append(many(count)) }
+        summaryItems(steps).map(\.label).joined(separator: " · ")
+    }
+
+    /// A turn's work as separate counts, so a caller that can show only part of
+    /// the summary still uses the same wording as `summarize`.
+    public struct TurnSummaryItem: Equatable, Sendable {
+        /// The kind of action a count describes. A caller that ranks the items
+        /// for one narrow surface reads this instead of re-parsing the label.
+        public enum Kind: String, Equatable, Sendable {
+            case edited, gitWrite, ran, fetched, searched, read, other, decision
         }
+
+        public let kind: Kind
+        public let label: String
+    }
+
+    /// How a `git` command counts in a turn's summary. A writing subcommand
+    /// is a Git write; a read-only one counts as reading. `nil` means the
+    /// command is not git.
+    public enum GitCommandClass: Equatable, Sendable {
+        case read
+        case write
+    }
+
+    /// The `git` subcommands that change state. A command whose subcommand is
+    /// not in this set counts as a read, so an unknown or ambiguous subcommand
+    /// (`branch`, `tag`, `config`) never claims a write it did not earn.
+    static let writingGitSubcommands: Set<String> = [
+        "add", "am", "apply", "checkout", "cherry-pick", "clean", "clone",
+        "commit", "fetch", "filter-branch", "gc", "init", "lfs", "merge",
+        "mv", "notes", "prune", "pull", "push", "rebase", "reset", "restore",
+        "revert", "rm", "stash", "submodule", "switch", "tag", "update-index",
+        "update-ref", "worktree",
+    ]
+
+    /// Classifies a command line by its first `git` invocation and that
+    /// invocation's subcommand. The scan is textual on purpose: the Host
+    /// reports a command as one string, so `cd repo && git commit` has to be
+    /// read the same as a bare `git commit`. A command that merely mentions
+    /// `git` (for example inside a quoted string) is classified too; the
+    /// counts are a presentation summary, not an audit.
+    public static func gitCommandClass(_ command: String) -> GitCommandClass? {
+        guard let subcommand = gitSubcommand(in: command) else { return nil }
+        return writingGitSubcommands.contains(subcommand) ? .write : .read
+    }
+
+    /// The subcommand of the first `git` invocation in a command line, or nil
+    /// when the line never invokes git. Git's own value-taking options are
+    /// skipped so `git -C /repo status` reads as `status`.
+    static func gitSubcommand(in command: String) -> String? {
+        let separators: Set<Character> = [";", "&", "|", "(", ")", "\n", "\t"]
+        let normalized = String(command.map { separators.contains($0) ? " " : $0 })
+        let tokens = normalized.split(whereSeparator: { $0 == " " }).map(String.init)
+        guard let gitIndex = tokens.firstIndex(of: "git") else { return nil }
+        let valueOptions: Set<String> = [
+            "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
+        ]
+        var index = gitIndex + 1
+        while index < tokens.count {
+            let token = tokens[index]
+            if valueOptions.contains(token) {
+                index += 2
+                continue
+            }
+            if token.hasPrefix("-") {
+                index += 1
+                continue
+            }
+            return token.lowercased()
+        }
+        return nil
+    }
+
+    /// A turn's steps as ordered counts, in `summarize`'s fixed order. The
+    /// sidebar re-ranks these by its own priority, which is why the kind is
+    /// carried beside the label.
+    public static func summaryItems(_ steps: [Step]) -> [TurnSummaryItem] {
+        let tools = steps.filter { $0.kind == .tool && $0.toolKind != "think" }
+        // A `ran` step is split by what its command is: a Git write is its own
+        // count, a git read joins the reads, and everything else stays a ran
+        // command. A non-git command is never a Git write.
+        let gitWrites = tools.filter { $0.toolKind == "ran" && gitCommandClass($0.detail) == .write }
+        let gitReads = tools.filter { $0.toolKind == "ran" && gitCommandClass($0.detail) == .read }
+        let commands = tools.filter { $0.toolKind == "ran" && gitCommandClass($0.detail) == nil }
+        let reads = tools.filter { $0.toolKind == "read" } + gitReads
+        let edits = tools.filter { ["edit", "write", "delete", "move"].contains($0.toolKind) }
+        let searches = tools.filter { ["grep", "glob", "search"].contains($0.toolKind) }
+        let fetches = tools.filter { $0.toolKind == "fetch" }
+        var used = Set((reads + edits + gitWrites + commands + searches + fetches).map(\.id))
+        var items: [TurnSummaryItem] = []
+        func append(_ kind: TurnSummaryItem.Kind, _ group: [Step], unique: Bool, _ one: String, _ many: (Int) -> String) {
+            let count = unique ? Set(group.map { $0.detail.isEmpty ? $0.id : $0.detail }).count : group.count
+            if count == 1 { items.append(.init(kind: kind, label: one)) }
+            else if count > 1 { items.append(.init(kind: kind, label: many(count))) }
+        }
+        append(.read, reads, unique: true, "Read 1 file", { "Read \($0) files" })
+        append(.edited, edits, unique: true, "Edited 1 file", { "Edited \($0) files" })
+        append(.gitWrite, gitWrites, unique: false, "Git wrote 1 change", { "Git wrote \($0) changes" })
+        append(.ran, commands, unique: false, "Ran 1 command", { "Ran \($0) commands" })
+        append(.searched, searches, unique: false, "Searched once", { "Searched \($0) times" })
+        append(.fetched, fetches, unique: false, "Fetched 1 page", { "Fetched \($0) pages" })
         let other = tools.filter { !used.contains($0.id) }.count
-        if other == 1 { parts.append("1 other step") } else if other > 1 { parts.append("\(other) other steps") }
+        if other == 1 { items.append(.init(kind: .other, label: "Used 1 tool")) }
+        else if other > 1 { items.append(.init(kind: .other, label: "Used \(other) tools")) }
         let decisions = steps.filter { $0.kind == .decision }.count
-        if decisions == 1 { parts.append("1 decision") } else if decisions > 1 { parts.append("\(decisions) decisions") }
-        return parts.joined(separator: " · ")
+        if decisions == 1 { items.append(.init(kind: .decision, label: "1 decision")) }
+        else if decisions > 1 { items.append(.init(kind: .decision, label: "\(decisions) decisions")) }
+        return items
     }
 
     /// The text to show while an answer streams: a trailing partial word is

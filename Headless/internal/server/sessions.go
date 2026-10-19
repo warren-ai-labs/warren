@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -56,34 +55,7 @@ func (s *Service) CreateSessionWithHandler(ctx context.Context, workspaceID, com
 			defer projectLock.RUnlock()
 		}
 	}
-	return s.createSession(ctx, workspaceID, "", command, kind, title, runtimeKind, agentHandler)
-}
-
-func (s *Service) CreateGroupSession(ctx context.Context, groupID, command, kind, title, runtimeKind string) (api.Session, error) {
-	return s.CreateGroupSessionWithHandler(ctx, groupID, command, kind, title, runtimeKind, "")
-}
-
-func (s *Service) CreateGroupSessionWithHandler(ctx context.Context, groupID, command, kind, title, runtimeKind, agentHandler string) (api.Session, error) {
-	s.terminalGroupLifecycleMu.Lock()
-	defer s.terminalGroupLifecycleMu.Unlock()
-	return s.createSession(ctx, "", groupID, command, kind, title, runtimeKind, agentHandler)
-}
-
-// CreateDefaultGroupSession creates a standalone shell in the first ordered
-// Group, recreating Inbox when a Host has no Groups left.
-func (s *Service) CreateDefaultGroupSession(ctx context.Context, command, kind, title, runtimeKind string) (api.Session, error) {
-	return s.CreateDefaultGroupSessionWithHandler(ctx, command, kind, title, runtimeKind, "")
-}
-
-func (s *Service) CreateDefaultGroupSessionWithHandler(ctx context.Context, command, kind, title, runtimeKind, agentHandler string) (api.Session, error) {
-	s.terminalGroupLifecycleMu.Lock()
-	defer s.terminalGroupLifecycleMu.Unlock()
-
-	group, err := s.ensureTerminalGroup()
-	if err != nil {
-		return api.Session{}, err
-	}
-	return s.createSession(ctx, "", group.ID, command, kind, title, runtimeKind, agentHandler)
+	return s.createSession(ctx, workspaceID, command, kind, title, runtimeKind, agentHandler)
 }
 
 // sessionEnvironment returns the per-session bindings together with the
@@ -109,9 +81,9 @@ func (s *Service) sessionEnvironment(id, kind string) ([]string, error) {
 	return env, nil
 }
 
-func (s *Service) createSession(ctx context.Context, workspaceID, groupID, command, kind, title, runtimeKind string, agentHandler ...string) (api.Session, error) {
+func (s *Service) createSession(ctx context.Context, workspaceID, command, kind, title, runtimeKind string, agentHandler ...string) (api.Session, error) {
 	return s.createSessionWith(ctx, sessionCreateRequest{
-		workspaceID: workspaceID, groupID: groupID, command: command, kind: kind,
+		workspaceID: workspaceID, command: command, kind: kind,
 		title: title, runtimeKind: runtimeKind, agentHandler: agentHandler,
 	})
 }
@@ -119,8 +91,8 @@ func (s *Service) createSession(ctx context.Context, workspaceID, groupID, comma
 // sessionCreateRequest carries createSession's arguments plus the Host-only
 // resume binding used by an ACP hand-off (RFC 0023 §6.12).
 type sessionCreateRequest struct {
-	workspaceID, groupID, command, kind, title, runtimeKind string
-	agentHandler                                            []string
+	workspaceID, command, kind, title, runtimeKind string
+	agentHandler                                   []string
 	// resumeAgentSessionID binds the new TUI Session to a provider
 	// conversation Warren already owns. The command then names that
 	// conversation itself, which the provider validators otherwise refuse.
@@ -134,14 +106,11 @@ type sessionCreateRequest struct {
 }
 
 func (s *Service) createSessionWith(ctx context.Context, request sessionCreateRequest) (api.Session, error) {
-	workspaceID, groupID, command, kind, title, runtimeKind, agentHandler := request.workspaceID, request.groupID, request.command, request.kind, request.title, request.runtimeKind, request.agentHandler
+	workspaceID, command, kind, title, runtimeKind, agentHandler := request.workspaceID, request.command, request.kind, request.title, request.runtimeKind, request.agentHandler
 	resuming := request.resumeAgentSessionID != ""
 	startedAt := time.Now()
-	if workspaceID == "" && groupID == "" {
-		return api.Session{}, errors.New("workspace or terminal group is required")
-	}
-	if workspaceID != "" && groupID != "" {
-		return api.Session{}, errors.New("workspace and terminal group are mutually exclusive")
+	if workspaceID == "" {
+		return api.Session{}, errors.New("workspace is required")
 	}
 	if normalizeProviderKind(kind) == sessionKindBrowser {
 		// A browser Session has no PTY and no Ghostline runtime, so the terminal
@@ -151,30 +120,7 @@ func (s *Service) createSessionWith(ctx context.Context, request sessionCreateRe
 		return api.Session{}, errors.New("a browser Session is created with browser.session.create, not session.create")
 	}
 	state := s.Store.Snapshot()
-	var workspace *api.Workspace
-	var group *api.TerminalGroup
-	if workspaceID != "" {
-		for i := range state.Workspaces {
-			if state.Workspaces[i].ID == workspaceID {
-				workspace = &state.Workspaces[i]
-				break
-			}
-		}
-		if workspace == nil {
-			return api.Session{}, fmt.Errorf("workspace not found: %s", workspaceID)
-		}
-	} else {
-		for i := range state.TerminalGroups {
-			if state.TerminalGroups[i].ID == groupID {
-				group = &state.TerminalGroups[i]
-				break
-			}
-		}
-		if group == nil {
-			return api.Session{}, fmt.Errorf("terminal group not found: %s", groupID)
-		}
-	}
-	workingDirectory, err := sessionWorkingDirectory(state, workspaceID, groupID)
+	workingDirectory, err := sessionWorkingDirectory(state, workspaceID)
 	if err != nil {
 		return api.Session{}, err
 	}
@@ -200,7 +146,7 @@ func (s *Service) createSessionWith(ctx context.Context, request sessionCreateRe
 	if selectedAgentHandler == AgentHandlerACP {
 		// An ACP Session has no PTY; the Agent handle owns its process
 		// (RFC 0023).
-		return s.createACPSession(ctx, workspaceID, groupID, command, kind, title)
+		return s.createACPSession(ctx, workspaceID, command, kind, title)
 	}
 	if kind == "opencode" {
 		if strings.TrimSpace(command) == "" {
@@ -313,23 +259,18 @@ func (s *Service) createSessionWith(ctx context.Context, request sessionCreateRe
 	}
 	runtimeDuration := time.Since(runtimeStartedAt)
 	session := api.Session{
-		ID:              id,
-		WorkspaceID:     workspaceID,
-		TerminalGroupID: groupID,
-		Scope:           api.SessionScopeWorkspace,
-		Title:           defaultTitle,
-		CustomTitle:     customTitle,
-		Kind:            kind,
-		AgentProvider:   agentProviderForKind(kind),
-		AgentHandler:    selectedAgentHandler,
-		Command:         command,
-		Runtime:         runtimeName,
-		RuntimeKind:     sessionKind,
-		Lifecycle:       "running",
-		CreatedAt:       sessionCreatedAt,
-	}
-	if groupID != "" {
-		session.Scope = api.SessionScopeTerminalGroup
+		ID:            id,
+		WorkspaceID:   workspaceID,
+		Title:         defaultTitle,
+		CustomTitle:   customTitle,
+		Kind:          kind,
+		AgentProvider: agentProviderForKind(kind),
+		AgentHandler:  selectedAgentHandler,
+		Command:       command,
+		Runtime:       runtimeName,
+		RuntimeKind:   sessionKind,
+		Lifecycle:     "running",
+		CreatedAt:     sessionCreatedAt,
 	}
 	if injectedClaude {
 		session.AgentSessionID = id
@@ -461,26 +402,20 @@ type SessionMoveExpectations struct {
 	AgentSessionID *string
 }
 
-// MoveSession changes the Host scope of a Session between a Workspace and a
-// Terminal Group. The compatibility wrapper keeps existing API callers
-// working; new callers should use MoveSessionWithExpectations.
-func (s *Service) MoveSession(ctx context.Context, id, workspaceID, groupID string) (api.Session, error) {
-	return s.MoveSessionWithExpectations(ctx, id, workspaceID, groupID, SessionMoveExpectations{})
+// MoveSession moves a Session to another Workspace. The compatibility wrapper
+// keeps existing API callers working; new callers should use
+// MoveSessionWithExpectations.
+func (s *Service) MoveSession(ctx context.Context, id, workspaceID string) (api.Session, error) {
+	return s.MoveSessionWithExpectations(ctx, id, workspaceID, SessionMoveExpectations{})
 }
 
 // MoveSessionWithExpectations performs an atomic move with optional source
 // context guards and records a reversible operation audit entry. The runtime,
 // working directory, output history, and Session ID are all preserved.
-func (s *Service) MoveSessionWithExpectations(_ context.Context, id, workspaceID, groupID string, expectations SessionMoveExpectations) (api.Session, error) {
-	if workspaceID == "" && groupID == "" {
-		return api.Session{}, errors.New("workspace or terminal group is required")
+func (s *Service) MoveSessionWithExpectations(_ context.Context, id, workspaceID string, expectations SessionMoveExpectations) (api.Session, error) {
+	if workspaceID == "" {
+		return api.Session{}, errors.New("workspace is required")
 	}
-	if workspaceID != "" && groupID != "" {
-		return api.Session{}, errors.New("workspace and terminal group are mutually exclusive")
-	}
-	s.terminalGroupLifecycleMu.Lock()
-	defer s.terminalGroupLifecycleMu.Unlock()
-
 	var moved api.Session
 	var operationID string
 	err := s.Store.Update(func(value *api.State) error {
@@ -501,34 +436,24 @@ func (s *Service) MoveSessionWithExpectations(_ context.Context, id, workspaceID
 		if expectations.AgentSessionID != nil && session.AgentSessionID != *expectations.AgentSessionID {
 			return fmt.Errorf("stale agent session context for %s: expected agent session %q, found %q; refresh session list and retry", id, *expectations.AgentSessionID, session.AgentSessionID)
 		}
-		if workspaceID != "" {
-			if !workspaceExists(value, workspaceID) {
-				return fmt.Errorf("workspace not found: %s", workspaceID)
-			}
-		} else if !terminalGroupExists(value, groupID) {
-			return fmt.Errorf("terminal group not found: %s", groupID)
+		if !workspaceExists(value, workspaceID) {
+			return fmt.Errorf("workspace not found: %s", workspaceID)
 		}
-		if session.WorkspaceID == workspaceID && session.TerminalGroupID == groupID {
+		if session.WorkspaceID == workspaceID {
 			moved = session
 			return nil
 		}
 
 		beforeWorkspaceID := session.WorkspaceID
-		beforeGroupID := session.TerminalGroupID
 		session.WorkspaceID = workspaceID
-		session.TerminalGroupID = groupID
-		session.Scope = api.SessionScopeWorkspace
-		if groupID != "" {
-			session.Scope = api.SessionScopeTerminalGroup
-		}
 		value.Sessions[index] = session
 		operationID = store.NewID()
 		value.Operations = append(value.Operations, api.OperationAudit{
 			ID: operationID, Kind: "session.move", Resource: "session", ResourceID: id,
-			BeforeWorkspaceID: beforeWorkspaceID, BeforeTerminalGroupID: beforeGroupID,
-			AfterWorkspaceID: workspaceID, AfterTerminalGroupID: groupID,
-			AgentSessionID: session.AgentSessionID,
-			CreatedAt:      time.Now().UTC(),
+			BeforeWorkspaceID: beforeWorkspaceID,
+			AfterWorkspaceID:  workspaceID,
+			AgentSessionID:    session.AgentSessionID,
+			CreatedAt:         time.Now().UTC(),
 		})
 		if len(value.Operations) > operationAuditLimit {
 			value.Operations = append([]api.OperationAudit(nil), value.Operations[len(value.Operations)-operationAuditLimit:]...)
@@ -555,24 +480,12 @@ func workspaceExists(state *api.State, id string) bool {
 	return false
 }
 
-func terminalGroupExists(state *api.State, id string) bool {
-	for _, group := range state.TerminalGroups {
-		if group.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
 // PreflightSessionMove validates a move without changing durable state. It
 // uses the same context checks as the atomic mutation path so dry-run output
 // is actionable rather than a best-effort local guess.
-func (s *Service) PreflightSessionMove(id, workspaceID, groupID string, expectations SessionMoveExpectations) (api.SessionMovePreflight, error) {
-	if workspaceID == "" && groupID == "" {
-		return api.SessionMovePreflight{}, errors.New("workspace or terminal group is required")
-	}
-	if workspaceID != "" && groupID != "" {
-		return api.SessionMovePreflight{}, errors.New("workspace and terminal group are mutually exclusive")
+func (s *Service) PreflightSessionMove(id, workspaceID string, expectations SessionMoveExpectations) (api.SessionMovePreflight, error) {
+	if workspaceID == "" {
+		return api.SessionMovePreflight{}, errors.New("workspace is required")
 	}
 	state := s.Store.Snapshot()
 	var session api.Session
@@ -593,16 +506,13 @@ func (s *Service) PreflightSessionMove(id, workspaceID, groupID string, expectat
 	if expectations.AgentSessionID != nil && session.AgentSessionID != *expectations.AgentSessionID {
 		return api.SessionMovePreflight{}, fmt.Errorf("stale agent session context for %s: expected agent session %q, found %q; refresh session list and retry", id, *expectations.AgentSessionID, session.AgentSessionID)
 	}
-	if workspaceID != "" && !workspaceExists(&state, workspaceID) {
+	if !workspaceExists(&state, workspaceID) {
 		return api.SessionMovePreflight{}, fmt.Errorf("workspace not found: %s", workspaceID)
-	}
-	if groupID != "" && !terminalGroupExists(&state, groupID) {
-		return api.SessionMovePreflight{}, fmt.Errorf("terminal group not found: %s", groupID)
 	}
 	result := api.SessionMovePreflight{
 		Allowed: true, Session: session,
-		SourceWorkspaceID: session.WorkspaceID, SourceTerminalGroupID: session.TerminalGroupID,
-		DestinationWorkspaceID: workspaceID, DestinationTerminalGroupID: groupID,
+		SourceWorkspaceID:      session.WorkspaceID,
+		DestinationWorkspaceID: workspaceID,
 	}
 	if expectations.WorkspaceID != nil {
 		result.ExpectedWorkspaceID = *expectations.WorkspaceID
@@ -620,8 +530,6 @@ func (s *Service) UndoSessionMove(operationID string) (api.Session, error) {
 	if strings.TrimSpace(operationID) == "" {
 		return api.Session{}, errors.New("operation ID is required")
 	}
-	s.terminalGroupLifecycleMu.Lock()
-	defer s.terminalGroupLifecycleMu.Unlock()
 	var moved api.Session
 	var reversalID string
 	err := s.Store.Update(func(state *api.State) error {
@@ -653,23 +561,23 @@ func (s *Service) UndoSessionMove(operationID string) (api.Session, error) {
 			return fmt.Errorf("session not found for operation %s: %s", operationID, operation.ResourceID)
 		}
 		current := state.Sessions[sessionIndex]
-		if current.WorkspaceID != operation.AfterWorkspaceID || current.TerminalGroupID != operation.AfterTerminalGroupID || current.AgentSessionID != operation.AgentSessionID {
-			return fmt.Errorf("cannot undo operation %s: session context changed; expected workspace %q/group %q/agent %q, found workspace %q/group %q/agent %q", operationID, operation.AfterWorkspaceID, operation.AfterTerminalGroupID, operation.AgentSessionID, current.WorkspaceID, current.TerminalGroupID, current.AgentSessionID)
+		if operation.BeforeWorkspaceID == "" {
+			// Moves recorded before Terminal Groups were removed can name a
+			// Group as their source; that destination no longer exists.
+			return fmt.Errorf("cannot undo operation %s: its source workspace is unknown", operationID)
+		}
+		if current.WorkspaceID != operation.AfterWorkspaceID || current.AgentSessionID != operation.AgentSessionID {
+			return fmt.Errorf("cannot undo operation %s: session context changed; expected workspace %q/agent %q, found workspace %q/agent %q", operationID, operation.AfterWorkspaceID, operation.AgentSessionID, current.WorkspaceID, current.AgentSessionID)
 		}
 		current.WorkspaceID = operation.BeforeWorkspaceID
-		current.TerminalGroupID = operation.BeforeTerminalGroupID
-		current.Scope = api.SessionScopeWorkspace
-		if current.TerminalGroupID != "" {
-			current.Scope = api.SessionScopeTerminalGroup
-		}
 		state.Sessions[sessionIndex] = current
 		now := time.Now().UTC()
 		state.Operations[operationIndex].RevertedAt = &now
 		reversalID = store.NewID()
 		state.Operations = append(state.Operations, api.OperationAudit{
 			ID: reversalID, Kind: "session.move.revert", Resource: "session", ResourceID: current.ID,
-			BeforeWorkspaceID: operation.AfterWorkspaceID, BeforeTerminalGroupID: operation.AfterTerminalGroupID,
-			AfterWorkspaceID: operation.BeforeWorkspaceID, AfterTerminalGroupID: operation.BeforeTerminalGroupID,
+			BeforeWorkspaceID:  operation.AfterWorkspaceID,
+			AfterWorkspaceID:   operation.BeforeWorkspaceID,
 			AgentSessionID:     operation.AgentSessionID,
 			RevertsOperationID: operationID, CreatedAt: now,
 		})
@@ -708,9 +616,20 @@ func (s *Service) removeWorkspaceRuntime(ctx context.Context, state api.State, w
 	return nil
 }
 
-func (s *Service) removeTerminalGroupRuntimes(ctx context.Context, state api.State, groupID string) {
+// retireStandaloneSessions removes the Sessions an older Host kept in Terminal
+// Groups. Those records decode without a Workspace now that Groups are gone, so
+// no client can show or reach them; their runtimes are killed before the
+// records are dropped, because the orphan reaper only reclaims runtimes that
+// are still recorded in state.
+func (s *Service) retireStandaloneSessions(ctx context.Context) {
+	state := s.Store.Snapshot()
+	retired := make(map[string]struct{})
 	for _, session := range state.Sessions {
-		if session.TerminalGroupID != groupID || session.Lifecycle != "running" {
+		if session.WorkspaceID != "" {
+			continue
+		}
+		retired[session.ID] = struct{}{}
+		if session.Lifecycle != "running" {
 			continue
 		}
 		if session.Kind == "opencode" {
@@ -728,52 +647,29 @@ func (s *Service) removeTerminalGroupRuntimes(ctx context.Context, state api.Sta
 			s.openCodeBindingMu.Unlock()
 		}
 	}
+	if len(retired) == 0 {
+		return
+	}
+	if err := s.Store.Update(func(value *api.State) error {
+		value.Sessions = filter(value.Sessions, func(session api.Session) bool {
+			_, gone := retired[session.ID]
+			return !gone
+		})
+		reconcilePaneGroups(value)
+		return nil
+	}); err != nil {
+		s.logWarn("retire standalone sessions", "error", err)
+	}
 }
 
-// sessionLaunchDirectory is the directory Warren started a Session in: the
-// Terminal Group home (falling back to the Host home) or the Workspace path.
-// It matches sessionWorkingDirectory without the filesystem check that only
-// the create path needs.
-func sessionLaunchDirectory(session api.Session, workspacePaths, groupHomes map[string]string) string {
-	if session.TerminalGroupID != "" {
-		home, ok := groupHomes[session.TerminalGroupID]
-		if !ok {
-			return ""
-		}
-		if home != "" {
-			return home
-		}
-		resolved, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		return resolved
-	}
+// sessionLaunchDirectory is the directory Warren started a Session in: its
+// Workspace path. It matches sessionWorkingDirectory without the lookup error
+// that only the create path needs.
+func sessionLaunchDirectory(session api.Session, workspacePaths map[string]string) string {
 	return workspacePaths[session.WorkspaceID]
 }
 
-func sessionWorkingDirectory(state api.State, workspaceID, groupID string) (string, error) {
-	if groupID != "" {
-		for _, group := range state.TerminalGroups {
-			if group.ID != groupID {
-				continue
-			}
-			home := group.Home
-			if home == "" {
-				var err error
-				home, err = os.UserHomeDir()
-				if err != nil {
-					return "", fmt.Errorf("resolve host home directory: %w", err)
-				}
-			}
-			info, err := os.Stat(home)
-			if err != nil || !info.IsDir() {
-				return "", fmt.Errorf("terminal group home is not a directory: %s", home)
-			}
-			return home, nil
-		}
-		return "", fmt.Errorf("terminal group not found: %s", groupID)
-	}
+func sessionWorkingDirectory(state api.State, workspaceID string) (string, error) {
 	for _, workspace := range state.Workspaces {
 		if workspace.ID == workspaceID {
 			return workspace.Path, nil

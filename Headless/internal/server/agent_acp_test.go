@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/abcdlsj/warren/Headless/internal/acp"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/store"
 )
@@ -302,6 +303,11 @@ func TestACPSessionHasNoRuntimeAndStreamsATurn(t *testing.T) {
 		}
 		if event.Type == "message.completed" && event.Payload["usage"] != nil {
 			sawUsage = true
+			// The model must ride along with the usage, or the rollup cannot
+			// price the call and the panel shows it as an unknown model.
+			if got := event.Payload["model"]; got != "claude-opus-5-5" {
+				t.Fatalf("usage model = %v, want claude-opus-5-5", got)
+			}
 		}
 	}
 	if !sawReasoning || !sawUsage {
@@ -640,6 +646,33 @@ func (h *acpTestHost) agentLog(t *testing.T) string {
 	return string(log)
 }
 
+// waitAgentEnded waits until the previous agent can no longer be adopted.
+//
+// A holder outlives the Host on purpose, so a new Service attaches to a live
+// holder rather than starting the agent again. A test that needs the opposite
+// has to wait for the teardown to take effect: while the previous agent is
+// still adoptable, the next connection is the adopted one, no handshake and no
+// resume happen at all, and the prompt fails on an agent that is already
+// exiting. stopAgent asks the holder to end the agent; this waits for that to
+// land, probing with Detach so the wait costs nothing when it already has.
+func (h *acpTestHost) waitAgentEnded(t *testing.T, sessionID string) {
+	t.Helper()
+	socket := h.service.acpHoldSocket(sessionID)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		attachContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		held, err := acp.Attach(attachContext, socket, sessionID)
+		cancel()
+		if err != nil {
+			// The holder is ending or gone, so it can no longer be adopted.
+			return
+		}
+		held.Detach()
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the previous agent was still adoptable, so a failed resume could not be exercised")
+}
+
 func TestACPIdleAgentSurvivesHostRestart(t *testing.T) {
 	host := newACPTestHost(t)
 	t.Setenv("WARREN_FAKE_ACP_LOAD", "1")
@@ -743,6 +776,10 @@ func TestACPResumeFailureStartsANewExecution(t *testing.T) {
 	host.waitTurn(t, session.ID, 1)
 	before, _ := host.service.Session(session.ID)
 	host.service.stopAgent(session.ID)
+	// The resume below is the subject of this test, so the previous agent has to
+	// be gone first: an adoptable holder means the next connection reuses that
+	// agent instead of resuming a conversation on a new one.
+	host.waitAgentEnded(t, session.ID)
 	t.Setenv("WARREN_FAKE_ACP_RESUME_FAIL", "1")
 	host.service = host.newService()
 	if _, err := host.service.ensureAgent(context.Background(), before); err != nil {
@@ -753,12 +790,22 @@ func TestACPResumeFailureStartsANewExecution(t *testing.T) {
 	for time.Now().Before(deadline) {
 		after, _ := host.service.Session(session.ID)
 		if after.AgentExecutionID != before.AgentExecutionID && after.AgentSessionID != before.AgentSessionID {
+			// The new execution must be the one a failed resume produced, not a
+			// fresh agent that never asked the provider to resume anything.
+			if log := host.agentLog(t); !strings.Contains(log, "session/resume") {
+				t.Fatalf("the conversation was replaced without attempting a resume; agent log:\n%s", log)
+			}
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	after, _ := host.service.Session(session.ID)
-	t.Fatalf("identity did not change after a failed resume: before %s/%s after %s/%s", before.AgentSessionID, before.AgentExecutionID, after.AgentSessionID, after.AgentExecutionID)
+	failures := &strings.Builder{}
+	for _, event := range host.events(t, session.ID) {
+		fmt.Fprintf(failures, "  %s %v\n", event.Type, event.Payload)
+	}
+	t.Fatalf("identity did not change after a failed resume: before %s/%s after %s/%s\nagent log:\n%s\nagent events:\n%s",
+		before.AgentSessionID, before.AgentExecutionID, after.AgentSessionID, after.AgentExecutionID, host.agentLog(t), failures)
 }
 
 func TestACPAuthRequiredExplainsHowToSignIn(t *testing.T) {
@@ -791,6 +838,44 @@ func TestACPSessionRejectsTerminalOperations(t *testing.T) {
 	}
 	if _, err := host.service.CreateSessionWithHandler(context.Background(), host.workspaceID, "opencode acp; rm -rf /", "opencode", "", "", AgentHandlerACP); err == nil {
 		t.Fatal("a command with shell operators was accepted")
+	}
+}
+
+func TestACPSessionUsesConfiguredProviderCommand(t *testing.T) {
+	host := newACPTestHost(t)
+	if err := host.service.SetACPCommands(map[string]string{"opencode": "ak acp opencode"}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := host.service.CreateSessionWithHandler(context.Background(), host.workspaceID, "", "opencode", "", "", AgentHandlerACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Command != "ak acp opencode" {
+		t.Fatalf("command = %q, want the configured ACP server", session.Command)
+	}
+	// An explicit request command still wins over the Host setting.
+	explicit, err := host.service.CreateSessionWithHandler(context.Background(), host.workspaceID, "acp-wrapper --flag", "opencode", "", "", AgentHandlerACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.Command != "acp-wrapper --flag" {
+		t.Fatalf("command = %q, want the explicit request command", explicit.Command)
+	}
+}
+
+func TestSetACPCommandsRejectsInvalidValues(t *testing.T) {
+	host := newACPTestHost(t)
+	if err := host.service.SetACPCommands(map[string]string{"pi": "ak acp pi"}); err == nil {
+		t.Fatal("a provider without an ACP server was configured")
+	}
+	if err := host.service.SetACPCommands(map[string]string{"opencode": "acp; rm -rf /"}); err == nil {
+		t.Fatal("a command with shell operators was accepted")
+	}
+	if err := host.service.SetACPCommands(map[string]string{"opencode": ""}); err != nil {
+		t.Fatal(err)
+	}
+	if configured := host.service.SettingsSnapshot().ACPCommands; len(configured) != 0 {
+		t.Fatalf("an empty command should clear the override, got %v", configured)
 	}
 }
 

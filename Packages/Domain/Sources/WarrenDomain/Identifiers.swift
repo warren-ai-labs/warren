@@ -55,7 +55,6 @@ public enum HostIDTag: Sendable {}
 public enum TaskIDTag: Sendable {}
 public enum ProjectIDTag: Sendable {}
 public enum WorkspaceIDTag: Sendable {}
-public enum TerminalGroupIDTag: Sendable {}
 public enum PaneIDTag: Sendable {}
 public enum PaneGroupIDTag: Sendable {}
 public enum TerminalSessionIDTag: Sendable {}
@@ -68,7 +67,6 @@ public typealias HostID = DomainID<HostIDTag>
 public typealias TaskID = DomainID<TaskIDTag>
 public typealias ProjectID = DomainID<ProjectIDTag>
 public typealias WorkspaceID = DomainID<WorkspaceIDTag>
-public typealias TerminalGroupID = DomainID<TerminalGroupIDTag>
 /// Identity of one pane inside an arrangement. The Host assigns it, so two
 /// clients that split at the same moment cannot invent the same identity.
 public typealias PaneID = DomainID<PaneIDTag>

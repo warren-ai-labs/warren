@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import XCTest
 import WarrenDomain
+import WarrenDesktop
 import WarrenTransport
 @testable import Warren
 
@@ -67,36 +68,49 @@ final class WarrenInspectorTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height), styleMask: [.titled], backing: .buffered, defer: false)
         let light = environment["WARREN_INSPECTOR_APPEARANCE"] == "light"
         window.appearance = NSAppearance(named: light ? .aqua : .darkAqua)
-        let hosting = NSHostingView(rootView: WarrenInspectorSurface(inspector: inspector, readsLocalFiles: true)
-            .environment(\.colorScheme, light ? .light : .dark))
-        hosting.frame = window.contentLayoutRect
-        window.contentView = hosting
+        let activity = WarrenDesktopInspectorActivity()
+        func present(_ tab: WarrenDesktopInspectorTab) {
+            let hosting = NSHostingView(
+                rootView: WarrenInspectorSurface(
+                    inspector: inspector,
+                    readsLocalFiles: true,
+                    tab: tab,
+                    activity: activity
+                )
+                .environment(\.colorScheme, light ? .light : .dark)
+            )
+            hosting.frame = window.contentLayoutRect
+            window.contentView = hosting
+        }
+        func currentView() throws -> NSView { try XCTUnwrap(window.contentView) }
         window.orderFrontRegardless()
-        try await render(hosting, to: "\(prefix)-changes.png")
+
+        present(.changes)
+        try await render(currentView(), to: "\(prefix)-changes.png")
 
         if let change = panel.changes.first(where: { $0.added + $0.deleted > 0 }) ?? panel.changes.first {
             inspector.toggleDiff(key: WarrenInspectorModel.changeKey(change), path: change.path, staged: change.staged, commit: nil, signature: "test")
             try await Task.sleep(for: .milliseconds(900))
-            try await render(hosting, to: "\(prefix)-diff.png")
+            try await render(currentView(), to: "\(prefix)-diff.png")
         }
 
-        inspector.tab = .history
         if let commit = panel.unmergedCommits.first ?? panel.commits.first {
             inspector.toggle(WarrenInspectorModel.commitKey(commit))
             if let file = commit.files.first {
                 inspector.toggleDiff(key: WarrenInspectorModel.commitFileKey(commit, file), path: file.path, staged: false, commit: commit.hash, signature: commit.hash)
             }
         }
+        present(.history)
         try await Task.sleep(for: .milliseconds(900))
-        try await render(hosting, to: "\(prefix)-history.png")
+        try await render(currentView(), to: "\(prefix)-history.png")
 
-        inspector.tab = .files
+        present(.files)
         try await Task.sleep(for: .milliseconds(900))
-        try await render(hosting, to: "\(prefix)-files.png")
+        try await render(currentView(), to: "\(prefix)-files.png")
         if let file = environment["WARREN_INSPECTOR_FILE"] {
             inspector.openFile = file
             try await Task.sleep(for: .milliseconds(900))
-            try await render(hosting, to: "\(prefix)-editor.png")
+            try await render(currentView(), to: "\(prefix)-editor.png")
         }
         window.orderOut(nil)
     }

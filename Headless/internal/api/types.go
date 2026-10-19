@@ -46,6 +46,11 @@ type Project struct {
 	Pinned                 bool      `json:"pinned,omitempty"`
 	Order                  int       `json:"order,omitempty"`
 	CreatedAt              time.Time `json:"createdAt"`
+	// ActiveSince is when the Project last went from no running Session to
+	// one. It is cleared when its last running Session ends or closes, so a
+	// sidebar can order active Projects by when they became active without
+	// rows moving on a status change.
+	ActiveSince *time.Time `json:"activeSince,omitempty"`
 }
 
 // WorktreeCandidate describes an existing Git worktree that can be imported
@@ -83,6 +88,10 @@ type Workspace struct {
 	// the project's default branch. It is overlaid on roster snapshots only
 	// and is never persisted with the workspace record.
 	MergeState MergeState `json:"mergeState,omitempty"`
+	// LastActivityAt is when a Session in this Workspace last started, ended,
+	// closed, or moved in or out. It is absent until that first happens, in
+	// which case CreatedAt is the Workspace's last activity.
+	LastActivityAt *time.Time `json:"lastActivityAt,omitempty"`
 }
 
 // MergeState describes whether a worktree branch still carries changes that
@@ -104,34 +113,20 @@ type WorkspaceCreateResult struct {
 	GitWorktree bool `json:"gitWorktree"`
 }
 
-type TerminalGroup struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Home      string    `json:"home,omitempty"`
-	Order     int       `json:"order,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-}
-
-const (
-	SessionScopeWorkspace     = "workspace"
-	SessionScopeTerminalGroup = "terminalGroup"
-)
-
 type Session struct {
 	ID          string `json:"id"`
 	WorkspaceID string `json:"workspace,omitempty"`
-	// TerminalGroupID is set for standalone shell Sessions. WorkspaceID and
-	// TerminalGroupID are mutually exclusive ownership fields.
-	TerminalGroupID string `json:"terminalGroup,omitempty"`
-	// Scope is explicit for new clients and derived from the ownership fields
-	// for legacy records that predate Terminal Groups.
-	Scope string `json:"scope,omitempty"`
 	// Title is the generated default label (kind or command name) fixed at
 	// session creation; it never changes after a user renames the session.
 	Title string `json:"title"`
 	// CustomTitle is the user-set display name. When non-empty it takes
 	// precedence over Title in every client that renders a session name.
 	CustomTitle string `json:"customTitle,omitempty"`
+	// ResultSentence is the Host's one-line account of what the last completed
+	// turn accomplished ("Fixed the resize race, added 3 tests"). A client
+	// draws it as a resting Agent row's second line and falls back to the
+	// turn's counts when it is empty, because the sentence needs a model call.
+	ResultSentence string `json:"resultSentence,omitempty"`
 	Kind        string `json:"kind"`
 	// AgentHandler selects the transport implementation inside an agent
 	// family (for example tui or acp). It is optional so legacy Sessions keep
@@ -150,11 +145,15 @@ type Session struct {
 	Process     string `json:"process,omitempty"`
 	CommandLine string `json:"commandLine,omitempty"`
 	Directory   string `json:"directory,omitempty"`
-	Runtime     string `json:"runtime"`
-	RuntimeKind string `json:"runtimeKind,omitempty"`
-	Lifecycle   string `json:"lifecycle"`
-	Epoch       uint64 `json:"epoch,omitempty"`
-	Sequence    uint64 `json:"sequence,omitempty"`
+	// Shell is the OSC 133 semantic prompt state of a shell Session, overlaid
+	// on roster snapshots only. It is nil when the runtime observed no marker,
+	// and then every subfield is unknown rather than false or empty.
+	Shell       *SessionShell `json:"shell,omitempty"`
+	Runtime     string        `json:"runtime"`
+	RuntimeKind string        `json:"runtimeKind,omitempty"`
+	Lifecycle   string        `json:"lifecycle"`
+	Epoch       uint64        `json:"epoch,omitempty"`
+	Sequence    uint64        `json:"sequence,omitempty"`
 	// OutputCursor is the opaque Ghostline v1 position immediately after the
 	// output durably reflected by Epoch and Sequence. It is never exposed to
 	// terminal clients and must not be synthesized from a byte offset.
@@ -200,10 +199,27 @@ type Session struct {
 	ScreenPaneCount int `json:"screenPaneCount,omitempty"`
 }
 
+// SessionShell is the OSC 133 semantic prompt state the Host projects for one
+// running shell Session. It is live runtime data: it is overlaid on roster
+// snapshots and never persisted with the Session record.
+type SessionShell struct {
+	// AtPrompt is true while the shell is at its prompt or in its input area.
+	AtPrompt bool `json:"atPrompt"`
+	// RunningCommand is the command line the shell is executing now.
+	RunningCommand string `json:"runningCommand,omitempty"`
+	// LastCommand is the command line of the most recently completed command.
+	LastCommand string `json:"lastCommand,omitempty"`
+	// LastExitCode is the status the shell reported for the last command. It
+	// is nil when no status has been reported.
+	LastExitCode *int `json:"lastExitCode,omitempty"`
+	// LastExitAt is when the last command finished.
+	LastExitAt *time.Time `json:"lastExitAt,omitempty"`
+}
+
 // PaneGroup is one whole-screen arrangement of running Sessions. It is durable
 // Host state: the Host owns the pane tree, so any client can read how a scope is
 // arranged without a reporting peer, and several arrangements can coexist in one
-// Workspace or Terminal Group.
+// Workspace.
 //
 // The tree is the single source of pane membership, pane order, and geometry.
 // Pane order is preorder leaf order; a pane's 1-based index is derived on read
@@ -211,13 +227,8 @@ type Session struct {
 // pane has focus.
 type PaneGroup struct {
 	ID string `json:"id"`
-	// WorkspaceID and TerminalGroupID are mutually exclusive owners, exactly as
-	// they are for a Session.
-	WorkspaceID     string `json:"workspace,omitempty"`
-	TerminalGroupID string `json:"terminalGroup,omitempty"`
-	// Scope mirrors Session.Scope so a group's owner kind is explicit for legacy
-	// and for clients that read one field.
-	Scope string `json:"scope,omitempty"`
+	// WorkspaceID is the owner, exactly as it is for a Session.
+	WorkspaceID string `json:"workspace,omitempty"`
 	// Name is an optional user label. An empty name renders as the group's
 	// ordinal within its owner.
 	Name string `json:"name,omitempty"`
@@ -233,24 +244,9 @@ type PaneGroup struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// OwnerID returns the Workspace or Terminal Group that owns the group.
+// OwnerID returns the Workspace that owns the group.
 func (group PaneGroup) OwnerID() string {
-	if group.WorkspaceID != "" {
-		return group.WorkspaceID
-	}
-	return group.TerminalGroupID
-}
-
-// OwnerScope normalizes the owner kind, deriving it from the ownership fields
-// for records written before Scope existed.
-func (group PaneGroup) OwnerScope() string {
-	if group.Scope != "" {
-		return group.Scope
-	}
-	if group.TerminalGroupID != "" {
-		return SessionScopeTerminalGroup
-	}
-	return SessionScopeWorkspace
+	return group.WorkspaceID
 }
 
 // PaneNode is one node of a Pane Group's tree. A leaf sets PaneID and
@@ -291,16 +287,6 @@ type ScreenLayout struct {
 type ScreenPanesResult struct {
 	SessionID string         `json:"sessionId"`
 	Screens   []ScreenLayout `json:"screens,omitempty"`
-}
-
-func (session Session) ScopeKind() string {
-	if session.Scope != "" {
-		return session.Scope
-	}
-	if session.TerminalGroupID != "" {
-		return SessionScopeTerminalGroup
-	}
-	return SessionScopeWorkspace
 }
 
 // AgentActivity is the lifecycle state of an agent conversation. Human
@@ -504,15 +490,13 @@ type State struct {
 	// Revision is a transient, non-zero roster token used by streaming clients
 	// to validate deltas. It is populated only in observer snapshots and is
 	// never written into the durable state file.
-	Revision       uint64          `json:"revision,omitempty"`
-	Host           Host            `json:"host"`
-	Tasks          []Task          `json:"tasks"`
-	Projects       []Project       `json:"projects"`
-	Workspaces     []Workspace     `json:"workspaces"`
-	TerminalGroups []TerminalGroup `json:"terminalGroups"`
-	Sessions       []Session       `json:"sessions"`
-	// PaneGroups carries the durable split arrangements of every Workspace and
-	// Terminal Group. It is additive state: a Host that has never served a split
+	Revision   uint64      `json:"revision,omitempty"`
+	Host       Host        `json:"host"`
+	Tasks      []Task      `json:"tasks"`
+	Projects   []Project   `json:"projects"`
+	Workspaces []Workspace `json:"workspaces"`
+	Sessions   []Session   `json:"sessions"`
+	// PaneGroups carries the durable split arrangements of every Workspace. It is additive state: a Host that has never served a split
 	// simply has none.
 	PaneGroups []PaneGroup `json:"paneGroups"`
 	// GhostlineMigration records the durable handoff journal used while a new
@@ -555,32 +539,28 @@ type GhostlineMigration struct {
 // before/after ownership fields are compared during undo so an unrelated
 // change can never be silently overwritten.
 type OperationAudit struct {
-	ID                    string     `json:"id"`
-	Kind                  string     `json:"kind"`
-	Resource              string     `json:"resource"`
-	ResourceID            string     `json:"resourceId"`
-	BeforeWorkspaceID     string     `json:"beforeWorkspace,omitempty"`
-	BeforeTerminalGroupID string     `json:"beforeTerminalGroup,omitempty"`
-	AfterWorkspaceID      string     `json:"afterWorkspace,omitempty"`
-	AfterTerminalGroupID  string     `json:"afterTerminalGroup,omitempty"`
-	AgentSessionID        string     `json:"agentSessionId,omitempty"`
-	RevertsOperationID    string     `json:"revertsOperationId,omitempty"`
-	CreatedAt             time.Time  `json:"createdAt"`
-	RevertedAt            *time.Time `json:"revertedAt,omitempty"`
+	ID                 string     `json:"id"`
+	Kind               string     `json:"kind"`
+	Resource           string     `json:"resource"`
+	ResourceID         string     `json:"resourceId"`
+	BeforeWorkspaceID  string     `json:"beforeWorkspace,omitempty"`
+	AfterWorkspaceID   string     `json:"afterWorkspace,omitempty"`
+	AgentSessionID     string     `json:"agentSessionId,omitempty"`
+	RevertsOperationID string     `json:"revertsOperationId,omitempty"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	RevertedAt         *time.Time `json:"revertedAt,omitempty"`
 }
 
 // SessionMovePreflight describes the exact source and destination checked by
 // the Host before a move. It contains IDs and context only, never transcript
 // contents.
 type SessionMovePreflight struct {
-	Allowed                    bool    `json:"allowed"`
-	Session                    Session `json:"session"`
-	SourceWorkspaceID          string  `json:"sourceWorkspace,omitempty"`
-	SourceTerminalGroupID      string  `json:"sourceTerminalGroup,omitempty"`
-	DestinationWorkspaceID     string  `json:"destinationWorkspace,omitempty"`
-	DestinationTerminalGroupID string  `json:"destinationTerminalGroup,omitempty"`
-	ExpectedWorkspaceID        string  `json:"expectedWorkspace,omitempty"`
-	ExpectedAgentSessionID     string  `json:"expectedAgentSessionId,omitempty"`
+	Allowed                bool    `json:"allowed"`
+	Session                Session `json:"session"`
+	SourceWorkspaceID      string  `json:"sourceWorkspace,omitempty"`
+	DestinationWorkspaceID string  `json:"destinationWorkspace,omitempty"`
+	ExpectedWorkspaceID    string  `json:"expectedWorkspace,omitempty"`
+	ExpectedAgentSessionID string  `json:"expectedAgentSessionId,omitempty"`
 }
 
 type Envelope struct {

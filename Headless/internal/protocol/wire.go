@@ -61,6 +61,7 @@ var Capabilities = []string{
 	"agent-config-v1",
 	"agent-streams-v1",
 	"browser-v1",
+	"output-ack-v1",
 }
 
 // TerminalStateFormats is the set of opaque terminal-state formats a client can install atomically.

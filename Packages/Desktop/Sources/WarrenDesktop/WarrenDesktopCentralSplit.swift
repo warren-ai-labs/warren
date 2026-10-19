@@ -94,9 +94,10 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
     private func divider(totalWidth: CGFloat) -> some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let isActive = dragStartWidth != nil
+        // The gutter between the two cards is the divider, so nothing is
+        // drawn in it at rest.
         Rectangle()
-            .fill(tokens.chromeDivider)
-            .frame(width: WarrenSpacing.hairline)
+            .fill(Color.clear)
             .frame(width: WarrenLayoutMetrics.editorSplitDividerWidth)
             .overlay {
                 Rectangle()

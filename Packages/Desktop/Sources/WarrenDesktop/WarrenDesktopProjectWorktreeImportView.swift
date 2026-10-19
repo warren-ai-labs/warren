@@ -31,17 +31,12 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
 
     public var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                Text("Import Existing Worktrees")
-                    .font(WarrenTypography.dialogTitle)
-                    .foregroundStyle(tokens.foreground)
-                Text("Choose worktrees to register under \(projectName). This does not create or delete files.")
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
+        WarrenDialog(
+            "Import Existing Worktrees",
+            message: "Choose worktrees to register under \(projectName). This does not create or delete files.",
+            width: .m
+        ) {
+            Group {
             if isLoading {
                 HStack(spacing: WarrenSpacing.compact) {
                     WarrenBrailleSpinner(size: 18, accessibilityLabel: "Loading worktrees")
@@ -64,25 +59,32 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
                     }
                 }
                 .frame(minHeight: 140, maxHeight: 320)
-                .overlay {
-                    RoundedRectangle(cornerRadius: WarrenRadius.medium)
-                        .stroke(tokens.border, lineWidth: WarrenSpacing.hairline)
-                }
             }
-
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                    .keyboardShortcut(.cancelAction)
-                Button("Import Selected", action: { onImport(Array(selectedPaths)) })
-                    .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
-                    .disabled(isLoading || selectedPaths.isEmpty)
-                    .keyboardShortcut(.defaultAction)
+            }
+        } footer: {
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                Button(action: onCancel) {
+                    HStack(spacing: 6) {
+                        Text("Cancel")
+                        WarrenDialogKeycap("esc")
+                    }
+                }
+                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
+                .keyboardShortcut(.cancelAction)
+                Button {
+                    onImport(Array(selectedPaths))
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(selectedPaths.isEmpty ? "Import" : "Import \(selectedPaths.count)")
+                        WarrenDialogKeycap("\u{23CE}", isOnPrimary: true)
+                    }
+                }
+                .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
+                .disabled(isLoading || selectedPaths.isEmpty)
+                .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(WarrenSpacing.large)
-        .frame(width: 560)
         .onExitCommand(perform: onCancel)
     }
 
@@ -92,48 +94,55 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
         tokens: WarrenColorTokens
     ) -> some View {
         let isDisabled = candidate.imported
+        let isSelected = selectedPaths.contains(candidate.path)
+        let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
         Button {
             guard !isDisabled else { return }
-            if selectedPaths.contains(candidate.path) {
+            if isSelected {
                 selectedPaths.remove(candidate.path)
             } else {
                 selectedPaths.insert(candidate.path)
             }
         } label: {
-            HStack(spacing: WarrenSpacing.compact) {
-                Image(systemName: selectedPaths.contains(candidate.path) ? "checkmark.square.fill" : "square")
-                    .foregroundStyle(isDisabled ? tokens.mutedForeground : tokens.highlight)
-                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+            HStack(spacing: WarrenDesktopMenuMetrics.iconSpacing) {
+                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(isSelected ? palette.check : palette.icon)
+                    .frame(width: WarrenDesktopMenuMetrics.glyphSlot, height: WarrenDesktopMenuMetrics.glyphSlot)
+                VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: WarrenSpacing.xs) {
                         Text(candidate.name)
-                            .font(WarrenTypography.dialogBody)
+                            .font(.system(size: 13))
+                            .foregroundStyle(palette.rowText)
                         if candidate.locked {
                             Label("Locked", systemImage: "lock.fill")
-                                .font(WarrenTypography.dialogMeta)
-                                .foregroundStyle(tokens.mutedForeground)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(palette.meta)
                         }
                         if candidate.imported {
                             Text("Imported")
-                                .font(WarrenTypography.dialogMeta)
-                                .foregroundStyle(tokens.mutedForeground)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(palette.meta)
                         }
                     }
                     Text(candidate.path)
-                        .font(WarrenTypography.dialogMeta)
-                        .foregroundStyle(tokens.mutedForeground)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(palette.meta)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, WarrenSpacing.compact)
-            .padding(.vertical, WarrenSpacing.small)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, WarrenDesktopMenuMetrics.rowHorizontalPadding)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: WarrenDesktopMenuMetrics.twoLineRowHeight,
+                alignment: .leading
+            )
             .contentShape(.rect)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(isDisabled ? tokens.mutedForeground : tokens.foreground)
+        .buttonStyle(WarrenDesktopMenuRowStyle())
         .disabled(isDisabled)
-        .opacity(isDisabled ? 0.58 : 1)
+        .opacity(isDisabled ? 0.42 : 1)
     }
 }

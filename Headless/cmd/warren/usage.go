@@ -43,7 +43,6 @@ Commands:
   task list|create|remove|rename|pin|move|attach|detach|workspace
   project list|add|remove|rename|pin|move
   workspace list|create|remove|rename|pin|move  (alias: worktree)
-  terminal-group list|create|remove|rename|home|move  (alias: group)
   pane list|create|split|close|rename|move|remove
   session list|current|panes|create|remove|rename|pin|move|send|read|undo
   browser list|create|get|action|close  drive an embedded Chromium
@@ -89,17 +88,11 @@ Examples:
     --keep-worktree keeps the local Git worktree on disk
   warren workspace move WORKSPACE_ID --before OTHER_WORKSPACE_ID
   warren task workspace create TASK_ID PROJECT_ID --branch release/feature
-  warren terminal-group create --name NAME [--home PATH]
-  warren terminal-group move GROUP_ID --before OTHER_GROUP_ID
-  warren terminal-group remove GROUP_ID --force
   warren session create WORKSPACE_ID --kind shell --command bash
-  warren session create --group GROUP_ID
-  warren session create
   warren session current
   warren session panes
   warren session move SESSION_ID --workspace WORKSPACE_ID [--confirm] [--expected-workspace ID] [--expected-agent-session ID]
   warren session move --current --workspace WORKSPACE_ID [--dry-run]
-  warren session move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]
   warren session undo OPERATION_ID
 `
 }
@@ -144,12 +137,12 @@ Run 'warren agent <command> --help' for command-specific help.
 
 func agentCreateUsageText() string {
 	return `Usage:
-  warren agent create [WORKSPACE_ID]
+  warren agent create WORKSPACE_ID
       --provider codex|claude|opencode|pi|qoder|antigravity
       [--agent-handler tui|cli|acp]
       [--command CMD]
       [--prompt TEXT | --no-prompt]
-      [--group GROUP_ID] [--title TITLE] [--wait] [--timeout DURATION]
+      [--title TITLE] [--wait] [--timeout DURATION]
 
 Create an Agent backed by a Codex, Claude, OpenCode, Pi, Qoder, or Antigravity session. --prompt is
 passed with the provider's startup syntax (positional for Codex/Claude/Pi/Qoder,
@@ -244,9 +237,6 @@ func resourceUsageText(commandName string) string {
 	if commandName == "worktree" {
 		aliasNote = "\nworktree is an alias for workspace."
 	}
-	if commandName == "group" {
-		aliasNote = "\ngroup is an alias for terminal-group."
-	}
 	switch canonicalResource(commandName) {
 	case "task":
 		return fmt.Sprintf(`Usage:
@@ -281,27 +271,17 @@ func resourceUsageText(commandName string) string {
   warren %s pin WORKSPACE_ID --pinned BOOL
   warren %s move WORKSPACE_ID [--before OTHER_WORKSPACE_ID]
 %s`, commandName, commandName, commandName, commandName, commandName, commandName, aliasNote)
-	case "terminal-group":
-		return fmt.Sprintf(`Usage:
-  warren %s list [--all] [--search TEXT] [--limit N] [-q]
-  warren %s create [--name NAME] [--home PATH]
-  warren %s remove GROUP_ID [--force]
-  warren %s rename GROUP_ID --name NAME
-  warren %s home GROUP_ID --path PATH
-  warren %s move GROUP_ID [--before OTHER_GROUP_ID]
-%s`, commandName, commandName, commandName, commandName, commandName, commandName, aliasNote)
 	case "session":
 		return `Usage:
-  warren session list [--all | --ended] [WORKSPACE_ID] [--workspace ID] [--project ID] [--group ID] [--kind KIND] [--status STATUS] [--activity ACTIVITY] [--search TEXT] [--current] [--pinned] [--limit N] [-q]
+  warren session list [--all | --ended] [WORKSPACE_ID] [--workspace ID] [--project ID] [--kind KIND] [--status STATUS] [--activity ACTIVITY] [--search TEXT] [--current] [--pinned] [--limit N] [-q]
   warren session current
   warren session panes [SESSION_ID] [-q]
-  warren session create [WORKSPACE_ID] [--group GROUP_ID] [--kind KIND] [--command CMD] [--title TITLE]
+  warren session create WORKSPACE_ID [--kind KIND] [--command CMD] [--title TITLE]
   warren session remove SESSION_ID [--force] [--current] [--dry-run]
   warren session rename SESSION_ID --title TITLE [--current]
   warren session pin SESSION_ID --pinned BOOL [--current]
   warren session move SESSION_ID --workspace WORKSPACE_ID [--confirm] [--expected-workspace ID] [--expected-agent-session ID] [--dry-run]
   warren session move --current --workspace WORKSPACE_ID [--dry-run]
-  warren session move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]
   warren session send SESSION_ID [TEXT...] [--current] [--raw]
   warren session read SESSION_ID [--timeout DURATION] [--contains TEXT] [--current]
   warren session undo OPERATION_ID
@@ -312,15 +292,15 @@ transcript/activity semantics.
 `
 	case "browser":
 		return `Usage:
-  warren browser list [--workspace ID | --group ID] [--search TEXT] [--limit N] [-q]
-  warren browser create [--workspace ID | --group GROUP_ID] [--url URL] [--title TITLE] [--window] [--width N] [--height N]
+  warren browser list [--workspace ID] [--search TEXT] [--limit N] [-q]
+  warren browser create --workspace ID [--url URL] [--title TITLE] [--window] [--width N] [--height N]
   warren browser get SESSION_ID
   warren browser action SESSION_ID ACTION [flags]
   warren browser close SESSION_ID
 
 A browser is a Warren Session that owns a Chromium rather than a PTY, so it
-appears in the session and agent rosters and lives in a Workspace or Terminal
-Group like anything else. The action subcommand drives it; the common actions
+appears in the session and agent rosters and lives in a Workspace like
+anything else. The action subcommand drives it; the common actions
 are navigate, snapshot, click, fill, text, evaluate, screenshot, and tabs.
 
 The page is drawn inside Warren from the browser's own frame stream, so Chromium
@@ -331,8 +311,8 @@ Run "warren browser action --help" for the action list and their flags.
 `
 	case "pane":
 		return `Usage:
-  warren pane list [--workspace WORKSPACE_ID | --group GROUP_ID] [--search TEXT] [--all] [--limit N] [-q]
-  warren pane create (--workspace WORKSPACE_ID | --group GROUP_ID) --session SESSION_ID [--name NAME] [--before PANE_GROUP_ID]
+  warren pane list [--workspace WORKSPACE_ID] [--search TEXT] [--all] [--limit N] [-q]
+  warren pane create --workspace WORKSPACE_ID --session SESSION_ID [--name NAME] [--before PANE_GROUP_ID]
   warren pane split --pane PANE_ID --session SESSION_ID [--axis horizontal|vertical] [--before]
   warren pane close --pane PANE_ID
   warren pane rename PANE_GROUP_ID --name NAME
@@ -340,7 +320,7 @@ Run "warren browser action --help" for the action list and their flags.
   warren pane remove PANE_GROUP_ID
 
 A pane is one whole-screen arrangement of Sessions, and several arrangements may
-coexist in one Workspace or Terminal Group. Only one is rendered at a time, so
+coexist in one Workspace. Only one is rendered at a time, so
 switching arrangements never changes how the others are laid out.
 Splitting and closing panes edit the arrangement only: a Session keeps running
 and stays reachable as an ordinary Tab. Use --json for the tree itself.
@@ -371,9 +351,9 @@ func actionUsageText(commandName, action string) string {
 	name := commandName
 	switch canonicalResource(commandName) + "." + action {
 	case "browser.list":
-		return fmt.Sprintf("Usage:\n  warren %s %s [--workspace ID | --group ID] [--search TEXT] [--limit N] [-q]\n\nDefault output is limited to 10 rows. The list is projected from the roster, so it costs no extra round trip and cannot disagree with `warren session list`.\n", name, action)
+		return fmt.Sprintf("Usage:\n  warren %s %s [--workspace ID] [--search TEXT] [--limit N] [-q]\n\nDefault output is limited to 10 rows. The list is projected from the roster, so it costs no extra round trip and cannot disagree with `warren session list`.\n", name, action)
 	case "browser.create":
-		return fmt.Sprintf("Usage:\n  warren %s create [--workspace ID | --group GROUP_ID] [--url URL] [--title TITLE] [--window] [--width N] [--height N]\n\nExactly one scope is required. The page is drawn inside Warren from the browser's frame stream, so Chromium runs with no window of its own; --window opts into a visible one for debugging the browser runtime. The URL, if given, is opened before the command returns.\n", name)
+		return fmt.Sprintf("Usage:\n  warren %s create --workspace ID [--url URL] [--title TITLE] [--window] [--width N] [--height N]\n\nA workspace is required. The page is drawn inside Warren from the browser's frame stream, so Chromium runs with no window of its own; --window opts into a visible one for debugging the browser runtime. The URL, if given, is opened before the command returns.\n", name)
 	case "browser.get":
 		return fmt.Sprintf("Usage:\n  warren %s get SESSION_ID\n", name)
 	case "browser.action":
@@ -403,7 +383,7 @@ title it left behind:
 		return fmt.Sprintf("Usage:\n  warren %s close SESSION_ID\n\nThe Chromium and its profile directory are removed, and the Session ends. Use `warren session remove SESSION_ID` to reach the same end through the session resource.\n", name)
 	case "task.list", "project.list", "workspace.list", "session.list":
 		if canonicalResource(commandName) == "session" {
-			return fmt.Sprintf("Usage:\n  warren %s %s [--all | --ended] [WORKSPACE_ID] [--workspace ID] [--project ID] [--group ID] [--kind KIND] [--status STATUS] [--activity ACTIVITY] [--search TEXT] [--current] [--pinned] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
+			return fmt.Sprintf("Usage:\n  warren %s %s [--all | --ended] [WORKSPACE_ID] [--workspace ID] [--project ID] [--kind KIND] [--status STATUS] [--activity ACTIVITY] [--search TEXT] [--current] [--pinned] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
 		}
 		if canonicalResource(commandName) == "workspace" {
 			return fmt.Sprintf("Usage:\n  warren %s %s [--all] [PROJECT_ID] [--project ID] [--task ID] [--branch BRANCH] [--merged | --unmerged] [--unattached] [--has-sessions] [--search TEXT] [--pinned] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
@@ -412,12 +392,10 @@ title it left behind:
 			return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--source SOURCE] [--has-workspaces | --unattached] [--search TEXT] [--pinned] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
 		}
 		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--search TEXT] [--has-workspaces] [--pinned] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
-	case "terminal-group.list":
-		return fmt.Sprintf("Usage:\n  warren %s %s [--all] [--search TEXT] [--limit N] [-q]\n\nDefault output is limited to 10 rows with long fields truncated. Use --search or filters to narrow down, --all for the complete list, and -q for IDs only.\n", name, action)
 	case "pane.list":
-		return fmt.Sprintf("Usage:\n  warren %s %s [--workspace WORKSPACE_ID | --group GROUP_ID] [--search TEXT] [--all] [--limit N] [-q]\n\nDefault output is limited to 10 rows. Use --all for the complete list, and -q for IDs only.\n", name, action)
+		return fmt.Sprintf("Usage:\n  warren %s %s [--workspace WORKSPACE_ID] [--search TEXT] [--all] [--limit N] [-q]\n\nDefault output is limited to 10 rows. Use --all for the complete list, and -q for IDs only.\n", name, action)
 	case "pane.create":
-		return fmt.Sprintf("Usage:\n  warren %s create (--workspace WORKSPACE_ID | --group GROUP_ID) --session SESSION_ID [--name NAME] [--before PANE_GROUP_ID]\n", name)
+		return fmt.Sprintf("Usage:\n  warren %s create --workspace WORKSPACE_ID --session SESSION_ID [--name NAME] [--before PANE_GROUP_ID]\n", name)
 	case "pane.split":
 		return fmt.Sprintf("Usage:\n  warren %s split --pane PANE_ID --session SESSION_ID [--axis horizontal|vertical] [--before]\n\nThe new pane goes after the named pane unless --before is given.\n", name)
 	case "pane.close":
@@ -460,18 +438,8 @@ title it left behind:
 		return fmt.Sprintf("Usage:\n  warren %s pin WORKSPACE_ID --pinned BOOL\n", name)
 	case "workspace.move":
 		return fmt.Sprintf("Usage:\n  warren %s move WORKSPACE_ID [--before OTHER_WORKSPACE_ID]\n", name)
-	case "terminal-group.create", "terminal-group.add":
-		return fmt.Sprintf("Usage:\n  warren %s create [--name NAME] [--home PATH]\n", name)
-	case "terminal-group.remove", "terminal-group.delete":
-		return fmt.Sprintf("Usage:\n  warren %s remove GROUP_ID [--force]\n", name)
-	case "terminal-group.rename":
-		return fmt.Sprintf("Usage:\n  warren %s rename GROUP_ID --name NAME\n", name)
-	case "terminal-group.home":
-		return fmt.Sprintf("Usage:\n  warren %s home GROUP_ID --path PATH\n", name)
-	case "terminal-group.move":
-		return fmt.Sprintf("Usage:\n  warren %s move GROUP_ID [--before OTHER_GROUP_ID]\n", name)
 	case "session.create", "session.add":
-		return fmt.Sprintf("Usage:\n  warren %s create [WORKSPACE_ID] [--group GROUP_ID] [--kind KIND] [--command CMD] [--title TITLE]\n", name)
+		return fmt.Sprintf("Usage:\n  warren %s create WORKSPACE_ID [--kind KIND] [--command CMD] [--title TITLE]\n", name)
 	case "session.remove", "session.delete", "session.kill":
 		return fmt.Sprintf("Usage:\n  warren %s remove SESSION_ID [--force] [--current] [--dry-run]\n", name)
 	case "session.rename":
@@ -479,7 +447,7 @@ title it left behind:
 	case "session.pin":
 		return fmt.Sprintf("Usage:\n  warren %s pin SESSION_ID --pinned BOOL [--current]\n", name)
 	case "session.move":
-		return fmt.Sprintf("Usage:\n  warren %s move SESSION_ID --workspace WORKSPACE_ID [--confirm] [--expected-workspace ID] [--expected-agent-session ID] [--dry-run]\n  warren %s move --current --workspace WORKSPACE_ID [--dry-run]\n  warren %s move SESSION_ID --group GROUP_ID [--confirm] [--dry-run]\n", name, name, name)
+		return fmt.Sprintf("Usage:\n  warren %s move SESSION_ID --workspace WORKSPACE_ID [--confirm] [--expected-workspace ID] [--expected-agent-session ID] [--dry-run]\n  warren %s move --current --workspace WORKSPACE_ID [--dry-run]\n", name, name)
 	case "session.send":
 		return fmt.Sprintf("Usage:\n  warren %s send SESSION_ID [TEXT...] [--current] [--raw]\n", name)
 	case "session.read":

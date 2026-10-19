@@ -86,7 +86,20 @@ const (
 	// profile rather than a Host and a phone disagreeing about when a
 	// connection counted as healthy.
 	relayStableConnection = 30 * time.Second
+	// A wake from sleep is detected by the wall clock running ahead of the
+	// monotonic clock, which stops while the machine is suspended. The check
+	// is cheap, and the threshold ignores ordinary scheduling jitter.
+	relayWakeCheckInterval = 5 * time.Second
+	relayWakeThreshold     = 5 * time.Second
+	relayWakeProbeTimeout  = 10 * time.Second
 )
+
+// suspendedBetween reports how long the machine was asleep between two
+// readings of time.Now: the wall clock keeps advancing across a suspend while
+// the monotonic clock does not.
+func suspendedBetween(previous, current time.Time) time.Duration {
+	return current.Round(0).Sub(previous.Round(0)) - current.Sub(previous)
+}
 
 // relayDialer matches websocket.DefaultDialer but negotiates permessage-deflate.
 // The Host's uplink carries every byte a remote client reads, and it is usually
@@ -400,6 +413,15 @@ type stream struct {
 	firstHeaders bool
 	hijackedMu   sync.Mutex
 	hijacked     *relayConn
+	// inbound holds body frames for an HTTP or upgrade stream until its
+	// worker hands them to the handler. Relay may only send what the credit
+	// window allows and credit returns after delivery, so the window bounds
+	// the queued bytes.
+	inboundMu    sync.Mutex
+	inbound      []frame
+	inboundBytes uint64
+	inboundWake  chan struct{}
+	inboundStart sync.Once
 }
 
 func newStream(open streamOpen, epoch uint64, ctx context.Context, cancel context.CancelFunc) *stream {
@@ -683,15 +705,40 @@ func (connector *Connector) connectOnce(ctx context.Context) error {
 	go func() {
 		ticker := time.NewTicker(relayHeartbeatInterval)
 		defer ticker.Stop()
+		wakeCheck := time.NewTicker(relayWakeCheckInterval)
+		defer wakeCheck.Stop()
+		lastCheck := time.Now()
+		ping := func() bool {
+			if err := connection.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+				// Closing the socket wakes the ReadMessage loop, which owns
+				// reconnect/backoff and will fence this connection epoch.
+				_ = connection.Close()
+				return false
+			}
+			return true
+		}
 		for {
 			select {
 			case <-heartbeatDone:
 				return
 			case <-ticker.C:
-				if err := connection.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
-					// Closing the socket wakes the ReadMessage loop, which owns
-					// reconnect/backoff and will fence this connection epoch.
-					_ = connection.Close()
+				if !ping() {
+					return
+				}
+			case <-wakeCheck.C:
+				now := time.Now()
+				suspended := suspendedBetween(lastCheck, now)
+				lastCheck = now
+				if suspended < relayWakeThreshold {
+					continue
+				}
+				// The machine slept. The socket usually still looks open, but
+				// its NAT mapping or route may be gone, and the ordinary
+				// deadline would leave clients waiting on a dead tunnel for
+				// over a minute. Ask now and give the answer a short budget; a
+				// live Relay's pong restores the normal deadline.
+				_ = connection.SetReadDeadline(time.Now().Add(relayWakeProbeTimeout))
+				if !ping() {
 					return
 				}
 			}
@@ -930,68 +977,32 @@ func (connector *Connector) dispatch(value frame) error {
 			return errors.New("control stream cannot carry HTTP headers")
 		}
 		return connector.handleHeaders(value.ID, streamValue, value.Payload)
-	case frameData, frameText, frameBinary:
-		streamValue.hijackedMu.Lock()
-		hijacked := streamValue.hijacked
-		streamValue.hijackedMu.Unlock()
-		if hijacked != nil {
-			if err := hijacked.feed(value.Payload); err != nil {
-				return err
-			}
-			return connector.sendForStream(streamValue, frame{Kind: frameWindow, ID: value.ID, Payload: encodeCredit(uint64(len(value.Payload)))})
+	case frameData, frameText, frameBinary, frameEnd:
+		// Body bytes reach the in-process handler through an unbuffered pipe,
+		// so delivering them here would hold this read loop until the handler
+		// reads. One slow public WebSocket would then stall every other stream
+		// on the Host socket, including every client's terminal input. Hand
+		// them to the stream's own inbound worker instead.
+		if err := streamValue.enqueueInbound(value); err != nil {
+			connector.failStream(value.ID, streamValue, "invalid_stream_input", err)
+			return nil
 		}
-		if streamValue.body != nil {
-			if err := writePipeWithContext(streamValue.ctx, streamValue.body, value.Payload); err != nil {
-				return err
-			}
-			// DATA credit is returned only after the in-process handler accepted
-			// the bytes. This couples Relay's queue to actual Host capacity.
-			return connector.sendForStream(streamValue, frame{Kind: frameWindow, ID: value.ID, Payload: encodeCredit(uint64(len(value.Payload)))})
-		}
-		return errors.New("HTTP DATA received before headers")
-	case frameEnd:
-		streamValue.hijackedMu.Lock()
-		hijacked := streamValue.hijacked
-		streamValue.hijackedMu.Unlock()
-		if len(value.Payload) > 0 {
-			var trailers httpHeaders
-			if json.Unmarshal(value.Payload, &trailers) != nil || !validHeaderPairs(trailers.Trailers) {
-				return errors.New("invalid HTTP trailers")
-			}
-			streamValue.requestMu.Lock()
-			if streamValue.request != nil {
-				for _, pair := range trailers.Trailers {
-					streamValue.request.Trailer.Add(pair[0], pair[1])
-				}
-			}
-			streamValue.requestMu.Unlock()
-		}
-		if hijacked != nil {
-			hijacked.closeInput()
-		}
-		if streamValue.body != nil {
-			_ = streamValue.body.Close()
-		}
-		if streamValue.body == nil && hijacked == nil {
-			streamValue.close()
-			connector.removeStreamForEpoch(value.ID, streamValue.epoch)
-			return errors.New("HTTP END received before headers")
-		}
+		connector.startInboundWorker(value.ID, streamValue)
 		return nil
 	case frameClose, frameError:
-		streamValue.hijackedMu.Lock()
-		hijacked := streamValue.hijacked
-		streamValue.hijackedMu.Unlock()
-		if hijacked != nil {
-			_ = hijacked.Close()
+		// A graceful CLOSE follows body frames the inbound worker may not have
+		// delivered yet, so it waits its turn behind them. ERROR aborts now.
+		// A handler that stopped reading must not keep a closed stream alive.
+		if value.Kind == frameClose && streamValue.enqueueInboundClose(value) {
+			id := value.ID
+			time.AfterFunc(inboundCloseDrainTimeout, func() {
+				if streamValue.ctx.Err() == nil {
+					connector.closeStreamFromRelay(id, streamValue)
+				}
+			})
+			return nil
 		}
-		if streamValue.body != nil {
-			_ = streamValue.body.CloseWithError(errors.New("relay stream closed"))
-		}
-		if streamValue.close != nil {
-			streamValue.close()
-		}
-		connector.removeStreamForEpoch(value.ID, streamValue.epoch)
+		connector.closeStreamFromRelay(value.ID, streamValue)
 	case frameWindow:
 		if len(value.Payload) != 8 {
 			return errors.New("invalid window update payload")
@@ -1043,6 +1054,172 @@ func (connector *Connector) enqueueControl(value *stream, message frame) error {
 		return errors.New("control stream closed")
 	default:
 		return errControlQueueOverflow
+	}
+}
+
+// maxInboundFrames bounds an inbound queue whose frames carry no bytes, which
+// the credit window alone would not limit.
+const maxInboundFrames = 4096
+
+func (value *stream) enqueueInbound(message frame) error {
+	value.inboundMu.Lock()
+	defer value.inboundMu.Unlock()
+	size := uint64(len(message.Payload))
+	if len(value.inbound) >= maxInboundFrames || size > initialWindow-value.inboundBytes {
+		return errors.New("stream input exceeds flow-control window")
+	}
+	if value.inboundWake == nil {
+		value.inboundWake = make(chan struct{}, 1)
+	}
+	value.inbound = append(value.inbound, message)
+	value.inboundBytes += size
+	select {
+	case value.inboundWake <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// inboundCloseDrainTimeout bounds how long a closed stream waits for its
+// handler to take the body frames queued before CLOSE.
+const inboundCloseDrainTimeout = 5 * time.Second
+
+// enqueueInboundClose queues CLOSE behind body frames already handed to the
+// inbound worker. It reports false when the stream never queued any, so the
+// caller closes it at once. CLOSE carries no bytes and is not limited.
+func (value *stream) enqueueInboundClose(message frame) bool {
+	value.inboundMu.Lock()
+	defer value.inboundMu.Unlock()
+	if value.inboundWake == nil {
+		return false
+	}
+	value.inbound = append(value.inbound, message)
+	select {
+	case value.inboundWake <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// closeStreamFromRelay ends a stream the Relay side closed.
+func (connector *Connector) closeStreamFromRelay(id connectionID, value *stream) {
+	value.hijackedMu.Lock()
+	hijacked := value.hijacked
+	value.hijackedMu.Unlock()
+	if hijacked != nil {
+		_ = hijacked.Close()
+	}
+	if value.body != nil {
+		_ = value.body.CloseWithError(errors.New("relay stream closed"))
+	}
+	connector.removeStreamForEpoch(id, value.epoch)
+	if value.close != nil {
+		value.close()
+	}
+}
+
+func (value *stream) takeInbound() []frame {
+	value.inboundMu.Lock()
+	defer value.inboundMu.Unlock()
+	pending := value.inbound
+	value.inbound = nil
+	value.inboundBytes = 0
+	return pending
+}
+
+// startInboundWorker delivers one stream's body frames in order, off the Host
+// socket's read loop. A failure is confined to this stream.
+func (connector *Connector) startInboundWorker(id connectionID, value *stream) {
+	value.inboundStart.Do(func() {
+		value.inboundMu.Lock()
+		wake := value.inboundWake
+		value.inboundMu.Unlock()
+		go func() {
+			for {
+				select {
+				case <-value.ctx.Done():
+					return
+				case <-wake:
+				}
+				for _, message := range value.takeInbound() {
+					if message.Kind == frameClose {
+						connector.closeStreamFromRelay(id, value)
+						return
+					}
+					if err := connector.deliverInbound(id, value, message); err != nil {
+						connector.failStream(id, value, "stream_input", err)
+						return
+					}
+				}
+			}
+		}()
+	})
+}
+
+func (connector *Connector) deliverInbound(id connectionID, value *stream, message frame) error {
+	value.hijackedMu.Lock()
+	hijacked := value.hijacked
+	value.hijackedMu.Unlock()
+	if message.Kind == frameEnd {
+		if len(message.Payload) > 0 {
+			var trailers httpHeaders
+			if json.Unmarshal(message.Payload, &trailers) != nil || !validHeaderPairs(trailers.Trailers) {
+				return errors.New("invalid HTTP trailers")
+			}
+			value.requestMu.Lock()
+			if value.request != nil {
+				for _, pair := range trailers.Trailers {
+					value.request.Trailer.Add(pair[0], pair[1])
+				}
+			}
+			value.requestMu.Unlock()
+		}
+		if hijacked != nil {
+			hijacked.closeInput()
+		}
+		if value.body != nil {
+			_ = value.body.Close()
+		}
+		if value.body == nil && hijacked == nil {
+			return errors.New("HTTP END received before headers")
+		}
+		return nil
+	}
+	if hijacked != nil {
+		if err := hijacked.feed(message.Payload); err != nil {
+			return err
+		}
+	} else if value.body != nil {
+		if err := writePipeWithContext(value.ctx, value.body, message.Payload); err != nil {
+			return err
+		}
+	} else {
+		return errors.New("HTTP DATA received before headers")
+	}
+	// DATA credit is returned only after the in-process handler accepted the
+	// bytes. This couples Relay's queue to actual Host capacity.
+	return connector.sendForStream(value, frame{Kind: frameWindow, ID: id, Payload: encodeCredit(uint64(len(message.Payload)))})
+}
+
+// failStream reports a stream-local failure and releases only that stream.
+// Unrelated clients on the same Host socket keep their streams.
+func (connector *Connector) failStream(id connectionID, value *stream, code string, cause error) {
+	_ = connector.sendForStream(value, frame{Kind: frameError, ID: id, Payload: mustJSON(map[string]string{"code": code, "message": cause.Error()})})
+	_ = connector.sendForStream(value, frame{Kind: frameClose, ID: id})
+	value.hijackedMu.Lock()
+	hijacked := value.hijacked
+	value.hijackedMu.Unlock()
+	if hijacked != nil {
+		_ = hijacked.Close()
+	}
+	if value.body != nil {
+		_ = value.body.CloseWithError(cause)
+	}
+	// Unregister before cancelling: a stream whose context has ended must
+	// already be gone from the routing table.
+	connector.removeStreamForEpoch(id, value.epoch)
+	if value.close != nil {
+		value.close()
 	}
 }
 

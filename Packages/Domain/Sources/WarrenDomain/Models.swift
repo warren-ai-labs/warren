@@ -54,6 +54,9 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
     public var pinned: Bool
     /// Host-owned sidebar order. Zero is the legacy fallback (creation order).
     public var order: Int
+    /// When the Project last went from no running Session to one; `nil` while
+    /// none runs, and on Hosts that predate the stamp.
+    public var activeSince: Date?
 
     public init(
         id: ProjectID = ProjectID(),
@@ -63,7 +66,8 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
         setupScript: String? = nil,
         autoImportGitWorktrees: Bool = false,
         pinned: Bool = false,
-        order: Int = 0
+        order: Int = 0,
+        activeSince: Date? = nil
     ) {
         self.id = id
         self.hostID = hostID
@@ -73,6 +77,7 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
         self.autoImportGitWorktrees = autoImportGitWorktrees
         self.pinned = pinned
         self.order = order
+        self.activeSince = activeSince
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -84,6 +89,7 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
         case autoImportGitWorktrees
         case pinned
         case order
+        case activeSince
     }
 
     public init(from decoder: Decoder) throws {
@@ -96,6 +102,7 @@ public struct Project: Identifiable, Codable, Hashable, Sendable {
         autoImportGitWorktrees = try container.decodeIfPresent(Bool.self, forKey: .autoImportGitWorktrees) ?? false
         pinned = try container.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         order = try container.decodeIfPresent(Int.self, forKey: .order) ?? 0
+        activeSince = try container.decodeIfPresent(Date.self, forKey: .activeSince)
     }
 }
 
@@ -134,6 +141,10 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
     /// Host-owned sidebar order within its project. Zero is the legacy
     /// fallback (creation order).
     public var order: Int
+    public var createdAt: Date?
+    /// When a Session here last started, ended, closed, or moved; `nil` until
+    /// that first happens, when `createdAt` stands in.
+    public var lastActivityAt: Date?
 
     public init(
         id: WorkspaceID = WorkspaceID(),
@@ -146,7 +157,9 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
         mergeState: WorkspaceMergeState? = nil,
         managedWorktree: Bool = false,
         worktreeLocked: Bool = false,
-        order: Int = 0
+        order: Int = 0,
+        createdAt: Date? = nil,
+        lastActivityAt: Date? = nil
     ) {
         self.id = id
         self.projectID = projectID
@@ -159,7 +172,12 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
         self.managedWorktree = managedWorktree
         self.worktreeLocked = worktreeLocked
         self.order = order
+        self.createdAt = createdAt
+        self.lastActivityAt = lastActivityAt
     }
+
+    /// The moment this Workspace was last active, as far as the Host can say.
+    public var lastActiveAt: Date? { lastActivityAt ?? createdAt }
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -173,6 +191,8 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
         case managedWorktree
         case worktreeLocked
         case order
+        case createdAt
+        case lastActivityAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -188,39 +208,9 @@ public struct Workspace: Identifiable, Codable, Hashable, Sendable {
         managedWorktree = try container.decodeIfPresent(Bool.self, forKey: .managedWorktree) ?? false
         worktreeLocked = try container.decodeIfPresent(Bool.self, forKey: .worktreeLocked) ?? false
         order = try container.decodeIfPresent(Int.self, forKey: .order) ?? 0
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
+        lastActivityAt = try container.decodeIfPresent(Date.self, forKey: .lastActivityAt)
     }
-}
-
-/// A Host-owned ordered container for standalone terminal sessions.
-public struct TerminalGroup: Identifiable, Codable, Hashable, Sendable {
-    public let id: TerminalGroupID
-    public let hostID: HostID
-    public var name: String
-    public var home: String?
-    public var order: Int
-    public let createdAt: Date
-
-    public init(
-        id: TerminalGroupID = TerminalGroupID(),
-        hostID: HostID,
-        name: String,
-        home: String? = nil,
-        order: Int = 0,
-        createdAt: Date = Date()
-    ) {
-        self.id = id
-        self.hostID = hostID
-        self.name = name
-        self.home = home
-        self.order = order
-        self.createdAt = createdAt
-    }
-}
-
-/// The mutually exclusive Host context of a terminal session.
-public enum TerminalSessionScope: Codable, Hashable, Sendable {
-    case workspace(WorkspaceID)
-    case terminalGroup(TerminalGroupID)
 }
 
 public struct TerminalSession: Identifiable, Codable, Hashable, Sendable {
@@ -240,10 +230,6 @@ public struct TerminalSession: Identifiable, Codable, Hashable, Sendable {
         self.epoch = epoch
         self.sequence = sequence
     }
-
-    /// Legacy domain sessions are Workspace-scoped. Remote desktop sessions
-    /// carry the full scope in their Host roster projection.
-    public var scope: TerminalSessionScope { .workspace(workspaceID) }
 }
 
 /// The durable lifecycle of Warren's terminal resource. Client connectivity,

@@ -89,22 +89,16 @@ func (s *Service) handoffACPSession(ctx context.Context, sessionID, baseCommand 
 	s.stopAgent(sessionID)
 
 	request := sessionCreateRequest{
-		workspaceID: session.WorkspaceID, groupID: session.TerminalGroupID,
-		command: command, kind: session.Kind, title: session.CustomTitle,
+		workspaceID: session.WorkspaceID,
+		command:     command, kind: session.Kind, title: session.CustomTitle,
 		agentHandler: []string{AgentHandlerTUI}, resumeAgentSessionID: conversationID,
 	}
 	var created api.Session
-	if session.TerminalGroupID != "" {
-		s.terminalGroupLifecycleMu.Lock()
+	if lock := s.lockWorkspaceForSession(session.WorkspaceID); lock != nil {
 		created, err = s.createSessionWith(ctx, request)
-		s.terminalGroupLifecycleMu.Unlock()
+		lock.RUnlock()
 	} else {
-		if lock := s.lockWorkspaceForSession(session.WorkspaceID); lock != nil {
-			created, err = s.createSessionWith(ctx, request)
-			lock.RUnlock()
-		} else {
-			created, err = s.createSessionWith(ctx, request)
-		}
+		created, err = s.createSessionWith(ctx, request)
 	}
 	if err != nil {
 		// The ACP Session stays; its next prompt starts a new process and

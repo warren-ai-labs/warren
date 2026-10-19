@@ -9,7 +9,6 @@ struct WarrenDesktopTaskRow: View {
     let task: WarrenTask
     let workspaceCount: Int
     let availableProjectGroups: [WarrenDesktopProjectGroup]
-    let isCollapsed: Bool
     let isExpanded: Bool
     let isInteractionDisabled: Bool
     let onToggleExpansion: () -> Void
@@ -18,6 +17,8 @@ struct WarrenDesktopTaskRow: View {
     let onRename: () -> Void
     let onTogglePin: () -> Void
     let onDelete: () -> Void
+    /// One mark per Session under the task, drawn as dots while folded.
+    var foldMarks: [WarrenActivityMark?] = []
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
@@ -28,84 +29,49 @@ struct WarrenDesktopTaskRow: View {
     @FocusState private var isToggleFocused: Bool
 
     var body: some View {
-        if isCollapsed {
-            collapsedRow
-        } else {
-            expandedRow
-        }
-    }
-
-    private var collapsedRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        return Button(action: onToggleExpansion) {
-            taskIcon(tokens: tokens)
-        }
-        .buttonStyle(.plain)
-        .buttonStyle(WarrenInteractiveRowStyle(isSelected: false, isFocused: isFocused))
-        .disabled(isInteractionDisabled)
-        .frame(width: 32, height: 32)
-        .contentShape(.rect)
-        .foregroundStyle(tokens.mutedForeground)
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
-        .accessibilityLabel("Task \(task.name)")
-        .accessibilityValue(taskAccessibilityValue)
-        .warrenSemanticElement(
-            id: "task.\(task.id.description)",
-            role: .button,
-            label: "Task \(task.name)",
-            value: taskAccessibilityValue,
-            isEnabled: !isInteractionDisabled,
-            action: { if !isInteractionDisabled { onToggleExpansion() } }
-        )
-        .focused($isFocused)
-        .contextMenu {
-            taskContextMenu
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.horizontal, WarrenSpacing.compact)
+        expandedRow
     }
 
     private var expandedRow: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let actionSlot = WarrenLayoutMetrics.sidebarActionButtonSize + WarrenSpacing.compact
-        let compactActionSize = WarrenLayoutMetrics.sidebarActionButtonSize - WarrenSpacing.xs
-        return ZStack(alignment: .trailing) {
+        return HStack(spacing: WarrenDesktopSidebarMetrics.groupIconSpacing) {
             Button(action: onToggleExpansion) {
-                HStack(spacing: WarrenSpacing.compact) {
+                HStack(spacing: WarrenDesktopSidebarMetrics.groupIconSpacing) {
                     taskIcon(tokens: tokens)
-                        .opacity(isHovered || isToggleFocused ? 0 : 1)
 
-                    Text(task.name)
-                        .font(WarrenTypography.sidebarContainerRow)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
-                    Text("(\(workspaceCount))")
-                        .font(WarrenTypography.navigationMeta)
-                        .foregroundStyle(tokens.mutedForeground)
-                        .lineLimit(1)
-                        .opacity(isHovered || isToggleFocused || forceHover ? 1 : 0)
-                        .accessibilityHidden(true)
+                    // The name gives way first; the task's external ID stays
+                    // readable beside it.
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        Text(task.name)
+                            .font(WarrenDesktopTreeTypography.groupName)
+                            .foregroundStyle(tokens.treeGroupText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if let externalID {
+                            Text(externalID)
+                                .font(.system(size: 11))
+                                .foregroundStyle(tokens.treeQuietText)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                    }
 
                     if task.pinned {
                         Image(systemName: "pin.fill")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(tokens.mutedForeground)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(tokens.treeQuietText)
                             .accessibilityHidden(true)
                     }
 
                     Spacer(minLength: 0)
                 }
-                .padding(.leading, WarrenDesktopSidebarIndent.task)
-                .padding(.trailing, actionSlot)
-                .frame(minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight)
+                .frame(height: WarrenDesktopSidebarMetrics.groupRowHeight)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
             }
-            .buttonStyle(WarrenInteractiveRowStyle(isSelected: false, isFocused: isFocused))
+            .buttonStyle(.plain)
             .disabled(isInteractionDisabled)
             .focused($isFocused)
-            .foregroundStyle(tokens.projectText)
             .accessibilityLabel("Task \(task.name), \(workspaceCount) workspaces")
             .accessibilityValue(taskAccessibilityValue)
             .warrenSemanticElement(
@@ -117,29 +83,26 @@ struct WarrenDesktopTaskRow: View {
                 action: { if !isInteractionDisabled { onToggleExpansion() } }
             )
 
-            taskAddMenu(
-                tokens: tokens,
-                compactActionSize: compactActionSize
-            )
-        }
-        .overlay(alignment: .leading) {
-            Button(action: onToggleExpansion) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(tokens.mutedForeground.opacity(0.86))
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .accessibilityHidden(true)
+            // The hidden add menu gives back its gap as well as its width, so
+            // a resting row spends that room on the name.
+            HStack(spacing: showsAddMenu ? WarrenDesktopSidebarMetrics.groupIconSpacing : 0) {
+                taskAddMenu(tokens: tokens)
+                if !isExpanded, WarrenDesktopTreeFoldDots.drawsAny(foldMarks) {
+                    WarrenDesktopTreeFoldDots(marks: foldMarks)
+                }
             }
-            .buttonStyle(WarrenChromeButtonStyle(isFocused: isToggleFocused))
+
+            Button(action: onToggleExpansion) {
+                WarrenDesktopTreeChevron(isExpanded: isExpanded)
+                    .frame(
+                        width: WarrenDesktopSidebarMetrics.chevronSize,
+                        height: WarrenDesktopSidebarMetrics.groupRowHeight
+                    )
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
             .disabled(isInteractionDisabled)
-            .frame(
-                width: WarrenLayoutMetrics.sidebarRowIconSlotSize,
-                height: WarrenLayoutMetrics.sidebarRowIconSlotSize
-            )
-            .contentShape(.rect)
-            .opacity(isHovered || isToggleFocused ? 1 : 0)
             .focused($isToggleFocused)
-            .padding(.leading, WarrenDesktopSidebarIndent.task)
             .accessibilityLabel(isExpanded ? "Collapse task \(task.name)" : "Expand task \(task.name)")
             .warrenSemanticElement(
                 id: "task.\(task.id.description).toggle",
@@ -149,110 +112,97 @@ struct WarrenDesktopTaskRow: View {
                 action: { if !isInteractionDisabled { onToggleExpansion() } }
             )
         }
-        .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight)
-        .background(tokens.interactionBackground(for: .resolve(
-            disabled: isInteractionDisabled,
-            pressed: false,
-            selected: false,
-            focused: isFocused,
-            hovered: isHovered || isAddFocused || isToggleFocused
-        )))
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
+        .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
+        .frame(maxWidth: .infinity, minHeight: WarrenDesktopSidebarMetrics.groupRowHeight)
+        .background(
+            isHovered || isFocused ? tokens.treeRowHover : .clear,
+            in: RoundedRectangle(cornerRadius: WarrenDesktopSidebarMetrics.rowRadius, style: .continuous)
+        )
         .contentShape(.rect)
         .onHover { isHovered = $0 }
-        .contextMenu {
-            taskContextMenu
-        }
-        .padding(.horizontal, WarrenSpacing.compact)
+        // A long name truncates to one line; the whole name is on hover.
+        .help(externalID.map { "\(task.name) · \($0)" } ?? task.name)
+        .warrenContextMenu(taskContextMenuActions)
         .accessibilityElement(children: .contain)
     }
 
+    private var showsAddMenu: Bool {
+        isHovered || isAddFocused || forceHover
+    }
+
+    private var externalID: String? {
+        let trimmed = task.externalID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private func taskIcon(tokens: WarrenColorTokens) -> some View {
-        Image(systemName: "checklist")
-            .font(.system(size: 12, weight: .regular))
-            .foregroundStyle(tokens.projectText)
+        Image(systemName: "checkmark.square")
+            .font(.system(size: 14, weight: .regular))
+            .foregroundStyle(tokens.treeGroupIcon)
             .frame(
-                width: WarrenLayoutMetrics.sidebarRowIconSlotSize,
-                height: WarrenLayoutMetrics.sidebarRowIconSlotSize
+                width: WarrenDesktopSidebarMetrics.groupIconSize,
+                height: WarrenDesktopSidebarMetrics.groupIconSize
             )
             .accessibilityHidden(true)
     }
 
-    private func taskAddMenu(
-        tokens: WarrenColorTokens,
-        compactActionSize: CGFloat
-    ) -> some View {
-        Menu {
-            Menu("Add Existing Workspace") {
-                let availableGroups = WarrenDesktopTaskWorkspaceOptions.availableGroups(
-                    from: availableProjectGroups
-                )
-                if availableGroups.isEmpty {
-                    Text("No unassigned workspaces")
-                } else {
-                    ForEach(availableGroups) { projectGroup in
-                        Menu(projectGroup.project.name) {
-                            ForEach(projectGroup.workspaces) { workspace in
-                                Button(workspace.name) {
-                                    onAttachWorkspace(workspace.id)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Menu("Create Workspace") {
-                if availableProjectGroups.isEmpty {
-                    Text("No projects available")
-                } else {
-                    ForEach(availableProjectGroups) { projectGroup in
-                        Button(projectGroup.project.name) {
-                            onCreateWorkspace(projectGroup.project.id)
-                        }
-                    }
-                }
-            }
-            Divider()
-            Button("Rename Task", action: onRename)
-            Button("Delete Task…", role: .destructive, action: onDelete)
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(tokens.mutedForeground.opacity(0.86))
-                .frame(width: compactActionSize, height: compactActionSize)
-                .contentShape(.rect)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .disabled(isInteractionDisabled)
-        .opacity(isHovered || isAddFocused ? 1 : 0)
-        .focused($isAddFocused)
-        .accessibilityLabel("Add workspace to task \(task.name)")
-        .help("Add workspace")
-        .warrenSemanticElement(
-            id: "task.\(task.id.description).new-workspace",
-            role: .button,
-            label: "Add workspace to task \(task.name)",
-            isEnabled: !isInteractionDisabled,
-            action: {}
-        )
-        .padding(.trailing, WarrenSpacing.xs)
+    private func taskAddMenu(tokens: WarrenColorTokens) -> some View {
+        Image(systemName: "plus")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(tokens.treeQuietText)
+            .frame(width: 18, height: 18)
+            .contentShape(.rect)
+            .warrenMenuButton(taskAddActions)
+            .focusable()
+            .disabled(isInteractionDisabled)
+            .opacity(showsAddMenu ? 1 : 0)
+            // Hidden, it gives its width back to the name, so a resting row shows
+            // the whole name and the external ID beside it.
+            .frame(width: showsAddMenu ? nil : 0)
+            .clipped()
+            .focused($isAddFocused)
+            .accessibilityLabel("Add workspace to task \(task.name)")
+            .accessibilityAddTraits(.isButton)
+            .warrenTooltip("Add workspace")
+            .warrenSemanticElement(
+                id: "task.\(task.id.description).new-workspace",
+                role: .button,
+                label: "Add workspace to task \(task.name)",
+                isEnabled: !isInteractionDisabled,
+                action: {}
+            )
     }
 
-    @ViewBuilder
-    private var taskContextMenu: some View {
-        if !isInteractionDisabled {
-            WarrenDesktopContextMenu([
-                .button(title: task.pinned ? "Unpin Task" : "Pin Task", action: onTogglePin),
-                .button(title: "Rename Task", action: onRename),
-                .button(
-                    title: "Delete Task…",
-                    destructive: true,
-                    action: onDelete
-                ),
-            ])
-        }
+    private var taskAddActions: [WarrenDesktopContextMenuAction] {
+        let availableGroups = WarrenDesktopTaskWorkspaceOptions.availableGroups(
+            from: availableProjectGroups
+        )
+        return [
+            .menu(title: "Add Existing Workspace", actions: availableGroups.map { projectGroup in
+                .menu(title: projectGroup.project.name, actions: projectGroup.workspaces.map { workspace in
+                    .button(title: workspace.name) { onAttachWorkspace(workspace.id) }
+                })
+            }),
+            .menu(title: "Create Workspace", actions: availableProjectGroups.map { projectGroup in
+                .button(title: projectGroup.project.name) { onCreateWorkspace(projectGroup.project.id) }
+            }),
+            .divider,
+            .button(title: "Rename Task", action: onRename),
+            .button(title: "Delete Task…", destructive: true, action: onDelete),
+        ]
+    }
+
+    private var taskContextMenuActions: [WarrenDesktopContextMenuAction] {
+        guard !isInteractionDisabled else { return [] }
+        return [
+            .button(title: task.pinned ? "Unpin Task" : "Pin Task", action: onTogglePin),
+            .button(title: "Rename Task", action: onRename),
+            .button(
+                title: "Delete Task…",
+                destructive: true,
+                action: onDelete
+            ),
+        ]
     }
 
     private var taskAccessibilityValue: String {

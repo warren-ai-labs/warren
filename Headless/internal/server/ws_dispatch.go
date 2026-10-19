@@ -232,6 +232,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		return p.writeResult(command.ID, map[string]any{
 			"defaultRuntime":     value.DefaultRuntime,
 			"runtimeEnv":         value.RuntimeEnv,
+			"acpCommands":        value.ACPCommands,
 			"autoOpenShell":      value.AutoOpenShell,
 			"autoStartAI":        value.AutoStartAI,
 			"openaiBaseURL":      value.OpenAIBaseURL,
@@ -240,6 +241,30 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"relay":              value.Relay,
 			"publicTunnel":       value.PublicTunnel,
 			"pairing":            pairing,
+		})
+	case "relay.enabled":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
+		value := p.server.Service.SettingsSnapshot()
+		relay := value.Relay
+		relay.Enabled = boolParam(params, "enabled")
+		if err := p.server.Service.UpdateRelaySettings(relay); err != nil {
+			return err
+		}
+		// The switch is the lifecycle: enabling starts the tunnel, disabling
+		// stops it, and the enrollment itself is kept either way.
+		if err := p.server.syncRelayLifecycle(); err != nil {
+			return err
+		}
+		value = p.server.Service.SettingsSnapshot()
+		p.server.pairingMu.Lock()
+		pairing := p.server.pairingStatusLocked(time.Now())
+		p.server.pairingMu.Unlock()
+		return p.writeResult(command.ID, map[string]any{
+			"relay":        value.Relay,
+			"publicTunnel": value.PublicTunnel,
+			"pairing":      pairing,
 		})
 	case "relay.reset":
 		if err := p.requireOwner(); err != nil {
@@ -292,6 +317,11 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		if err := p.server.Service.UpdateSettings(stringParam(params, "defaultRuntime"), runtimeEnv); err != nil {
 			return err
+		}
+		if _, specified := params["acpCommands"]; specified {
+			if err := p.server.Service.SetACPCommands(stringMapParam(params, "acpCommands")); err != nil {
+				return err
+			}
 		}
 		if _, specified := params["autoOpenShell"]; specified {
 			if err := p.server.Service.SetAutoOpenShell(boolParam(params, "autoOpenShell")); err != nil {
@@ -352,6 +382,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		return p.writeResult(command.ID, map[string]any{
 			"defaultRuntime":     value.DefaultRuntime,
 			"runtimeEnv":         value.RuntimeEnv,
+			"acpCommands":        value.ACPCommands,
 			"autoOpenShell":      value.AutoOpenShell,
 			"autoStartAI":        value.AutoStartAI,
 			"openaiBaseURL":      value.OpenAIBaseURL,
@@ -508,47 +539,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, map[string]bool{"moved": true})
-	case "terminal-group.create":
-		value, err := p.server.Service.CreateTerminalGroup(stringParam(params, "name"), stringParam(params, "home"))
-		if err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, value)
-	case "terminal-group.remove":
-		if err := p.server.Service.RemoveTerminalGroup(ctx, stringParam(params, "id"), boolParam(params, "force")); err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, map[string]bool{"removed": true})
-	case "terminal-group.rename":
-		if err := p.server.Service.RenameTerminalGroup(stringParam(params, "id"), stringParam(params, "name")); err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, map[string]bool{"renamed": true})
-	case "terminal-group.home":
-		if err := p.server.Service.SetTerminalGroupHome(stringParam(params, "id"), stringParam(params, "path")); err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, map[string]bool{"updated": true})
-	case "terminal-group.move":
-		if err := p.server.Service.MoveTerminalGroup(stringParam(params, "id"), stringParam(params, "before")); err != nil {
-			return err
-		}
-		return p.writeResult(command.ID, map[string]bool{"moved": true})
 	case "pane-group.create":
-		workspaceID := stringParam(params, "workspace")
-		groupID := stringParam(params, "group")
-		if workspaceID != "" && groupID != "" {
-			return errors.New("workspace and terminal group are mutually exclusive")
-		}
-		ownerScope := api.SessionScopeWorkspace
-		ownerID := workspaceID
-		if groupID != "" {
-			ownerScope = api.SessionScopeTerminalGroup
-			ownerID = groupID
-		}
 		value, err := p.server.Service.CreatePaneGroup(
-			ownerScope,
-			ownerID,
+			stringParam(params, "workspace"),
 			stringParam(params, "session"),
 			stringParam(params, "name"),
 			stringParam(params, "before"),
@@ -602,12 +595,11 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		session, err := p.server.Service.CreateBrowserSession(ctx, BrowserCreateOptions{
-			WorkspaceID:     stringParam(params, "workspace"),
-			TerminalGroupID: stringParam(params, "group"),
-			Title:           stringParam(params, "title"),
-			URL:             stringParam(params, "url"),
-			Headless:        headless,
-			Viewport:        viewport,
+			WorkspaceID: stringParam(params, "workspace"),
+			Title:       stringParam(params, "title"),
+			URL:         stringParam(params, "url"),
+			Headless:    headless,
+			Viewport:    viewport,
 		})
 		if err != nil {
 			return err
@@ -621,10 +613,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, projection)
 	case "browser.session.list":
-		return p.writeResult(command.ID, p.server.Service.BrowserSessions(
-			stringParam(params, "workspace"),
-			stringParam(params, "group"),
-		))
+		return p.writeResult(command.ID, p.server.Service.BrowserSessions(stringParam(params, "workspace")))
 	case "browser.session.get":
 		id := stringParam(params, "id")
 		if id == "" {
@@ -665,43 +654,15 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.subscribeBrowser(command.ID, id)
 	case "session.create":
-		var value api.Session
-		var err error
-		groupID := stringParam(params, "group")
-		workspaceID := stringParam(params, "workspace")
-		if groupID != "" && workspaceID != "" {
-			return errors.New("workspace and terminal group are mutually exclusive")
-		}
-		if groupID != "" {
-			value, err = p.server.Service.CreateGroupSessionWithHandler(
-				ctx,
-				groupID,
-				stringParam(params, "command"),
-				stringParam(params, "kind"),
-				stringParam(params, "title"),
-				stringParam(params, "runtimeKind"),
-				stringParam(params, "agentHandler"),
-			)
-		} else if workspaceID != "" {
-			value, err = p.server.Service.CreateSessionWithHandler(
-				ctx,
-				workspaceID,
-				stringParam(params, "command"),
-				stringParam(params, "kind"),
-				stringParam(params, "title"),
-				stringParam(params, "runtimeKind"),
-				stringParam(params, "agentHandler"),
-			)
-		} else {
-			value, err = p.server.Service.CreateDefaultGroupSessionWithHandler(
-				ctx,
-				stringParam(params, "command"),
-				stringParam(params, "kind"),
-				stringParam(params, "title"),
-				stringParam(params, "runtimeKind"),
-				stringParam(params, "agentHandler"),
-			)
-		}
+		value, err := p.server.Service.CreateSessionWithHandler(
+			ctx,
+			stringParam(params, "workspace"),
+			stringParam(params, "command"),
+			stringParam(params, "kind"),
+			stringParam(params, "title"),
+			stringParam(params, "runtimeKind"),
+			stringParam(params, "agentHandler"),
+		)
 		if err != nil {
 			return err
 		}
@@ -731,7 +692,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		return p.writeResult(command.ID, map[string]any{
 			"allowed": true, "resource": "session", "id": value.ID,
-			"workspace": value.WorkspaceID, "terminalGroup": value.TerminalGroupID,
+			"workspace":      value.WorkspaceID,
 			"agentSessionId": value.AgentSessionID, "transcriptPath": value.TranscriptPath,
 			"lifecycle": value.Lifecycle,
 		})
@@ -798,13 +759,8 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if id == "" {
 			return errors.New("session parameter required")
 		}
-		workspaceID := stringParam(params, "workspace")
-		groupID := stringParam(params, "group")
-		if workspaceID != "" && groupID != "" {
-			return errors.New("workspace and terminal group are mutually exclusive")
-		}
 		expectations := sessionMoveExpectations(params)
-		value, err := p.server.Service.MoveSessionWithExpectations(ctx, id, workspaceID, groupID, expectations)
+		value, err := p.server.Service.MoveSessionWithExpectations(ctx, id, stringParam(params, "workspace"), expectations)
 		if err != nil {
 			return err
 		}
@@ -814,12 +770,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if id == "" {
 			return errors.New("session parameter required")
 		}
-		workspaceID := stringParam(params, "workspace")
-		groupID := stringParam(params, "group")
-		if workspaceID != "" && groupID != "" {
-			return errors.New("workspace and terminal group are mutually exclusive")
-		}
-		value, err := p.server.Service.PreflightSessionMove(id, workspaceID, groupID, sessionMoveExpectations(params))
+		value, err := p.server.Service.PreflightSessionMove(id, stringParam(params, "workspace"), sessionMoveExpectations(params))
 		if err != nil {
 			return err
 		}
@@ -938,13 +889,22 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		lock.Unlock()
 		resume()
 		return nil
+	case "session.ack":
+		// Fire-and-forget: an ack is sent many times a second on a busy
+		// terminal, so it has no response. Stale or unknown acks are ignored.
+		epoch, hasEpoch := uint64Param(params, "epoch")
+		sequence, hasSequence := uint64Param(params, "sequence")
+		if hasEpoch && hasSequence {
+			p.server.Service.ackPeerOutput(p, stringParam(params, "id"), epoch, sequence)
+		}
+		return nil
 	case "session.unsubscribe":
 		id := stringParam(params, "id")
 		p.cancelPendingSubscription(id)
 		p.server.Service.detachPeer(p, id)
-		if p.attachedSessionID() == id {
-			p.detach()
-		}
+		// A subscribe for another Session runs concurrently; a separate check
+		// and detach could release the attachment it just claimed.
+		p.detachIfAttachedTo(id)
 		return p.writeResult(command.ID, map[string]bool{"unsubscribed": true})
 	case "session.focus":
 		agentOnly, _, agentErr := optionalBoolParam(params, "agent")

@@ -111,9 +111,6 @@ func canonicalResource(name string) string {
 	if name == "worktree" {
 		return "workspace"
 	}
-	if name == "group" {
-		return "terminal-group"
-	}
 	return name
 }
 
@@ -133,10 +130,6 @@ var resourceActions = map[string]map[string]bool{
 	"workspace": {
 		"list": true, "create": true, "add": true, "remove": true, "delete": true,
 		"rename": true, "pin": true, "move": true,
-	},
-	"terminal-group": {
-		"list": true, "create": true, "add": true, "remove": true, "delete": true,
-		"rename": true, "home": true, "move": true,
 	},
 	"session": {
 		"list": true, "create": true, "add": true, "remove": true, "delete": true,
@@ -171,8 +164,6 @@ func requiredPositionals(resource, action string) []string {
 		return []string{"PROJECT_ID"}
 	case "workspace.remove", "workspace.delete", "workspace.rename", "workspace.pin", "workspace.move":
 		return []string{"WORKSPACE_ID"}
-	case "terminal-group.remove", "terminal-group.delete", "terminal-group.rename", "terminal-group.home", "terminal-group.move":
-		return []string{"GROUP_ID"}
 	case "session.remove", "session.delete", "session.kill", "session.rename", "session.pin", "session.move",
 		"session.send", "session.read":
 		return []string{"SESSION_ID"}
@@ -209,7 +200,7 @@ func sessionTargetAction(action string) bool {
 
 func missingRequiredFlag(resource, action string, params map[string]any) string {
 	switch resource + "." + action {
-	case "task.create", "task.add", "task.rename", "project.rename", "workspace.rename", "terminal-group.rename":
+	case "task.create", "task.add", "task.rename", "project.rename", "workspace.rename":
 		if stringValue(params, "name") == "" {
 			return "--name NAME"
 		}
@@ -221,17 +212,13 @@ func missingRequiredFlag(resource, action string, params map[string]any) string 
 		if stringValue(params, "branch") == "" {
 			return "--branch BRANCH"
 		}
-	case "terminal-group.home":
-		if stringValue(params, "path") == "" {
-			return "--path PATH"
-		}
 	case "pane.rename":
 		if stringValue(params, "name") == "" {
 			return "--name NAME"
 		}
 	case "pane.create":
-		if stringValue(params, "workspace") == "" && stringValue(params, "group") == "" {
-			return "--workspace WORKSPACE_ID or --group GROUP_ID"
+		if stringValue(params, "workspace") == "" {
+			return "--workspace WORKSPACE_ID"
 		}
 		if stringValue(params, "session") == "" {
 			return "--session SESSION_ID"

@@ -6,6 +6,10 @@
 - Scope: make a split terminal arrangement a durable Host resource that several
   groups can coexist in one Workspace or Terminal Group
 - Protocol baseline: Warren protocol 4.0
+- Amended 2026-10-15: Terminal Groups were removed ([RFC 0003](0003-terminal-groups.md),
+  withdrawn). Every Session and Pane Group belongs to a Workspace; the Terminal
+  Group owner, `terminalGroup`/`scope` fields, and `--group` flags described
+  below no longer exist.
 - Supersedes: the ownership and persistence sections of [RFC 0008](0008-native-tab-splits.md)
 
 ---

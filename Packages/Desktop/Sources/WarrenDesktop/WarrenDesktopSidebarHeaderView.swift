@@ -2,7 +2,6 @@ import SwiftUI
 import WarrenDesignSystem
 
 struct WarrenDesktopSidebarHeader: View {
-    let isCollapsed: Bool
     let chromeMode: WarrenDesktopChromeMode
     let updateStatus: WarrenDesktopUpdateStatus
     let onUpdateAction: () -> Void
@@ -10,15 +9,25 @@ struct WarrenDesktopSidebarHeader: View {
     let onCommandPalette: () -> Void
     var showsActiveOnly: Bool = false
     var onToggleActiveOnly: () -> Void = {}
-    var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode = .compact
-    var onToggleWorkspaceDisplayMode: () -> Void = {}
+    /// The Host this window is working on, named at the top of the sidebar.
+    var host: WarrenDesktopSidebarHostIdentity? = nil
+    /// Whether the Host picker is open. The window root presents it, hanging
+    /// from this row, like every other chrome surface.
+    var isHostPickerPresented: Bool = false
+    /// Opens or closes the Host picker, or `nil` when there is nothing to
+    /// switch to.
+    var onToggleHostPicker: (() -> Void)? = nil
+    /// Whether Public Access is serving this Host, for the globe beside the
+    /// Host name.
+    var isPublicAccessOn: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var searchFocused: Bool
+    @State private var isHostRowHovered = false
 
     init(
-        isCollapsed: Bool,
         chromeMode: WarrenDesktopChromeMode,
         updateStatus: WarrenDesktopUpdateStatus,
         onUpdateAction: @escaping () -> Void,
@@ -26,10 +35,11 @@ struct WarrenDesktopSidebarHeader: View {
         onCommandPalette: @escaping () -> Void,
         showsActiveOnly: Bool = false,
         onToggleActiveOnly: @escaping () -> Void = {},
-        workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode = .compact,
-        onToggleWorkspaceDisplayMode: @escaping () -> Void = {}
+        host: WarrenDesktopSidebarHostIdentity? = nil,
+        isHostPickerPresented: Bool = false,
+        isPublicAccessOn: Bool = false,
+        onToggleHostPicker: (() -> Void)? = nil
     ) {
-        self.isCollapsed = isCollapsed
         self.chromeMode = chromeMode
         self.updateStatus = updateStatus
         self.onUpdateAction = onUpdateAction
@@ -37,98 +47,220 @@ struct WarrenDesktopSidebarHeader: View {
         self.onCommandPalette = onCommandPalette
         self.showsActiveOnly = showsActiveOnly
         self.onToggleActiveOnly = onToggleActiveOnly
-        self.workspaceDisplayMode = workspaceDisplayMode
-        self.onToggleWorkspaceDisplayMode = onToggleWorkspaceDisplayMode
+        self.host = host
+        self.isHostPickerPresented = isHostPickerPresented
+        self.isPublicAccessOn = isPublicAccessOn
+        self.onToggleHostPicker = onToggleHostPicker
     }
 
     var body: some View {
         Group {
             if chromeMode == .workspace {
                 workspaceHeader
-            } else if isCollapsed {
-                collapsedDashboardHeader
             } else {
                 expandedDashboardHeader
             }
         }
         .background(
             chromeMode == .workspace
-                ? WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).sidebarSurface
+                ? WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).workbenchCardFill
                 : .clear
         )
     }
 
-    /// Superset's expanded dashboard header has a 32pt traffic-light row with
-    /// an 80pt leading inset, followed by its compact navigation actions. Warren
-    /// keeps the same geometry and exposes the one supported action: opening a
-    /// new terminal session in the selected workspace.
+    /// The top of the sidebar card: the window's traffic lights, then the Host
+    /// this window works on, with search and the active-only filter beside it.
     private var workspaceHeader: some View {
         VStack(spacing: 0) {
-            if isCollapsed {
-                WarrenDesktopWindowDragRegion()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: WarrenLayoutMetrics.tabBarHeight)
-                    .background(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).chromeSurface)
-
-                compactSearchButton
-                    .padding(.top, WarrenSpacing.medium)
-            } else {
-                trafficRow
-
-                expandedSearchButton
-            }
+            trafficRow
+            hostRow
         }
     }
 
     private var trafficRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        return HStack(spacing: WarrenSpacing.xs) {
-            // Superset owns an 80pt traffic-light pad; Warren renders the
-            // lights itself because the window is borderless.
+        HStack(spacing: WarrenSpacing.xs) {
+            // The window is borderless, so Warren draws its own lights inside
+            // the sidebar card.
             WarrenDesktopTrafficLights()
-                .frame(width: WarrenLayoutMetrics.macTrafficLightInset, alignment: .leading)
-
-            WarrenDesktopChromeButton(
-                systemImage: "sidebar.leading",
-                label: "Collapse sidebar",
-                hint: "Collapse the project and session list",
-                action: onToggle
-            )
-
-            WarrenDesktopChromeButton(
-                systemImage: showsActiveOnly ? "bolt.horizontal.fill" : "bolt.horizontal",
-                label: showsActiveOnly ? "Show all workspaces" : "Filter active workspaces",
-                hint: showsActiveOnly ? "Show all workspaces" : "Show only workspaces with active sessions",
-                action: onToggleActiveOnly,
-                tint: showsActiveOnly ? tokens.highlight : nil
-            )
-
-            WarrenDesktopChromeButton(
-                systemImage: workspaceDisplayMode.systemImage,
-                label: workspaceDisplayMode.toggleLabel,
-                hint: workspaceDisplayMode.toggleHint,
-                action: onToggleWorkspaceDisplayMode,
-                tint: workspaceDisplayMode.isRich ? tokens.highlight : nil,
-            )
+                .frame(width: WarrenLayoutMetrics.macTrafficLightInset - 12, alignment: .leading)
+                .padding(.leading, 12)
 
             WarrenDesktopWindowDragRegion()
                 .frame(minWidth: 0, maxWidth: .infinity)
                 .accessibilityHidden(true)
 
             if WarrenBuildVariant.isBuild {
-                // The provenance marker is the header's only disposable child.
-                // It spends the reserved slot while the rail can carry it, then
-                // the compact form, then nothing — so a narrow rail truncates
-                // nothing and never widens the sidebar's content column.
+                // The provenance marker is the row's only disposable child: the
+                // full form while the rail can carry it, then the compact one,
+                // then nothing, so a narrow rail never widens the column.
                 ViewThatFits(in: .horizontal) {
                     buildMarker()
                     buildMarker(isCompact: true)
                     EmptyView()
                 }
-                .padding(.trailing, WarrenSpacing.compact)
             }
+
         }
-        .frame(height: WarrenLayoutMetrics.tabBarHeight)
+        .frame(height: WarrenDesktopSidebarMetrics.headerTrafficRowHeight)
+    }
+
+    private var hostRow: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        return HStack(spacing: 10) {
+            Button {
+                onToggleHostPicker?()
+            } label: {
+                HStack(spacing: 10) {
+                    hostTile(tokens: tokens)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 4) {
+                            Text(host?.name ?? "This Mac")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(tokens.foreground.opacity(0.92))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            if isPublicAccessOn {
+                                publicAccessGlobe(tokens: tokens)
+                            }
+                            if onToggleHostPicker != nil {
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 8, weight: .semibold))
+                                    .foregroundStyle(tokens.treeQuietText)
+                                    .opacity(isHostRowHovered || isHostPickerPresented ? 1 : 0)
+                                    .animation(
+                                        WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
+                                        value: isHostRowHovered || isHostPickerPresented
+                                    )
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        if let subtitle = host?.subtitle, !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(.system(size: 11))
+                                .foregroundStyle(tokens.treeQuietText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(
+                            isHostPickerPresented
+                                ? tokens.treeRowSelected
+                                : (isHostRowHovered && onToggleHostPicker != nil ? tokens.treeRowHover : .clear)
+                        )
+                )
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .onHover { isHostRowHovered = $0 }
+            .help(host.map { "\($0.name) · \($0.connectionLabel)" } ?? "Host")
+            .accessibilityLabel("Host \(host?.name ?? "")")
+            .accessibilityValue(host?.connectionLabel ?? "")
+            .warrenSemanticElement(
+                id: "sidebar.host",
+                role: .button,
+                label: "Host \(host?.name ?? "")",
+                value: host?.connectionLabel ?? "",
+                isEnabled: onToggleHostPicker != nil,
+                isSelected: isHostPickerPresented,
+                action: { if !isHostPickerPresented { onToggleHostPicker?() } }
+            )
+
+            headerButton(
+                systemImage: "magnifyingglass",
+                label: "Search",
+                hint: "Search projects, sessions and commands (⌘K)",
+                action: onCommandPalette
+            )
+            .focused($searchFocused)
+        }
+        // The button's own 8pt inset keeps the tile on the rows' 16pt line.
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
+        .frame(height: WarrenDesktopSidebarMetrics.headerHostRowHeight)
+    }
+
+    /// The Public Access indicator: a quiet globe with the green dot at its
+    /// corner, shown only while Public Access is on.
+    private func publicAccessGlobe(tokens: WarrenColorTokens) -> some View {
+        Image(systemName: "globe")
+            .font(.system(size: 13, weight: .regular))
+            .foregroundStyle(tokens.treeQuietText)
+            .overlay(alignment: .bottomTrailing) {
+                Circle()
+                    .fill(tokens.success)
+                    .frame(width: 6, height: 6)
+                    .padding(1)
+                    .background(Circle().fill(tokens.workbenchCardFill))
+                    .offset(x: 3, y: 3)
+            }
+            .padding(.leading, 5)
+            .warrenTooltip("Public Access is on")
+            .accessibilityLabel("Public Access on")
+            .accessibilityHidden(true)
+    }
+
+    /// The Host's tile: a laptop for this Mac, a server for anything else,
+    /// with the connection's state as a dot on its corner.
+    private func hostTile(tokens: WarrenColorTokens) -> some View {
+        let size = WarrenDesktopSidebarMetrics.hostTileSize
+        return Image(systemName: host?.isLocal == false ? "server.rack" : "display")
+            .font(.system(size: 13, weight: .regular))
+            .foregroundStyle(tokens.foreground.opacity(0.8))
+            .frame(width: size, height: size)
+            .background(
+                tokens.foreground.opacity(0.07),
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .overlay(alignment: .bottomTrailing) {
+                Circle()
+                    .fill(host.map { connectionColor($0.connectionTone, tokens: tokens) } ?? tokens.success)
+                    .frame(width: 8, height: 8)
+                    .padding(2)
+                    .background(tokens.workbenchCardFill, in: Circle())
+                    .offset(x: 4, y: 4)
+            }
+            .accessibilityHidden(true)
+    }
+
+    private func connectionColor(
+        _ tone: WarrenDesktopConnectionTone,
+        tokens: WarrenColorTokens
+    ) -> Color {
+        switch tone {
+        case .success: tokens.success
+        case .info: tokens.info
+        case .warning: tokens.warning
+        case .destructive: tokens.destructive
+        }
+    }
+
+    private func headerButton(
+        systemImage: String,
+        label: String,
+        hint: String,
+        tint: Color? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        return Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .regular))
+                .frame(width: 28, height: 28)
+                .contentShape(.rect)
+                .accessibilityHidden(true)
+        }
+        .buttonStyle(WarrenChromeButtonStyle())
+        .frame(width: 28, height: 28)
+        .foregroundStyle(tint ?? tokens.mutedForeground.opacity(0.85))
+        .warrenTooltip(hint)
+        .accessibilityLabel(label)
+        .accessibilityHint(hint)
     }
 
     private func buildMarker(isCompact: Bool = false) -> some View {
@@ -140,67 +272,6 @@ struct WarrenDesktopSidebarHeader: View {
         )
     }
 
-    private var expandedSearchButton: some View {
-        Button(action: onCommandPalette) {
-            HStack(spacing: WarrenSpacing.compact) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground)
-                    .frame(width: 20)
-                    .accessibilityHidden(true)
-
-                Text("Search")
-                    .font(WarrenTypography.navigationItemLight)
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
-
-                Text("⌘K")
-                    .font(WarrenTypography.shortcut)
-                    .tracking(1.2)
-                    .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).fillHover)
-                    .clipShape(.rect(cornerRadius: WarrenRadius.xs))
-            }
-            .padding(.horizontal, WarrenSpacing.compact)
-            .frame(height: WarrenLayoutMetrics.sidebarProjectRowHeight)
-        }
-        .buttonStyle(WarrenInteractiveRowStyle(isFocused: searchFocused))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground)
-        .focused($searchFocused)
-        .padding(.horizontal, WarrenSpacing.xs)
-        .accessibilityLabel("Search")
-    }
-
-    private var compactSearchButton: some View {
-        Button(action: onCommandPalette) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
-                .frame(width: 28, height: 28)
-                .accessibilityHidden(true)
-        }
-        .buttonStyle(WarrenInteractiveRowStyle(isFocused: searchFocused))
-        .frame(maxWidth: .infinity)
-        .contentShape(Rectangle())
-        .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground)
-        .focused($searchFocused)
-        .accessibilityLabel("Search")
-    }
-
-    private var collapsedDashboardHeader: some View {
-        WarrenDesktopChromeButton(
-            systemImage: "sidebar.left",
-            label: "Expand sidebar",
-            hint: "Show the project and workspace list",
-            action: onToggle
-        )
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, WarrenSpacing.compact)
-    }
-
     private var expandedDashboardHeader: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         return HStack(spacing: WarrenSpacing.xs) {
@@ -208,7 +279,8 @@ struct WarrenDesktopSidebarHeader: View {
                 systemImage: "sidebar.leading",
                 label: "Collapse sidebar",
                 hint: "Collapse the sidebar to icons",
-                action: onToggle
+                action: onToggle,
+                shortcut: "⌘B"
             )
 
             WarrenDesktopChromeButton(
@@ -219,17 +291,63 @@ struct WarrenDesktopSidebarHeader: View {
                 tint: showsActiveOnly ? tokens.highlight : nil
             )
 
-            WarrenDesktopChromeButton(
-                systemImage: workspaceDisplayMode.systemImage,
-                label: workspaceDisplayMode.toggleLabel,
-                hint: workspaceDisplayMode.toggleHint,
-                action: onToggleWorkspaceDisplayMode,
-                tint: workspaceDisplayMode.isRich ? tokens.highlight : nil,
-            )
-
             Spacer(minLength: 0)
         }
         .frame(height: WarrenLayoutMetrics.sidebarHeaderRowHeight)
         .padding(.horizontal, WarrenSpacing.compact)
+    }
+}
+
+/// What the sidebar's Host row says about the Host this window works on.
+struct WarrenDesktopSidebarHostIdentity: Equatable {
+    let name: String
+    /// "Local · Mac Studio", "Remote · fsn1-dev" and the like.
+    let subtitle: String
+    let isLocal: Bool
+    let connectionState: WarrenDesktopConnectionState
+
+    var connectionLabel: String {
+        WarrenDesktopConnectionPresentation(connectionState).label
+    }
+
+    var connectionTone: WarrenDesktopConnectionTone {
+        WarrenDesktopConnectionPresentation(connectionState).tone
+    }
+
+    /// The row's title is the Host's own name, so the row names the machine
+    /// rather than the connection. The endpoint's label moves to the subtitle
+    /// when it says something the name does not; otherwise its address does.
+    static func names(
+        hostName: String,
+        endpointLabel: String?,
+        endpointDetail: String?
+    ) -> (name: String, detail: String?) {
+        var host = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if host.lowercased().hasSuffix(".local") {
+            host = String(host.dropLast(".local".count))
+        }
+        let label = endpointLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !host.isEmpty else {
+            return (label.isEmpty ? "This Mac" : label, endpointDetail)
+        }
+        let labelIsDistinct = !label.isEmpty
+            && label.caseInsensitiveCompare(host) != .orderedSame
+            && !["local", "remote"].contains(label.lowercased())
+        return (host, labelIsDistinct ? label : endpointDetail)
+    }
+
+    /// The subtitle: where the Host is, then what it is, or how the
+    /// connection is doing while it is not connected.
+    static func subtitle(
+        isLocal: Bool,
+        detail: String?,
+        connectionState: WarrenDesktopConnectionState
+    ) -> String {
+        let place = isLocal ? "Local" : "Remote"
+        guard connectionState.isConnected else {
+            return "\(place) · \(WarrenDesktopConnectionPresentation(connectionState).label)"
+        }
+        let trimmed = detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? place : "\(place) · \(trimmed)"
     }
 }

@@ -107,6 +107,71 @@ public enum TerminalSessionPresentation {
         return URL(fileURLWithPath: trimmed).lastPathComponent
     }
 
+    /// The name of the shell a foreground process names, or nil when the
+    /// process is not a shell.
+    public static func shellName(process: String) -> String? {
+        let name = executableName(process)
+        guard !name.isEmpty, shellProcessNames.contains(name.lowercased()) else { return nil }
+        return name
+    }
+
+    /// A shell row's title: where the shell is, not what it is running.
+    ///
+    /// A user-set or meaningful generated name wins. Otherwise the title says
+    /// where the shell is: the shell's own name at the worktree root, the path
+    /// relative to the worktree inside it, and a `~`-shortened path outside.
+    /// The command never appears here, so it is not written twice beside the
+    /// row's second line.
+    public static func shellLocationTitle(
+        customTitle: String?,
+        title: String,
+        kind: TerminalSessionKind,
+        shellName: String,
+        directory: String,
+        worktreeRoot: String
+    ) -> String {
+        let name = sessionName(customTitle: customTitle, title: title, kind: kind)
+        if !name.isEmpty { return name }
+        let shell = shellName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = shell.isEmpty ? kind.displayName : shell
+        let path = normalizedPath(directory)
+        guard !path.isEmpty else { return fallback }
+        let root = normalizedPath(worktreeRoot)
+        if !root.isEmpty, path == root { return fallback }
+        if !root.isEmpty, path.hasPrefix(root + "/") {
+            return String(path.dropFirst(root.count + 1))
+        }
+        return abbreviatedPath(path)
+    }
+
+    /// A directory shortened for display: `~` stands in for the home directory,
+    /// and everything else is left as the shell reported it.
+    public static func abbreviatedPath(_ path: String) -> String {
+        let normalized = normalizedPath(path)
+        guard !normalized.isEmpty else { return "" }
+        #if os(macOS)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        #else
+        // iOS has no shell home; tilde abbreviation is desktop chrome only.
+        let home = ""
+        #endif
+        guard !home.isEmpty else { return normalized }
+        if normalized == home { return "~" }
+        if normalized.hasPrefix(home + "/") {
+            return "~" + normalized.dropFirst(home.count)
+        }
+        return normalized
+    }
+
+    /// A path with redundant separators and `.`/`..` segments removed, without
+    /// resolving symlinks: the displayed path should be the one the shell
+    /// reported, not the one the filesystem points at.
+    public static func normalizedPath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return URL(fileURLWithPath: trimmed).standardizedFileURL.path
+    }
+
     /// The executable a process name or command line refers to, without a
     /// leading login-shell dash.
     public static func executableName(_ value: String) -> String {

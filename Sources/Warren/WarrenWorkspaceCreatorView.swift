@@ -27,103 +27,111 @@ struct WarrenWorkspaceCreatorView: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
-            Text("New workspace")
-                .font(WarrenTypography.dialogTitle)
-                .foregroundStyle(tokens.foreground)
-            Text("Create a Git worktree for \(project.name).")
-                .font(WarrenTypography.dialogBody)
-                .foregroundStyle(tokens.mutedForeground)
-
-            WarrenInputField(
-                "Workspace name",
-                text: coordinator.binding(\.displayName),
-                placeholder: "feature/my-change",
-                monospaced: false,
-                focusOnAppear: true,
-                labelFont: WarrenTypography.dialogFieldLabel,
-                inputFont: WarrenTypography.dialogInput
-            )
-            .disabled(coordinator.isSubmitting)
-
-            WarrenInputField(
-                "Branch",
-                text: coordinator.binding(\.branch),
-                placeholder: "main",
-                monospaced: false,
-                labelFont: WarrenTypography.dialogFieldLabel,
-                inputFont: WarrenTypography.dialogInput
-            )
-            .disabled(coordinator.isSubmitting)
-            .onChange(of: coordinator.branch) { value in
-                if coordinator.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    coordinator.displayName = value
-                }
-            }
-
-            if let setupScript = project.setupScript,
-               !setupScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Toggle("Run setup script", isOn: coordinator.binding(\.runSetupScript))
-                    .toggleStyle(.switch)
-                    .font(WarrenTypography.dialogBody)
-                    .disabled(coordinator.isSubmitting)
-                    .accessibilityIdentifier("workspace-creation.run-setup-script")
-
-                Text("Configured script: \(setupScript)")
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .lineLimit(2)
+        WarrenDialog(
+            "New workspace",
+            message: "Create a Git worktree for \(project.name).",
+            width: .m
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                WarrenInputField(
+                    "Workspace name",
+                    text: coordinator.binding(\.displayName),
+                    placeholder: "feature/my-change",
+                    monospaced: false,
+                    focusOnAppear: true,
+                    labelFont: WarrenTypography.dialogFieldLabel,
+                    inputFont: WarrenTypography.dialogInput
+                )
+                .disabled(coordinator.isSubmitting)
 
                 WarrenInputField(
-                    "Setup arguments",
-                    text: coordinator.binding(\.setupArgumentsText),
-                    placeholder: "One argument per line",
+                    "Branch",
+                    text: coordinator.binding(\.branch),
+                    placeholder: "main",
                     monospaced: true,
                     labelFont: WarrenTypography.dialogFieldLabel,
                     inputFont: WarrenTypography.dialogInput
                 )
-                .disabled(coordinator.isSubmitting || !coordinator.runSetupScript)
-                .accessibilityIdentifier("workspace-creation.setup-arguments")
+                .disabled(coordinator.isSubmitting)
+                .onChange(of: coordinator.branch) { value in
+                    if coordinator.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        coordinator.displayName = value
+                    }
+                }
 
-                Text("The script runs in the new worktree. The first two arguments are the main repository and worktree paths.")
-                    .font(WarrenTypography.dialogBody)
+                if let setupScript = project.setupScript,
+                   !setupScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Run setup script", isOn: coordinator.binding(\.runSetupScript))
+                            .toggleStyle(.switch)
+                            .font(WarrenTypography.dialogBody)
+                            .disabled(coordinator.isSubmitting)
+                            .accessibilityIdentifier("workspace-creation.run-setup-script")
+
+                        Text("Configured script: \(setupScript)")
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(tokens.mutedForeground)
+                            .lineLimit(2)
+
+                        WarrenInputField(
+                            "Setup arguments",
+                            text: coordinator.binding(\.setupArgumentsText),
+                            placeholder: "One argument per line",
+                            monospaced: true,
+                            labelFont: WarrenTypography.dialogFieldLabel,
+                            inputFont: WarrenTypography.dialogInput
+                        )
+                        .disabled(coordinator.isSubmitting || !coordinator.runSetupScript)
+                        .accessibilityIdentifier("workspace-creation.setup-arguments")
+
+                        Text("The script runs in the new worktree. The first two arguments are the main repository and worktree paths.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(tokens.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Text("Worktree files are stored under ~/.warren/worktrees.")
+                    .font(.system(size: 11.5))
                     .foregroundStyle(tokens.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
+
+                if let errorMessage = coordinator.errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(tokens.destructive)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Workspace creation error: \(errorMessage)")
+                }
             }
-
-            Text("Worktree files are stored under ~/.warren/worktrees.")
-                .font(WarrenTypography.dialogBody)
-                .foregroundStyle(tokens.mutedForeground)
-
-            if let errorMessage = coordinator.errorMessage {
-                Text(errorMessage)
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.destructive)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Workspace creation error: \(errorMessage)")
-            }
-
-            HStack {
+        } footer: {
+            HStack(spacing: 8) {
                 if coordinator.isSubmitting {
                     WarrenBrailleSpinner(size: 16, accessibilityLabel: "Creating workspace")
                     Text("Creating workspace…")
                         .font(WarrenTypography.dialogBody)
                         .foregroundStyle(tokens.mutedForeground)
                 }
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(coordinator.isSubmitting)
-                Button("Create", action: submit)
+                Spacer(minLength: 0)
+                Button(action: onCancel) {
+                    HStack(spacing: 6) {
+                        Text("Cancel")
+                        WarrenDialogKeycap("esc")
+                    }
+                }
+                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
+                .keyboardShortcut(.cancelAction)
+                .disabled(coordinator.isSubmitting)
+                Button(action: submit) {
+                    HStack(spacing: 6) {
+                        Text("Create")
+                        WarrenDialogKeycap("\u{23CE}", isOnPrimary: true)
+                    }
+                }
                 .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
                 .keyboardShortcut(.defaultAction)
                 .disabled(!coordinator.canSubmit)
             }
         }
-        .padding(WarrenSpacing.large)
-        .frame(width: WarrenLayoutMetrics.standardDialogWidth)
-        .background(tokens.popoverSurface)
         .onExitCommand {
             guard !coordinator.isSubmitting else { return }
             onCancel()

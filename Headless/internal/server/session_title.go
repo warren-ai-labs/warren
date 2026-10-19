@@ -6,21 +6,77 @@ import (
 	"strings"
 	"time"
 
+	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	sessiontitle "github.com/abcdlsj/warren/Headless/internal/title"
 )
 
-// tryStartSessionTitle atomically claims the one automatic title request for a
-// session once its first user and assistant texts are complete. The request is
-// intentionally asynchronous: an unavailable model must never delay terminal
-// or agent event delivery.
+// cliTitleGracePeriod is how long the Host waits for an agent CLI that names
+// its own conversations before falling back to its own title request. Every
+// CLI Warren integrates reports the name within seconds of the first completed
+// turn, so the bound is generous relative to the wait it usually covers.
+const cliTitleGracePeriod = 30 * time.Second
+
+// cliTitleUpgradeWindow bounds the lookup after the Host's own request already
+// produced a title. A CLI name that arrives late still wins, because it
+// describes the thread the agent believes it is running, but a CLI that never
+// names the conversation must not be re-read for the life of the Session.
+const cliTitleUpgradeWindow = 60 * time.Second
+
+// providerSuppliesTitle reports whether an agent CLI generates a name for its
+// own conversation. Those names are preferred over the Host's title request;
+// every other provider keeps the Host's request as its only source.
+func providerSuppliesTitle(provider string) bool {
+	family, _ := splitAgentKey(provider)
+	switch family {
+	case "claude", "codex", "opencode", "qoder":
+		return true
+	}
+	return false
+}
+
+// titleAutomatic reports whether the Host may name a conversation from its own
+// model call. It is the user's switch, and it is deliberately not consulted for
+// a name the agent CLI generated for itself: that name costs nothing and
+// describes the thread the agent is actually running.
+func (s *Service) titleAutomatic() bool {
+	return s.Settings.OpenAITitleEnabled
+}
+
+// titleGenerationConfigured reports whether the Host's own title request is
+// possible. An agent CLI that names its own conversation does not need it, so
+// this is deliberately narrower than titleAutomatic.
+func (s *Service) titleGenerationConfigured() bool {
+	return s.titleAutomatic() &&
+		strings.TrimSpace(s.Settings.OpenAIBaseURL) != "" &&
+		strings.TrimSpace(s.Settings.OpenAIKey) != ""
+}
+
+func (s *Service) titleConfig() sessiontitle.Config {
+	return sessiontitle.Config{
+		BaseURL: s.Settings.OpenAIBaseURL,
+		Model:   s.Settings.OpenAIModel,
+		APIKey:  s.Settings.OpenAIKey,
+	}
+}
+
+// tryStartSessionTitle atomically claims the one automatic naming decision for
+// a session once its first user and assistant texts are complete. The decision
+// is intentionally asynchronous: an unavailable model must never delay
+// terminal or agent event delivery.
+//
+// For a provider that names its own conversations the claim opens a bounded
+// wait; pollAgentTitles resolves it with the CLI's name or, on expiry, with the
+// Host's own request.
 func (s *Service) tryStartSessionTitle(sessionID string) {
-	if !s.titleGenerationConfigured() || s.Store == nil {
+	if s.Store == nil {
 		return
 	}
 	state := s.Store.Snapshot()
+	provider := ""
 	found := false
-	for _, session := range state.Sessions {
+	for index := range state.Sessions {
+		session := state.Sessions[index]
 		if session.ID != sessionID {
 			continue
 		}
@@ -30,9 +86,22 @@ func (s *Service) tryStartSessionTitle(sessionID string) {
 		if strings.TrimSpace(session.CustomTitle) != "" || session.Lifecycle != "running" {
 			return
 		}
+		provider = agentProviderForKind(session.AgentProvider)
+		if provider == "" {
+			provider = agentProviderForKind(session.Kind)
+		}
 		break
 	}
 	if !found {
+		return
+	}
+	// An agent CLI that names its own conversation is given the first chance:
+	// the name comes from the same first exchange, the agent's own view of the
+	// thread rather than a second model call over a transcript Warren only
+	// partly sees, and it costs nothing. The user's switch governs only the
+	// Host's own request, so an agent name is read whether it is on or off.
+	waitForCLI := providerSuppliesTitle(provider)
+	if !waitForCLI && !s.titleGenerationConfigured() {
 		return
 	}
 	var input sessiontitle.Input
@@ -50,29 +119,167 @@ func (s *Service) tryStartSessionTitle(sessionID string) {
 		return
 	}
 	entry.titleGenerationStarted = true
-	// Capture the conversation generation so a request that outlives a
-	// `/clear`, `/new`, or provider rebind cannot name the replacement
-	// conversation.
+	// Capture the conversation generation so a name that outlives a `/clear`,
+	// `/new`, or provider rebind cannot label the replacement conversation.
 	generation := strings.TrimSpace(entry.executionID)
 	input = sessiontitle.Input{
 		User:      entry.titleUser,
 		Assistant: entry.titleAssistant,
 	}
+	if waitForCLI {
+		entry.cliTitleDeadline = time.Now().Add(cliTitleGracePeriod)
+	}
 	entry.mu.Unlock()
 	s.agentsMu.Unlock()
 
-	config := sessiontitle.Config{
-		BaseURL: s.Settings.OpenAIBaseURL,
-		Model:   s.Settings.OpenAIModel,
-		APIKey:  s.Settings.OpenAIKey,
+	if waitForCLI {
+		return
 	}
-	go s.generateSessionTitle(sessionID, generation, config, input)
+	go s.generateSessionTitle(sessionID, generation, s.titleConfig(), input)
 }
 
-func (s *Service) titleGenerationConfigured() bool {
-	return s.Settings.OpenAITitleEnabled &&
-		strings.TrimSpace(s.Settings.OpenAIBaseURL) != "" &&
-		strings.TrimSpace(s.Settings.OpenAIKey) != ""
+// pollAgentTitles resolves every conversation whose agent CLI was given the
+// first chance to name it. It runs on the lifecycle tick, so the wait is
+// bounded in wall-clock time rather than by how many transcript events a
+// Session happens to produce.
+func (s *Service) pollAgentTitles() {
+	s.lazyInit()
+	type titleWait struct {
+		sessionID string
+		watcher   *agent.Watcher
+		tailer    *agent.OpenCodeTailer
+		expired   bool
+	}
+	var waits []titleWait
+	// The reporter handles belong to the entry but are published under
+	// agentsMu, so they are read there and used after it is released: a title
+	// lookup reads another process's state and must not hold the roster lock.
+	s.agentsMu.Lock()
+	for sessionID, entry := range s.agents {
+		if entry == nil {
+			continue
+		}
+		entry.mu.Lock()
+		waiting := !entry.cliTitleDeadline.IsZero() && !entry.cliTitleCaptured
+		expired := waiting && !time.Now().Before(entry.cliTitleDeadline)
+		watcher, tailer := entry.watcher, entry.tailer
+		entry.mu.Unlock()
+		if !waiting {
+			continue
+		}
+		waits = append(waits, titleWait{sessionID: sessionID, watcher: watcher, tailer: tailer, expired: expired})
+	}
+	s.agentsMu.Unlock()
+	for _, wait := range waits {
+		// The provider's own name wins whenever it exists, including inside the
+		// upgrade window that follows the Host's own request.
+		if s.captureAgentCLITitle(wait.sessionID, wait.watcher, wait.tailer) {
+			continue
+		}
+		if wait.expired {
+			s.finishAgentTitleFallback(wait.sessionID)
+		}
+	}
+}
+
+// captureAgentCLITitle applies a name the agent CLI generated for its own
+// conversation. It reports whether one was available.
+func (s *Service) captureAgentCLITitle(sessionID string, watcher *agent.Watcher, tailer *agent.OpenCodeTailer) bool {
+	title := ""
+	if watcher != nil {
+		title = watcher.TakeTitle()
+	}
+	if title == "" && tailer != nil {
+		title = tailer.TakeTitle()
+	}
+	title = sessiontitle.Normalize(title)
+	if title == "" {
+		return false
+	}
+	s.applyAgentCLITitle(sessionID, title)
+	return true
+}
+
+// applyAgentCLITitle persists a provider-generated name. A title the user set
+// is never replaced; a title the Host generated for this same conversation is,
+// because the provider's own name is the more specific one.
+func (s *Service) applyAgentCLITitle(sessionID, title string) {
+	var generated, generation string
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	s.agentsMu.Unlock()
+	if entry != nil {
+		entry.mu.Lock()
+		generated = entry.aiTitleValue
+		generation = strings.TrimSpace(entry.executionID)
+		entry.mu.Unlock()
+	}
+	if s.Store != nil {
+		err := s.Store.Update(func(state *api.State) error {
+			for index := range state.Sessions {
+				session := &state.Sessions[index]
+				if session.ID != sessionID {
+					continue
+				}
+				if session.Lifecycle != "running" {
+					return nil
+				}
+				// A name for a conversation that has been replaced must never
+				// label the conversation that replaced it.
+				if generation != "" && strings.TrimSpace(session.AgentExecutionID) != generation {
+					return nil
+				}
+				current := strings.TrimSpace(session.CustomTitle)
+				if current != "" && (generated == "" || current != generated) {
+					return nil
+				}
+				session.CustomTitle = title
+				return nil
+			}
+			return fmt.Errorf("session not found: %s", sessionID)
+		})
+		if err != nil {
+			s.logWarn("persist agent session title", "session", sessionID, "error", err)
+		}
+	}
+	if entry != nil {
+		entry.mu.Lock()
+		entry.cliTitleCaptured = true
+		entry.cliTitleDeadline = time.Time{}
+		entry.mu.Unlock()
+	}
+	s.wakeLiveActivity()
+}
+
+// finishAgentTitleFallback runs the Host's own title request once the CLI has
+// had its grace period, then keeps the lookup open for one upgrade window so a
+// provider name that lands late still wins.
+func (s *Service) finishAgentTitleFallback(sessionID string) {
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	s.agentsMu.Unlock()
+	if entry == nil {
+		return
+	}
+	entry.mu.Lock()
+	if entry.titleFallbackFired {
+		// The upgrade window elapsed without the CLI naming the conversation.
+		entry.cliTitleDeadline = time.Time{}
+		entry.mu.Unlock()
+		return
+	}
+	entry.titleFallbackFired = true
+	generation := strings.TrimSpace(entry.executionID)
+	input := sessiontitle.Input{User: entry.titleUser, Assistant: entry.titleAssistant}
+	entry.cliTitleDeadline = time.Now().Add(cliTitleUpgradeWindow)
+	entry.mu.Unlock()
+	if !s.titleGenerationConfigured() ||
+		strings.TrimSpace(input.User) == "" || strings.TrimSpace(input.Assistant) == "" {
+		// Nothing to fall back to; the upgrade window stays open so a late CLI
+		// name is still applied.
+		return
+	}
+	go s.generateSessionTitle(sessionID, generation, s.titleConfig(), input)
 }
 
 // TestOpenAITitle makes one best-effort title request without changing
@@ -165,7 +372,83 @@ func (s *Service) generateSessionTitle(sessionID, generation string, config sess
 	})
 	if err != nil {
 		s.logWarn("persist session title", "session", sessionID, "error", err)
-	} else {
-		s.wakeLiveActivity()
+		return
 	}
+	// Remember the Host's own title so a provider name that arrives inside the
+	// upgrade window can replace it, while a title the user set can not.
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	s.agentsMu.Unlock()
+	if entry != nil {
+		entry.mu.Lock()
+		entry.aiTitleValue = titleValue
+		entry.mu.Unlock()
+	}
+	s.wakeLiveActivity()
+}
+
+// tryStartResultSentence starts the one result-sentence request a turn may make.
+// It shares the title request's configuration and best-effort contract: when the
+// endpoint is missing or fails, the sidebar keeps the counts it already folds.
+func (s *Service) tryStartResultSentence(sessionID string) {
+	if !s.titleGenerationConfigured() {
+		return
+	}
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	if entry == nil {
+		s.agentsMu.Unlock()
+		return
+	}
+	entry.mu.Lock()
+	if entry.resultGenerationStarted || strings.TrimSpace(entry.turnAssistant) == "" {
+		entry.mu.Unlock()
+		s.agentsMu.Unlock()
+		return
+	}
+	entry.resultGenerationStarted = true
+	generation := strings.TrimSpace(entry.executionID)
+	answer := entry.turnAssistant
+	entry.mu.Unlock()
+	s.agentsMu.Unlock()
+	go s.generateResultSentence(sessionID, generation, s.titleConfig(), answer)
+}
+
+func (s *Service) generateResultSentence(sessionID, generation string, config sessiontitle.Config, answer string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	result, err := (sessiontitle.Generator{Config: config}).GenerateResult(ctx, sessiontitle.ResultInput{
+		Answer: answer,
+	})
+	if err != nil {
+		s.logWarn("generate result sentence", "session", sessionID, "error", err)
+		return
+	}
+	if strings.TrimSpace(result) == "" {
+		return
+	}
+	err = s.Store.Update(func(state *api.State) error {
+		for index := range state.Sessions {
+			session := &state.Sessions[index]
+			if session.ID != sessionID {
+				continue
+			}
+			if session.Lifecycle != "running" {
+				return nil
+			}
+			// A sentence written for a replaced conversation must not describe
+			// the current one, exactly as with a title.
+			if generation != "" && strings.TrimSpace(session.AgentExecutionID) != generation {
+				return nil
+			}
+			session.ResultSentence = result
+			return nil
+		}
+		return fmt.Errorf("session not found: %s", sessionID)
+	})
+	if err != nil {
+		s.logWarn("persist result sentence", "session", sessionID, "error", err)
+		return
+	}
+	s.wakeLiveActivity()
 }

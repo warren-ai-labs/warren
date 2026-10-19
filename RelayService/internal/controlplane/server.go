@@ -1303,7 +1303,6 @@ func (server *Server) connectClient(response http.ResponseWriter, request *http.
 				// compression flag.
 				client.EnableWriteCompression(len(frame.Payload) >= compressionThreshold)
 				err := client.WriteMessage(messageType, frame.Payload)
-				route.release(frame)
 				if err != nil {
 					return
 				}

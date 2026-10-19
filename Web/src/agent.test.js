@@ -20,7 +20,9 @@ import {
   displayToolName,
   editAgentQueueItem,
   enqueueAgentMessage,
+  extractActiveSubagents,
   extractPatchFiles,
+  extractSubagentActivity,
   formatAgentModel,
   formatAgentReasoning,
   getAvailableAgentModels,
@@ -39,6 +41,41 @@ import {
   retryAgentQueueItem,
   toolSummary,
 } from "./agent.js";
+
+test("extractActiveSubagents reads canonical rows and child activity", () => {
+  const events = [
+    {
+      type: "subagent.updated",
+      sequence: 1,
+      timestamp: "2026-01-01T00:00:00Z",
+      payload: { subagentId: "child-1", parentCallId: "call-spawn-1", label: "Explore", state: "running" },
+    },
+    {
+      type: "tool.started",
+      sequence: 2,
+      timestamp: "2026-01-01T00:00:01Z",
+      payload: { subagentId: "child-1", toolName: "shell", toolDetail: "go test ./...", toolKind: "ran", toolStatus: "running" },
+    },
+    {
+      type: "subagent.updated",
+      sequence: 3,
+      payload: { subagentId: "child-1", state: "completed" },
+    },
+  ];
+  assert.deepEqual(extractActiveSubagents(events), [
+    {
+      id: "child-1",
+      parentCallId: "call-spawn-1",
+      title: "Explore",
+      summary: "",
+      state: "completed",
+      timestamp: "2026-01-01T00:00:00Z",
+    },
+  ]);
+  const activity = extractSubagentActivity(events);
+  assert.equal(activity.get("child-1").toolName, "shell");
+  assert.equal(activity.get("child-1").detail, "go test ./...");
+});
 
 test("formatAgentModel turns wire names into readable labels", () => {
   assert.equal(formatAgentModel("5.6-sol"), "5.6 Sol");

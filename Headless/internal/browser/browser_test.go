@@ -37,7 +37,7 @@ func TestManagerSessionsAreOrderedAndRemovable(t *testing.T) {
 	manager := NewManager(t.TempDir())
 	for _, id := range []string{"s-c", "s-a", "s-b"} {
 		manager.mu.Lock()
-		manager.sessions[id] = newSession(manager, id, "", "", "terminalGroup", true, api.BrowserViewport{Width: DefaultViewportWidth, Height: DefaultViewportHeight})
+		manager.sessions[id] = newSession(manager, id, "", true, api.BrowserViewport{Width: DefaultViewportWidth, Height: DefaultViewportHeight})
 		manager.mu.Unlock()
 	}
 	ids := make([]string, 0, 3)
@@ -70,10 +70,10 @@ func TestManagerSessionsAreOrderedAndRemovable(t *testing.T) {
 func TestManagerStartRejectsAnIDThatIsAlreadyRunning(t *testing.T) {
 	manager := NewManager("")
 	manager.mu.Lock()
-	manager.sessions["dup"] = newSession(manager, "dup", "", "", "terminalGroup", true, api.BrowserViewport{Width: DefaultViewportWidth, Height: DefaultViewportHeight})
+	manager.sessions["dup"] = newSession(manager, "dup", "", true, api.BrowserViewport{Width: DefaultViewportWidth, Height: DefaultViewportHeight})
 	manager.mu.Unlock()
 
-	if _, err := manager.Start(context.Background(), StartOptions{SessionID: "dup", Scope: "terminalGroup"}); err == nil {
+	if _, err := manager.Start(context.Background(), StartOptions{SessionID: "dup"}); err == nil {
 		t.Fatal("starting a duplicate session id must fail")
 	}
 	if _, err := manager.Start(context.Background(), StartOptions{SessionID: ""}); err == nil {

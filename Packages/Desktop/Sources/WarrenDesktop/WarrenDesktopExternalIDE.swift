@@ -165,32 +165,6 @@ struct WarrenDesktopExternalIDEMenuPresentation {
     }
 }
 
-struct WarrenDesktopExternalIDEMenu: View {
-    let options: [WarrenDesktopExternalIDEOption]
-    let onPresent: () -> Void
-    let onOpen: (WarrenDesktopExternalIDEOption) -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-
-    var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        Button(action: onPresent) {
-            Image(systemName: "macwindow")
-                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .regular))
-                .accessibilityHidden(true)
-                .frame(width: 28, height: 28)
-        }
-        .buttonStyle(.plain)
-        .frame(width: 28, height: 28)
-        .contentShape(.rect)
-        .fixedSize(horizontal: true, vertical: false)
-        .foregroundStyle(tokens.mutedForeground)
-        .accessibilityLabel("Open workspace in IDE")
-        .accessibilityHint("Open the current worktree in an external IDE")
-    }
-}
-
 @MainActor
 final class WarrenDesktopExternalIDEService {
     typealias Launch = (URL, URL) async throws -> Void

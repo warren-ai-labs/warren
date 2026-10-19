@@ -110,9 +110,9 @@ func (s *Service) acpEnvironment() ([]string, error) {
 }
 
 // resolveACPCommand returns the command to launch for a provider. An explicit
-// command wins; otherwise the provider default must resolve on the login
-// shell's PATH, and a missing adapter is a creation error that names what to
-// install.
+// command wins, then the Host setting for this provider, then the provider
+// default, which must resolve on the login shell's PATH; a missing adapter is
+// a creation error that names what to install.
 func (s *Service) resolveACPCommand(ctx context.Context, kind, command, dir string) (string, error) {
 	defaults, ok := acpProviderCommands[kind]
 	if !ok {
@@ -123,6 +123,12 @@ func (s *Service) resolveACPCommand(ctx context.Context, kind, command, dir stri
 			return "", err
 		}
 		return strings.TrimSpace(command), nil
+	}
+	if configured := strings.TrimSpace(s.SettingsSnapshot().ACPCommands[kind]); configured != "" {
+		if err := validateACPCommand(configured); err != nil {
+			return "", fmt.Errorf("the configured acp command for %s is invalid: %w", kind, err)
+		}
+		return configured, nil
 	}
 	shell, args, fallback := s.acpShell()
 	env, err := s.acpEnvironment()
@@ -138,13 +144,13 @@ func (s *Service) resolveACPCommand(ctx context.Context, kind, command, dir stri
 // createACPSession records a Session driven over ACP. There is no PTY: the
 // agent process is started by the Agent handle and is a disposable worker of
 // the Session (RFC 0023 §4).
-func (s *Service) createACPSession(ctx context.Context, workspaceID, groupID, command, kind, title string) (api.Session, error) {
+func (s *Service) createACPSession(ctx context.Context, workspaceID, command, kind, title string) (api.Session, error) {
 	startedAt := time.Now()
 	if !ACPProviderAvailable(kind) {
 		return api.Session{}, fmt.Errorf("acp is not available for provider %s", kind)
 	}
 	state := s.Store.Snapshot()
-	workingDirectory, err := sessionWorkingDirectory(state, workspaceID, groupID)
+	workingDirectory, err := sessionWorkingDirectory(state, workspaceID)
 	if err != nil {
 		return api.Session{}, err
 	}
@@ -158,22 +164,17 @@ func (s *Service) createACPSession(ctx context.Context, workspaceID, groupID, co
 		customTitle = ""
 	}
 	session := api.Session{
-		ID:              store.NewID(),
-		WorkspaceID:     workspaceID,
-		TerminalGroupID: groupID,
-		Scope:           api.SessionScopeWorkspace,
-		Title:           defaultTitle,
-		CustomTitle:     customTitle,
-		Kind:            kind,
-		AgentProvider:   kind,
-		AgentHandler:    AgentHandlerACP,
-		Command:         resolved,
-		RuntimeKind:     runtimeKindACP,
-		Lifecycle:       "running",
-		CreatedAt:       time.Now().UTC(),
-	}
-	if groupID != "" {
-		session.Scope = api.SessionScopeTerminalGroup
+		ID:            store.NewID(),
+		WorkspaceID:   workspaceID,
+		Title:         defaultTitle,
+		CustomTitle:   customTitle,
+		Kind:          kind,
+		AgentProvider: kind,
+		AgentHandler:  AgentHandlerACP,
+		Command:       resolved,
+		RuntimeKind:   runtimeKindACP,
+		Lifecycle:     "running",
+		CreatedAt:     time.Now().UTC(),
 	}
 	if err := s.Store.Update(func(value *api.State) error { value.Sessions = append(value.Sessions, session); return nil }); err != nil {
 		return api.Session{}, err

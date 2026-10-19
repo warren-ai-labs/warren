@@ -8,9 +8,9 @@ import WarrenClientCore
 final class WarrenTerminalRendererTests: XCTestCase {
     func testEmberPaletteMatchesSupersetDefaultDarkTheme() {
         XCTAssertEqual(TerminalPalette.ember.count, 16)
-        XCTAssertEqual(TerminalPalette.ember[0], TerminalPaletteColor(red: 0x15, green: 0x11, blue: 0x10))
+        XCTAssertEqual(TerminalPalette.ember[0], TerminalPaletteColor(red: 0x0b, green: 0x0b, blue: 0x0b))
         XCTAssertEqual(TerminalPalette.ember[1], TerminalPaletteColor(red: 0xdc, green: 0x6b, blue: 0x6b))
-        XCTAssertEqual(TerminalPalette.ember[8], TerminalPaletteColor(red: 0x5c, green: 0x58, blue: 0x56))
+        XCTAssertEqual(TerminalPalette.ember[8], TerminalPaletteColor(red: 0x5c, green: 0x5c, blue: 0x5c))
         XCTAssertEqual(TerminalPalette.ember[15], TerminalPaletteColor(red: 0xff, green: 0xff, blue: 0xff))
     }
 

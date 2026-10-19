@@ -14,12 +14,12 @@ func TestScreenReportReportsPositionToSessionCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	group := api.TerminalGroup{ID: "group-1", Name: "Default"}
+	workspace := api.Workspace{ID: "workspace-1", ProjectID: "project-1", Name: "main", Kind: "main"}
 	if err := state.Update(func(value *api.State) error {
-		value.TerminalGroups = []api.TerminalGroup{group}
+		value.Workspaces = []api.Workspace{workspace}
 		value.Sessions = []api.Session{
-			{ID: "session-1", TerminalGroupID: group.ID, Scope: api.SessionScopeTerminalGroup, Lifecycle: "running"},
-			{ID: "session-2", TerminalGroupID: group.ID, Scope: api.SessionScopeTerminalGroup, Lifecycle: "running", Title: "second"},
+			{ID: "session-1", WorkspaceID: workspace.ID, Lifecycle: "running"},
+			{ID: "session-2", WorkspaceID: workspace.ID, Lifecycle: "running", Title: "second"},
 		}
 		return nil
 	}); err != nil {
@@ -77,13 +77,13 @@ func TestScreenPanesAnswersAcrossPeers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	group := api.TerminalGroup{ID: "group-1", Name: "Default"}
+	workspace := api.Workspace{ID: "workspace-1", ProjectID: "project-1", Name: "main", Kind: "main"}
 	if err := state.Update(func(value *api.State) error {
-		value.TerminalGroups = []api.TerminalGroup{group}
+		value.Workspaces = []api.Workspace{workspace}
 		value.Sessions = []api.Session{
-			{ID: "session-1", TerminalGroupID: group.ID, Scope: api.SessionScopeTerminalGroup, Lifecycle: "running"},
-			{ID: "session-2", TerminalGroupID: group.ID, Scope: api.SessionScopeTerminalGroup, Lifecycle: "running"},
-			{ID: "session-3", TerminalGroupID: group.ID, Scope: api.SessionScopeTerminalGroup, Lifecycle: "running"},
+			{ID: "session-1", WorkspaceID: workspace.ID, Lifecycle: "running"},
+			{ID: "session-2", WorkspaceID: workspace.ID, Lifecycle: "running"},
+			{ID: "session-3", WorkspaceID: workspace.ID, Lifecycle: "running"},
 		}
 		return nil
 	}); err != nil {
@@ -124,13 +124,13 @@ func TestScreenPanesListsEveryWindowMostRecentFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	group := api.TerminalGroup{ID: "group-1", Name: "Default"}
+	workspace := api.Workspace{ID: "workspace-1", ProjectID: "project-1", Name: "main", Kind: "main"}
 	if err := state.Update(func(value *api.State) error {
-		value.TerminalGroups = []api.TerminalGroup{group}
+		value.Workspaces = []api.Workspace{workspace}
 		value.Sessions = []api.Session{
-			{ID: "session-1", TerminalGroupID: group.ID, Scope: api.SessionScopeTerminalGroup, Lifecycle: "running"},
-			{ID: "session-2", TerminalGroupID: group.ID, Scope: api.SessionScopeTerminalGroup, Lifecycle: "running"},
-			{ID: "session-3", TerminalGroupID: group.ID, Scope: api.SessionScopeTerminalGroup, Lifecycle: "running"},
+			{ID: "session-1", WorkspaceID: workspace.ID, Lifecycle: "running"},
+			{ID: "session-2", WorkspaceID: workspace.ID, Lifecycle: "running"},
+			{ID: "session-3", WorkspaceID: workspace.ID, Lifecycle: "running"},
 		}
 		return nil
 	}); err != nil {

@@ -23,7 +23,6 @@ type BrowserRow struct {
 // browserRows projects the running browser Sessions out of a roster snapshot.
 func browserRows(state api.State, params map[string]any) []BrowserRow {
 	workspace := stringValue(params, "workspace")
-	group := stringValue(params, "group")
 	search := strings.ToLower(strings.TrimSpace(stringValue(params, "search")))
 	rows := make([]BrowserRow, 0, len(state.Sessions))
 	for _, session := range state.Sessions {
@@ -31,9 +30,6 @@ func browserRows(state api.State, params map[string]any) []BrowserRow {
 			continue
 		}
 		if workspace != "" && session.WorkspaceID != workspace {
-			continue
-		}
-		if group != "" && session.TerminalGroupID != group {
 			continue
 		}
 		if search != "" && !strings.Contains(strings.ToLower(browserRowTitle(session)), search) {
@@ -52,14 +48,10 @@ func browserRowTitle(session api.Session) string {
 }
 
 func browserRowCells(item BrowserRow) []string {
-	owner := item.WorkspaceID
-	if owner == "" {
-		owner = item.TerminalGroupID
-	}
 	return []string{
 		displayTruncated(item.ID, 36),
 		displayTruncated(browserRowTitle(item.Session), 24),
-		displayTruncated(owner, 36),
+		displayTruncated(item.WorkspaceID, 36),
 		displayTruncated(item.Lifecycle, 10),
 		formatTime(item.CreatedAt),
 	}

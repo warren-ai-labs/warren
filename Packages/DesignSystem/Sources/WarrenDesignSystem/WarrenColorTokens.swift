@@ -59,6 +59,17 @@ public struct WarrenColorTokens: Sendable {
     /// `bg-muted/45 dark:bg-muted/35`; both appearances resolve that blend to
     /// an opaque value here rather than introducing a separate panel color.
     public private(set) var sidebarSurface: Color
+    /// The floating peek overlay's fill.
+    ///
+    /// One step brighter than the docked card, because the peek is lifted off
+    /// the content card it covers rather than sitting on the window backdrop.
+    /// A shadow and a border carry the rest of the lift.
+    public private(set) var peekSurface: Color
+    /// The window's own ground: the gutter the sidebar and pane cards float on.
+    ///
+    /// One step darker than `background`, which is the cards' fill and the
+    /// terminal's ground, so a card reads as a card without a shadow.
+    public private(set) var windowBackdrop: Color
     /// Elevated surface for command palettes, menus, and relay popovers.
     public private(set) var popoverSurface: Color
     /// Surface for text inputs and other editable controls.
@@ -75,6 +86,18 @@ public struct WarrenColorTokens: Sendable {
     /// the shared identity palette; the names stay separate so neither
     /// feature's contract can drift into the other's.
     public let tabGroupTints: [Color]
+    /// Pale, low-saturation hues for a Host section heading's foreground.
+    ///
+    /// A multi-Host sidebar no longer washes a plate behind each Host. The
+    /// Host's identity is carried in the foreground only: the heading's hollow
+    /// tile, its name, the rule that runs to the row's trailing edge, and the
+    /// short scope rule beside its subtree. The status palette stays reserved
+    /// for activity dots, so the two never read as the same signal.
+    ///
+    /// The light values are the same five hues taken darker, because a pale
+    /// hue that reads on Ember vanishes as text on paper. Single-Host sections
+    /// never draw a Host heading, so the neutral fallback is only a guard.
+    public let hostForegroundTints: [Color]
 
     /// The base the sidebar's quiet text tiers are faded from.
     ///
@@ -120,10 +143,13 @@ public struct WarrenColorTokens: Sendable {
         amber: Color,
         chromeSurface: Color,
         sidebarSurface: Color,
+        peekSurface: Color,
+        windowBackdrop: Color,
         popoverSurface: Color,
         inputSurface: Color,
         hostSectionTints: [Color],
         tabGroupTints: [Color],
+        hostForegroundTints: [Color],
         sidebarTextBase: Color,
         fillHover: Color,
         fillSelected: Color,
@@ -148,10 +174,13 @@ public struct WarrenColorTokens: Sendable {
         self.amber = amber
         self.chromeSurface = chromeSurface
         self.sidebarSurface = sidebarSurface
+        self.peekSurface = peekSurface
+        self.windowBackdrop = windowBackdrop
         self.popoverSurface = popoverSurface
         self.inputSurface = inputSurface
         self.hostSectionTints = hostSectionTints
         self.tabGroupTints = tabGroupTints
+        self.hostForegroundTints = hostForegroundTints
         self.sidebarTextBase = sidebarTextBase
         self.fillHover = fillHover
         self.fillSelected = fillSelected
@@ -160,15 +189,17 @@ public struct WarrenColorTokens: Sendable {
         self.elevationShadow = elevationShadow
     }
 
-    /// Superset globals.css dark fallback values.
+    /// The Workbench spec's neutral dark: #0B0B0B cards on a black window,
+    /// #1F1F1F hairlines and an #EDEDED ink. Neutral rather than Ember's warm
+    /// brown, so the greys of the tree stay crisp against the ground.
     public static let dark = make(
-        background: hex(0x1511_10),
-        foreground: hex(0xEAE8_E6),
-        muted: hex(0x2A28_27),
-        mutedForeground: hex(0xA8A5_A3),
-        border: hex(0x2A28_27),
-        ring: hex(0x3A38_37),
-        primary: hex(0xEAE8_E6),
+        background: hex(0x0B0B_0B),
+        foreground: hex(0xEDED_ED),
+        muted: hex(0x1C1C_1C),
+        mutedForeground: hex(0xA3A3_A3),
+        border: hex(0x1F1F_1F),
+        ring: hex(0x3A3A_3A),
+        primary: hex(0xEDED_ED),
         highlight: hex(0xE078_50),
         destructive: hex(0xCC44_44),
         success: hex(0x7EC6_99),
@@ -177,17 +208,24 @@ public struct WarrenColorTokens: Sendable {
         link: hex(0x7EC0_F5),
         amber: hex(0xF59E_0B),
         identityTints: Self.darkIdentityTints,
-        // Superset blends muted/35 over the Ember background before
-        // compositing. An opacity color would otherwise render black over an
-        // NSHostingView/terminal surface; keep the blended value opaque so the
-        // top chrome and sidebar never look like a void.
-        chromeSurface: hex(0x1C19_18),
-        sidebarSurface: hex(0x1C19_18),
-        popoverSurface: hex(0x201E_1C),
-        inputSurface: hex(0x1816_15),
-        // On Ember the ladder starts mid-scale and fades outward, which is what
-        // the tier fractions were measured against.
-        sidebarTextBase: hex(0xA8A5_A3),
+        hostForegroundTints: Self.darkHostForegroundTints,
+        // One step above the card ground, opaque: an opacity color would
+        // render black over an NSHostingView/terminal surface.
+        chromeSurface: hex(0x1212_12),
+        // The sidebar is a card on the window backdrop, filled like the pane
+        // cards beside it.
+        sidebarSurface: hex(0x0B0B_0B),
+        // The peek overlay floats over the content card, so it is one step
+        // brighter than the card it covers.
+        peekSurface: hex(0x0E0E_0E),
+        // Near pure black, so the gutters between cards read as the window
+        // and every card stands off it.
+        windowBackdrop: hex(0x0000_00),
+        popoverSurface: hex(0x1A1A_1A),
+        inputSurface: hex(0x1111_11),
+        // The leaf tier lands on the spec's #858585 activity grey and the
+        // section tier at #666666, near its #5C5C5C.
+        sidebarTextBase: hex(0xA8A8_A8),
         hoverOpacity: 0.07,
         selectedOpacity: 0.10,
         tertiaryOpacity: 0.05,
@@ -218,8 +256,13 @@ public struct WarrenColorTokens: Sendable {
         link: hex(0x1B6E_C2),
         amber: hex(0x8A5A_00),
         identityTints: Self.lightIdentityTints,
+        hostForegroundTints: Self.lightHostForegroundTints,
         chromeSurface: hex(0xF2EF_EC),
-        sidebarSurface: hex(0xF2EF_EC),
+        sidebarSurface: hex(0xFFFF_FF),
+        // Paper's raised surfaces are whiter than the page, and the card is
+        // already white: the border and shadow carry the lift instead.
+        peekSurface: hex(0xFFFF_FF),
+        windowBackdrop: hex(0xEBE7_E3),
         // Elevation darkens the ground on paper and lightens it on Ember, so a
         // raised surface cannot be one alpha wash shared by both appearances.
         // A popover here reads as raised because it is the whitest thing on
@@ -268,13 +311,19 @@ public struct WarrenColorTokens: Sendable {
         tokens.material = .glass
         tokens.chromeSurface = .clear
         tokens.sidebarSurface = .clear
+        // The gutters between the Workbench's cards darken the coat, so the
+        // opaque cards stay distinct from the glass around them.
+        tokens.windowBackdrop = Color.black.opacity(isLight ? 0.06 : 0.55)
         tokens.popoverSurface = raised
         tokens.inputSurface = raised
+        tokens.peekSurface = raised
         tokens.modalScrim = Color.black.opacity(WarrenGlassMetrics.scrimOpacity(isLight: isLight))
         return tokens
     }
 
-    static func hex(_ value: UInt32) -> Color {
+    /// A colour from a `0xRRGGBB` literal. The one place hex literals become
+    /// colours; palettes outside this file call it too.
+    public static func hex(_ value: UInt32) -> Color {
         Color(
             red: Double((value >> 16) & 0xFF) / 255,
             green: Double((value >> 8) & 0xFF) / 255,
@@ -314,6 +363,26 @@ public struct WarrenColorTokens: Sendable {
         hex(0x5F6C_35),
     ]
 
+    /// The Host heading's pale foreground hues: mist blue, sand, mint, lilac,
+    /// pink. Kept apart from `identityTints` because a Host signposts its
+    /// section with text and rules rather than a plate, and the light set has
+    /// to carry the name as readable text on paper.
+    private static let darkHostForegroundTints: [Color] = [
+        hex(0x9FB8_E6),
+        hex(0xE2C3_8F),
+        hex(0x93CD_B8),
+        hex(0xC3AE_E3),
+        hex(0xE3A9_B8),
+    ]
+
+    private static let lightHostForegroundTints: [Color] = [
+        hex(0x3C6B_A8),
+        hex(0x8A65_20),
+        hex(0x2C7A_63),
+        hex(0x6A52_98),
+        hex(0x9E4A_64),
+    ]
+
     private static func make(
         background: Color,
         foreground: Color,
@@ -330,8 +399,11 @@ public struct WarrenColorTokens: Sendable {
         link: Color,
         amber: Color,
         identityTints: [Color],
+        hostForegroundTints: [Color],
         chromeSurface: Color,
         sidebarSurface: Color,
+        peekSurface: Color,
+        windowBackdrop: Color,
         popoverSurface: Color,
         inputSurface: Color,
         sidebarTextBase: Color,
@@ -361,6 +433,8 @@ public struct WarrenColorTokens: Sendable {
             amber: amber,
             chromeSurface: chromeSurface,
             sidebarSurface: sidebarSurface,
+            peekSurface: peekSurface,
+            windowBackdrop: windowBackdrop,
             popoverSurface: popoverSurface,
             inputSurface: inputSurface,
             // Host sections and split groups index the same palette. They stay
@@ -368,6 +442,7 @@ public struct WarrenColorTokens: Sendable {
             // the other's.
             hostSectionTints: identityTints,
             tabGroupTints: identityTints,
+            hostForegroundTints: hostForegroundTints,
             sidebarTextBase: sidebarTextBase,
             fillHover: foreground.opacity(hoverOpacity),
             fillSelected: foreground.opacity(selectedOpacity),
@@ -379,12 +454,6 @@ public struct WarrenColorTokens: Sendable {
             elevationShadow: Color.black.opacity(shadowOpacity)
         )
     }
-}
-
-public enum WarrenWashKind: Sendable {
-    case hover
-    case selected
-    case tertiary
 }
 
 /// Colors that are deliberately the same in both appearances.
@@ -422,6 +491,15 @@ public extension WarrenColorTokens {
     /// clear, so a card is raised instead.
     var cardSurface: Color { material == .glass ? popoverSurface : chromeSurface }
 
+    /// The hairline around a card on the window backdrop: the sidebar, a pane,
+    /// the tab capsule. Foreground-derived so it lightens Ember and darkens
+    /// paper by the same small step.
+    var cardBorder: Color { foreground.opacity(0.07) }
+
+    /// The hairline around the card that holds the keyboard. Brighter rather
+    /// than tinted: a hue here would be read as Agent state.
+    var cardBorderFocused: Color { foreground.opacity(0.16) }
+
     /// Higher-contrast rule used to separate adjacent desktop chrome regions.
     /// The regular border token is intentionally softer for cards and fields.
     ///
@@ -433,13 +511,6 @@ public extension WarrenColorTokens {
             ? foreground.opacity(WarrenGlassMetrics.dividerOpacity)
             : mutedForeground.opacity(0.20)
     }
-
-    /// The active tab's selection rule.
-    ///
-    /// Deliberately neutral rather than `highlight`: the accent already means
-    /// "agent activity" in this very row (the working dot sits beside the tab
-    /// title), so spending it on selection would put two meanings on one color.
-    var activeTabIndicator: Color { foreground.opacity(0.55) }
 
     /// The selected tab's fill. Opaque, the tab takes the content's ground so
     /// it reads as joined to the pane below; on glass that ground is clear, so
@@ -466,31 +537,6 @@ public extension WarrenColorTokens {
     var sidebarLeafText: Color {
         sidebarTextBase.opacity(WarrenSidebarTextWeight.leaf)
     }
-    var sidebarLeafSelectedText: Color { workspaceSelectedText }
-
-    /// The rail tying a workspace's Session leaves to it.
-    ///
-    /// Indentation alone answers containment only when the eye can measure it,
-    /// and one 10pt step is below that threshold. A stroked line in the gutter
-    /// answers it without spending contrast on either row.
-    ///
-    /// The rail is structure rather than decoration, so it has to survive a
-    /// squint the way a divider does. At 0.18 it sat within a few units of the
-    /// sidebar's own trailing divider and read as noise instead of as a figure;
-    /// 0.30 keeps it quieter than any row text while staying continuous to the
-    /// eye. `WarrenLayoutMetrics.sidebarRailWidth` owns the matching width, and
-    /// a Host section rule uses the same pair so the tree has one rail spec.
-    var sidebarTreeGuide: Color { mutedForeground.opacity(0.30) }
-
-    /// The rail while the pointer is over the group it ties.
-    ///
-    /// Rich mode's workspace row does not act on a click, so the row can no
-    /// longer spend its hover wash on a navigation affordance it does not have.
-    /// The feedback moves to the figure the pointer is actually over. Lifting
-    /// the same hue past the resting 0.30 keeps the rail structural rather than
-    /// turning it into `highlight`, which already means agent activity in this
-    /// rail.
-    var sidebarTreeGuideHighlight: Color { mutedForeground.opacity(0.65) }
 
     /// Section headings that name a region rather than participate in it.
     ///
@@ -514,17 +560,6 @@ public extension WarrenColorTokens {
     /// Row metadata on the selected or hovered row, where the user has already
     /// signalled interest in this row's detail.
     var sidebarMetaTextActive: Color { sidebarTextBase.opacity(0.92) }
-
-    func wash(_ kind: WarrenWashKind) -> Color {
-        switch kind {
-        case .hover:
-            fillHover
-        case .selected:
-            fillSelected
-        case .tertiary:
-            tertiaryWash
-        }
-    }
 
     func interactionBackground(for state: WarrenInteractionState) -> Color {
         switch state {

@@ -486,6 +486,14 @@ func writeHooksJSON(path string, document map[string]any) error {
 	if err != nil {
 		return err
 	}
+	// The file belongs to the agent CLI, not to Warren, so the directory is
+	// created rather than assumed. A CLI that has never run has no
+	// configuration directory yet, and failing here would leave the managed
+	// hook silently uninstalled on exactly the machine where the binding it
+	// provides is most needed.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create hooks directory: %w", err)
+	}
 	temporary := path + ".tmp"
 	if err := os.WriteFile(temporary, append(data, '\n'), 0o600); err != nil {
 		return err
@@ -502,6 +510,7 @@ func writeHooksJSON(path string, document map[string]any) error {
 const openCodeBindPluginSource = `import type { Plugin } from "@opencode-ai/plugin"
 import * as fs from "fs"
 import * as path from "path"
+import { execFileSync } from "child_process"
 const marker = "warren-agent-bind-v1"
 function atomicWrite(filePath: string, data: string) {
   const dir = path.dirname(filePath)
@@ -509,6 +518,41 @@ function atomicWrite(filePath: string, data: string) {
   const tmp = filePath + ".tmp." + process.pid
   fs.writeFileSync(tmp, data)
   fs.renameSync(tmp, filePath)
+}
+// A binding belongs to the agent CLI its Session is running, but the bind
+// environment is inherited by every descendant of the Session's shell. A CLI
+// that another agent starts is therefore reachable from here through nothing
+// but shells, and would otherwise take the Session over: its provider, its
+// transcript, and its icon. Stopping at the first thing that is neither a shell
+// nor an agent draws the line where the Session's own CLI lives: the PTY daemon
+// that allocated it, a terminal emulator, or init. Every step fails open, so an
+// unreadable process table leaves binding exactly as it was.
+function nestedInAnotherAgent(): boolean {
+  const agents = ["claude", "codex", "pi", "opencode", "qoder", "antigravity", "agy"]
+  const shells = ["sh", "bash", "zsh", "fish", "dash", "ksh"]
+  const interpreters = ["node", "bun", "deno", "python", "python3"]
+  const ps = (args: string[]): string => {
+    try { return execFileSync("ps", args, { encoding: "utf8" }).trim() } catch { return "" }
+  }
+  let pid = process.ppid
+  for (let hops = 0; hops < 32 && pid > 1; hops++) {
+    const argv = ps(["-o", "command=", "-p", String(pid)]).split(/\s+/)
+    let program = path.basename(argv[0] || "")
+    const isShell = shells.includes(program)
+    // A process started through an interpreter or a shell script is unwrapped
+    // to the program it runs, which is how 'node /path/codex' reads as Codex.
+    if ((isShell || interpreters.includes(program)) && argv[1]) program = path.basename(argv[1])
+    if (agents.includes(program)) return true
+    if (!isShell) return false
+    pid = Number.parseInt(ps(["-o", "ppid=", "-p", String(pid)]), 10) || 0
+  }
+  return false
+}
+// A Session created for one provider says so in its environment. Any other
+// provider running there is nested by definition.
+function foreignProvider(): boolean {
+  const declared = (process.env.WARREN_AGENT_KIND || "").trim()
+  return declared !== "" && declared !== "opencode"
 }
 export const WarrenBindPlugin: Plugin = async () => {
   const writeStatus = (activity: string, attention?: { kind: string, reason: string, requestId?: string }) => {
@@ -519,6 +563,13 @@ export const WarrenBindPlugin: Plugin = async () => {
       : { activity, attention: null }
     try { atomicWrite(stateFile, JSON.stringify({ status }) + "\n") } catch {}
   }
+  // Every task OpenCode delegates gets its own child session, and a child is
+  // not the conversation this terminal is in. Binding one would re-point the
+  // Warren Session at the agent's internal work, and a child's own lifecycle
+  // would then drive this Session's activity, so children are remembered and
+  // every event that names one is ignored. parentID is OpenCode's own marker
+  // for a child session.
+  const childSessions = new Set<string>()
   return {
     event: async ({ event }: { event: any }) => {
       const bindFile = process.env.WARREN_BIND_FILE
@@ -528,15 +579,22 @@ export const WarrenBindPlugin: Plugin = async () => {
       const kind = process.env.WARREN_AGENT_KIND || "opencode"
       const props: any = (event as any).properties || {}
       const t = (event as any).type as string
+      const eventSession: string = props.info?.id || props.sessionID || ""
+      if (foreignProvider() || nestedInAnotherAgent()) return
       if (t === "session.created") {
-        const sid: string = props.info?.id || props.sessionID || ""
-        if (!sid || !bindFile) return
+        if (props.info?.parentID) {
+          if (eventSession) childSessions.add(eventSession)
+          return
+        }
+        if (!eventSession || !bindFile) return
         const cwd: string = props.info?.directory || (props.directory as string) || process.env.WARREN_WORKSPACE_PATH || ""
         // Verify marker so a stale manual install does not shadow the managed one
         // (marker: warren-agent-bind-v1)
-        const payload = JSON.stringify({ provider: kind, sessionId: sid, transcriptPath: "", cwd, updatedAt: new Date().toISOString() }) + "\n"
+        const payload = JSON.stringify({ provider: kind, sessionId: eventSession, transcriptPath: "", cwd, updatedAt: new Date().toISOString() }) + "\n"
         try { atomicWrite(bindFile, payload) } catch {}
         writeStatus("ready")
+      } else if (eventSession && childSessions.has(eventSession)) {
+        return
       } else if (t === "session.status" && props.status?.type === "busy") {
         writeStatus("working")
       } else if (t === "session.error") {
@@ -642,6 +700,78 @@ bind_session() {
   mv -f "$temporary" "$WARREN_BIND_FILE" 2>/dev/null || return 0
 }
 
+# A binding belongs to the agent CLI its Session is running, but the bind
+# environment is inherited by every descendant of the Session's shell. A CLI
+# that another agent starts -- a scripted 'codex exec', a delegated run, a test
+# harness -- therefore fires this hook inside the Session it was started from
+# and would take that Session over: its provider, its transcript, its icon, and
+# even the exit notice that clears the projection.
+#
+# Such a CLI is always reachable from here through nothing but shells, so this
+# walks the ancestry and refuses every write once a second agent CLI is found.
+# Reaching anything that is neither a shell nor an agent means the chain has
+# left the shell layer, which is where a Session's own CLI lives: the PTY daemon
+# that allocated the Session, a terminal emulator, or init. Every step fails
+# open, so an unreadable process table leaves binding exactly as it was.
+AGENT_NAMES=' claude codex pi opencode qoder antigravity agy '
+SHELL_NAMES=' sh bash zsh fish dash ksh '
+INTERPRETER_NAMES=' node bun deno python python3 '
+
+# process_info prints "<parent> <program> <is-shell>" for one pid. The script
+# runs on every tool call, so it stays at one process (ps) per level: the parent,
+# the program, and the interpreter unwrapping below use only shell builtins.
+# A process started through an interpreter or a shell script is unwrapped to the
+# program it runs, which is how 'node /opt/homebrew/bin/codex exec' is Codex.
+process_info() {
+  # shellcheck disable=SC2046
+  set -- $(ps -o ppid=,command= -p "$1" 2>/dev/null)
+  parent=${1:-}
+  program=${2:-}
+  program=${program##*/}
+  shell_state=no
+  case " $SHELL_NAMES " in *" $program "*) shell_state=yes ;; esac
+  case " $SHELL_NAMES $INTERPRETER_NAMES " in
+    *" $program "*) [ -n "${3:-}" ] && program=${3##*/} ;;
+  esac
+  [ -n "$program" ] || program=unknown
+  printf '%s %s %s' "$parent" "$program" "$shell_state"
+}
+
+nested_in_another_agent() {
+  # The hook is a child of the CLI that fired it, so the first agent above it is
+  # that CLI; a second one is the agent that started it.
+  current=$PPID
+  caller_seen=no
+  hops=0
+  while [ -n "$current" ] && [ "$current" != 0 ] && [ "$current" != 1 ] && [ "$hops" -lt 32 ]; do
+    set -- $(process_info "$current")
+    current=${1:-}
+    program=${2:-}
+    case " $AGENT_NAMES " in
+      *" $program "*)
+        [ "$caller_seen" = yes ] && return 0
+        caller_seen=yes
+        ;;
+      *)
+        [ "${3:-}" = yes ] || return 1
+        ;;
+    esac
+    hops=$((hops + 1))
+  done
+  return 1
+}
+
+# A Session created for one provider says so in its environment. Any other
+# provider's hook running there is nested by definition, and this decides that
+# before paying for the walk above.
+foreign_provider() {
+  [ -n "${WARREN_AGENT_KIND:-}" ] && [ "$WARREN_AGENT_KIND" != "$provider" ]
+}
+
+if foreign_provider || nested_in_another_agent; then
+  exit_hook
+fi
+
 request_id=$(printf '%s' "$input" | sed -nE 's/.*"request_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 [ -n "$request_id" ] || request_id=$(printf '%s' "$input" | sed -nE 's/.*"requestId"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 [ -n "$request_id" ] || request_id=$(printf '%s' "$input" | sed -nE 's/.*"tool_use_id"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
@@ -714,6 +844,7 @@ exit_hook
 const piBindExtensionSource = `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import * as fs from "node:fs"
 import * as path from "node:path"
+import { execFileSync } from "node:child_process"
 
 function atomicWrite(filePath: string, data: string) {
   const dir = path.dirname(filePath)
@@ -723,11 +854,49 @@ function atomicWrite(filePath: string, data: string) {
   fs.renameSync(tmp, filePath)
 }
 
+// A binding belongs to the agent CLI its Session is running, but the bind
+// environment is inherited by every descendant of the Session's shell. A Pi
+// that another agent starts is therefore reachable from here through nothing
+// but shells, and would otherwise take that Session over: its provider, its
+// transcript, and its icon. Stopping at the first thing that is neither a shell
+// nor an agent draws the line where the Session's own CLI lives: the PTY daemon
+// that allocated it, a terminal emulator, or init. Every step fails open, so an
+// unreadable process table leaves binding exactly as it was.
+function nestedInAnotherAgent(): boolean {
+  const agents = ["claude", "codex", "pi", "opencode", "qoder", "antigravity", "agy"]
+  const shells = ["sh", "bash", "zsh", "fish", "dash", "ksh"]
+  const interpreters = ["node", "bun", "deno", "python", "python3"]
+  const ps = (args: string[]): string => {
+    try { return execFileSync("ps", args, { encoding: "utf8" }).trim() } catch { return "" }
+  }
+  let pid = process.ppid
+  for (let hops = 0; hops < 32 && pid > 1; hops++) {
+    const argv = ps(["-o", "command=", "-p", String(pid)]).split(/\s+/)
+    let program = path.basename(argv[0] || "")
+    const isShell = shells.includes(program)
+    // A process started through an interpreter or a shell script is unwrapped
+    // to the program it runs, which is how 'node /path/codex' reads as Codex.
+    if ((isShell || interpreters.includes(program)) && argv[1]) program = path.basename(argv[1])
+    if (agents.includes(program)) return true
+    if (!isShell) return false
+    pid = Number.parseInt(ps(["-o", "ppid=", "-p", String(pid)]), 10) || 0
+  }
+  return false
+}
+
+// A Session created for one provider says so in its environment. Any other
+// provider running there is nested by definition.
+function foreignProvider(): boolean {
+  const declared = (process.env.WARREN_AGENT_KIND || "").trim()
+  return declared !== "" && declared !== "pi"
+}
+
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     const bindFile = process.env.WARREN_BIND_FILE
     const warrenSession = process.env.WARREN_SESSION_ID
     if (!bindFile || !warrenSession) return
+    if (foreignProvider() || nestedInAnotherAgent()) return
     const sessionId = ctx.sessionManager.getSessionId() || ""
     const sessionFile = ctx.sessionManager.getSessionFile() || ""
     if (!sessionId || !sessionFile) return

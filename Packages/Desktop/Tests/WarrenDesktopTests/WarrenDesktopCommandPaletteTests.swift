@@ -266,27 +266,6 @@ final class WarrenDesktopCommandPaletteTests: XCTestCase {
         )
     }
 
-    func testSearchIndexesTerminalGroupTitle() {
-        let host = Host(name: "Search Host")
-        let group = TerminalGroup(
-            hostID: host.id,
-            name: "Build Queue",
-            home: "/tmp/build"
-        )
-        let projection = WarrenDesktopProjection(
-            host: host,
-            groups: [],
-            terminalGroups: [group]
-        )
-
-        XCTAssertTrue(
-            results(for: "queue", in: projection).contains {
-                if case .terminalGroup(group.id) = $0.kind { return true }
-                return false
-            }
-        )
-    }
-
     func testSearchIndexesPendingTabTitle() {
         let host = Host(name: "Search Host")
         let tab = ClientTab(

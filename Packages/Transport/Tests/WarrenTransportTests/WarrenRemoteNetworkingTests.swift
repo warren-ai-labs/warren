@@ -152,3 +152,37 @@ final class WarrenReconnectBackoffTests: XCTestCase {
         XCTAssertEqual(WarrenRemoteClient.connectionStabilityWindow, .seconds(30))
     }
 }
+
+final class WarrenRelayAccessTokenExpiryTests: XCTestCase {
+    private func capability(expiry: TimeInterval) -> String {
+        let claims = try! JSONSerialization.data(withJSONObject: ["host_id": "host-1", "exp": Int(expiry)])
+        let encoded = claims.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return encoded + ".signature"
+    }
+
+    /// An expired capability is rotated before dialing instead of spending a
+    /// whole handshake on a refusal first.
+    func testExpiredOrExpiringCapabilityIsRefreshedBeforeDialing() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertTrue(WarrenRemoteClient.relayAccessTokenNeedsRefresh(
+            capability(expiry: now.timeIntervalSince1970 - 1), now: now
+        ))
+        XCTAssertTrue(WarrenRemoteClient.relayAccessTokenNeedsRefresh(
+            capability(expiry: now.timeIntervalSince1970 + 30), now: now
+        ))
+        XCTAssertFalse(WarrenRemoteClient.relayAccessTokenNeedsRefresh(
+            capability(expiry: now.timeIntervalSince1970 + 600), now: now
+        ))
+        XCTAssertTrue(WarrenRemoteClient.relayAccessTokenNeedsRefresh("", now: now))
+    }
+
+    /// A token whose claims cannot be read is presented as before.
+    func testUnreadableCapabilityIsPresentedUnchanged() {
+        let now = Date()
+        XCTAssertFalse(WarrenRemoteClient.relayAccessTokenNeedsRefresh("opaque-token", now: now))
+        XCTAssertFalse(WarrenRemoteClient.relayAccessTokenNeedsRefresh("bm90LWpzb24.sig", now: now))
+    }
+}

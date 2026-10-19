@@ -226,6 +226,24 @@ public struct WarrenDesktopSessionPreset: Identifiable, Hashable, Sendable {
         return order.joined(separator: ",")
     }
 
+    /// The order with `id` moved in front of `targetID`. Dragging a row onto
+    /// another is one gesture, so it is one step rather than a run of swaps.
+    public static func moving(_ id: String, before targetID: String, in rawValue: String) -> String {
+        var order = normalizedOrder(rawValue)
+        guard let from = order.firstIndex(of: id),
+              from != order.firstIndex(of: targetID) else {
+            return normalizedOrderRawValue(rawValue)
+        }
+        let moved = order.remove(at: from)
+        // The target's index is read after the removal, so "before the target"
+        // stays true when the row was moving down the list.
+        guard let to = order.firstIndex(of: targetID) else {
+            return normalizedOrderRawValue(rawValue)
+        }
+        order.insert(moved, at: to)
+        return order.joined(separator: ",")
+    }
+
     public static var firstAI: Self? {
         pinned.first(where: \.isAI)
     }

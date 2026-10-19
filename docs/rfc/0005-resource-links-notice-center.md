@@ -76,7 +76,8 @@ silently opening a different resource.
 - `warren://terminal?project=<selector>&workspace=<selector>&session=<selector>`
   can target any existing Project/Workspace/Session; omitted levels use the
   remembered/default child.
-- Existing `warren://terminal?group=<name-or-uuid>` links still work.
+- `warren://terminal?group=<name-or-uuid>` links were retired when Terminal
+  Groups were removed ([RFC 0003](0003-terminal-groups.md), withdrawn).
 - A stale name link fails with an actionable notice and never falls back to a
   similarly named resource.
 - Clicking the bell and opening notice details leaves terminal dimensions

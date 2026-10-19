@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -486,5 +487,199 @@ func TestPublicRouteMetadataRejectsNonUpgradeStream(t *testing.T) {
 	})})
 	if err == nil || !strings.Contains(err.Error(), "websocket upgrade") {
 		t.Fatalf("public HTTP stream was not rejected: %v", err)
+	}
+}
+
+func newTestRelayPair(t *testing.T) (*websocket.Conn, *websocket.Conn) {
+	t.Helper()
+	serverConn := make(chan *websocket.Conn, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(response, request, nil)
+		if err != nil {
+			return
+		}
+		serverConn <- connection
+	}))
+	t.Cleanup(server.Close)
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	select {
+	case relay := <-serverConn:
+		t.Cleanup(func() { _ = relay.Close() })
+		return client, relay
+	case <-time.After(time.Second):
+		t.Fatal("test websocket server did not accept the connection")
+	}
+	return nil, nil
+}
+
+func newHijackedTestStream(connector *Connector, id connectionID) (*stream, *io.PipeReader) {
+	ctx, cancel := context.WithCancel(context.Background())
+	value := newStream(streamOpen{Class: "upgrade"}, 1, ctx, cancel)
+	reader, input := io.Pipe()
+	value.hijacked = &relayConn{connector: connector, id: id, stream: value, reader: reader, input: input, done: make(chan struct{})}
+	connector.streams[id] = value
+	connector.usedIDs[id] = 1
+	return value, reader
+}
+
+func readRelayFrame(t *testing.T, relay *websocket.Conn) frame {
+	t.Helper()
+	_ = relay.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, payload, err := relay.ReadMessage()
+	if err != nil {
+		t.Fatalf("read relay frame: %v", err)
+	}
+	decoded, err := decode(payload)
+	if err != nil {
+		t.Fatalf("decode relay frame: %v", err)
+	}
+	return decoded
+}
+
+// A handler that stops reading must only stall its own stream. Delivering its
+// bytes on the Host socket's read loop held every other client behind it.
+func TestStalledUpgradeStreamDoesNotBlockOtherStreams(t *testing.T) {
+	client, relay := newTestRelayPair(t)
+	connector := &Connector{
+		conn:            client,
+		writer:          newConnectionWriter(client, 1),
+		connectionEpoch: 1,
+		streams:         map[connectionID]*stream{},
+		usedIDs:         map[connectionID]uint64{},
+	}
+	go connector.writer.run()
+	defer connector.writer.stopWith(nil)
+
+	stalledID, readyID := connectionID{20}, connectionID{21}
+	stalled, _ := newHijackedTestStream(connector, stalledID)
+	defer stalled.close()
+	ready, readyReader := newHijackedTestStream(connector, readyID)
+	defer ready.close()
+
+	dispatched := make(chan error, 1)
+	go func() {
+		for index := 0; index < 3; index++ {
+			if err := connector.dispatch(frame{Kind: frameData, ID: stalledID, Payload: []byte("stalled")}); err != nil {
+				dispatched <- err
+				return
+			}
+		}
+		dispatched <- connector.dispatch(frame{Kind: frameData, ID: readyID, Payload: []byte("ready")})
+	}()
+	select {
+	case err := <-dispatched:
+		if err != nil {
+			t.Fatalf("dispatch returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a stream whose handler stopped reading blocked the Host read loop")
+	}
+
+	buffer := make([]byte, 5)
+	read := make(chan error, 1)
+	go func() {
+		_, err := io.ReadFull(readyReader, buffer)
+		read <- err
+	}()
+	select {
+	case err := <-read:
+		if err != nil || string(buffer) != "ready" {
+			t.Fatalf("ready stream read %q, %v", buffer, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ready stream input was not delivered while another stream was stalled")
+	}
+	credit := readRelayFrame(t, relay)
+	if credit.Kind != frameWindow || credit.ID != readyID || binary.BigEndian.Uint64(credit.Payload) != 5 {
+		t.Fatalf("unexpected credit frame: kind=%d id=%v payload=%v", credit.Kind, credit.ID, credit.Payload)
+	}
+}
+
+// Input that reaches a handler which already returned is that stream's
+// problem. It used to end the whole Host socket and reconnect every client.
+func TestStreamInputFailureStaysOnItsStream(t *testing.T) {
+	client, relay := newTestRelayPair(t)
+	connector := &Connector{
+		conn:            client,
+		writer:          newConnectionWriter(client, 1),
+		connectionEpoch: 1,
+		streams:         map[connectionID]*stream{},
+		usedIDs:         map[connectionID]uint64{},
+	}
+	go connector.writer.run()
+	defer connector.writer.stopWith(nil)
+
+	id := connectionID{22}
+	value, reader := newHijackedTestStream(connector, id)
+	_ = reader.Close()
+	if err := connector.dispatch(frame{Kind: frameData, ID: id, Payload: []byte("late")}); err != nil {
+		t.Fatalf("stream-local failure was returned to the Host read loop: %v", err)
+	}
+	reported := readRelayFrame(t, relay)
+	if reported.Kind != frameError || reported.ID != id {
+		t.Fatalf("expected a stream ERROR, got kind=%d id=%v", reported.Kind, reported.ID)
+	}
+	select {
+	case <-value.ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("failed stream was not released")
+	}
+	connector.mu.Lock()
+	_, remaining := connector.streams[id]
+	connector.mu.Unlock()
+	if remaining {
+		t.Fatal("failed stream is still registered")
+	}
+}
+
+// A client's last bytes followed by CLOSE must still reach a handler that is
+// slow to read. CLOSE used to overtake the queued body frames and drop them.
+func TestRelayCloseWaitsForQueuedStreamInput(t *testing.T) {
+	client, _ := newTestRelayPair(t)
+	connector := &Connector{
+		conn:            client,
+		writer:          newConnectionWriter(client, 1),
+		connectionEpoch: 1,
+		streams:         map[connectionID]*stream{},
+		usedIDs:         map[connectionID]uint64{},
+	}
+	go connector.writer.run()
+	defer connector.writer.stopWith(nil)
+
+	id := connectionID{23}
+	value, reader := newHijackedTestStream(connector, id)
+	for _, message := range []frame{
+		{Kind: frameData, ID: id, Payload: []byte("last")},
+		{Kind: frameClose, ID: id},
+	} {
+		if err := connector.dispatch(message); err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+	}
+	// The handler only starts reading after CLOSE has been dispatched.
+	received, err := io.ReadAll(reader)
+	if err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("read: %v", err)
+	}
+	if string(received) != "last" {
+		t.Fatalf("handler read %q before close, want %q", received, "last")
+	}
+	select {
+	case <-value.ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("stream was not released after its queued input")
+	}
+}
+
+func TestSuspendedBetweenIgnoresAnAwakeInterval(t *testing.T) {
+	start := time.Now()
+	time.Sleep(20 * time.Millisecond)
+	if suspended := suspendedBetween(start, time.Now()); suspended < -time.Millisecond || suspended > time.Millisecond {
+		t.Fatalf("awake interval reported %s of suspension", suspended)
 	}
 }

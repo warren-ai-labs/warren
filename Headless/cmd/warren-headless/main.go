@@ -48,6 +48,10 @@ var (
 
 const tokenRepairInterval = time.Second
 
+// hostNameRefreshInterval bounds how long a renamed machine keeps its old
+// name in Warren.
+const hostNameRefreshInterval = time.Minute
+
 const ghostlineModulePath = "github.com/abcdlsj/ghostline"
 
 // ghostlineReleaseVersion returns the module version embedded by the Go
@@ -166,6 +170,9 @@ func main() {
 	state, err := store.Open(*statePath, *hostName)
 	if err != nil {
 		fatal(err)
+	}
+	if strings.TrimSpace(*hostName) == "" {
+		go followMachineHostName(context.Background(), state, logger)
 	}
 	// Ghostline is the sole terminal runtime.
 	defaultKind := loadedSettings.Normalized()
@@ -811,6 +818,23 @@ func loadOrCreateToken(path string) (string, error) {
 // available to new desktop and CLI clients. The daemon keeps the token in
 // memory, so restoring a deleted or replaced file is safe and prevents a
 // second daemon from publishing a different token for the same port.
+// followMachineHostName keeps the Host named after the machine while the
+// daemon runs, so renaming the machine reaches every client without a restart.
+func followMachineHostName(ctx context.Context, state *store.Store, logger *slog.Logger) {
+	ticker := time.NewTicker(hostNameRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := state.SetHostName(store.ResolveHostName("")); err != nil {
+				logger.Warn("unable to refresh host name", "error", err)
+			}
+		}
+	}
+}
+
 func maintainTokenFile(ctx context.Context, path, token string, logger *slog.Logger) {
 	repair := func() {
 		if err := ensureTokenFile(path, token); err != nil {

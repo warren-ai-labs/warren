@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,10 +61,13 @@ func Open(path, hostName string) (*Store, error) {
 		default:
 			return nil, &StateResetError{Path: path, FoundSchema: s.state.Schema, RequiredSchema: currentSchema}
 		}
-		if len(s.state.TerminalGroups) == 0 {
-			if err := ensureTerminalGroups(&s.state); err != nil {
-				return nil, err
-			}
+		if backfillActivity(&s.state) {
+			migrated = true
+		}
+		// The Host is named after the machine, so a renamed machine renames
+		// the Host instead of keeping the name it had when the state began.
+		if name := ResolveHostName(hostName); name != "" && name != s.state.Host.Name {
+			s.state.Host.Name = name
 			migrated = true
 		}
 		if migrated {
@@ -76,16 +80,11 @@ func Open(path, hostName string) (*Store, error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read state: %w", err)
 	}
-	if hostName == "" {
-		hostName, _ = os.Hostname()
-	}
+	hostName = ResolveHostName(hostName)
 	current, _ := user.Current()
 	s.state = api.State{
 		Schema: currentSchema,
 		Host:   api.Host{ID: NewID(), Name: hostName, User: userName(current), OS: runtime.GOOS + "/" + runtime.GOARCH, Version: api.Version},
-	}
-	if err := ensureTerminalGroups(&s.state); err != nil {
-		return nil, err
 	}
 	if err := s.save(s.state); err != nil {
 		return nil, err
@@ -106,6 +105,28 @@ func (e *StateResetError) Error() string {
 		return "state_reset_required"
 	}
 	return fmt.Sprintf("state_reset_required: %s has schema %d; create a fresh state file with schema %d", e.Path, e.FoundSchema, e.RequiredSchema)
+}
+
+// ResolveHostName returns the Host's display name: the configured one when
+// set, otherwise the machine's current host name.
+func ResolveHostName(configured string) string {
+	if name := strings.TrimSpace(configured); name != "" {
+		return name
+	}
+	name, _ := os.Hostname()
+	return strings.TrimSpace(name)
+}
+
+// SetHostName renames the Host, leaving the state untouched when the name is
+// empty or already current.
+func (s *Store) SetHostName(name string) error {
+	if name == "" || s.Snapshot().Host.Name == name {
+		return nil
+	}
+	return s.Update(func(state *api.State) error {
+		state.Host.Name = name
+		return nil
+	})
 }
 
 func userName(value *user.User) string {
@@ -149,6 +170,8 @@ func (s *Store) Update(fn func(*api.State) error) error {
 	if err := fn(&next); err != nil {
 		return err
 	}
+	// s.state only changes under writeMu, which this writer holds.
+	stampActivity(&s.state, &next, time.Now().UTC())
 	// Persist before publishing so a failed write leaves the in-memory state
 	// untouched, matching the previous rollback contract.
 	if err := s.save(next); err != nil {
@@ -201,7 +224,15 @@ func clone(value api.State) api.State {
 	result.Tasks = append([]api.Task(nil), value.Tasks...)
 	result.Projects = append([]api.Project(nil), value.Projects...)
 	result.Workspaces = append([]api.Workspace(nil), value.Workspaces...)
-	result.TerminalGroups = append([]api.TerminalGroup(nil), value.TerminalGroups...)
+	// A Pane Group's tree is a pointer graph. Copying the slice element alone
+	// would leave every snapshot sharing the nodes with the published state, so
+	// an in-place edit would be invisible to a before/after comparison and a
+	// reader could observe a half-applied arrangement.
+	result.PaneGroups = make([]api.PaneGroup, len(value.PaneGroups))
+	for index, group := range value.PaneGroups {
+		group.Tree = *clonePaneNode(&group.Tree)
+		result.PaneGroups[index] = group
+	}
 	result.Sessions = append([]api.Session(nil), value.Sessions...)
 	if value.GhostlineMigration != nil {
 		migration := *value.GhostlineMigration
@@ -235,14 +266,12 @@ func clone(value api.State) api.State {
 	return result
 }
 
-func ensureTerminalGroups(state *api.State) error {
-	if len(state.TerminalGroups) > 0 {
+func clonePaneNode(node *api.PaneNode) *api.PaneNode {
+	if node == nil {
 		return nil
 	}
-	state.TerminalGroups = []api.TerminalGroup{{
-		ID:        NewID(),
-		Name:      "Inbox",
-		CreatedAt: time.Now().UTC(),
-	}}
-	return nil
+	cloned := *node
+	cloned.First = clonePaneNode(node.First)
+	cloned.Second = clonePaneNode(node.Second)
+	return &cloned
 }

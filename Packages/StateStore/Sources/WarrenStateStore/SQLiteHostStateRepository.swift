@@ -323,7 +323,6 @@ public actor SQLiteHostStateRepository: HostStateRepository, SupersetImportCommi
         do {
             try await database.write { db in
                 try db.execute(sql: "DELETE FROM tabs WHERE session_id = ?", arguments: [sessionID.description])
-                try db.execute(sql: "DELETE FROM terminal_group_tabs WHERE session_id = ?", arguments: [sessionID.description])
                 try db.execute(sql: "DELETE FROM runtime_bindings WHERE session_id = ?", arguments: [sessionID.description])
                 try db.execute(sql: "DELETE FROM request_receipts WHERE resource_id = ?", arguments: [sessionID.description])
                 try db.execute(sql: "DELETE FROM terminal_sessions WHERE id = ?", arguments: [sessionID.description])
@@ -415,10 +414,6 @@ public actor SQLiteHostStateRepository: HostStateRepository, SupersetImportCommi
                 arguments: [workspaceID.description]
             ) else { return }
             try db.execute(sql: "DELETE FROM tabs WHERE workspace_id = ?", arguments: [workspaceID.description])
-            try db.execute(
-                sql: "DELETE FROM terminal_group_tabs WHERE session_id IN (SELECT id FROM terminal_sessions WHERE workspace_id = ?)",
-                arguments: [workspaceID.description]
-            )
             try db.execute(sql: "DELETE FROM workspace_views WHERE workspace_id = ?", arguments: [workspaceID.description])
             try db.execute(sql: "UPDATE client_windows SET active_workspace_id = NULL WHERE active_workspace_id = ?", arguments: [workspaceID.description])
             try db.execute(sql: "DELETE FROM runtime_bindings WHERE session_id IN (SELECT id FROM terminal_sessions WHERE workspace_id = ?)", arguments: [workspaceID.description])
@@ -444,10 +439,6 @@ public actor SQLiteHostStateRepository: HostStateRepository, SupersetImportCommi
                 arguments: [projectID.description]
             ) == true else { return }
             try db.execute(sql: "DELETE FROM tabs WHERE workspace_id IN (SELECT id FROM workspaces WHERE project_id = ?)", arguments: [projectID.description])
-            try db.execute(
-                sql: "DELETE FROM terminal_group_tabs WHERE session_id IN (SELECT id FROM terminal_sessions WHERE workspace_id IN (SELECT id FROM workspaces WHERE project_id = ?))",
-                arguments: [projectID.description]
-            )
             try db.execute(sql: "DELETE FROM workspace_views WHERE workspace_id IN (SELECT id FROM workspaces WHERE project_id = ?)", arguments: [projectID.description])
             try db.execute(sql: "UPDATE client_windows SET active_workspace_id = NULL WHERE active_workspace_id IN (SELECT id FROM workspaces WHERE project_id = ?)", arguments: [projectID.description])
             try db.execute(sql: "DELETE FROM runtime_bindings WHERE session_id IN (SELECT id FROM terminal_sessions WHERE workspace_id IN (SELECT id FROM workspaces WHERE project_id = ?))", arguments: [projectID.description])
@@ -793,7 +784,7 @@ public actor SQLiteHostStateRepository: HostStateRepository, SupersetImportCommi
                     database,
                     sql: """
                     SELECT id, sidebar_width, sidebar_collapsed, window_width,
-                           window_height, active_workspace_id, active_terminal_group_id
+                           window_height, active_workspace_id
                     FROM client_windows
                     WHERE client_id = ?
                     ORDER BY updated_at, id
@@ -809,9 +800,6 @@ public actor SQLiteHostStateRepository: HostStateRepository, SupersetImportCommi
                     )
                     let activeWorkspaceID: WorkspaceID? = try Self.optionalDomainID(
                         row: row, table: "client_windows", column: "active_workspace_id"
-                    )
-                    let activeTerminalGroupID: TerminalGroupID? = try Self.optionalDomainID(
-                        row: row, table: "client_windows", column: "active_terminal_group_id"
                     )
                     let width: Double? = row["window_width"]
                     let height: Double? = row["window_height"]
@@ -865,65 +853,13 @@ public actor SQLiteHostStateRepository: HostStateRepository, SupersetImportCommi
                             activeTabID: viewRow["active_tab_id"]
                         )
                     }
-                    let groupViewRows = try Row.fetchAll(
-                        database,
-                        sql: """
-                        SELECT terminal_group_id, active_tab_id
-                        FROM terminal_group_views
-                        WHERE window_id = ?
-                        ORDER BY position, updated_at, terminal_group_id
-                        """,
-                        arguments: [windowID.description]
-                    )
-                    let groupViews = try groupViewRows.map { viewRow -> ClientTerminalGroupView in
-                        let terminalGroupID: TerminalGroupID = try Self.domainID(
-                            row: viewRow,
-                            table: "terminal_group_views",
-                            column: "terminal_group_id"
-                        )
-                        let tabs = try Row.fetchAll(
-                            database,
-                            sql: """
-                            SELECT id, session_id, title, kind
-                            FROM terminal_group_tabs
-                            WHERE window_id = ? AND terminal_group_id = ?
-                            ORDER BY position, created_at, id
-                            """,
-                            arguments: [windowID.description, terminalGroupID.description]
-                        ).map { tabRow -> ClientTab in
-                            let kindValue: String = tabRow["kind"]
-                            guard let kind = TerminalSessionKind(rawValue: kindValue) else {
-                                throw HostStateRepositoryError.invalidDatabaseValue(
-                                    table: "terminal_group_tabs", column: "kind", value: kindValue
-                                )
-                            }
-                            let sessionID: TerminalSessionID = try Self.domainID(
-                                row: tabRow,
-                                table: "terminal_group_tabs",
-                                column: "session_id"
-                            )
-                            return ClientTab(
-                                id: tabRow["id"],
-                                title: (tabRow["title"] as String?) ?? kind.displayName,
-                                sessionID: sessionID,
-                                kind: kind
-                            )
-                        }
-                        return ClientTerminalGroupView(
-                            terminalGroupID: terminalGroupID,
-                            tabs: tabs,
-                            activeTabID: viewRow["active_tab_id"]
-                        )
-                    }
                     guard let window = ClientWindowLayout(
                         id: windowID,
                         sidebarWidth: row["sidebar_width"],
                         sidebarCollapsed: row["sidebar_collapsed"],
                         windowSize: windowSize,
                         activeWorkspaceID: activeWorkspaceID,
-                        workspaceViews: views,
-                        activeTerminalGroupID: activeTerminalGroupID,
-                        terminalGroupViews: groupViews
+                        workspaceViews: views
                     ) else {
                         throw HostStateRepositoryError.invalidDatabaseValue(
                             table: "client_windows", column: "sidebar_width", value: "invalid"
@@ -962,9 +898,8 @@ public actor SQLiteHostStateRepository: HostStateRepository, SupersetImportCommi
                         sql: """
                         INSERT INTO client_windows (
                             id, client_id, sidebar_width, sidebar_collapsed,
-                            window_width, window_height, active_workspace_id,
-                            active_terminal_group_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            window_width, window_height, active_workspace_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         arguments: [
                             window.id.description,
@@ -974,7 +909,6 @@ public actor SQLiteHostStateRepository: HostStateRepository, SupersetImportCommi
                             window.windowSize?.width,
                             window.windowSize?.height,
                             window.activeWorkspaceID?.description,
-                            window.activeTerminalGroupID?.description,
                         ]
                     )
                     for (viewPosition, view) in window.workspaceViews.enumerated() {
@@ -1007,44 +941,6 @@ public actor SQLiteHostStateRepository: HostStateRepository, SupersetImportCommi
                                     window.id.description,
                                     view.workspaceID.description,
                                     sessionID.description,
-                                    position,
-                                ]
-                            )
-                        }
-                    }
-                    for (viewPosition, view) in window.terminalGroupViews.enumerated() {
-                        let validActiveTabID = view.tabs.contains(where: { $0.id == view.activeTabID })
-                            ? view.activeTabID
-                            : nil
-                        try database.execute(
-                            sql: """
-                            INSERT INTO terminal_group_views (
-                                window_id, terminal_group_id, active_tab_id, position
-                            ) VALUES (?, ?, ?, ?)
-                            """,
-                            arguments: [
-                                window.id.description,
-                                view.terminalGroupID.description,
-                                validActiveTabID,
-                                viewPosition,
-                            ]
-                        )
-                        for (position, tab) in view.tabs.enumerated() {
-                            guard let sessionID = tab.sessionID else { continue }
-                            try database.execute(
-                                sql: """
-                                INSERT INTO terminal_group_tabs (
-                                    id, window_id, terminal_group_id, session_id,
-                                    title, kind, position
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                                """,
-                                arguments: [
-                                    tab.id,
-                                    window.id.description,
-                                    view.terminalGroupID.description,
-                                    sessionID.description,
-                                    tab.title,
-                                    tab.kind.rawValue,
                                     position,
                                 ]
                             )
@@ -1292,6 +1188,21 @@ public actor SQLiteHostStateRepository: HostStateRepository, SupersetImportCommi
                 on: "terminal_group_tabs",
                 columns: ["terminal_group_id", "session_id"]
             )
+        }
+        // Terminal Groups were removed. Their client views go with them;
+        // `client_windows.active_terminal_group_id` stays as an unused
+        // nullable column because SQLite cannot drop it without a rebuild.
+        migrator.registerMigration("v6_remove_terminal_group_client_layout") { database in
+            try database.execute(sql: "DROP INDEX IF EXISTS terminal_group_tabs_session_guard")
+            try database.execute(sql: "DROP TABLE IF EXISTS terminal_group_tabs")
+            try database.execute(sql: "DROP TABLE IF EXISTS terminal_group_views")
+            if try SQLiteHostStateRepository.columnExists(
+                database,
+                table: "client_windows",
+                column: "active_terminal_group_id"
+            ) {
+                try database.execute(sql: "UPDATE client_windows SET active_terminal_group_id = NULL")
+            }
         }
         return migrator
     }()

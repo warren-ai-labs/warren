@@ -71,11 +71,6 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertEqual(addresses.map(\.url), [lanURL, publicURL])
     }
 
-    func testWebPopoverUsesCompactDocumentedWidth() {
-        XCTAssertEqual(WarrenLayoutMetrics.webPopoverWidth, 288)
-        XCTAssertLessThan(WarrenLayoutMetrics.webPopoverWidth, 340)
-    }
-
     func testPublicAccessIntentIsSeparateFromDesktopControlPermission() {
         let status = WarrenDesktopWebStatus(
             canControl: false,
@@ -123,31 +118,100 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
 
         let snapshot = recorder.snapshot()
         let root = snapshot.node(id: "settings.section.Usage")
-        let overview = snapshot.node(id: "settings.usage.view.Overview")
-        let usage = snapshot.node(id: "settings.usage.view.Usage")
 
         XCTAssertEqual(root?.label, "Usage")
         XCTAssertTrue(root?.isSelected == true)
-        XCTAssertEqual(overview?.label, "Overview")
-        XCTAssertFalse(overview?.isSelected == true)
-        XCTAssertEqual(usage?.label, "Usage")
-        XCTAssertTrue(usage?.isSelected == true)
-        XCTAssertLessThan(root?.frame.x ?? .greatestFiniteMagnitude, usage?.frame.x ?? -.greatestFiniteMagnitude)
+        // Overview and Usage merged into one page, so the second-level tab no
+        // longer exists.
         XCTAssertNil(snapshot.node(id: "settings.section.Overview"))
+        XCTAssertNil(snapshot.node(id: "settings.usage.view.Overview"))
     }
 
     @MainActor
-    func testUsageOverviewSelectsOverviewInSecondLevelNavigation() {
+    func testUsageOverviewDeepLinkSelectsTheMergedUsagePage() {
         let recorder = WarrenSemanticRecorder()
-        let hostingView = makeUsageHostingView(initialSection: .usageOverview, recorder: recorder)
+        let hostingView = makeUsageHostingView(initialSection: .usage, recorder: recorder)
         hostingView.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
         let snapshot = recorder.snapshot()
         XCTAssertTrue(snapshot.node(id: "settings.section.Usage")?.isSelected == true)
-        XCTAssertTrue(snapshot.node(id: "settings.usage.view.Overview")?.isSelected == true)
-        XCTAssertFalse(snapshot.node(id: "settings.usage.view.Usage")?.isSelected == true)
+    }
+
+    /// Writes the settings page to a PNG when asked, so the navigation and the
+    /// page header can be looked at as they are drawn.
+    @MainActor
+    func testWritesTheSettingsPageWhenAnArtifactDirectoryIsGiven() throws {
+        guard let directory = ProcessInfo.processInfo.environment["WARREN_SETTINGS_IMAGES"] else {
+            throw XCTSkip("Set WARREN_SETTINGS_IMAGES to write settings PNGs")
+        }
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        for section in [WarrenDesktopSettingsSection.appearance, .workspaces, .presets, .terminal, .aiTitles, .usage, .publicAccess, .relay] {
+            let recorder = WarrenSemanticRecorder()
+            let hosting = makeUsageHostingView(initialSection: section, recorder: recorder)
+            hosting.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+            hosting.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
+                return XCTFail("No bitmap for the settings page")
+            }
+            hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+            let url = URL(fileURLWithPath: directory)
+                .appendingPathComponent("settings-\(section.id).png")
+            try bitmap.representation(using: .png, properties: [:])?.write(to: url)
+        }
+    }
+
+    /// Writes the enrolled Relay page, whose connection row carries the
+    /// on/off switch, so the row can be looked at as it is drawn.
+    @MainActor
+    func testWritesTheEnrolledRelayPageWhenAnArtifactDirectoryIsGiven() throws {
+        guard let directory = ProcessInfo.processInfo.environment["WARREN_SETTINGS_IMAGES"] else {
+            throw XCTSkip("Set WARREN_SETTINGS_IMAGES to write settings PNGs")
+        }
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        let settings = WarrenDesktopSettingsView(
+            onBack: {},
+            hostName: "Test Host",
+            webStatus: WarrenDesktopWebStatus(),
+            onWebTest: nil,
+            onWebStop: nil,
+            onWebReset: nil,
+            onRelayEnroll: { _, _, completion in completion(.success(())) },
+            relaySettings: WarrenDesktopRelaySettings(
+                enabled: true,
+                relayURL: "https://relay.example.test",
+                hostID: "00000000-0000-4000-8000-000000000001",
+                routeID: "route-1",
+                relayKeyID: "key-1",
+                relayPublicKey: "pinned-public-key"
+            ),
+            onSetRelayEnabled: { _ in },
+            defaultRuntime: nil,
+            onSetRuntime: { _ in },
+            autoOpenShell: false,
+            onSetAutoOpenShell: { _ in },
+            autoStartAI: false,
+            onSetAutoStartAI: { _ in },
+            openAIBaseURL: "",
+            openAIModel: "",
+            openAITitleEnabled: false,
+            onSetOpenAISetting: { _, _ in },
+            onTestOpenAI: { _, _, _ in },
+            initialSettingsSection: .relay
+        )
+        .environment(\.colorScheme, .dark)
+        let hosting = NSHostingView(rootView: AnyView(settings))
+        hosting.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hosting.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
+            return XCTFail("No bitmap for the Relay page")
+        }
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let url = URL(fileURLWithPath: directory).appendingPathComponent("settings-Relay-enrolled.png")
+        try bitmap.representation(using: .png, properties: [:])?.write(to: url)
     }
 
     @MainActor
@@ -199,7 +263,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
     }
 
     @MainActor
-    func testAITitleSettingsTestConnectionButtonSendsCurrentDrafts() throws {
+    func testAITitleSettingsSaveAndTestSendsCurrentDrafts() throws {
         let callback = expectation(description: "test connection callback")
         var received: (baseURL: String, model: String, key: String?)?
         let recorder = WarrenSemanticRecorder()
@@ -237,10 +301,9 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
-        let node = recorder.snapshot().node(id: "settings.ai-titles.test")
-        XCTAssertEqual(node?.label, "Test AI title connection")
+        let node = recorder.snapshot().node(id: "settings.ai-titles.save-and-test")
         XCTAssertTrue(node?.isEnabled == true)
-        try recorder.perform(.press, on: "settings.ai-titles.test")
+        try recorder.perform(.press, on: "settings.ai-titles.save-and-test")
         wait(for: [callback], timeout: 1)
 
         XCTAssertEqual(received?.baseURL, "https://api.example.test/v1")

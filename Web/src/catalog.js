@@ -13,7 +13,6 @@ export function rosterFromMessage(message = {}) {
     host: isRecord(source?.host) ? source.host : {},
     projects: arrayOrEmpty(source?.projects),
     workspaces: arrayOrEmpty(source?.workspaces),
-    terminalGroups: arrayOrEmpty(source?.terminalGroups),
     tabs,
   });
 }
@@ -34,17 +33,15 @@ export function applyRosterDelta(roster, message = {}) {
     return null;
   }
 
-  const entityKeys = ["projects", "workspaces", "terminalGroups", "sessions"];
+  const entityKeys = ["projects", "workspaces", "sessions"];
   const entityIDs = {
     projects: value => value?.id,
     workspaces: value => value?.id,
-    terminalGroups: value => value?.id,
     sessions: value => value?.id,
   };
   if (Object.prototype.hasOwnProperty.call(message, "host") && !isRecord(message.host)) {
     return null;
   }
-  const terminalGroupChanges = message.terminalGroups;
   for (const key of entityKeys) {
     if (Object.prototype.hasOwnProperty.call(message, key)
       && !validEntityChanges(message[key], entityIDs[key])) {
@@ -69,11 +66,6 @@ export function applyRosterDelta(roster, message = {}) {
     host: isRecord(message.host) ? message.host : current.host,
     projects: applyEntityChanges(current.projects, message.projects, value => value?.id),
     workspaces: applyEntityChanges(current.workspaces, message.workspaces, value => value?.id),
-    terminalGroups: applyEntityChanges(
-      current.terminalGroups,
-      terminalGroupChanges,
-      value => value?.id,
-    ),
     tabs: applySessionMetadata(tabs, message.sessionMetadata),
   });
 }
@@ -94,7 +86,6 @@ export function updateSessionAgentStatus(catalog, sessionID, agentStatus) {
     host: catalog.host,
     projects: catalog.projects,
     workspaces: catalog.workspaces,
-    terminalGroups: catalog.terminalGroups,
     tabs,
   });
 }
@@ -153,7 +144,6 @@ export function moveInCatalog(catalog, kind, id, beforeID) {
     host: catalog.host,
     projects: kind === "projects" ? next : catalog.projects,
     workspaces: kind === "workspaces" ? next : catalog.workspaces,
-    terminalGroups: catalog.terminalGroups,
     tabs: catalog.tabs,
   });
 }
@@ -201,7 +191,6 @@ function normalizeRoster(roster) {
     host: isRecord(roster?.host) ? roster.host : {},
     projects: arrayOrEmpty(roster?.projects),
     workspaces: arrayOrEmpty(roster?.workspaces),
-    terminalGroups: arrayOrEmpty(roster?.terminalGroups),
     tabs: arrayOrEmpty(roster?.tabs),
   };
 }
@@ -244,11 +233,6 @@ function sessionToTab(session = {}) {
     tab.agentCapabilities = Array.isArray(session.agentCapabilities)
       ? [...session.agentCapabilities]
       : [];
-  }
-  // Session scope fields are optional in older Hosts. Preserve them when
-  // present so group-scoped sessions do not lose their ownership metadata.
-  for (const key of ["terminalGroup", "scope"]) {
-    if (Object.prototype.hasOwnProperty.call(session, key)) tab[key] = session[key];
   }
   return tab;
 }

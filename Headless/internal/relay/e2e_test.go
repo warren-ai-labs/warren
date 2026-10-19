@@ -56,6 +56,7 @@ func TestRelayE2E(t *testing.T) {
 	}
 
 	var relayCleanup func()
+	relayLogPath := ""
 	if relayURL == "" {
 		relayBin := filepath.Join(binDir, "warren-relay")
 		if err := buildBinary(repoRoot, "./RelayService/cmd/warren-relay", relayBin); err != nil {
@@ -76,6 +77,7 @@ func TestRelayE2E(t *testing.T) {
 			"WARREN_RELAY_DATA="+filepath.Join(tmp, "registry.json"),
 		)
 		logFile := filepath.Join(tmp, "relay.log")
+		relayLogPath = logFile
 		logF, err := os.Create(logFile)
 		if err != nil {
 			t.Fatalf("create relay log: %v", err)
@@ -140,8 +142,9 @@ func TestRelayE2E(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	hostHome := filepath.Join(tmp, "home")
 	cmd := exec.CommandContext(ctx, headlessBin, "--lan-https=")
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(isolatedUserEnvironment(hostHome),
 		"WARREN_LISTEN=127.0.0.1:"+fmt.Sprint(headlessPort),
 		"WARREN_RELAY_URL="+relayURL,
 		"WARREN_RELAY_ENROLLMENT_KEY="+enrollmentKey,
@@ -171,6 +174,20 @@ func TestRelayE2E(t *testing.T) {
 	if !waitForHealth(fmt.Sprintf("http://127.0.0.1:%d/healthz", headlessPort), 5*time.Second) {
 		tail, _ := os.ReadFile(hostLog)
 		t.Fatalf("headless did not become healthy; log:\n%s", tail)
+	}
+	// The daemon installs its agent hooks at startup, so the isolated home is
+	// also how the test proves the installation ran and ran somewhere harmless.
+	for _, installed := range []string{
+		filepath.Join(hostHome, ".codex", "hooks.json"),
+		filepath.Join(hostHome, ".claude", "settings.json"),
+		filepath.Join(hostHome, ".config", "opencode", "plugin", "warren-bind.ts"),
+		filepath.Join(hostHome, ".pi", "agent", "extensions", "warren-bind.ts"),
+		filepath.Join(hostHome, ".qoder", "settings.json"),
+		filepath.Join(hostHome, ".gemini", "config", "hooks.json"),
+	} {
+		if !waitForFile(installed, 5*time.Second) {
+			t.Fatalf("daemon did not install %s into its isolated home", installed)
+		}
 	}
 
 	settingsResponse := getJSON(t, fmt.Sprintf("http://127.0.0.1:%d/v1/settings", headlessPort), hostToken)
@@ -292,10 +309,19 @@ func TestRelayE2E(t *testing.T) {
 	assetBody, assetReadErr := io.ReadAll(publicAsset.Body)
 	publicAsset.Body.Close()
 	if assetReadErr != nil {
-		t.Fatalf("read public access asset: %v", assetReadErr)
+		tail, _ := os.ReadFile(hostLog)
+		relayTail, _ := os.ReadFile(relayLogPath)
+		t.Fatalf("read public access asset: %v\nhost log:\n%s\nrelay log:\n%s", assetReadErr, tail, relayTail)
 	}
 	if publicAsset.StatusCode != http.StatusOK || len(assetBody) == 0 {
 		t.Fatalf("public access asset status=%d bytes=%d", publicAsset.StatusCode, len(assetBody))
+	}
+	// The whole bundle must arrive. A truncated body is the failure this guards
+	// against: the Host frames a compressed asset in hundreds of small pieces,
+	// and a route torn down mid-body ends the response early, which a Client can
+	// only tell apart from a complete one by its length.
+	if want := webAssetSize(t, filepath.Join(repoRoot, "Web", "dist", "assets", "app.js")); want > 0 && len(assetBody) != int(want) {
+		t.Fatalf("public access asset is %d bytes, want the whole %d-byte bundle", len(assetBody), want)
 	}
 	publicWebSocketURL := "ws" + strings.TrimPrefix(strings.TrimRight(publicEndpoint, "/")+"/v1/ws", "http")
 	dialer := websocket.Dialer{EnableCompression: true}
@@ -317,6 +343,87 @@ func TestRelayE2E(t *testing.T) {
 	if welcome["t"] != "welcome" || welcome["version"] != "4.0" {
 		t.Fatalf("public WebSocket welcome = %#v", welcome)
 	}
+}
+
+// userLevelConfigEnvironment names every environment variable that redirects a
+// spawned daemon into a user's own configuration. Each is set explicitly for
+// the child rather than merely removed, because the child would otherwise
+// inherit a developer's own value for it, which would put the mutation back.
+var userLevelConfigEnvironment = []string{
+	"HOME",
+	"WARREN_DATA_DIR",
+	"WARREN_TLS_DIR",
+	"WARREN_PI_EXTENSION_PATH",
+	"WARREN_OPENCODE_PLUGIN_PATH",
+	"CODEX_HOME",
+	"CLAUDE_CONFIG_DIR",
+	"XDG_CONFIG_HOME",
+	"PI_CODING_AGENT_DIR",
+	"QODER_CONFIG_DIR",
+	"ANTIGRAVITY_CONFIG_DIR",
+}
+
+// isolatedUserEnvironment returns the environment for the daemon under test
+// with every user-level path pinned inside root.
+//
+// The daemon installs Warren-managed hooks into each agent CLI's own
+// configuration directory, writes its bindings and agent journal under the
+// Warren data directory, and installs a terminal definition under the home
+// directory. Started with the developer's own environment it edits that
+// developer's real Codex, Claude Code, OpenCode, Pi, Qoder, and Antigravity
+// configuration and rewrites the journal of the daemon they are running, so a
+// test run once replaced a live OpenCode binding plugin. The installations are
+// the same code path in either case, so coverage is unchanged: they land in the
+// test's own home, where TestRelayE2E asserts they happened.
+func isolatedUserEnvironment(root string) []string {
+	isolation := map[string]struct{}{}
+	for _, key := range userLevelConfigEnvironment {
+		isolation[key] = struct{}{}
+	}
+	env := make([]string, 0, len(os.Environ())+len(userLevelConfigEnvironment))
+	for _, entry := range os.Environ() {
+		if key, _, found := strings.Cut(entry, "="); found {
+			if _, redirected := isolation[key]; redirected {
+				continue
+			}
+		}
+		env = append(env, entry)
+	}
+	return append(env,
+		"HOME="+root,
+		"WARREN_DATA_DIR="+filepath.Join(root, ".warren"),
+		"WARREN_TLS_DIR="+filepath.Join(root, ".warren", "tls"),
+		"WARREN_PI_EXTENSION_PATH="+filepath.Join(root, ".pi", "agent", "extensions", "warren-bind.ts"),
+		"WARREN_OPENCODE_PLUGIN_PATH="+filepath.Join(root, ".config", "opencode", "plugin", "warren-bind.ts"),
+		"CODEX_HOME="+filepath.Join(root, ".codex"),
+		"CLAUDE_CONFIG_DIR="+filepath.Join(root, ".claude"),
+		"XDG_CONFIG_HOME="+filepath.Join(root, ".config"),
+		"PI_CODING_AGENT_DIR="+filepath.Join(root, ".pi", "agent"),
+		"QODER_CONFIG_DIR="+filepath.Join(root, ".qoder"),
+		"ANTIGRAVITY_CONFIG_DIR="+filepath.Join(root, ".gemini", "config"),
+	)
+}
+
+// webAssetSize returns the size of the bundle the daemon serves, or 0 when it
+// is not on disk, in which case the assertion is skipped rather than guessed.
+func webAssetSize(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+func waitForFile(path string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
 }
 
 func buildBinary(workDir, pkg, out string) error {

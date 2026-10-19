@@ -19,6 +19,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let setupScript: String?
         let autoImportGitWorktrees: Bool?
         let pinned: Bool?
+        var activeSince: String? = nil
     }
     struct WorktreeCandidate: Decodable, Sendable {
         let path: String
@@ -41,13 +42,8 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         // Keep the wire value raw so a future Host state cannot invalidate
         // the entire roster; the projection maps known values below.
         let mergeState: String?
-    }
-    struct TerminalGroup: Decodable, Sendable, Equatable {
-        let id: String
-        let name: String
-        let home: String?
-        let order: Int?
-        let createdAt: String?
+        var createdAt: String? = nil
+        var lastActivityAt: String? = nil
     }
     /// The Host's pane tree. The wire shape is flat: a leaf carries pane and
     /// session identity, a split carries geometry. Recursion needs an indirect
@@ -82,8 +78,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     struct PaneGroup: Decodable, Sendable, Equatable {
         let id: String
         let workspace: String?
-        let terminalGroup: String?
-        let scope: String?
         let name: String?
         let order: Int?
         let tree: PaneNode
@@ -93,10 +87,12 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     struct Session: Decodable, Sendable, Equatable {
         let id: String
         let workspace: String?
-        let terminalGroup: String?
-        let scope: String?
         let title: String
         let customTitle: String?
+        /// The Host's one-line account of the last completed turn, when it
+        /// asked a model for one. Absent on a Host that has no title endpoint
+        /// configured, and then a row keeps its counts.
+        let resultSentence: String?
         let kind: String
         /// The provider family the Host bound to a shell or custom Session.
         /// Dropping it made every Agent started inside a shell render as a
@@ -110,6 +106,9 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let pinned: Bool?
         let agentStatus: AgentStatus?
         let agentTurn: AgentTurn?
+        /// The shell's OSC 133 semantic prompt state. Nil when the shell
+        /// never emitted a marker, so no part of the state is known.
+        var shell: ShellMetadata? = nil
         var agentExecutionId: String? = nil
         /// `"acp"` marks a Session with no terminal: an Agent driven over the
         /// Agent Client Protocol, rendered by the Conversation surface.
@@ -118,10 +117,36 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         /// The provider conversation a chat can hand off to its terminal UI.
         var agentSessionId: String? = nil
         var agentCapabilities: [String]? = nil
+        /// When the Host created the Session, for the "nothing run yet"
+        /// duration on a shell row.
+        var createdAt: String? = nil
     }
     struct AgentTurn: Decodable, Sendable, Equatable {
         let id: UInt64
         let status: String
+    }
+    /// The OSC 133 semantic prompt state of a shell Session. Every field is
+    /// live Host data; `ShellMetadata` absent means no marker was ever seen.
+    struct ShellMetadata: Decodable, Sendable, Equatable {
+        let atPrompt: Bool
+        let runningCommand: String?
+        let lastCommand: String?
+        let lastExitCode: Int?
+        let lastExitAt: String?
+
+        init(
+            atPrompt: Bool = false,
+            runningCommand: String? = nil,
+            lastCommand: String? = nil,
+            lastExitCode: Int? = nil,
+            lastExitAt: String? = nil
+        ) {
+            self.atPrompt = atPrompt
+            self.runningCommand = runningCommand
+            self.lastCommand = lastCommand
+            self.lastExitCode = lastExitCode
+            self.lastExitAt = lastExitAt
+        }
     }
     struct AgentStatus: Decodable, Sendable, Equatable {
         let activity: String
@@ -148,6 +173,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
             let process: String?
             let commandLine: String?
             let directory: String?
+            let shell: ShellMetadata?
         }
 
         struct SessionMetadataChanges: Decodable, Sendable {
@@ -188,7 +214,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         let tasks: EntityChanges<Task>?
         let projects: EntityChanges<Project>?
         let workspaces: EntityChanges<Workspace>?
-        let terminalGroups: EntityChanges<TerminalGroup>?
         let paneGroups: EntityChanges<PaneGroup>?
         let sessions: EntityChanges<Session>?
         let sessionMetadata: SessionMetadataChanges?
@@ -217,7 +242,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
     let tasks: [Task]
     let projects: [Project]
     let workspaces: [Workspace]
-    let terminalGroups: [TerminalGroup]
     let paneGroups: [PaneGroup]
     let sessions: [Session]
 
@@ -228,7 +252,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         tasks = try container.decodeIfPresent([Task].self, forKey: .tasks) ?? []
         projects = try container.decodeIfPresent([Project].self, forKey: .projects) ?? []
         workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
-        terminalGroups = try container.decodeIfPresent([TerminalGroup].self, forKey: .terminalGroups) ?? []
         paneGroups = try container.decodeIfPresent([PaneGroup].self, forKey: .paneGroups) ?? []
         sessions = try container.decodeIfPresent([Session].self, forKey: .sessions) ?? []
     }
@@ -239,7 +262,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         case tasks
         case projects
         case workspaces
-        case terminalGroups
         case paneGroups
         case sessions
     }
@@ -250,7 +272,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         tasks: [Task],
         projects: [Project],
         workspaces: [Workspace],
-        terminalGroups: [TerminalGroup],
         paneGroups: [PaneGroup],
         sessions: [Session]
     ) {
@@ -259,7 +280,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         self.tasks = tasks
         self.projects = projects
         self.workspaces = workspaces
-        self.terminalGroups = terminalGroups
         self.paneGroups = paneGroups
         self.sessions = sessions
     }
@@ -276,7 +296,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
             tasks: Self.applying(tasks, changes: delta.tasks, id: \.id),
             projects: Self.applying(projects, changes: delta.projects, id: \.id),
             workspaces: Self.applying(workspaces, changes: delta.workspaces, id: \.id),
-            terminalGroups: Self.applying(terminalGroups, changes: delta.terminalGroups, id: \.id),
             paneGroups: Self.applying(paneGroups, changes: delta.paneGroups, id: \.id),
             // Metadata travels separately from the Session entity, so apply it
             // first and let an entity upsert override it with the full record.
@@ -303,6 +322,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
             updated.process = change.process
             updated.commandLine = change.commandLine
             updated.directory = change.directory
+            updated.shell = change.shell
             return updated
         }
     }

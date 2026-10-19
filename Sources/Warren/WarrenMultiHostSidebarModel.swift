@@ -572,7 +572,7 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 endpointID: endpointID,
                 endpointLabel: endpointID,
                 connectionState: .failed,
-                lastError: "Endpoint is not configured."
+                lastError: "This Host is not configured."
             )
         }
         return WarrenDesktopSidebarHostProjection(
@@ -582,6 +582,9 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
         )
     }
 
+    /// The Hosts the sidebar shows, in order: the window's Host first, since
+    /// it is always in the sidebar, then the ones added to it. Switching Host
+    /// replaces the first section; the added ones stay where they are.
     nonisolated static func resolveAliases(
         display: WarrenDisplayConfiguration?,
         current: String
@@ -612,7 +615,7 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
         guard !aliases.isEmpty else {
             return ([fallback], "The display endpoint set cannot be empty.")
         }
-        return (aliases, nil)
+        return ([fallback] + aliases.filter { $0 != fallback }, nil)
     }
 
     nonisolated static func makeProjection(
@@ -663,7 +666,8 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 setupScript: value.setupScript,
                 autoImportGitWorktrees: value.autoImportGitWorktrees,
                 pinned: value.pinned,
-                order: value.order
+                order: value.order,
+                activeSince: WarrenRemoteApplicationModel.parseISO8601Date(value.activeSince)
             )
         }
         let workspaces = roster.workspaces.compactMap { value -> Workspace? in
@@ -682,7 +686,9 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 mergeState: value.mergeState.flatMap(WorkspaceMergeState.init(rawValue:)),
                 managedWorktree: value.managedWorktree,
                 worktreeLocked: value.worktreeLocked,
-                order: value.order
+                order: value.order,
+                createdAt: WarrenRemoteApplicationModel.parseISO8601Date(value.createdAt),
+                lastActivityAt: WarrenRemoteApplicationModel.parseISO8601Date(value.lastActivityAt)
             )
         }
         let workspaceIDs = Set(workspaces.map(\.id))
@@ -702,9 +708,20 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 agentProvider: value.agentProvider.flatMap(TerminalSessionKind.init(rawValue:)),
                 state: value.isRunning ? .attached : .exited,
                 agentStatus: agentStatus(from: value.agentStatus),
+                createdAt: WarrenRemoteApplicationModel.parseISO8601Date(value.createdAt),
                 runtimeProcess: value.process ?? value.command ?? "",
                 runtimeCommandLine: value.commandLine ?? "",
-                workingDirectory: value.directory ?? ""
+                workingDirectory: value.directory ?? "",
+                shellState: value.shell.map { shell in
+                    WarrenDesktopShellState(
+                        atPrompt: shell.atPrompt,
+                        runningCommand: shell.runningCommand ?? "",
+                        lastCommand: shell.lastCommand ?? "",
+                        lastExitCode: shell.lastExitCode,
+                        lastExitAt: WarrenRemoteApplicationModel.parseISO8601Date(shell.lastExitAt),
+                        shellName: TerminalSessionPresentation.shellName(process: value.process ?? "") ?? ""
+                    )
+                }
             )
         }
         let tabs = sessions.compactMap { session -> ClientTab? in

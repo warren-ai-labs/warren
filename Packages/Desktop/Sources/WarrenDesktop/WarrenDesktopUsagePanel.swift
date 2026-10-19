@@ -65,11 +65,22 @@ public struct WarrenDesktopUsagePanel: View {
     /// person clicked instead of leaving the click inert.
     let onOpenDetail: ((String) -> Void)?
     let mode: WarrenUsagePanelMode
+    /// The redesigned Settings page moves the range control into its header, so
+    /// the panel can be told to leave its own copy out.
+    let showsRangePicker: Bool
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var curveGranularity: WarrenUsageCurveGranularity = .halfHour
     @State private var curveMetric: WarrenUsageCurveMetric = .tokens
     @State private var selectedAgentFilter: String? = nil
     @State private var selectedModelFilter: String? = nil
+    /// The panel's laid-out width. Columns are chosen from it so the cards
+    /// fill a wide window and fold instead of truncating in a narrow one.
+    @State private var contentWidth: CGFloat = 0
+
+    /// Wide enough for four summary cards, four legend columns and three
+    /// breakdown cards side by side without cutting an amount short.
+    private var isWide: Bool { contentWidth == 0 || contentWidth >= 760 }
 
     /// Rows shown per breakdown card before the rest collapse into a count.
     ///
@@ -86,7 +97,8 @@ public struct WarrenDesktopUsagePanel: View {
         selectedDay: Binding<String?>,
         onLoad: @escaping (_ days: Int, _ day: String?, _ force: Bool) -> Void,
         onOpenDetail: ((String) -> Void)? = nil,
-        mode: WarrenUsagePanelMode = .detail
+        mode: WarrenUsagePanelMode = .detail,
+        showsRangePicker: Bool = true
     ) {
         self.stats = stats
         self.state = state
@@ -96,6 +108,7 @@ public struct WarrenDesktopUsagePanel: View {
         self.onLoad = onLoad
         self.onOpenDetail = onOpenDetail
         self.mode = mode
+        self.showsRangePicker = showsRangePicker
     }
 
     private var heatmap: WarrenUsageHeatmap {
@@ -117,7 +130,9 @@ public struct WarrenDesktopUsagePanel: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.large) {
-            rangePicker
+            if showsRangePicker {
+                rangePicker
+            }
             switch state {
             case .failed(let message):
                 failureNotice(message)
@@ -133,10 +148,16 @@ public struct WarrenDesktopUsagePanel: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .warrenMeasureWidth($contentWidth)
         .onChange(of: range) { _ in
             selectedDay = nil
             onLoad(range.days, nil, false)
         }
+    }
+
+    private func flexibleColumns(_ count: Int) -> [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: WarrenSpacing.standard, alignment: .topLeading), count: count)
     }
 
     @ViewBuilder
@@ -160,6 +181,18 @@ public struct WarrenDesktopUsagePanel: View {
             completenessNotice
             compositionCard
             heatmapCard(subtitle: heatmapSubtitle)
+                // Its readout can overhang the card's edge onto the bars below.
+                .zIndex(1)
+            // Under the calendar: the same days, read as amounts rather than
+            // shades, and selecting a day here is the calendar's own selection.
+            WarrenDesktopUsageBarsView(
+                days: stats.days,
+                fromDay: stats.fromDay,
+                toDay: stats.toDay,
+                tokens: tokens,
+                selectedDay: heatmapSelection,
+                filterNote: activeFilterLabel.map { _ in "All Agents and models" }
+            )
             breakdowns(providers: stats.providers, models: stats.models, projects: stats.projects)
             footnote
         }
@@ -264,12 +297,13 @@ public struct WarrenDesktopUsagePanel: View {
                         Text(title)
                             .font(WarrenTypography.settingsBodyEmphasis)
                             .foregroundStyle(tokens.foreground)
+                            .lineLimit(1)
 
                         if let curDay = detailDay, let idx = stats.days.firstIndex(where: { $0.day == curDay }), stats.days.count > 1 {
                             HStack(spacing: 2) {
                                 Button {
                                     if idx > 0 {
-                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                        withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
                                             selectedDay = stats.days[idx - 1].day
                                         }
                                         onLoad(range.days, selectedDay, false)
@@ -284,11 +318,11 @@ public struct WarrenDesktopUsagePanel: View {
                                 .buttonStyle(.plain)
                                 .disabled(idx == 0)
                                 .opacity(idx == 0 ? 0.35 : 1)
-                                .help("Previous day")
+                                .warrenTooltip("Previous day")
 
                                 Button {
                                     if idx < stats.days.count - 1 {
-                                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                        withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
                                             selectedDay = stats.days[idx + 1].day
                                         }
                                         onLoad(range.days, selectedDay, false)
@@ -303,7 +337,7 @@ public struct WarrenDesktopUsagePanel: View {
                                 .buttonStyle(.plain)
                                 .disabled(idx >= stats.days.count - 1)
                                 .opacity(idx >= stats.days.count - 1 ? 0.35 : 1)
-                                .help("Next day")
+                                .warrenTooltip("Next day")
                             }
                             .padding(.leading, WarrenSpacing.xxs)
                         }
@@ -317,7 +351,7 @@ public struct WarrenDesktopUsagePanel: View {
 
                 if selectedDay != nil {
                     Button {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
                             selectedDay = nil
                         }
                         onLoad(range.days, nil, false)
@@ -345,9 +379,12 @@ public struct WarrenDesktopUsagePanel: View {
                     Text(WarrenUsageFormatting.money(cost))
                         .font(WarrenTypography.pageTitle)
                         .foregroundStyle(tokens.highlight)
+                        .warrenNumericTransition(value: cost.nanoUSD)
+                        .fixedSize()
                     Text("\(WarrenUsageFormatting.tokens(buckets.total)) tokens")
                         .font(WarrenTypography.settingsMeta)
                         .foregroundStyle(tokens.mutedForeground)
+                        .warrenNumericTransition(value: buckets.total)
                 }
                 .monospacedDigit()
             }
@@ -468,114 +505,69 @@ public struct WarrenDesktopUsagePanel: View {
             // itself is chosen in the calendar and stepped with the arrows beside
             // the date.
             if mode == .overview {
-                Picker("Range", selection: $range) {
-                    ForEach(WarrenUsageRange.allCases) { option in
-                        Text(option.label).tag(option)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                // The app's own segmented control: the system one draws in the
+                // platform accent, which is the one colour Warren reserves for
+                // live state, and it cannot slide its plate.
+                WarrenSettingsSegmented(
+                    options: WarrenUsageRange.allCases.map { ($0, $0.label) },
+                    selection: $range,
+                    accessibilityID: "usage.range"
+                )
                 .frame(maxWidth: 260)
-                .accessibilityIdentifier("usage.range")
+                .warrenSemanticElement(
+                    id: "usage.range",
+                    role: .group,
+                    label: "Usage range"
+                )
             }
 
             // Agent filter
-            Menu {
-                Button("All Agents") {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
-                        selectedAgentFilter = nil
-                    }
-                }
-                Divider()
-                // Scoped, so the menu cannot offer an Agent that did not run on
-                // the day being shown and then resolve to an empty selection.
-                ForEach(scopedProviders) { group in
-                    Button {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
-                            selectedAgentFilter = (selectedAgentFilter == group.key) ? nil : group.key
-                        }
-                    } label: {
-                        HStack {
-                            Text(group.displayName)
-                            if selectedAgentFilter == group.key {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "person.2")
-                        .font(.system(size: 11, weight: .regular))
-                    Text(selectedAgentFilter.flatMap { key in scopedProviders.first { $0.key == key }?.displayName } ?? "All Agents")
-                        .font(WarrenTypography.settingsGroupLabel)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .regular))
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(selectedAgentFilter != nil ? tokens.highlight.opacity(0.12) : tokens.cardSurface)
-                .foregroundStyle(selectedAgentFilter != nil ? tokens.highlight : tokens.foreground)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(selectedAgentFilter != nil ? tokens.highlight.opacity(0.4) : tokens.border.opacity(0.4), lineWidth: WarrenSpacing.hairline)
-                )
+            HStack(spacing: 4) {
+                Image(systemName: "person.2")
+                    .font(.system(size: 11, weight: .regular))
+                Text(selectedAgentFilter.flatMap { key in scopedProviders.first { $0.key == key }?.displayName } ?? "All Agents")
+                    .font(WarrenTypography.settingsGroupLabel)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .regular))
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(selectedAgentFilter != nil ? tokens.highlight.opacity(0.12) : tokens.cardSurface)
+            .foregroundStyle(selectedAgentFilter != nil ? tokens.highlight : tokens.foreground)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(selectedAgentFilter != nil ? tokens.highlight.opacity(0.4) : tokens.border.opacity(0.4), lineWidth: WarrenSpacing.hairline)
+            )
+            .warrenMenuButton(agentFilterActions)
             .accessibilityIdentifier("usage.filter.agent")
 
             // Model filter
-            Menu {
-                Button("All Models") {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
-                        selectedModelFilter = nil
-                    }
-                }
-                Divider()
-                ForEach(scopedModels) { group in
-                    Button {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
-                            selectedModelFilter = (selectedModelFilter == group.key) ? nil : group.key
-                        }
-                    } label: {
-                        HStack {
-                            Text(group.displayName)
-                            if selectedModelFilter == group.key {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "cpu")
-                        .font(.system(size: 11, weight: .regular))
-                    Text(selectedModelFilter.flatMap { key in scopedModels.first { $0.key == key }?.displayName } ?? "All Models")
-                        .font(WarrenTypography.settingsGroupLabel)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .regular))
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(selectedModelFilter != nil ? tokens.highlight.opacity(0.12) : tokens.cardSurface)
-                .foregroundStyle(selectedModelFilter != nil ? tokens.highlight : tokens.foreground)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(selectedModelFilter != nil ? tokens.highlight.opacity(0.4) : tokens.border.opacity(0.4), lineWidth: WarrenSpacing.hairline)
-                )
+            HStack(spacing: 4) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 11, weight: .regular))
+                Text(selectedModelFilter.flatMap { key in scopedModels.first { $0.key == key }?.displayName } ?? "All Models")
+                    .font(WarrenTypography.settingsGroupLabel)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .regular))
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(selectedModelFilter != nil ? tokens.highlight.opacity(0.12) : tokens.cardSurface)
+            .foregroundStyle(selectedModelFilter != nil ? tokens.highlight : tokens.foreground)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(selectedModelFilter != nil ? tokens.highlight.opacity(0.4) : tokens.border.opacity(0.4), lineWidth: WarrenSpacing.hairline)
+            )
+            .warrenMenuButton(modelFilterActions)
             .accessibilityIdentifier("usage.filter.model")
 
             if selectedAgentFilter != nil || selectedModelFilter != nil {
                 Button {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                    withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
                         selectedAgentFilter = nil
                         selectedModelFilter = nil
                     }
@@ -594,19 +586,62 @@ public struct WarrenDesktopUsagePanel: View {
 
             Spacer(minLength: 0)
 
-            if state == .loading {
-                ProgressView().controlSize(.small)
-            }
-
+            // The button carries the busy state itself. A spinner beside it was a
+            // second loading mark on a page whose first load already shows its
+            // placeholder, and it moved the controls when it came and went.
             Button {
                 onLoad(range.days, selectedDay, true)
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                Label(state == .loading ? "Updating…" : "Refresh", systemImage: "arrow.clockwise")
             }
             .buttonStyle(.bordered)
+            .disabled(state == .loading)
             .font(WarrenTypography.settingsSupporting)
             .accessibilityIdentifier("usage.refresh")
         }
+    }
+
+    /// The Agent filter's single-choice list, scoped so it cannot offer an
+    /// Agent that did not run on the day being shown and then resolve to an
+    /// empty selection.
+    private var agentFilterActions: [WarrenDesktopContextMenuAction] {
+        let reset = {
+            withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
+                selectedAgentFilter = nil
+            }
+        }
+        var actions: [WarrenDesktopContextMenuAction] = [
+            .check(title: "All Agents", isOn: selectedAgentFilter == nil, action: reset),
+            .divider,
+        ]
+        actions.append(contentsOf: scopedProviders.map { group in
+            .check(title: group.displayName, isOn: selectedAgentFilter == group.key) {
+                withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
+                    selectedAgentFilter = (selectedAgentFilter == group.key) ? nil : group.key
+                }
+            }
+        })
+        return actions
+    }
+
+    private var modelFilterActions: [WarrenDesktopContextMenuAction] {
+        let reset = {
+            withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
+                selectedModelFilter = nil
+            }
+        }
+        var actions: [WarrenDesktopContextMenuAction] = [
+            .check(title: "All Models", isOn: selectedModelFilter == nil, action: reset),
+            .divider,
+        ]
+        actions.append(contentsOf: scopedModels.map { group in
+            .check(title: group.displayName, isOn: selectedModelFilter == group.key) {
+                withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
+                    selectedModelFilter = (selectedModelFilter == group.key) ? nil : group.key
+                }
+            }
+        })
+        return actions
     }
 
     private func heatmapCard(subtitle: String?) -> some View {
@@ -671,15 +706,11 @@ public struct WarrenDesktopUsagePanel: View {
         let cost = activeFilteredCost
 
         let activeDays = stats.days.filter { $0.buckets.total > 0 }.count
-        // Four equal columns. The subtitles used to truncate mid-word ("US$0.022
-        // per priced…") not because the row was too narrow but because they were
-        // held to one line; they now wrap to two, which fits the settings width
-        // without spending a second row of cards on four short numbers.
+        // Four equal columns where they fit, two by two where they do not. Four
+        // forced into a narrow column scaled the amounts down and still cut the
+        // uppercase labels and subtitles short.
         return LazyVGrid(
-            columns: Array(
-                repeating: GridItem(.flexible(), spacing: WarrenSpacing.standard),
-                count: 4
-            ),
+            columns: flexibleColumns(isWide ? 4 : 2),
             alignment: .leading,
             spacing: WarrenSpacing.standard
         ) {
@@ -758,6 +789,7 @@ public struct WarrenDesktopUsagePanel: View {
                     .tracking(0.6)
                     .foregroundStyle(tokens.mutedForeground)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 Spacer(minLength: 0)
             }
 
@@ -765,6 +797,7 @@ public struct WarrenDesktopUsagePanel: View {
                 .font(.system(size: emphasize ? 30 : 24, weight: .light))
                 .foregroundStyle(tinted ? accent : tokens.foreground)
                 .monospacedDigit()
+                .warrenNumericTransition(value: value)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
@@ -772,7 +805,7 @@ public struct WarrenDesktopUsagePanel: View {
                 Text(subtitle)
                     .font(WarrenTypography.settingsMeta)
                     .foregroundStyle(tokens.mutedForeground)
-                    .lineLimit(2)
+                    .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -793,7 +826,12 @@ public struct WarrenDesktopUsagePanel: View {
 
     /// The four bucket colors, in the order the bars and legend always use them.
     private var bucketColors: (fresh: Color, cacheWrite: Color, cacheRead: Color, output: Color) {
-        (tokens.highlight, tokens.warning, tokens.info, tokens.success)
+        (
+            WarrenUsageBucket.freshInput.color(tokens),
+            WarrenUsageBucket.cacheWrite.color(tokens),
+            WarrenUsageBucket.cacheRead.color(tokens),
+            WarrenUsageBucket.output.color(tokens)
+        )
     }
 
     /// Two stacked bars: what the tokens were, and what they cost.
@@ -855,7 +893,8 @@ public struct WarrenDesktopUsagePanel: View {
         let total = max(buckets.total, 1)
         let money = cost.byBucket
         return VStack(alignment: .leading, spacing: WarrenSpacing.small) {
-            HStack(alignment: .top, spacing: WarrenSpacing.standard) {
+            // Two by two when four columns would cut "US$638.15 · 524.3M" short.
+            LazyVGrid(columns: flexibleColumns(isWide ? 4 : 2), alignment: .leading, spacing: WarrenSpacing.medium) {
                 bucketKey("Fresh input", buckets.freshInput, total, money.freshInput, money.share(money.freshInput), bucketColors.fresh)
                 bucketKey("Cache write", buckets.cacheWrite, total, money.cacheWrite, money.share(money.cacheWrite), bucketColors.cacheWrite)
                 bucketKey("Cache read", buckets.cacheRead, total, money.cacheRead, money.share(money.cacheRead), bucketColors.cacheRead)
@@ -915,6 +954,8 @@ public struct WarrenDesktopUsagePanel: View {
             }
             .font(WarrenTypography.settingsBody)
             .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
             // The shares are derived from those two, so they sit below in small
             // print rather than competing with them.
             HStack(spacing: WarrenSpacing.xs) {
@@ -931,6 +972,7 @@ public struct WarrenDesktopUsagePanel: View {
             }
             .font(WarrenTypography.settingsGroupLabel)
             .monospacedDigit()
+            .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .help(
@@ -955,14 +997,20 @@ public struct WarrenDesktopUsagePanel: View {
                     .font(WarrenTypography.settingsBodyEmphasis)
                     .foregroundStyle(tokens.foreground)
             }
-            HStack(alignment: .top, spacing: WarrenSpacing.standard) {
+            // Three across where each card can hold a name and its amount, one
+            // under another where it cannot: at a third of a narrow column the
+            // model names and the amounts beside them were both cut short.
+            let layout = isWide
+                ? AnyLayout(HStackLayout(alignment: .top, spacing: WarrenSpacing.standard))
+                : AnyLayout(VStackLayout(alignment: .leading, spacing: WarrenSpacing.standard))
+            layout {
                 breakdownCard(
                     "By Agent",
                     icon: "person.2",
                     groups: providers,
                     selectedKey: selectedAgentFilter,
                     onSelect: { group in
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
                             selectedAgentFilter = (selectedAgentFilter == group.key) ? nil : group.key
                         }
                     }
@@ -973,7 +1021,7 @@ public struct WarrenDesktopUsagePanel: View {
                     groups: models,
                     selectedKey: selectedModelFilter,
                     onSelect: { group in
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                        withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
                             selectedModelFilter = (selectedModelFilter == group.key) ? nil : group.key
                         }
                     }
@@ -1118,10 +1166,12 @@ public struct WarrenDesktopUsagePanel: View {
 
                 Spacer(minLength: WarrenSpacing.xs)
 
+                // The amount is the row's figure; the name gives way first.
                 Text(WarrenUsageFormatting.money(group.cost))
                     .font(WarrenTypography.settingsBody)
                     .foregroundStyle(tokens.foreground)
                     .monospacedDigit()
+                    .fixedSize()
             }
 
             HStack(spacing: WarrenSpacing.xs) {
@@ -1139,6 +1189,7 @@ public struct WarrenDesktopUsagePanel: View {
             }
             .font(WarrenTypography.settingsGroupLabel)
             .foregroundStyle(tokens.mutedForeground)
+            .lineLimit(1)
         }
         .padding(.horizontal, WarrenSpacing.compact)
         .padding(.vertical, WarrenSpacing.xs)
@@ -1295,6 +1346,7 @@ public struct WarrenDesktopUsageOverviewPanel: View {
     @Binding private var selectedDay: String?
     private let onLoad: (Int, String?, Bool) -> Void
     private let onOpenDetail: ((String) -> Void)?
+    private let showsRangePicker: Bool
 
     public init(
         stats: WarrenUsageStats,
@@ -1303,7 +1355,8 @@ public struct WarrenDesktopUsageOverviewPanel: View {
         range: Binding<WarrenUsageRange>,
         selectedDay: Binding<String?>,
         onLoad: @escaping (Int, String?, Bool) -> Void,
-        onOpenDetail: ((String) -> Void)? = nil
+        onOpenDetail: ((String) -> Void)? = nil,
+        showsRangePicker: Bool = true
     ) {
         self.stats = stats
         self.state = state
@@ -1312,6 +1365,7 @@ public struct WarrenDesktopUsageOverviewPanel: View {
         self._selectedDay = selectedDay
         self.onLoad = onLoad
         self.onOpenDetail = onOpenDetail
+        self.showsRangePicker = showsRangePicker
     }
 
     public var body: some View {
@@ -1323,7 +1377,8 @@ public struct WarrenDesktopUsageOverviewPanel: View {
             selectedDay: $selectedDay,
             onLoad: onLoad,
             onOpenDetail: onOpenDetail,
-            mode: .overview
+            mode: .overview,
+            showsRangePicker: showsRangePicker
         )
     }
 }

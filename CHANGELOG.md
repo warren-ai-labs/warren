@@ -4,7 +4,341 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
-_No changes yet._
+## [0.31.0] - 2026-10-19
+
+> Minor release: removes fixed waits from the Agent path — the transcript
+> watcher reads at 50ms after input and while a turn works, PTY submission
+> continues as soon as the TUI echoes and goes quiet, and the opt-in
+> `output-ack-v1` capability bounds terminal output in flight to about one
+> round trip — and counts waiting Agents on the Dock icon with a macOS
+> notification while Warren is in the background. The JSON control protocol
+> remains at 4.0 and this release migrates no state.
+
+### Added
+
+- Bound terminal output in flight with `output-ack-v1`. A client that negotiates
+  the capability acknowledges received output with `session.ack`; the Host keeps
+  about one round trip plus 200ms in flight and pauses the reader beyond that, so
+  a keystroke echo or Agent event is no longer stuck behind seconds of queued PTY
+  output on a slow link. A reader held back for over a second skips its backlog
+  and receives a fresh terminal state in place, instead of the connection closing
+  for a re-anchor.
+- Tell a person away from the window that an Agent is waiting. The Desktop counts
+  the current Host's waiting Sessions on the Dock icon, posts one macOS
+  notification per new request while Warren is in the background, lets an
+  approval be allowed or rejected from the notification through the approval
+  tray's request, and withdraws the notification once nobody is asking. Settings
+  > Notifications has a switch for each, and a muted notice center silences the
+  notifications.
+
+### Changed
+
+- Answer Agent messages without fixed waits. The transcript watcher reads at
+  50ms right after input and while a turn is working, then back at 500ms when
+  idle, and PTY submission continues once the TUI has echoed the input and gone
+  quiet, still capped at 300ms. Codex's queue poll stays on the idle cadence.
+- Open an iOS Agent Session without terminal output. The Agent view subscribes to
+  the Agent stream directly and no longer carries TUI redraws it never shows;
+  the terminal stream attaches when the user switches to the terminal. Hosts
+  without `agent-streams-v1` keep the old path.
+- Name a Session the same way on every client. The kind promotion moves into
+  `SessionTitle`, iOS resolves with the owning Workspace's path, and the roster
+  carries `resultSentence` so the iOS Inbox row says what a finished Agent did,
+  as the Desktop sidebar does. A new iOS Agent Session is named New Session, so
+  Task keeps meaning the Host Task.
+- Cut Relay round trips on resume, reconnect, and session switch. An expiring
+  access capability is refreshed before dialing, the Session holding the control
+  lease is restored first, the resume probe ceiling grows with measured round
+  trips, and iOS sends the old unsubscribe alongside the new subscribe.
+- Say Host instead of server or endpoint in Desktop copy.
+
+### Fixed
+
+- Keep a slow Relay stream from stalling the Host socket. Each stream drains its
+  own bounded inbound queue, and a delivery failure closes only that stream
+  instead of reconnecting every client; the connector also probes the Relay
+  right after the machine wakes from sleep.
+- Close races in output flow control and Relay streams: record output as sent
+  before enqueueing it, allow a held-back reader 1s plus two round trips before
+  skipping its backlog, let a backlog skip yield to a subscribe already in
+  flight, check and clear the terminal attachment atomically, and queue a Relay
+  CLOSE behind undelivered body frames.
+- Keep the iOS terminal reachable after opening a Session in the Agent view.
+- Keep a panel that rises above its anchor inside the window.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and this release migrates no state.
+  It adds the opt-in `output-ack-v1` capability; a client that does not negotiate
+  it behaves as before.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
+## [0.30.0] - 2026-10-19
+
+> Major release: rebuilds the Desktop workbench — its sidebar, top bar, menus,
+> conversation pane, and a separate Settings window — around what a Session is
+> really doing, and removes Terminal Groups so every Session belongs to a
+> Workspace. The JSON control protocol remains at 4.0 and this release migrates
+> no state.
+
+### Added
+
+- Let a Host record per-provider ACP server commands in `~/.warren/settings.json`
+  (`acpCommands`). A Chat Session created without an explicit command now uses
+  that entry, so every client — Desktop's Chat preset, Web, iOS, and
+  `warren agent create --agent-handler acp` — can route chat through an ACP
+  server that carries the provider's credentials (for example a wrapper that
+  injects them) instead of the built-in adapter resolved from `PATH`. An
+  explicit request `command` still wins, and an empty entry keeps the built-in.
+- Give every Session row the same two lines. A row was one line or two depending
+  on whether its Agent had anything to report, so a worktree's rows changed
+  height as turns started and ended. Every row now draws two: what the Session
+  is doing, what it last did and how long ago, or that it has not done anything
+  yet — with the resting line one colour tier below a working one, a slow
+  highlight on a working Agent's line that Reduce Motion removes, a fade at the
+  tail instead of a truncation glyph, and a chip in the title row that counts the
+  subagents a Session is running and opens their rows in place.
+- Read a shell's prompt state from the shell itself. With OSC 133 marks in the
+  shell integration (zsh and fish), a shell row's title says where it is — the
+  shell's name at the worktree root, a relative path inside it, a `~` path
+  outside — instead of repeating its command, and its second line says what it
+  is running, what it last ran, and, when that command exited non-zero without
+  being interrupted, its exit code. The state comes from ghostline v1.5.0's
+  `SessionMetadata.Shell`; a shell that reports no marks keeps the
+  foreground-process line it had. A command that starts an agent CLI turns the
+  Session back into an Agent, with the Agent's title and second line.
+- Rebuild the conversation pane. Answers occupy the reading column with no
+  bubble; user messages sit in a right-aligned bubble that folds past eight
+  lines; one line carries the turn's work and expands into its steps; thinking
+  collapses to its own line; changed files open in the inspector's Changes tab;
+  and the composer holds attachments, the permission mode, the context figure,
+  and the model beside a send key that becomes a stop key while the agent works.
+  Decisions, plans, and queued prompts stack on the composer, and a decision is
+  the only thing in the pane drawn with the accent colour.
+- Show what a subagent is doing. Claude and Codex write a spawned child's tool
+  calls and messages to its own transcript; Warren now tails those transcripts
+  and attaches every event to the child's stable identity (`subagentId`), with
+  `parentCallId` linking the spawn call. A Session shows one row per subagent and
+  the commands it is running, and a subagent's activity never changes the parent
+  Session's status, attention, or turn. A child's pending question or approval
+  is folded too, and would turn the parent row's dot orange, but no provider
+  reports one today: Claude keeps no question or permission inside a subagent
+  transcript, and Codex runs its subagent threads with approval disabled.
+  Providers that keep no child transcript are unchanged.
+- Use the name an agent CLI generates for its own conversation as the Session
+  title. Codex, Claude Code, OpenCode, and Qoder all name the conversation they
+  are running; Warren now reads those names (`threads.name` in Codex's thread
+  store, the `ai-title` transcript record for Claude Code and Qoder, and
+  `session.title` for OpenCode) instead of spending a second model call on the
+  same exchange. A name the user set still wins, and a name the Host generated
+  is replaced by the agent's own. Subagent conversations are never used: a
+  delegated child is named after its task, not after the conversation on screen.
+
+### Changed
+
+- Polish the Web client's chrome. The sidebar and tab strips fade their scroll
+  edges with a seven-stop non-linear alpha ramp instead of a two-stop cut, and
+  where scroll-driven animations exist the fade follows the scroll offset itself
+  rather than a fixed size pinned on at the first scrollable pixel. Structural
+  chrome separators are true hairlines on Retina, compact controls press with a
+  sampled spring, and keyboard focus draws the ring plus a soft accent halo. The
+  sidebar list and both tab strips are single Tab stops now: the arrows,
+  Home/End, and PageUp/PageDown walk them, and only the selected tab stays in
+  the Tab order. The dark-only client's medium and semibold weights are nudged
+  down to counter bloom.
+- Shorten what a row reports to the width it has. A Session's activity line, a
+  command's paths, and the Host's own generated titles are all cut for the
+  sidebar now: a path keeps its last segment, a `--flag value` pair either
+  becomes the object it names or goes away, a compound command keeps its first
+  command, and a generated title is bounded by display width — about 30 latin or
+  16 CJK characters — with the verb first. A title the user set, and a name an
+  agent generated for its own conversation, are never rewritten.
+- Unify the sidebar's time format and count vocabulary. Ages read
+  `now / 5m / 2h / 3d / 2w` and then a date; durations read `18s / 3m / 1h`; a
+  turn's counts rank edits, Git writes, commands, fetches, searches, and reads,
+  with unknown tools folded into one `Used n tools`, and a read-only Git command
+  counts as a read.
+- Keep the Host's own title request as a fallback for every agent. When an agent
+  names its own conversation it is given a 30-second grace period first, and a
+  name that arrives later still replaces the Host's title for another minute;
+  when an agent never names the conversation (or does not name its own at all)
+  the configured LLM request runs exactly as before. The Settings switch now
+  reads as the fallback it is: agents that name their own conversations always
+  show that name, and the switch only adds a title for the agents that do not.
+- Give every Session one name. The top bar, the sidebar row, a split pane's
+  header, a tab, and the window title now resolve the same `SessionTitle`
+  instead of each assembling its own: the user's name wins, then an Agent's own
+  or generated name, then a `Claude Code` / `Codex` kind name, then a custom
+  command's summary, then a shell's location. A shell's running command travels
+  beside the title rather than inside it, so a tab no longer reads
+  `npm run dev · warren`, and `CommandSummary` holds the shortening rule in one
+  place for the surfaces that need a command. The top bar's title pill draws
+  that command as a dim segment after the title, keeps the command whole by
+  dropping it before it shortens the title, caps the title at 345 points so a
+  long name still hugs its own width, and fades a title that overflows instead
+  of adding an ellipsis. Clicking the title opens Rename Session…, Copy
+  Command, Copy Path, and Open in Editor, and resting on it shows a detail card
+  with the full command, directory, branch, and kind.
+- Drop the verb from a shell row's second line. It says only the command now, in
+  the monospaced face, so the running shimmer and the status dot carry the
+  state; the command is shortened to the words a person would name it by
+  (`npm run dev`, not `sudo npm run dev --package-path …`) by the same
+  `CommandSummary` the top bar uses.
+- Let a resting shell's row collapse to one line. Ten minutes after its last
+  command ends — or right away if it never ran — a shell row drops to a 30pt
+  line with its location and the time since it last did anything, and running a
+  command brings the second line straight back. A failed command stays two
+  lines until the Session has been looked at once, the collapse waits while the
+  pointer is over the rail, and hovering the row shows the last command, exit
+  code, full directory, and branch on the shared detail card.
+- Make a section's add control a permanent part of its heading. Projects and
+  Tasks always show the small grey `+` left of the fold arrow instead of
+  revealing it on hover; a background Host keeps the bottom bar's Add host…
+  rather than a second entry.
+- Slide the selected plate between top-bar tabs. A Tab's selection is now the
+  sidebar's `#1C1C1C` fill with a hairline border, and the plate travels to the
+  newly selected Tab on the shared `WarrenMotion.selection` spring (a 120ms
+  crossfade under Reduce Motion) instead of fading in place. The settings
+  navigation and segmented controls reuse the same motion as they land. The
+  tab track no longer sits in an outer capsule — the selected plate is the
+  anchor — and its overflow is only the two edge fades, with no arrow buttons;
+  a Tab's own title fades at its tail instead of ending in an ellipsis.
+- Put the blocking dialogs on one container. `WarrenDialog` now owns the ground,
+  the 20pt padding, the top-anchored position, the title block and the S/M/L
+  widths (400 / 480 / 720); the rename prompt, the message dialog and the task,
+  workspace and project delete confirmations draw inside it and carry their
+  Return / esc / ⌘Return keycaps, so no dialog sets its own width.
+- Draw settings in its own window. ⌘, opens one 860×620 window (min 720×480,
+  position remembered) that can sit beside the terminal it changes, and the main
+  window stays live. The navigation is 220pt wide with monochrome SF Symbols;
+  the coloured page-header tile and the Back to app row are gone. A settings row
+  is 44pt tall, a search result names its scope, and Terminal and Terminal
+  Runtime link to each other. Settings' palette derives every value from the
+  shared tokens now, so it can no longer drift from the rest of the app.
+- Give a resting Agent row the Host's result sentence. At the end of a turn the
+  Host asks its title endpoint for one past-tense line describing what the turn
+  did (`Fixed the resize race, added 3 tests`) and stores it on the Session, so
+  a resting row says what happened instead of `Edited 2 files`; when the
+  endpoint is not configured or the request fails, the row keeps its counts.
+- Give Settings the shared code chip and a real setup-script editor. `$1`,
+  `$2`, and `WARREN_*` draw as one monospaced `WarrenDesktopCodeChip` with its
+  caption beside it, and a project's setup script shows its first line (with
+  `+N lines`) and an Edit… button that opens the L dialog holding the whole
+  script.
+- Merge the Launch Commands list. One row per preset carries its order, its
+  visibility, and its command on a second monospaced line; clicking the row
+  opens the command editor under it, and a browser preset says the Host
+  launches it rather than showing an empty field.
+- Put the editor choice in the Settings editor list. Each row carries the same
+  white checkmark column a single-choice menu uses and clicking a row is what
+  sets Open in Editor; a chosen colour card draws the same white ring a focused
+  field uses instead of a heavier outline.
+- Let a Launch Commands row be dragged onto another to reorder it, lifting the
+  row being carried; a row that holds the keyboard also answers ⌥↑ / ⌥↓.
+- Give the Relay connection row its on/off switch. Enrolling a Host keeps it
+  enrolled; the switch only starts or stops the tunnel, so pausing a Relay no
+  longer means resetting the enrollment. `relay.enabled` is the Host command it
+  drives.
+- Draw New workspace, New Task, the worktree importer, the Superset importer and
+  the setup-script editor in the shared `WarrenDialog`, so every blocking flow
+  shares one ground, one padding scale, and keycap buttons.
+  The setup-script editor is now one component used from both the sidebar and
+  Settings, so a project's script is edited in the same place either way.
+- Give the AI Titles page the shared validated form. Its fields stay a
+  page-local draft, a primary Save & Test saves and checks the endpoint with a
+  spinner, a Test button (disabled until there is a draft) checks without
+  saving, and the result sits beside the buttons.
+- Keep the Relay invite and the LAN pairing PIN inline with a countdown bar.
+  The invite's QR no longer opens a popover over the page, and both rows show
+  how much of their window is left as a thin bar under the text.
+- Rework the Terminal page's previews. The font preview keeps a fixed 132pt
+  height so changing the font never reflows the page, the pane-title template
+  fills its row and renders its result right under it behind a ↳, and the
+  placeholder chips show only the placeholder (its description is a tooltip) so
+  all nine fit in two rows.
+- Use the app's own segmented control for the Usage range instead of the system
+  one, so the chart does not borrow the platform accent.
+- Size Tabs by the room the track has. A Tab is now 200pt wide when there are
+  few and narrows evenly as more arrive, down to a 96pt floor; past the floor
+  the track scrolls under its two edge fades and a `⌄ N` control lists every
+  Tab so a scrolled-away one is still one click away.
+- Put Public Access's state in a header row. A dot, the address it serves (or
+  Not published), and a switch at the tail replace the separate status sentence
+  and the Turn Off button that said the same thing.
+
+### Fixed
+
+- Stop the sidebar jumping under a shell row's hover card. The card sat on the
+  menu layer's click-catching scrim, which took the pointer from the rail as
+  soon as it moved: the card closed, every resting shell row collapsed, and the
+  rows came back on the next move. Hover cards (the shell row's and the top bar
+  title's) now draw without the scrim and never take the pointer, and a shell
+  row's collapse and expansion animate the rows below it instead of only itself.
+- Give the chrome's state changes their motion. Menus and hover cards fade in
+  and out (their transition sat on a view inside the inserted layer, where it
+  never ran); the sidebar's rows move when a Session opens or closes or a
+  Workspace folds into the idle row; the controls that hovering reveals fade
+  in, in the solo pill, project rows, section headings and the Host row; the
+  solo pill grows into a shell's running command; the Editor tab grows into its
+  close key; and the Hosts heading cross-fades to its count.
+- Keep a Session's pane arrangement when its activity line changes. The
+  projection copy that updates that line rebuilt every relationship by hand and
+  left the pane groups behind, so an Agent step could erase the Host's split
+  arrangements until the next roster snapshot.
+- Stop truncating a public response when a route's delivery queue fills. Relay
+  bounded that queue by frame count while the Host's flow control is counted in
+  bytes, so a sender well inside its window could still overrun it: a gzip
+  writer emits a few hundred bytes at a time, an 82 KB asset therefore arrives
+  as hundreds of frames, and the 64-frame queue filled long before the window
+  did. Filling it discarded a body frame and tore the route down, so a browser
+  loaded a truncated bundle while the response still looked successful. A
+  route's buffer is now bounded in bytes by the sender's whole window — the
+  amount it is already allowed to have unacknowledged — and a per-route
+  delivery goroutine hands frames to the consumer in order, so a full handoff
+  buffer never stalls the tunnel or loses a frame.
+- Install the managed agent hooks even when the agent CLI has never run, so its
+  configuration directory does not exist yet. The installer only created
+  Warren's own hook script directory and then wrote `hooks.json` into the
+  agent's config directory, which failed with `no such file or directory`; the
+  daemon logged a warning and ran without the hook. Codex, Claude Code, and
+  Qoder were all affected, and the failure was invisible because every
+  developer machine already had those directories.
+- Stop binding an OpenCode Session to a session OpenCode created to delegate
+  work. Every subagent task runs in its own child session, and Warren treated
+  the newest `session.created` as the conversation the terminal was in, so a
+  subagent re-pointed the binding at the agent's internal work: the projected
+  conversation, the activity overlay, and the Session title all followed the
+  child. The bind plugin now ignores a child session (`parentID`), discovery
+  only offers root conversations, and a binding that already names a child is
+  repaired to the conversation that owns it rather than discarded.
+
+### Removed
+
+- Remove Terminal Groups, the Host-owned containers (default `Inbox`) for
+  standalone shell Sessions. Every Session now belongs to a Workspace. The
+  `terminal-group.*` methods are gone, the roster and `roster.delta` no longer
+  carry `terminalGroups`, and Session and Pane Group records drop
+  `terminalGroup` and `scope`. `session.create` requires `workspace` with no
+  default-group fallback, and `session.move`, `pane-group.create`, and
+  `browser.session.create`/`list` take only `workspace`. The CLI drops the
+  `warren terminal-group` resource and every `--group` flag, and
+  `warren session create` requires a Workspace. The Web client, search (`g:`
+  and `group:` prefixes), and docs drop the group surface, and the Raycast
+  extension, whose only command opened a shell in a Terminal Group, is removed.
+  [RFC 0003](docs/rfc/0003-terminal-groups.md) is marked withdrawn.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and this release migrates no state.
+- Terminal Groups are removed, which is a breaking change for clients and
+  scripts: `session.create` requires a `workspace`, the `terminal-group.*`
+  methods and every `--group` flag are gone, and the roster no longer carries
+  `terminalGroups`. Update clients and scripts to this release.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
 
 ## [0.25.0] - 2026-10-12
 

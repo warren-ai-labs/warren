@@ -17,8 +17,6 @@ public enum WarrenPresentationRole: Sendable {
 /// layers; individual screen components must not invent local z-index values.
 public enum WarrenPresentationLayer {
     public static let content: Double = 0
-    public static let inlineOverlay: Double = 10
-    public static let drawer: Double = 20
     public static let popover: Double = 30
     public static let commandSurface: Double = 40
     public static let modal: Double = 50
@@ -43,10 +41,8 @@ public enum WarrenPresentationMetrics {
         switch role {
         case .inline, .status:
             WarrenRadius.medium
-        case .popover, .menu, .commandSurface:
+        case .popover, .menu, .commandSurface, .modal, .sheet:
             WarrenRadius.base
-        case .modal, .sheet:
-            WarrenRadius.large
         }
     }
 
@@ -63,6 +59,34 @@ public enum WarrenPresentationMetrics {
         case .sheet:
             .init(opacity: 0.5, radius: 25, y: 14)
         }
+    }
+}
+
+/// The dialog family's surface, border and shadow.
+///
+/// A dialog shares the menu's neutral ground — the same `#141414` card and
+/// `#262626` hairline with a hairline of light along the top edge — but keeps
+/// a heavier single shadow and the window scrim, because a dialog blocks
+/// rather than floats.
+enum WarrenDialogPalette {
+    static func surface(for colorScheme: ColorScheme, tokens: WarrenColorTokens) -> Color {
+        colorScheme == .light ? tokens.popoverSurface : WarrenColorTokens.hex(0x1414_14)
+    }
+
+    static func border(for colorScheme: ColorScheme, tokens: WarrenColorTokens) -> Color {
+        colorScheme == .light ? tokens.border : WarrenColorTokens.hex(0x2626_26)
+    }
+
+    static let highlight = Color.white.opacity(0.05)
+
+    /// The confirmation red, one step brighter than the status token so a
+    /// filled button reads as a button rather than as a dot.
+    static func destructive(for colorScheme: ColorScheme, tokens: WarrenColorTokens) -> Color {
+        colorScheme == .light ? tokens.destructive : WarrenColorTokens.hex(0xE052_4A)
+    }
+
+    static func shadow(for colorScheme: ColorScheme) -> (opacity: Double, radius: CGFloat, y: CGFloat) {
+        colorScheme == .light ? (0.14, 40, 20) : (0.55, 56, 24)
     }
 }
 
@@ -87,47 +111,90 @@ public struct WarrenPanelSurfaceModifier: ViewModifier {
         self.showsBorder = showsBorder
     }
 
+    @ViewBuilder
     public func body(content: Content) -> some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let resolvedCornerRadius = cornerRadius ?? WarrenPresentationMetrics.cornerRadius(for: role)
-        let elevation = WarrenPresentationMetrics.elevation(for: role)
-        let isElevatedModal = role == .modal || role == .sheet || role == .commandSurface
-        content
-            .background {
-                // On glass every floating surface is one material: the same
-                // Ember tone as a raised surface, over an in-window blur so the
-                // content underneath — usually terminal text — cannot compete
-                // with the surface's own. Inline and status surfaces sit in the
-                // flow and do not float, so they take the tone without a blur.
-                if windowMaterial == .glass, Self.floats(role) {
-                    ZStack {
-                        Rectangle().fill(.regularMaterial)
+        if role == .modal || role == .sheet {
+            dialogSurface(content, tokens: tokens, cornerRadius: resolvedCornerRadius)
+        } else {
+            let elevation = WarrenPresentationMetrics.elevation(for: role)
+            let isElevatedModal = role == .commandSurface
+            content
+                .background {
+                    // On glass every floating surface is one material: the same
+                    // Ember tone as a raised surface, over an in-window blur so
+                    // the content underneath — usually terminal text — cannot
+                    // compete with the surface's own. Inline and status surfaces
+                    // sit in the flow and do not float, so they take the tone
+                    // without a blur.
+                    if windowMaterial == .glass, Self.floats(role) {
+                        ZStack {
+                            Rectangle().fill(.regularMaterial)
+                            tokens.popoverSurface
+                        }
+                    } else {
                         tokens.popoverSurface
                     }
+                }
+                .clipShape(.rect(cornerRadius: resolvedCornerRadius))
+                .overlay {
+                    if showsBorder {
+                        RoundedRectangle(cornerRadius: resolvedCornerRadius)
+                            .stroke(
+                                isElevatedModal ? tokens.border.opacity(0.9) : tokens.border,
+                                lineWidth: WarrenSpacing.hairline
+                            )
+                    }
+                }
+                .shadow(
+                    color: .black.opacity(colorScheme == .light ? min(elevation.opacity * 0.25, 0.14) : elevation.opacity),
+                    radius: elevation.radius,
+                    y: elevation.y
+                )
+        }
+    }
+
+    /// The blocking card: the dialog ground, a full hairline, a hairline of
+    /// light along the top edge, and one heavier shadow.
+    @ViewBuilder
+    private func dialogSurface(
+        _ content: Content,
+        tokens: WarrenColorTokens,
+        cornerRadius: CGFloat
+    ) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let shadow = WarrenDialogPalette.shadow(for: colorScheme)
+        content
+            .background {
+                if windowMaterial == .glass {
+                    ZStack {
+                        Rectangle().fill(.regularMaterial)
+                        WarrenDialogPalette.surface(for: colorScheme, tokens: tokens)
+                    }
                 } else {
-                    tokens.popoverSurface
+                    WarrenDialogPalette.surface(for: colorScheme, tokens: tokens)
                 }
             }
-            .clipShape(.rect(cornerRadius: resolvedCornerRadius))
+            .clipShape(shape)
             .overlay {
                 if showsBorder {
-                    RoundedRectangle(cornerRadius: resolvedCornerRadius)
-                        .stroke(
-                            isElevatedModal ? tokens.border.opacity(0.9) : tokens.border,
-                            lineWidth: WarrenSpacing.hairline
-                        )
+                    shape.strokeBorder(
+                        WarrenDialogPalette.border(for: colorScheme, tokens: tokens),
+                        lineWidth: WarrenSpacing.hairline
+                    )
                 }
             }
-            .shadow(
-                color: .black.opacity(colorScheme == .light ? min(elevation.opacity * 0.25, 0.14) : elevation.opacity),
-                radius: elevation.radius,
-                y: elevation.y
-            )
-            .shadow(
-                color: (isElevatedModal && colorScheme == .dark) ? .white.opacity(0.04) : .clear,
-                radius: (isElevatedModal && colorScheme == .dark) ? 1 : 0,
-                y: (isElevatedModal && colorScheme == .dark) ? 1 : 0
-            )
+            .overlay(alignment: .top) {
+                if colorScheme == .dark {
+                    Rectangle()
+                        .fill(WarrenDialogPalette.highlight)
+                        .frame(height: 1)
+                        .padding(.horizontal, cornerRadius)
+                        .allowsHitTesting(false)
+                }
+            }
+            .shadow(color: .black.opacity(shadow.opacity), radius: shadow.radius, y: shadow.y)
     }
 }
 
@@ -155,17 +222,6 @@ public extension View {
         ))
     }
 
-    /// Backward-compatible shorthand for local popovers and compact panels.
-    func warrenPanelSurface(
-        cornerRadius: CGFloat = WarrenRadius.base,
-        showsBorder: Bool = true
-    ) -> some View {
-        warrenPresentationSurface(
-            role: .popover,
-            cornerRadius: cornerRadius,
-            showsBorder: showsBorder
-        )
-    }
 }
 
 /// Full-window modal scrim shared by every custom dialog. The backdrop draws
@@ -191,76 +247,6 @@ public struct WarrenModalBackdrop<Content: View>: View {
     }
 }
 
-/// Blocking compact surface for editable, destructive and decision-oriented
-/// flows. Backdrop clicks deliberately do nothing: a modal must never discard
-/// a user's input by accident.
-public struct WarrenModalSurface<Content: View>: View {
-    private let content: Content
-    private let cornerRadius: CGFloat
-
-    public init(
-        cornerRadius: CGFloat = WarrenRadius.large,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.cornerRadius = cornerRadius
-        self.content = content()
-    }
-
-    public var body: some View {
-        WarrenModalBackdrop {
-            content
-                .warrenPresentationSurface(role: .modal, cornerRadius: cornerRadius)
-        }
-    }
-}
-
-/// Blocking wide surface for multi-row selection and short review flows.
-/// The parent owns dismissal, so sheets keep the same explicit cancellation
-/// contract as modals unless a caller intentionally supplies another action.
-public struct WarrenSheetSurface<Content: View>: View {
-    private let content: Content
-    private let cornerRadius: CGFloat
-
-    public init(
-        cornerRadius: CGFloat = WarrenRadius.large,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.cornerRadius = cornerRadius
-        self.content = content()
-    }
-
-    public var body: some View {
-        WarrenModalBackdrop {
-            content
-                .warrenPresentationSurface(role: .sheet, cornerRadius: cornerRadius)
-        }
-    }
-}
-
-/// Non-blocking progress, success, warning or connection feedback. Status
-/// surfaces never trap focus and do not participate in modal dismissal.
-public struct WarrenStatusSurface<Content: View>: View {
-    private let content: Content
-    private let cornerRadius: CGFloat
-
-    public init(
-        cornerRadius: CGFloat = WarrenRadius.medium,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.cornerRadius = cornerRadius
-        self.content = content()
-    }
-
-    public var body: some View {
-        content
-            .warrenPresentationSurface(
-                role: .status,
-                cornerRadius: cornerRadius,
-                showsBorder: false
-            )
-    }
-}
-
 /// Labeled input field with the Warren surface language: sunken input
 /// background, subtle border, small radius and an accent focus ring.
 public struct WarrenInputField: View {
@@ -283,7 +269,7 @@ public struct WarrenInputField: View {
         placeholder: String = "",
         monospaced: Bool = true,
         focusOnAppear: Bool = false,
-        labelFont: Font = WarrenTypography.bodyEmphasis,
+        labelFont: Font = WarrenTypography.dialogFieldLabel,
         inputFont: Font? = nil,
         onSubmit: (() -> Void)? = nil
     ) {
@@ -293,7 +279,7 @@ public struct WarrenInputField: View {
         self.monospaced = monospaced
         self.focusOnAppear = focusOnAppear
         self.labelFont = labelFont
-        self.inputFont = inputFont ?? (monospaced ? WarrenTypography.code : WarrenTypography.body)
+        self.inputFont = inputFont ?? (monospaced ? WarrenTypography.code : WarrenTypography.dialogInput)
         self.onSubmit = onSubmit
     }
 
@@ -309,13 +295,13 @@ public struct WarrenInputField: View {
                 .font(inputFont)
                 .focused($isFocused)
                 .padding(.horizontal, WarrenSpacing.compact)
-                .frame(minHeight: 30)
+                .frame(minHeight: 32)
                 .background(tokens.inputSurface)
                 .clipShape(.rect(cornerRadius: WarrenRadius.small))
                 .overlay {
                     RoundedRectangle(cornerRadius: WarrenRadius.small)
                         .stroke(
-                            isFocused ? tokens.highlight : tokens.border,
+                            isFocused ? tokens.focusRing : WarrenDialogPalette.border(for: colorScheme, tokens: tokens),
                             lineWidth: WarrenSpacing.hairline
                         )
                 }
@@ -378,12 +364,14 @@ public struct WarrenSecondaryButtonStyle: ButtonStyle {
                 .overlay {
                     RoundedRectangle(cornerRadius: WarrenRadius.small)
                         .stroke(
-                            state == .focused ? tokens.focusRing : tokens.border,
+                            state == .focused
+                                ? tokens.focusRing
+                                : WarrenDialogPalette.border(for: colorScheme, tokens: tokens),
                             lineWidth: WarrenSpacing.hairline
                         )
                 }
                 .opacity(state == .disabled ? 0.42 : 1)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: state)
+                .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: state)
                 .onHover { hovered = $0 }
         }
     }
@@ -427,9 +415,8 @@ public struct WarrenDestructiveButtonStyle: ButtonStyle {
                 .padding(.horizontal, WarrenSpacing.medium)
                 .frame(minHeight: WarrenLayoutMetrics.compactControlHeight)
                 .background(
-                    state == .pressed
-                        ? tokens.destructive.opacity(0.82)
-                        : tokens.destructive
+                    WarrenDialogPalette.destructive(for: colorScheme, tokens: tokens)
+                        .opacity(state == .pressed ? 0.82 : 1)
                 )
                 .clipShape(.rect(cornerRadius: WarrenRadius.small))
                 .overlay {
@@ -440,7 +427,7 @@ public struct WarrenDestructiveButtonStyle: ButtonStyle {
                         )
                 }
                 .opacity(state == .disabled ? 0.42 : 1)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: state)
+                .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: state)
                 .onHover { hovered = $0 }
         }
     }
@@ -458,7 +445,6 @@ public struct WarrenTextInputDialog: View {
     public let onConfirm: () -> Void
 
     @Binding public var text: String
-    @Environment(\.colorScheme) private var colorScheme
 
     public init(
         title: String,
@@ -481,115 +467,45 @@ public struct WarrenTextInputDialog: View {
     }
 
     public var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        WarrenModalSurface {
-            VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
-                Text(title)
-                    .font(WarrenTypography.dialogTitle)
-                    .foregroundStyle(tokens.foreground)
-
-                Text(message)
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                WarrenInputField(
-                    fieldLabel,
-                    text: $text,
-                    monospaced: false,
-                    focusOnAppear: true,
-                    labelFont: WarrenTypography.dialogFieldLabel,
-                    inputFont: WarrenTypography.dialogInput,
-                    onSubmit: onConfirm
-                )
-
-                HStack(spacing: WarrenSpacing.compact) {
-                    Spacer(minLength: 0)
-                    Button("Cancel", action: onCancel)
-                        .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                        .keyboardShortcut(.cancelAction)
-                    if isDestructive {
-                        Button(confirmLabel, action: onConfirm)
-                            .buttonStyle(WarrenDestructiveButtonStyle(font: WarrenTypography.dialogCriticalAction))
-                            .keyboardShortcut(.defaultAction)
-                            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    } else {
-                        Button(confirmLabel, action: onConfirm)
-                            .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
-                            .keyboardShortcut(.defaultAction)
-                            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        WarrenDialog(title, message: message, width: .s) {
+            WarrenInputField(
+                fieldLabel,
+                text: $text,
+                monospaced: false,
+                focusOnAppear: true,
+                labelFont: WarrenTypography.dialogFieldLabel,
+                inputFont: WarrenTypography.dialogInput,
+                onSubmit: onConfirm
+            )
+        } footer: {
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                Button(action: onCancel) {
+                    HStack(spacing: 6) {
+                        Text("Cancel")
+                        WarrenDialogKeycap("esc")
                     }
                 }
+                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
+                .keyboardShortcut(.cancelAction)
+                Button(action: onConfirm) {
+                    HStack(spacing: 6) {
+                        Text(confirmLabel)
+                        WarrenDialogKeycap(
+                            "\u{23CE}",
+                            isOnPrimary: !isDestructive
+                        )
+                    }
+                }
+                .modifier(WarrenDialogConfirmButtonStyle(
+                    isDestructive: isDestructive,
+                    isEnabled: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ))
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding(WarrenSpacing.large)
-#if os(iOS)
-            .frame(maxWidth: WarrenLayoutMetrics.compactDialogWidth)
-            .padding(.horizontal, 20)
-#else
-            .frame(width: WarrenLayoutMetrics.compactDialogWidth)
-#endif
         }
 #if os(macOS)
         .onExitCommand(perform: onCancel)
-#endif
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(title)
-    }
-}
-
-/// One-action modal for messages that used to escape into a platform-native
-/// alert. Keeping it app-owned preserves the same typography, focus behavior
-/// and in-window context as the action that triggered it.
-public struct WarrenMessageDialog: View {
-    public let title: String
-    public let message: String
-    public let actionLabel: String
-    public let onDismiss: () -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    public init(
-        title: String,
-        message: String,
-        actionLabel: String = "OK",
-        onDismiss: @escaping () -> Void
-    ) {
-        self.title = title
-        self.message = message
-        self.actionLabel = actionLabel
-        self.onDismiss = onDismiss
-    }
-
-    public var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme)
-        WarrenModalSurface {
-            VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
-                Text(title)
-                    .font(WarrenTypography.dialogTitle)
-                    .foregroundStyle(tokens.foreground)
-
-                Text(message)
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                HStack {
-                    Spacer(minLength: 0)
-                    Button(actionLabel, action: onDismiss)
-                        .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
-                        .keyboardShortcut(.defaultAction)
-                }
-            }
-            .padding(WarrenSpacing.large)
-#if os(iOS)
-            .frame(maxWidth: WarrenLayoutMetrics.compactDialogWidth)
-            .padding(.horizontal, 20)
-#else
-            .frame(width: WarrenLayoutMetrics.compactDialogWidth)
-#endif
-        }
-#if os(macOS)
-        .onExitCommand(perform: onDismiss)
 #endif
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)

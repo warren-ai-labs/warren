@@ -270,7 +270,35 @@ func (r *GhostlineRuntime) Metadata(ctx context.Context, name string) (runtime.R
 	if err != nil {
 		return runtime.RuntimeMetadata{}, err
 	}
-	return runtime.RuntimeMetadata{Process: metadata.Process, CommandLine: metadata.CommandLine, Directory: metadata.Directory}, nil
+	return runtime.RuntimeMetadata{
+		Process:     metadata.Process,
+		CommandLine: metadata.CommandLine,
+		Directory:   metadata.Directory,
+		Shell:       shellMetadata(metadata.Shell),
+	}, nil
+}
+
+// shellMetadata maps ghostline's OSC 133 state into Warren's runtime snapshot.
+// A nil input stays nil: it means the shell never emitted a marker, so no part
+// of the prompt state is known.
+func shellMetadata(shell *ghostline.ShellMetadata) *runtime.ShellMetadata {
+	if shell == nil {
+		return nil
+	}
+	mapped := &runtime.ShellMetadata{
+		AtPrompt:       shell.AtPrompt,
+		RunningCommand: shell.RunningCommand,
+		LastCommand:    shell.LastCommand,
+	}
+	if shell.LastExitCode != nil {
+		code := *shell.LastExitCode
+		mapped.LastExitCode = &code
+	}
+	if shell.LastExitAt != nil {
+		at := *shell.LastExitAt
+		mapped.LastExitAt = &at
+	}
+	return mapped
 }
 
 // Checkpoint captures a v1 replay together with an opaque output cursor. The

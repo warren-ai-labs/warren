@@ -1,32 +1,57 @@
 import Foundation
 import WarrenDomain
 
-/// Device-local sidebar tree state (which tasks and projects are expanded and
-/// whether each sidebar section is collapsed). It is intentionally not Host
+/// Device-local sidebar tree state (which tasks, projects, and workspaces
+/// the user folded away, and whether each
+/// sidebar section is collapsed). Everything starts open: only a fold is
+/// recorded, so a new row is never hidden by a choice nobody made. It is intentionally not Host
 /// state: ordering lives on the Host, while expansion is a per-endpoint UI
 /// preference.
 public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
-    public var expandedTaskIDs: Set<TaskID>
-    public var expandedProjectIDs: Set<ProjectID>
-    public var terminalGroupsCollapsed: Bool
+    /// Tasks the user folded away.
+    public var collapsedTaskIDs: Set<TaskID>
+    /// Projects the user folded away.
+    public var collapsedProjectIDs: Set<ProjectID>
+    /// Workspaces whose Session leaves the user folded away. Stored as the
+    /// collapsed set so a new workspace lists its Sessions by default.
+    public var collapsedWorkspaceIDs: Set<WorkspaceID>
+    /// Sessions whose subagent rows the user opened. Stored as the opened set so
+    /// a new Session keeps its subagents in the title's count chip.
+    public var expandedSubagentSessionIDs: Set<TerminalSessionID>
+    /// Sessions whose completed subagents the user opened past the `N done`
+    /// row. Stored separately because it is a second fold inside the first.
+    public var expandedSubagentDoneSessionIDs: Set<TerminalSessionID>
     public var tasksCollapsed: Bool
     public var projectsCollapsed: Bool
     public var showsActiveOnly: Bool
+    /// Projects whose idle-worktrees row the user opened. That row starts
+    /// folded, so the opened set is what is recorded.
+    public var expandedIdleWorkspaceProjectIDs: Set<ProjectID>
+    /// Whether the user opened the inactive-projects row, which starts folded.
+    public var inactiveProjectsExpanded: Bool
 
     public init(
-        expandedTaskIDs: Set<TaskID> = [],
-        expandedProjectIDs: Set<ProjectID> = [],
-        terminalGroupsCollapsed: Bool = false,
+        collapsedTaskIDs: Set<TaskID> = [],
+        collapsedProjectIDs: Set<ProjectID> = [],
+        collapsedWorkspaceIDs: Set<WorkspaceID> = [],
+        expandedSubagentSessionIDs: Set<TerminalSessionID> = [],
+        expandedSubagentDoneSessionIDs: Set<TerminalSessionID> = [],
         tasksCollapsed: Bool = false,
         projectsCollapsed: Bool = false,
-        showsActiveOnly: Bool = false
+        showsActiveOnly: Bool = false,
+        expandedIdleWorkspaceProjectIDs: Set<ProjectID> = [],
+        inactiveProjectsExpanded: Bool = false
     ) {
-        self.expandedTaskIDs = expandedTaskIDs
-        self.expandedProjectIDs = expandedProjectIDs
-        self.terminalGroupsCollapsed = terminalGroupsCollapsed
+        self.collapsedTaskIDs = collapsedTaskIDs
+        self.collapsedProjectIDs = collapsedProjectIDs
+        self.collapsedWorkspaceIDs = collapsedWorkspaceIDs
+        self.expandedSubagentSessionIDs = expandedSubagentSessionIDs
+        self.expandedSubagentDoneSessionIDs = expandedSubagentDoneSessionIDs
         self.tasksCollapsed = tasksCollapsed
         self.projectsCollapsed = projectsCollapsed
         self.showsActiveOnly = showsActiveOnly
+        self.expandedIdleWorkspaceProjectIDs = expandedIdleWorkspaceProjectIDs
+        self.inactiveProjectsExpanded = inactiveProjectsExpanded
     }
 }
 
@@ -38,17 +63,32 @@ public enum WarrenDesktopSidebarTreePersistence {
         defaults: UserDefaults = .standard
     ) -> WarrenDesktopSidebarTreeState {
         let base = "warren.desktop.sidebar.tree.\(scope)"
-        let expandedTasks = (defaults.stringArray(forKey: base + ".tasks.expanded") ?? [])
+        // The folded sets have keys of their own. The expanded sets an earlier
+        // build stored are left unread, so every row opens once and then
+        // remembers its own fold.
+        let collapsedTasks = (defaults.stringArray(forKey: base + ".tasks.folded") ?? [])
             .compactMap(TaskID.init(uuidString:))
-        let expanded = (defaults.stringArray(forKey: base + ".expanded") ?? [])
+        let collapsedProjects = (defaults.stringArray(forKey: base + ".projects.folded") ?? [])
+            .compactMap(ProjectID.init(uuidString:))
+        let collapsedWorkspaces = (defaults.stringArray(forKey: base + ".workspaces.collapsed") ?? [])
+            .compactMap(WorkspaceID.init(uuidString:))
+        let expandedSubagents = (defaults.stringArray(forKey: base + ".sessions.subagents.expanded") ?? [])
+            .compactMap(TerminalSessionID.init(uuidString:))
+        let expandedSubagentDone = (defaults.stringArray(forKey: base + ".sessions.subagents.done.expanded") ?? [])
+            .compactMap(TerminalSessionID.init(uuidString:))
+        let expandedIdleWorkspaces = (defaults.stringArray(forKey: base + ".projects.idle-worktrees.expanded") ?? [])
             .compactMap(ProjectID.init(uuidString:))
         return WarrenDesktopSidebarTreeState(
-            expandedTaskIDs: Set(expandedTasks),
-            expandedProjectIDs: Set(expanded),
-            terminalGroupsCollapsed: defaults.bool(forKey: base + ".terminal-groups.collapsed"),
+            collapsedTaskIDs: Set(collapsedTasks),
+            collapsedProjectIDs: Set(collapsedProjects),
+            collapsedWorkspaceIDs: Set(collapsedWorkspaces),
+            expandedSubagentSessionIDs: Set(expandedSubagents),
+            expandedSubagentDoneSessionIDs: Set(expandedSubagentDone),
             tasksCollapsed: defaults.bool(forKey: base + ".tasks.collapsed"),
             projectsCollapsed: defaults.bool(forKey: base + ".collapsed"),
-            showsActiveOnly: defaults.bool(forKey: base + ".active-only")
+            showsActiveOnly: defaults.bool(forKey: base + ".active-only"),
+            expandedIdleWorkspaceProjectIDs: Set(expandedIdleWorkspaces),
+            inactiveProjectsExpanded: defaults.bool(forKey: base + ".projects.inactive.expanded")
         )
     }
 
@@ -59,22 +99,33 @@ public enum WarrenDesktopSidebarTreePersistence {
     ) {
         let base = "warren.desktop.sidebar.tree.\(scope)"
         defaults.set(
-            state.expandedTaskIDs.map(\.description).sorted(),
-            forKey: base + ".tasks.expanded"
+            state.collapsedTaskIDs.map(\.description).sorted(),
+            forKey: base + ".tasks.folded"
         )
         defaults.set(
-            state.expandedProjectIDs
-                .map(\.description)
-                .sorted(),
-            forKey: base + ".expanded"
+            state.collapsedProjectIDs.map(\.description).sorted(),
+            forKey: base + ".projects.folded"
         )
         defaults.set(
-            state.terminalGroupsCollapsed,
-            forKey: base + ".terminal-groups.collapsed"
+            state.collapsedWorkspaceIDs.map(\.description).sorted(),
+            forKey: base + ".workspaces.collapsed"
+        )
+        defaults.set(
+            state.expandedSubagentSessionIDs.map(\.description).sorted(),
+            forKey: base + ".sessions.subagents.expanded"
+        )
+        defaults.set(
+            state.expandedSubagentDoneSessionIDs.map(\.description).sorted(),
+            forKey: base + ".sessions.subagents.done.expanded"
         )
         defaults.set(state.tasksCollapsed, forKey: base + ".tasks.collapsed")
         defaults.set(state.showsActiveOnly, forKey: base + ".active-only")
         defaults.set(state.projectsCollapsed, forKey: base + ".collapsed")
+        defaults.set(
+            state.expandedIdleWorkspaceProjectIDs.map(\.description).sorted(),
+            forKey: base + ".projects.idle-worktrees.expanded"
+        )
+        defaults.set(state.inactiveProjectsExpanded, forKey: base + ".projects.inactive.expanded")
     }
 
 }

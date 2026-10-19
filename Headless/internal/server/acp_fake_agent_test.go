@@ -226,6 +226,8 @@ func (a *fakeACPAgent) prompt(id json.RawMessage, text string) {
 		for _, part := range []string{"Hel", "lo", " there"} {
 			a.chunk(part)
 		}
+		// ACP's usage carries no model, so the concrete id rides in `_meta`.
+		a.update(map[string]any{"sessionUpdate": "usage_update", "used": 13, "size": 200000, "_meta": map[string]any{"_claude/model": "claude-opus-5-5"}})
 		a.reply(id, map[string]any{"stopReason": "end_turn", "usage": map[string]any{"inputTokens": 10, "outputTokens": 3, "totalTokens": 13}})
 	case strings.HasPrefix(text, "tool"):
 		a.chunk("Looking.")

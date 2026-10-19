@@ -1,6 +1,8 @@
 # RFC 0003: Terminal Groups for standalone shells
 
-- Status: Implemented
+- Status: Withdrawn (2026-10-15)
+- Note: Terminal Groups were removed from Warren; every Session now belongs to a
+  Workspace. This RFC is kept for history and describes no current behavior.
 - Owner: Warren Host and Desktop clients
 - Created: 2026-08-17
 - Scope: phase-one standalone shell organization

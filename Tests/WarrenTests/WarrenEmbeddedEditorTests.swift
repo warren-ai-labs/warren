@@ -114,8 +114,8 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertEqual(settings["go.toolsManagement.checkForUpdates"] as? String, "off")
         XCTAssertEqual(settings["update.showReleaseNotes"] as? Bool, false)
         let colors = settings["workbench.colorCustomizations"] as? [String: String]
-        XCTAssertEqual(colors?["editor.background"], "#151110")
-        XCTAssertEqual(colors?["sideBar.background"], "#1c1918")
+        XCTAssertEqual(colors?["editor.background"], "#0b0b0b")
+        XCTAssertEqual(colors?["sideBar.background"], "#121212")
         XCTAssertEqual(colors?["editorCursor.foreground"], "#e07850")
     }
 
@@ -179,7 +179,7 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertFalse(light.contains("dark"))
 
         let dark = WarrenEmbeddedEditorChrome.appearanceSource(appearance: .dark)
-        XCTAssertTrue(dark.contains("#151110"))
+        XCTAssertTrue(dark.contains("#0b0b0b"))
         XCTAssertTrue(dark.contains(#"const scheme = "dark""#))
 
         // Both install and replace the same node, so a mid-session change

@@ -140,14 +140,12 @@ extension PaneNode: Codable {
 ///
 /// A Pane Group is durable Host state: the Host stores the tree, so any client
 /// reads the same shape without a reporting peer, and several arrangements can
-/// coexist in one Workspace or Terminal Group.
+/// coexist in one Workspace.
 public struct PaneGroup: Identifiable, Codable, Hashable, Sendable {
     public let id: PaneGroupID
     public let hostID: HostID
-    /// Workspace and Terminal Group ownership are mutually exclusive, exactly as
-    /// they are for a Session.
+    /// The Workspace that owns the arrangement.
     public let workspaceID: WorkspaceID?
-    public let terminalGroupID: TerminalGroupID?
     public var name: String?
     public var order: Int
     public var tree: PaneNode
@@ -161,7 +159,6 @@ public struct PaneGroup: Identifiable, Codable, Hashable, Sendable {
         id: PaneGroupID = PaneGroupID(),
         hostID: HostID,
         workspaceID: WorkspaceID? = nil,
-        terminalGroupID: TerminalGroupID? = nil,
         name: String? = nil,
         order: Int = 0,
         tree: PaneNode,
@@ -172,7 +169,6 @@ public struct PaneGroup: Identifiable, Codable, Hashable, Sendable {
         self.id = id
         self.hostID = hostID
         self.workspaceID = workspaceID
-        self.terminalGroupID = terminalGroupID
         self.name = name
         self.order = order
         self.tree = tree
@@ -183,8 +179,8 @@ public struct PaneGroup: Identifiable, Codable, Hashable, Sendable {
 
     public var paneCount: Int { tree.paneCount }
 
-    /// The Workspace or Terminal Group that owns the arrangement.
-    public var ownerID: String { workspaceID?.description ?? terminalGroupID?.description ?? "" }
+    /// The Workspace that owns the arrangement.
+    public var ownerID: String { workspaceID?.description ?? "" }
 
     /// A group is drawn as a group only once it holds more than one pane: a
     /// single pane has nothing to bind it to.

@@ -33,7 +33,13 @@ jobs:
           sha256sum "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz" \
             > "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz.sha256"
 
+      # A pull request only has to prove the Linux build works; the artifact
+      # exists for a release. Uploading one per pull request filled the
+      # account's artifact storage until every upload failed, which turned this
+      # gate red for a reason that had nothing to do with the change under
+      # review.
       - name: Upload Linux headless artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: warren-headless-linux-amd64

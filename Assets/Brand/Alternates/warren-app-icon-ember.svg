@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Warren app icon, ember</title>
+  <desc id="desc">A white single-stroke W with a dark dot on an ember-orange tile.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0.3" y1="0" x2="0.7" y2="1">
+      <stop offset="0%" stop-color="#ee9068"/>
+      <stop offset="55%" stop-color="#dd6c42"/>
+      <stop offset="100%" stop-color="#c4532c"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="180" fill="url(#tile)"/>
+  <g transform="scale(10.24)">
+    <polyline points="17.5,30.5 31.5,72.5 47.5,43.5 63.5,72.5 76.5,33.5" fill="none" stroke="#fffaf5" stroke-width="9.00" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="80.77" cy="20.69" r="5.00" fill="#2a1610"/>
+  </g>
+</svg>

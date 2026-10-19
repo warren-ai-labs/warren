@@ -358,7 +358,7 @@ enum WarrenEndpointCatalog {
                 throw NSError(
                     domain: "WarrenEndpointCatalog",
                     code: 5,
-                    userInfo: [NSLocalizedDescriptionKey: "Endpoint not found: \(endpointID)"]
+                    userInfo: [NSLocalizedDescriptionKey: "Host not found: \(endpointID)"]
                 )
             }
 
@@ -429,7 +429,7 @@ enum WarrenEndpointCatalog {
                 throw NSError(
                     domain: "WarrenEndpointCatalog",
                     code: 5,
-                    userInfo: [NSLocalizedDescriptionKey: "Endpoint not found: \(endpointID)"]
+                    userInfo: [NSLocalizedDescriptionKey: "Host not found: \(endpointID)"]
                 )
             }
 
@@ -628,7 +628,7 @@ enum WarrenEndpointCatalog {
             throw NSError(
                 domain: "WarrenEndpointCatalog",
                 code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "Endpoint not found: \(normalized)"]
+                userInfo: [NSLocalizedDescriptionKey: "Host not found: \(normalized)"]
             )
         }
         return normalized

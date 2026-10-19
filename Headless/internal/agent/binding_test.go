@@ -68,6 +68,43 @@ func TestBindingRoundTrip(t *testing.T) {
 	}
 }
 
+// TestEnsureAgentBindHookCreatesAMissingConfigDirectory covers a machine where
+// the agent CLI has never run, so its configuration directory does not exist
+// yet. The managed hook must still install: failing here leaves the binding
+// silently uninstalled on exactly the machine that needs it most, and only a
+// warning in the daemon log says so.
+func TestEnsureAgentBindHookCreatesAMissingConfigDirectory(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		install  func(string) (bool, error)
+		hooksRel string
+	}{
+		{name: "codex", install: EnsureCodexBindHook, hooksRel: "hooks.json"},
+		{name: "claude", install: EnsureClaudeBindHook, hooksRel: "settings.json"},
+		{name: "qoder", install: EnsureQoderBindHook, hooksRel: "settings.json"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("WARREN_DATA_DIR", t.TempDir())
+			configDir := filepath.Join(t.TempDir(), "not-created-yet")
+			changed, err := testCase.install(configDir)
+			if err != nil {
+				t.Fatalf("install into a missing config directory: %v", err)
+			}
+			if !changed {
+				t.Fatal("first install must report changed")
+			}
+			hooksPath := filepath.Join(configDir, testCase.hooksRel)
+			data, err := os.ReadFile(hooksPath)
+			if err != nil {
+				t.Fatalf("read installed hooks: %v", err)
+			}
+			if !strings.Contains(string(data), hookCommandMarker) {
+				t.Fatalf("installed hooks missing the Warren entry: %s", data)
+			}
+		})
+	}
+}
+
 func TestEnsureCodexBindHookMergesIdempotently(t *testing.T) {
 	t.Setenv("WARREN_DATA_DIR", t.TempDir())
 	codexHome := t.TempDir()
@@ -137,6 +174,32 @@ func TestEnsureCodexBindHookMergesIdempotently(t *testing.T) {
 	}
 	if string(dataAfter) != string(data) {
 		t.Fatal("second install rewrote the hooks file")
+	}
+}
+
+// TestEmbeddedBindingsRefuseANestedAgent keeps the rule in every surface that
+// writes a binding. Each installs into a place an agent CLI or a Session loads
+// from, so a surface that lost the guard would silently rebind Sessions to
+// whichever agent a user's tooling happened to start underneath them.
+func TestEmbeddedBindingsRefuseANestedAgent(t *testing.T) {
+	surfaces := map[string]struct{ source, nested, foreign string }{
+		"codex/claude/antigravity/qoder hook": {agentBindHookScript, "nested_in_another_agent", "foreign_provider"},
+		"pi extension":                        {piBindExtensionSource, "nestedInAnotherAgent", "foreignProvider"},
+		"opencode plugin":                     {openCodeBindPluginSource, "nestedInAnotherAgent", "foreignProvider"},
+	}
+	for name, surface := range surfaces {
+		nested := strings.Index(surface.source, surface.nested)
+		if nested < 0 {
+			t.Errorf("%s does not refuse a nested agent", name)
+		}
+		if !strings.Contains(surface.source, surface.foreign) {
+			t.Errorf("%s does not reject a provider its Session was not created for", name)
+		}
+		// The guard has to run before the surface's own write, or it decides
+		// nothing. Both plugins write the binding from one place.
+		if write := strings.Index(surface.source, "atomicWrite(bindFile"); write >= 0 && nested > write {
+			t.Errorf("%s writes a binding before it refuses a nested agent", name)
+		}
 	}
 }
 

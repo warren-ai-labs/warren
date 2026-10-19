@@ -104,6 +104,96 @@ func TestOpenCodeFinderUsesSQLiteAndStableBinding(t *testing.T) {
 
 }
 
+func TestOpenCodeFinderBindsOnlyRootConversations(t *testing.T) {
+	directory := t.TempDir()
+	dbPath := filepath.Join(directory, "opencode.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, directory TEXT, parent_id TEXT, time_created INTEGER, time_updated INTEGER);`); err != nil {
+		t.Fatal(err)
+	}
+	created := time.Now().UnixMilli()
+	for _, row := range []struct {
+		id, parent string
+		created    int64
+	}{
+		// The root exists first; a delegated child is always created later. The
+		// child must be ignored even though a newest-wins rule would prefer it.
+		{id: "ses_root", created: created},
+		{id: "ses_child", parent: "ses_root", created: created + 10},
+		{id: "ses_grandchild", parent: "ses_child", created: created + 20},
+	} {
+		if _, err := db.Exec(`INSERT INTO session(id,project_id,directory,parent_id,time_created,time_updated) VALUES(?,?,?,?,?,?)`,
+			row.id, "global", directory, nullableParent(row.parent), row.created, row.created); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Setenv("WARREN_DATA_DIR", filepath.Join(directory, "warren"))
+	finder := DefaultFinder{OpenCodeRoot: directory}
+	ctx := context.Background()
+
+	// Discovery sees only the root conversation.
+	bindings, err := finder.FindBindings(ctx, "warren-session", "opencode", directory, time.UnixMilli(created-1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 1 || bindings[0].SessionID != "ses_root" {
+		t.Fatalf("discovery bound %+v, want the root conversation only", bindings)
+	}
+
+	// An exact request that names a child is repaired to the root it belongs to,
+	// so a binding written by an older plugin keeps showing the real
+	// conversation instead of the agent's delegated work.
+	for _, named := range []string{"ses_child", "ses_grandchild"} {
+		binding, err := finder.FindBindingBySessionID(ctx, "warren-session", directory, named)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if binding == nil || binding.SessionID != "ses_root" {
+			t.Fatalf("FindBindingBySessionID(%q) = %+v, want the root conversation", named, binding)
+		}
+	}
+}
+
+func TestOpenCodeRootSessionClauseToleratesAMissingColumn(t *testing.T) {
+	directory := t.TempDir()
+	dbPath := filepath.Join(directory, "opencode.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// A schema without parent_id must not lose every candidate to a failed
+	// query; discovery keeps working exactly as it did before the filter.
+	if _, err := db.Exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER);`); err != nil {
+		t.Fatal(err)
+	}
+	created := time.Now().UnixMilli()
+	if _, err := db.Exec(`INSERT INTO session(id,project_id,directory,time_created,time_updated) VALUES(?,?,?,?,?)`, "ses_legacy", "global", directory, created, created); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("WARREN_DATA_DIR", filepath.Join(directory, "warren"))
+	binding, err := (DefaultFinder{OpenCodeRoot: directory}).FindBinding(context.Background(), "warren-session", "opencode", directory, time.UnixMilli(created-1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding == nil || binding.SessionID != "ses_legacy" {
+		t.Fatalf("binding = %+v, want ses_legacy", binding)
+	}
+}
+
+func nullableParent(parent string) any {
+	if parent == "" {
+		return nil
+	}
+	return parent
+}
+
 func TestOpenCodeFinderUsesSQLiteProjectWorktree(t *testing.T) {
 	directory := t.TempDir()
 	dbPath := filepath.Join(directory, "opencode.db")

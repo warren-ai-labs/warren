@@ -13,7 +13,6 @@ enum WarrenDesktopCommandPaletteSearch {
         case task(TaskID)
         case project(ProjectID)
         case workspace(WorkspaceID)
-        case terminalGroup(TerminalGroupID)
         case session(TerminalSessionID)
         case tab(String)
 
@@ -22,7 +21,6 @@ enum WarrenDesktopCommandPaletteSearch {
             case .task(let id): return "task.\(id)"
             case .project(let id): return "project.\(id)"
             case .workspace(let id): return "workspace.\(id)"
-            case .terminalGroup(let id): return "terminalGroup.\(id)"
             case .session(let id): return "session.\(id)"
             case .tab(let id): return "tab.\(id)"
             }
@@ -33,7 +31,6 @@ enum WarrenDesktopCommandPaletteSearch {
             case .task: return .task
             case .project: return .project
             case .workspace: return .workspace
-            case .terminalGroup: return .terminalGroup
             case .session: return .session
             case .tab: return .tab
             }
@@ -47,7 +44,6 @@ enum WarrenDesktopCommandPaletteSearch {
             case .task: return "checklist"
             case .project: return "folder"
             case .workspace: return "arrow.triangle.branch"
-            case .terminalGroup: return "rectangle.stack"
             case .session: return "terminal"
             case .tab: return "rectangle"
             }
@@ -210,7 +206,6 @@ enum WarrenDesktopCommandPaletteSearch {
         private(set) var providerKinds: [Kind: TerminalSessionKind] = [:]
 
         private var workspaceContext: [WorkspaceID: (project: Project, workspace: Workspace)] = [:]
-        private var terminalGroupsByID: [TerminalGroupID: TerminalGroup] = [:]
 
         init(projection: WarrenDesktopProjection) {
             self.projection = projection
@@ -220,13 +215,11 @@ enum WarrenDesktopCommandPaletteSearch {
             descriptors.reserveCapacity(
                 projection.taskGroups.count
                     + projection.groups.count
-                    + projection.terminalGroups.count
                     + projection.sessions.count
                     + projection.tabs.count
             )
             addProjectsAndWorkspaces()
             addTasks()
-            addTerminalGroups()
             addSessions()
             addPendingTabs()
         }
@@ -364,24 +357,6 @@ enum WarrenDesktopCommandPaletteSearch {
             return right > left ? rhs : lhs
         }
 
-        // MARK: Terminal groups
-
-        private mutating func addTerminalGroups() {
-            for group in projection.terminalGroups {
-                terminalGroupsByID[group.id] = group
-                let mark = projection.mark(in: group.id)
-                add(
-                    .terminalGroup(group.id),
-                    title: group.name,
-                    context: group.home.map(Self.displayPath) ?? "Standalone sessions",
-                    path: group.home,
-                    aliases: [group.home.map { ($0 as NSString).lastPathComponent }],
-                    status: mark.map(Status.mark),
-                    boost: Status.boost(mark: mark, pinned: false)
-                )
-            }
-        }
-
         // MARK: Sessions
 
         private mutating func addSessions() {
@@ -396,18 +371,10 @@ enum WarrenDesktopCommandPaletteSearch {
 
         private mutating func addSession(_ session: WarrenDesktopSession, tab: ClientTab?) {
             let workspaceID = projection.sessionWorkspaceIDs[session.id] ?? session.workspaceID
-            let terminalGroupID = projection.sessionTerminalGroupIDs[session.id]
-                ?? session.terminalGroupID
             let pair = workspaceID.flatMap { workspaceContext[$0] }
-            let terminalGroup = terminalGroupID.flatMap { terminalGroupsByID[$0] }
-            let context: String
-            if let pair {
-                context = "\(pair.project.name) › \(Self.workspaceTitle(pair.workspace))"
-            } else if let terminalGroup {
-                context = terminalGroup.name
-            } else {
-                context = ""
-            }
+            let context = pair.map {
+                "\($0.project.name) › \(Self.workspaceTitle($0.workspace))"
+            } ?? ""
             let title = Self.sessionTitle(session, tab: tab)
             let command = TerminalSessionPresentation.commandLabel(
                 kind: session.presentedKind,
@@ -438,7 +405,6 @@ enum WarrenDesktopCommandPaletteSearch {
                     pair?.project.name,
                     pair?.workspace.name,
                     branch,
-                    terminalGroup?.name,
                 ],
                 kinds: [session.presentedKind.displayName],
                 providerKind: session.presentedKind,

@@ -185,6 +185,12 @@ public enum WarrenPreferenceKey {
     public static let embeddedEditorDefaultIDE = "editor.openByDefault"
     public static let embeddedEditorOpenLinks = "editor.openLinksByDefault"
     public static let agentCompletionSoundEnabled = "notifications.agentCompletionSoundEnabled"
+    /// Whether a request an Agent stops on posts a macOS notification while
+    /// Warren is in the background. On by default.
+    public static let agentAttentionAlertsEnabled = "notifications.agentAttentionAlertsEnabled"
+    /// Whether the Dock icon counts the Sessions waiting on a person. On by
+    /// default.
+    public static let agentAttentionDockBadgeEnabled = "notifications.agentAttentionDockBadgeEnabled"
     public static let sidebarShowActiveSessions = "sidebar.showActiveSessions"
     public static let sidebarShowTasks = "sidebar.showTasks"
     /// Presentation mode for workspace rows in the desktop sidebar.
@@ -204,6 +210,9 @@ public enum WarrenPreferenceKey {
     /// Off by default: it changes how every region looks, so existing installs
     /// keep the appearance they have until someone turns it on.
     public static let appearanceLiquidGlass = "appearance.liquidGlass"
+    /// Which colorway the desktop app icon is drawn in. Client-local: the
+    /// iPhone keeps its own choice, which iOS stores for it.
+    public static let appearanceAppIcon = "appearance.appIcon"
 }
 
 /// Which appearance the desktop client paints.
@@ -231,6 +240,38 @@ public enum WarrenAppearanceMode: String, CaseIterable, Sendable {
         case .system: "System"
         case .light: "Light"
         case .dark: "Dark"
+        }
+    }
+}
+
+/// Which colorway the app icon is drawn in. Every colorway is the same mark;
+/// only the tile and ink colors change. The sources live in `Assets/Brand`.
+public enum WarrenAppIconColorway: String, CaseIterable, Sendable {
+    /// Cream W and ember dot on a caramel-brown tile. The bundled icon.
+    case caramel
+    /// Cream W and ember dot on charcoal.
+    case charcoal
+    /// White W and dark dot on an ember tile.
+    case ember
+    /// Near-black W and ember dot on warm white.
+    case paper
+    /// Ember W and dark dot on cream.
+    case cream
+
+    public static let defaultValue = Self.caramel
+
+    /// Tolerates an unwritten or hand-edited preference rather than trapping.
+    public init(storedValue: String?) {
+        self = storedValue.flatMap(Self.init(rawValue:)) ?? .defaultValue
+    }
+
+    public var displayName: String {
+        switch self {
+        case .caramel: "Caramel"
+        case .charcoal: "Charcoal"
+        case .ember: "Ember"
+        case .paper: "Paper"
+        case .cream: "Cream"
         }
     }
 }

@@ -1,29 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
   <title id="title">Warren app icon</title>
-  <desc id="desc">A slanted straight-line W with silver metallic highlights on a charcoal rounded tile.</desc>
+  <desc id="desc">A cream single-stroke W whose last stroke flicks out into an ember dot, on a caramel-brown tile.</desc>
   <defs>
-    <linearGradient id="metalDark" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#8a8376"/>
-      <stop offset="42%" stop-color="#c4bdb0"/>
-      <stop offset="100%" stop-color="#6b655c"/>
-    </linearGradient>
-    <linearGradient id="metalBright" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#7b756a"/>
-      <stop offset="26%" stop-color="#c7c0b2"/>
-      <stop offset="45%" stop-color="#f2eee5"/>
-      <stop offset="54%" stop-color="#fbf9f3"/>
-      <stop offset="72%" stop-color="#b8b1a4"/>
-      <stop offset="100%" stop-color="#5c574f"/>
-    </linearGradient>
+    <radialGradient id="tile" cx="0.3" cy="0" r="1.15" fx="0.3" fy="0">
+      <stop offset="0%" stop-color="#4a2a1e"/>
+      <stop offset="50%" stop-color="#2d1912"/>
+      <stop offset="100%" stop-color="#170d0a"/>
+    </radialGradient>
   </defs>
-  <rect x="0" y="0" width="1024" height="1024" rx="180" fill="#121110"/>
-  <rect x="10" y="10" width="1004" height="1004" rx="168" fill="#1c1918"/>
-  <polygon points="687.2,835.2 897.8,252.5 802.2,223.5 652.8,824.8" fill="#0d0c0b"/>
-  <polygon points="714.8,819.5 562.4,298.1 529.3,305.9 625.2,840.5" fill="#0d0c0b"/>
-  <polygon points="531.4,293.1 182.8,805.9 261.2,854.1 560.4,310.9" fill="#0d0c0b"/>
-  <polygon points="271.9,833.7 284.0,239.3 248.0,236.7 172.1,826.3" fill="#0d0c0b"/>
-  <polygon points="673.2,815.2 883.8,232.5 788.2,203.5 638.8,804.8" fill="url(#metalDark)"/>
-  <polygon points="700.8,799.5 548.4,278.1 515.3,285.9 611.2,820.5" fill="url(#metalBright)"/>
-  <polygon points="517.4,273.1 168.8,785.9 247.2,834.1 546.4,290.9" fill="url(#metalBright)"/>
-  <polygon points="257.9,813.7 270.0,219.3 234.0,216.7 158.1,806.3" fill="url(#metalDark)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="180" fill="url(#tile)"/>
+  <g transform="scale(10.24)">
+    <polyline points="17.5,30.5 31.5,72.5 47.5,43.5 63.5,72.5 76.5,33.5" fill="none" stroke="#f7ebe2" stroke-width="9.00" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="80.77" cy="20.69" r="5.00" fill="#ff8a5b"/>
+  </g>
 </svg>

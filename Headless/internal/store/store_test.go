@@ -93,10 +93,10 @@ func TestOpenMigratesSchema3AndKeepsPaneGroups(t *testing.T) {
 		Host:       api.Host{ID: "host-1", Name: "test"},
 		Workspaces: []api.Workspace{{ID: "workspace-1", ProjectID: "project-1", Name: "main", Kind: "main"}},
 		Sessions: []api.Session{{
-			ID: "session-1", WorkspaceID: "workspace-1", Scope: api.SessionScopeWorkspace, Lifecycle: "running",
+			ID: "session-1", WorkspaceID: "workspace-1", Lifecycle: "running",
 		}},
 		PaneGroups: []api.PaneGroup{{
-			ID: "group-1", WorkspaceID: "workspace-1", Scope: api.SessionScopeWorkspace,
+			ID: "group-1", WorkspaceID: "workspace-1",
 			Name: "left", Revision: 2,
 			Tree: api.PaneNode{PaneID: "pane-1", SessionID: "session-1"},
 		}},
@@ -155,11 +155,8 @@ func TestOpenCreatesFreshCurrentState(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := state.Snapshot()
-	if snapshot.Schema != currentSchema || len(snapshot.TerminalGroups) != 1 {
+	if snapshot.Schema != currentSchema || len(snapshot.Sessions) != 0 {
 		t.Fatalf("fresh state = %#v", snapshot)
-	}
-	if snapshot.TerminalGroups[0].Name != "Inbox" {
-		t.Fatalf("fresh terminal group = %#v", snapshot.TerminalGroups[0])
 	}
 }
 
@@ -208,18 +205,32 @@ func TestSnapshotDoesNotShareMutableState(t *testing.T) {
 	store := &Store{changed: make(chan struct{}), state: api.State{
 		Tasks:    []api.Task{{ID: "task"}},
 		Projects: []api.Project{{ID: "project"}},
+		PaneGroups: []api.PaneGroup{{
+			ID:   "group",
+			Name: "before",
+			Tree: api.PaneNode{
+				Axis:   "horizontal",
+				Ratio:  0.5,
+				First:  &api.PaneNode{PaneID: "pane-a", SessionID: "session-a"},
+				Second: &api.PaneNode{PaneID: "pane-b", SessionID: "session-b"},
+			},
+		}},
 		Sessions: []api.Session{{ID: "session", AgentCapabilities: []string{"agent-timeline-v1"}, EndedAt: &endedAt}},
 	}}
 
 	snapshot := store.Snapshot()
 	snapshot.Tasks[0].ID = "changed-task"
 	snapshot.Projects[0].ID = "changed"
+	snapshot.PaneGroups[0].Name = "changed-group"
+	snapshot.PaneGroups[0].Tree.Second.SessionID = "changed-session"
 	snapshot.Sessions[0].AgentCapabilities[0] = "changed-capability"
 	changedTime := endedAt.Add(time.Hour)
 	*snapshot.Sessions[0].EndedAt = changedTime
 
 	current := store.Snapshot()
 	if current.Tasks[0].ID != "task" || current.Projects[0].ID != "project" ||
+		current.PaneGroups[0].Name != "before" ||
+		current.PaneGroups[0].Tree.Second.SessionID != "session-b" ||
 		current.Sessions[0].AgentCapabilities[0] != "agent-timeline-v1" ||
 		!current.Sessions[0].EndedAt.Equal(endedAt) {
 		t.Fatalf("snapshot mutated store: %#v", current)
@@ -293,5 +304,45 @@ func TestUpdateAdvancesRevisionAndNotifiesWatchers(t *testing.T) {
 	case <-store.ChangesSince(revision):
 	default:
 		t.Fatal("stale revision did not report an immediate change")
+	}
+}
+
+func TestOpenRenamesHostAfterMachine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	first, err := Open(path, "old-name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := first.Snapshot().Host.ID
+
+	reopened, err := Open(path, "new-name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := reopened.Snapshot().Host
+	if host.Name != "new-name" || host.ID != id {
+		t.Fatalf("host = %#v, want new-name with id %s", host, id)
+	}
+
+	_, revision := reopened.SnapshotVersion()
+	if err := reopened.SetHostName("new-name"); err != nil {
+		t.Fatal(err)
+	}
+	if _, after := reopened.SnapshotVersion(); after != revision {
+		t.Fatalf("unchanged name bumped revision %d -> %d", revision, after)
+	}
+	if err := reopened.SetHostName("renamed"); err != nil {
+		t.Fatal(err)
+	}
+	var persisted api.State
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Host.Name != "renamed" {
+		t.Fatalf("persisted host name = %q, want renamed", persisted.Host.Name)
 	}
 }

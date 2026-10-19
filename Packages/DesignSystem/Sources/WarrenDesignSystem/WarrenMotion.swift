@@ -22,6 +22,21 @@ public enum WarrenMotion {
     /// can last for minutes and only has to stay noticeable, not urgent.
     public static let quietActivityPulseDuration: TimeInterval = 2.4
     public static let spinnerFrameDuration: TimeInterval = 0.09
+    /// The selection plate as it slides between same-kind options. Slow enough
+    /// to read as travel, damped enough not to bounce. Text colour settles
+    /// faster so it never lags the plate.
+    public static let selectionResponse: TimeInterval = 0.28
+    public static let selectionDamping: Double = 0.82
+    public static let selectionTextDuration: TimeInterval = 0.12
+
+    public static func selection(reduceMotion: Bool) -> Animation {
+        guard !reduceMotion else { return .easeInOut(duration: selectionTextDuration) }
+        return .spring(
+            response: selectionResponse,
+            dampingFraction: selectionDamping,
+            blendDuration: 0
+        )
+    }
 
     public static func animation(
         _ role: WarrenMotionRole,

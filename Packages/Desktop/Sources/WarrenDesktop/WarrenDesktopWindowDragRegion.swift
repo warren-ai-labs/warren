@@ -50,12 +50,71 @@ final class WarrenDesktopWindowDragView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount >= 2 {
-            // Match the green traffic light: double-clicking empty chrome
-            // toggles Spaces full screen instead of zooming the window.
-            window?.toggleFullScreen(nil)
+            guard let window else { return }
+            WarrenDesktopTitleBarDoubleClick.perform(
+                WarrenDesktopTitleBarDoubleClick.current(),
+                on: window
+            )
         } else {
             window?.performDrag(with: event)
         }
     }
+}
+
+/// What a double-click on empty chrome does: whatever System Settings ›
+/// Desktop & Dock says a title bar double-click does, so Warren's
+/// borderless chrome behaves like every titled window beside it. It used to
+/// always enter Spaces full screen, which no title bar on the system does.
+enum WarrenDesktopTitleBarDoubleClick: Equatable {
+    case zoom
+    case minimize
+    case ignore
+
+    /// Reads the global preference. "Fill" (macOS 15) and "Maximize" both
+    /// mean the zoom; an unset preference is the system default, zoom.
+    static func current(defaults: UserDefaults = .standard) -> Self {
+        let global = defaults.persistentDomain(forName: UserDefaults.globalDomain)
+        return action(for: global?["AppleActionOnDoubleClick"] as? String)
+    }
+
+    static func action(for value: String?) -> Self {
+        switch value {
+        case "Minimize": .minimize
+        case "None": .ignore
+        default: .zoom
+        }
+    }
+
+    @MainActor
+    static func perform(_ action: Self, on window: NSWindow) {
+        switch action {
+        case .minimize:
+            window.miniaturize(nil)
+        case .ignore:
+            break
+        case .zoom:
+            zoom(window)
+        }
+    }
+
+    /// `NSWindow.zoom(_:)` needs a title bar to find its standard frame, and
+    /// this window is borderless, so the toggle is done by hand: fill the
+    /// screen's visible frame, and a second double-click puts back the frame
+    /// the window had.
+    @MainActor
+    private static func zoom(_ window: NSWindow) {
+        guard !window.styleMask.contains(.fullScreen),
+              let visible = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
+        if window.frame.equalTo(visible), let restored = restoredFrames[window.windowNumber] {
+            restoredFrames[window.windowNumber] = nil
+            window.setFrame(restored, display: true, animate: true)
+        } else {
+            restoredFrames[window.windowNumber] = window.frame
+            window.setFrame(visible, display: true, animate: true)
+        }
+    }
+
+    @MainActor
+    private static var restoredFrames: [Int: NSRect] = [:]
 }
 #endif

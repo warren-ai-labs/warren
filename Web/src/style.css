@@ -116,6 +116,9 @@
 
   /* Spacing scale (WarrenSpacing parity). */
   --space-hairline: 1px;
+  /* Border width that stays a true hairline on Retina. The spacing token above
+     mirrors the Swift scale and stays 1px; separators opt into this one. */
+  --border-hairline: 1px;
   --space-xxs: 2px;
   --space-xs: 4px;
   --space-sm: 6px;
@@ -154,8 +157,12 @@
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --weight-light: 300;
   --weight-regular: 400;
-  --weight-medium: 500;
-  --weight-semibold: 600;
+  /* The Web client is dark-only, where light-on-dark text blooms and reads a
+     touch heavier than it measures. Nudge the two top weights down instead of
+     fattening the type; variable fonts interpolate this, non-variable fonts
+     round it back to 500/600. */
+  --weight-medium: 465;
+  --weight-semibold: 560;
   --leading-tight: 1.2;
   --leading-normal: 1.5;
   --leading-relaxed: 1.65;
@@ -170,6 +177,8 @@
   --shadow-mobile-keys: 0 -6px 18px rgba(0, 0, 0, 0.25);
   --shadow-drawer: 16px 0 40px rgba(0, 0, 0, 0.3);
   --shadow-focus-ring: 0 0 0 2px var(--color-accent-subtle);
+  /* Ring plus a diffuse accent halo, laid under the global focus outline. */
+  --shadow-focus-halo: 0 0 0 1px color-mix(in srgb, var(--color-focus-ring) 45%, transparent), 0 0 6px 1px color-mix(in srgb, var(--color-focus-ring) 26%, transparent);
   --outline-image: 1px solid rgba(255, 255, 255, 0.1);
 
   /* Presentation layers: the only z-index values a component may reference. */
@@ -187,11 +196,31 @@
   --duration-base: 150ms;
   --duration-slow: 200ms;
   --duration-overlay: 180ms;
+  --duration-spring: 320ms;
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  /* 15-stop spring sampled from a damped harmonic oscillator (Stiffness 600 /
+     damping 30, +8.8% overshoot). Used for the press feedback on compact
+     chrome controls; where `linear()` is unsupported the declaration is
+     invalid and the transition falls back to its initial easing. */
+  --ease-spring: linear(0, 0.2459, 0.6526, 0.9468, 1.0764, 1.0915, 1.0585, 1.0219, 0.9993, 0.9914, 0.9921, 0.9957, 0.9988, 1.0004, 1);
   --radius-overlay: var(--radius-xl);
   --radius-sheet: var(--radius-2xl);
   --shadow-overlay: var(--shadow-dialog);
   --color-scrim-overlay: var(--color-bg-overlay);
+}
+
+/* A 1px separator reads as a heavy rule on Retina; thin it to a true hairline
+   so the chrome keeps hairline weights the way the native app does. */
+@media (min-resolution: 2dppx) {
+  :root {
+    --border-hairline: 0.5px;
+  }
+}
+
+@media (min-resolution: 3dppx) {
+  :root {
+    --border-hairline: 0.3333px;
+  }
 }
 
 * {
@@ -266,6 +295,25 @@ button:disabled {
   outline-offset: 1px;
 }
 
+/* Chrome controls that carry no elevation shadow of their own get the accent
+   halo in addition to the outline, so keyboard focus reads as a double ring.
+   `:where()` keeps selector weight at zero: any element with its own
+   box-shadow (active tabs, chevrons) keeps it and shows the plain outline. */
+:where(
+  .menu-button,
+  .chrome-button,
+  .new-session,
+  .tabs-chevron,
+  .section-add,
+  .project-add,
+  .project-chevron,
+  .footer-new-session,
+  .workspace-row-main,
+  .project-toggle-main
+):focus-visible {
+  box-shadow: var(--shadow-focus-halo);
+}
+
 ::selection {
   background: var(--color-selection);
   color: var(--color-text-primary);
@@ -324,7 +372,7 @@ button:disabled {
   min-height: 0;
   overflow: hidden;
   background: var(--color-bg-sidebar);
-  border-inline-end: 1px solid var(--color-border-separator);
+  border-inline-end: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .brand {
@@ -334,7 +382,7 @@ button:disabled {
   gap: 9px;
   height: 40px;
   padding-inline: var(--space-lg);
-  border-bottom: 1px solid var(--color-border-separator);
+  border-bottom: var(--border-hairline) solid var(--color-border-separator);
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
 }
@@ -400,6 +448,7 @@ button:disabled {
 }
 
 .sidebar-scroll {
+  --scroll-fade-size: 32px;
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: hidden;
@@ -408,6 +457,101 @@ button:disabled {
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
   padding: var(--space-md) var(--space-lg) var(--space-lg);
+}
+
+/* Edge fades are driven by the scroll offset itself, not by JavaScript.
+   `--scroll-fade-*` are registered as lengths so they can interpolate; the
+   keyframes below run on `animation-timeline: scroll(self ...)`, which keeps
+   the fade in step with the thumb for free and costs no per-frame renders.
+   Browsers without scroll-driven animations simply keep a clean edge. */
+@property --scroll-fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --scroll-fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --scroll-fade-left {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --scroll-fade-right {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@keyframes scroll-fade-top-in {
+  from { --scroll-fade-top: 0px; }
+  to { --scroll-fade-top: var(--scroll-fade-size); }
+}
+
+@keyframes scroll-fade-bottom-out {
+  from { --scroll-fade-bottom: var(--scroll-fade-size); }
+  to { --scroll-fade-bottom: 0px; }
+}
+
+@keyframes scroll-fade-left-in {
+  from { --scroll-fade-left: 0px; }
+  to { --scroll-fade-left: var(--scroll-fade-size); }
+}
+
+@keyframes scroll-fade-right-out {
+  from { --scroll-fade-right: var(--scroll-fade-size); }
+  to { --scroll-fade-right: 0px; }
+}
+
+@supports (animation-timeline: scroll(self block)) {
+  .sidebar-scroll[data-overflow="true"] {
+    --scroll-fade-top: 0px;
+    --scroll-fade-bottom: var(--scroll-fade-size);
+    animation-name: scroll-fade-top-in, scroll-fade-bottom-out;
+    animation-timeline: scroll(self block), scroll(self block);
+    animation-range: 0 var(--scroll-fade-size), calc(100% - var(--scroll-fade-size)) 100%;
+    animation-fill-mode: both;
+    animation-timing-function: linear;
+    mask-image: linear-gradient(to bottom,
+      transparent,
+      #0000000d calc(var(--scroll-fade-top) * 0.15),
+      #00000026 calc(var(--scroll-fade-top) * 0.30),
+      #0000004d calc(var(--scroll-fade-top) * 0.45),
+      #00000080 calc(var(--scroll-fade-top) * 0.60),
+      #000000b3 calc(var(--scroll-fade-top) * 0.75),
+      #000000d9 calc(var(--scroll-fade-top) * 0.87),
+      #000 var(--scroll-fade-top),
+      #000 calc(100% - var(--scroll-fade-bottom)),
+      #000000d9 calc(100% - var(--scroll-fade-bottom) * 0.87),
+      #000000b3 calc(100% - var(--scroll-fade-bottom) * 0.75),
+      #00000080 calc(100% - var(--scroll-fade-bottom) * 0.60),
+      #0000004d calc(100% - var(--scroll-fade-bottom) * 0.45),
+      #00000026 calc(100% - var(--scroll-fade-bottom) * 0.30),
+      #0000000d calc(100% - var(--scroll-fade-bottom) * 0.15),
+      transparent);
+    -webkit-mask-image: linear-gradient(to bottom,
+      transparent,
+      #0000000d calc(var(--scroll-fade-top) * 0.15),
+      #00000026 calc(var(--scroll-fade-top) * 0.30),
+      #0000004d calc(var(--scroll-fade-top) * 0.45),
+      #00000080 calc(var(--scroll-fade-top) * 0.60),
+      #000000b3 calc(var(--scroll-fade-top) * 0.75),
+      #000000d9 calc(var(--scroll-fade-top) * 0.87),
+      #000 var(--scroll-fade-top),
+      #000 calc(100% - var(--scroll-fade-bottom)),
+      #000000d9 calc(100% - var(--scroll-fade-bottom) * 0.87),
+      #000000b3 calc(100% - var(--scroll-fade-bottom) * 0.75),
+      #00000080 calc(100% - var(--scroll-fade-bottom) * 0.60),
+      #0000004d calc(100% - var(--scroll-fade-bottom) * 0.45),
+      #00000026 calc(100% - var(--scroll-fade-bottom) * 0.30),
+      #0000000d calc(100% - var(--scroll-fade-bottom) * 0.15),
+      transparent);
+  }
 }
 
 .section-label {
@@ -748,7 +892,7 @@ button:disabled {
   gap: var(--space-xxs);
   flex: 0 0 auto;
   padding: var(--space-sm) var(--space-md);
-  border-top: 1px solid var(--color-border-separator);
+  border-top: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .footer-new-session {
@@ -797,7 +941,7 @@ button:disabled {
   align-items: center;
   min-width: 0;
   background: var(--color-bg-surface);
-  border-bottom: 1px solid var(--color-border-separator);
+  border-bottom: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .menu-button {
@@ -824,6 +968,7 @@ button:disabled {
 }
 
 .tabs {
+  --scroll-fade-size: 36px;
   display: flex;
   align-items: stretch;
   min-width: 0;
@@ -837,19 +982,145 @@ button:disabled {
   display: none;
 }
 
+/* 7-stop non-linear alpha ramp (borrowed from the Claude Design System). A
+   plain `transparent -> black` pair bands on Retina; sampling the alpha at
+   .15/.30/.45/.60/.75/.87 of the fade distance follows the eye's curve and
+   keeps the edge clean. The class still marks which edges are scrollable,
+   so the fallback never fades an edge that has nothing hidden behind it. */
 .tabs.fade-left {
-  mask-image: linear-gradient(to right, transparent 0, black 36px, black 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0, black 36px, black 100%);
+  mask-image: linear-gradient(to right,
+    transparent,
+    #0000000d calc(var(--scroll-fade-size) * 0.15),
+    #00000026 calc(var(--scroll-fade-size) * 0.30),
+    #0000004d calc(var(--scroll-fade-size) * 0.45),
+    #00000080 calc(var(--scroll-fade-size) * 0.60),
+    #000000b3 calc(var(--scroll-fade-size) * 0.75),
+    #000000d9 calc(var(--scroll-fade-size) * 0.87),
+    #000 var(--scroll-fade-size),
+    #000 100%);
+  -webkit-mask-image: linear-gradient(to right,
+    transparent,
+    #0000000d calc(var(--scroll-fade-size) * 0.15),
+    #00000026 calc(var(--scroll-fade-size) * 0.30),
+    #0000004d calc(var(--scroll-fade-size) * 0.45),
+    #00000080 calc(var(--scroll-fade-size) * 0.60),
+    #000000b3 calc(var(--scroll-fade-size) * 0.75),
+    #000000d9 calc(var(--scroll-fade-size) * 0.87),
+    #000 var(--scroll-fade-size),
+    #000 100%);
 }
 
 .tabs.fade-right {
-  mask-image: linear-gradient(to left, transparent 0, black 36px, black 100%);
-  -webkit-mask-image: linear-gradient(to left, transparent 0, black 36px, black 100%);
+  mask-image: linear-gradient(to right,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-size)),
+    #000000d9 calc(100% - var(--scroll-fade-size) * 0.87),
+    #000000b3 calc(100% - var(--scroll-fade-size) * 0.75),
+    #00000080 calc(100% - var(--scroll-fade-size) * 0.60),
+    #0000004d calc(100% - var(--scroll-fade-size) * 0.45),
+    #00000026 calc(100% - var(--scroll-fade-size) * 0.30),
+    #0000000d calc(100% - var(--scroll-fade-size) * 0.15),
+    transparent 100%);
+  -webkit-mask-image: linear-gradient(to right,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-size)),
+    #000000d9 calc(100% - var(--scroll-fade-size) * 0.87),
+    #000000b3 calc(100% - var(--scroll-fade-size) * 0.75),
+    #00000080 calc(100% - var(--scroll-fade-size) * 0.60),
+    #0000004d calc(100% - var(--scroll-fade-size) * 0.45),
+    #00000026 calc(100% - var(--scroll-fade-size) * 0.30),
+    #0000000d calc(100% - var(--scroll-fade-size) * 0.15),
+    transparent 100%);
 }
 
 .tabs.fade-left.fade-right {
-  mask-image: linear-gradient(to right, transparent 0, black 36px, black calc(100% - 36px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0, black 36px, black calc(100% - 36px), transparent 100%);
+  mask-image: linear-gradient(to right,
+    transparent,
+    #0000000d calc(var(--scroll-fade-size) * 0.15),
+    #00000026 calc(var(--scroll-fade-size) * 0.30),
+    #0000004d calc(var(--scroll-fade-size) * 0.45),
+    #00000080 calc(var(--scroll-fade-size) * 0.60),
+    #000000b3 calc(var(--scroll-fade-size) * 0.75),
+    #000000d9 calc(var(--scroll-fade-size) * 0.87),
+    #000 var(--scroll-fade-size),
+    #000 calc(100% - var(--scroll-fade-size)),
+    #000000d9 calc(100% - var(--scroll-fade-size) * 0.87),
+    #000000b3 calc(100% - var(--scroll-fade-size) * 0.75),
+    #00000080 calc(100% - var(--scroll-fade-size) * 0.60),
+    #0000004d calc(100% - var(--scroll-fade-size) * 0.45),
+    #00000026 calc(100% - var(--scroll-fade-size) * 0.30),
+    #0000000d calc(100% - var(--scroll-fade-size) * 0.15),
+    transparent 100%);
+  -webkit-mask-image: linear-gradient(to right,
+    transparent,
+    #0000000d calc(var(--scroll-fade-size) * 0.15),
+    #00000026 calc(var(--scroll-fade-size) * 0.30),
+    #0000004d calc(var(--scroll-fade-size) * 0.45),
+    #00000080 calc(var(--scroll-fade-size) * 0.60),
+    #000000b3 calc(var(--scroll-fade-size) * 0.75),
+    #000000d9 calc(var(--scroll-fade-size) * 0.87),
+    #000 var(--scroll-fade-size),
+    #000 calc(100% - var(--scroll-fade-size)),
+    #000000d9 calc(100% - var(--scroll-fade-size) * 0.87),
+    #000000b3 calc(100% - var(--scroll-fade-size) * 0.75),
+    #00000080 calc(100% - var(--scroll-fade-size) * 0.60),
+    #0000004d calc(100% - var(--scroll-fade-size) * 0.45),
+    #00000026 calc(100% - var(--scroll-fade-size) * 0.30),
+    #0000000d calc(100% - var(--scroll-fade-size) * 0.15),
+    transparent 100%);
+}
+
+/* Where scroll-driven animations exist, the fade tracks the scroll offset
+   instead of being pinned on: the near edge fades in only once the strip has
+   actually moved and the far edge fades out as it reaches the end. The class
+   gate (overflow exists) is kept because an inactive scroll timeline cannot
+   distinguish "no overflow" from "at the start". */
+@supports (animation-timeline: scroll(self inline)) {
+  .tabs.fade-left,
+  .tabs.fade-right,
+  .tabs.fade-left.fade-right {
+    --scroll-fade-left: 0px;
+    --scroll-fade-right: var(--scroll-fade-size);
+    animation-name: scroll-fade-left-in, scroll-fade-right-out;
+    animation-timeline: scroll(self inline), scroll(self inline);
+    animation-range: 0 var(--scroll-fade-size), calc(100% - var(--scroll-fade-size)) 100%;
+    animation-fill-mode: both;
+    animation-timing-function: linear;
+    mask-image: linear-gradient(to right,
+      transparent,
+      #0000000d calc(var(--scroll-fade-left) * 0.15),
+      #00000026 calc(var(--scroll-fade-left) * 0.30),
+      #0000004d calc(var(--scroll-fade-left) * 0.45),
+      #00000080 calc(var(--scroll-fade-left) * 0.60),
+      #000000b3 calc(var(--scroll-fade-left) * 0.75),
+      #000000d9 calc(var(--scroll-fade-left) * 0.87),
+      #000 var(--scroll-fade-left),
+      #000 calc(100% - var(--scroll-fade-right)),
+      #000000d9 calc(100% - var(--scroll-fade-right) * 0.87),
+      #000000b3 calc(100% - var(--scroll-fade-right) * 0.75),
+      #00000080 calc(100% - var(--scroll-fade-right) * 0.60),
+      #0000004d calc(100% - var(--scroll-fade-right) * 0.45),
+      #00000026 calc(100% - var(--scroll-fade-right) * 0.30),
+      #0000000d calc(100% - var(--scroll-fade-right) * 0.15),
+      transparent 100%);
+    -webkit-mask-image: linear-gradient(to right,
+      transparent,
+      #0000000d calc(var(--scroll-fade-left) * 0.15),
+      #00000026 calc(var(--scroll-fade-left) * 0.30),
+      #0000004d calc(var(--scroll-fade-left) * 0.45),
+      #00000080 calc(var(--scroll-fade-left) * 0.60),
+      #000000b3 calc(var(--scroll-fade-left) * 0.75),
+      #000000d9 calc(var(--scroll-fade-left) * 0.87),
+      #000 var(--scroll-fade-left),
+      #000 calc(100% - var(--scroll-fade-right)),
+      #000000d9 calc(100% - var(--scroll-fade-right) * 0.87),
+      #000000b3 calc(100% - var(--scroll-fade-right) * 0.75),
+      #00000080 calc(100% - var(--scroll-fade-right) * 0.60),
+      #0000004d calc(100% - var(--scroll-fade-right) * 0.45),
+      #00000026 calc(100% - var(--scroll-fade-right) * 0.30),
+      #0000000d calc(100% - var(--scroll-fade-right) * 0.15),
+      transparent 100%);
+  }
 }
 
 .tabs-chevron {
@@ -899,7 +1170,7 @@ button:disabled {
   height: 36px;
   padding-inline: var(--space-lg);
   border: 0;
-  border-inline-end: 1px solid var(--color-border-separator);
+  border-inline-end: var(--border-hairline) solid var(--color-border-separator);
   background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
@@ -948,7 +1219,7 @@ button:disabled {
   height: 36px;
   flex: 0 0 auto;
   border: 0;
-  border-inline-end: 1px solid var(--color-border-separator);
+  border-inline-end: var(--border-hairline) solid var(--color-border-separator);
   background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
@@ -978,7 +1249,37 @@ button:disabled {
   background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
-  transition-property: color, background-color, transform;
+  transition-property: color, background-color, transform, scale;
+  transition-duration: var(--duration-fast), var(--duration-fast), var(--duration-fast), var(--duration-spring);
+  transition-timing-function: var(--ease-out), var(--ease-out), var(--ease-out), var(--ease-spring);
+}
+
+/* Press feedback for compact chrome controls. The independent `scale`
+   property is used rather than `transform` so it composes with controls that
+   already translate (the tab chevrons) and never clobbers a component's own
+   transform. The release rides the 15-stop spring token. */
+.menu-button,
+.new-session,
+.section-add,
+.project-add,
+.project-chevron,
+.footer-new-session,
+.tabs-chevron {
+  scale: 1;
+  transition-property: scale;
+  transition-duration: var(--duration-spring);
+  transition-timing-function: var(--ease-spring);
+}
+
+.menu-button:active:not(:disabled),
+.chrome-button:active:not(:disabled),
+.new-session:active:not(:disabled),
+.section-add:active:not(:disabled),
+.project-add:active:not(:disabled),
+.project-chevron:active:not(:disabled),
+.footer-new-session:active:not(:disabled),
+.tabs-chevron:active:not(:disabled) {
+  scale: 0.94;
   transition-duration: var(--duration-fast);
   transition-timing-function: var(--ease-out);
 }
@@ -995,7 +1296,7 @@ button:disabled {
   min-width: 0;
   padding-inline: var(--space-md);
   overflow-x: auto;
-  border-bottom: 1px solid var(--color-border-separator);
+  border-bottom: var(--border-hairline) solid var(--color-border-separator);
   background: var(--color-bg-page);
 }
 
@@ -1034,10 +1335,6 @@ button:disabled {
   border-radius: 3px;
 }
 
-.preset-brand-icon-codex img {
-  transform: scale(1.35);
-}
-
 .preset.pending {
   color: var(--color-text-primary);
 }
@@ -1055,7 +1352,7 @@ button:disabled {
   min-width: 0;
   height: 28px;
   padding-inline: var(--space-lg);
-  border-bottom: 1px solid var(--color-border-separator);
+  border-bottom: var(--border-hairline) solid var(--color-border-separator);
   background: var(--fill-tertiary);
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
@@ -2767,7 +3064,7 @@ button:disabled {
   padding: var(--space-xl) 10px var(--space-lg);
   overflow: hidden;
   background: var(--color-bg-sidebar);
-  border-inline-end: 1px solid var(--color-border-separator);
+  border-inline-end: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .settings-nav-top {
@@ -3192,7 +3489,7 @@ button:disabled {
   display: flex;
   margin-top: var(--space-xl);
   padding-top: var(--space-xl);
-  border-top: 1px solid var(--color-border-separator);
+  border-top: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .settings-reset {
@@ -3259,7 +3556,7 @@ button:disabled {
   flex: 0 0 56px;
   height: 56px;
   padding-inline: 20px;
-  border-bottom: 1px solid var(--color-border-separator);
+  border-bottom: var(--border-hairline) solid var(--color-border-separator);
   color: var(--color-text-secondary);
 }
 
@@ -3454,7 +3751,7 @@ button:disabled {
   align-items: flex-start;
   gap: var(--space-xl);
   padding: var(--space-2xl);
-  border-bottom: 1px solid var(--color-border-separator);
+  border-bottom: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .worktree-dialog-header > div {
@@ -3611,7 +3908,7 @@ button:disabled {
   align-items: center;
   gap: var(--space-lg);
   padding: var(--space-lg) var(--space-2xl);
-  border-top: 1px solid var(--color-border-separator);
+  border-top: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .worktree-dialog-summary {
@@ -4279,7 +4576,7 @@ button:disabled {
     gap: var(--space-xxs);
     height: calc(44px + env(safe-area-inset-top));
     padding-top: env(safe-area-inset-top);
-    border-bottom: 1px solid var(--color-border-separator);
+    border-bottom: var(--border-hairline) solid var(--color-border-separator);
   }
 
   .mobile-command .menu-button {
@@ -4415,7 +4712,7 @@ button:disabled {
     padding: 0 var(--space-md);
     overflow-x: auto;
     scrollbar-width: none;
-    border-bottom: 1px solid var(--color-border-separator);
+    border-bottom: var(--border-hairline) solid var(--color-border-separator);
     overscroll-behavior-x: contain;
     touch-action: pan-x;
   }
@@ -4485,7 +4782,7 @@ button:disabled {
     flex-direction: column;
     gap: var(--space-sm);
     padding: 5px 7px calc(5px + env(safe-area-inset-bottom));
-    border-top: 1px solid var(--color-border-separator);
+    border-top: var(--border-hairline) solid var(--color-border-separator);
     background: var(--color-bg-chrome-translucent);
     box-shadow: var(--shadow-mobile-keys);
   }
@@ -4542,7 +4839,7 @@ button:disabled {
     padding: calc(10px + env(safe-area-inset-top)) var(--space-lg) var(--space-md);
     overflow: visible;
     border-inline-end: 0;
-    border-bottom: 1px solid var(--color-border-separator);
+    border-bottom: var(--border-hairline) solid var(--color-border-separator);
   }
 
   .settings-nav-top {
@@ -4699,7 +4996,7 @@ button:disabled {
     min-width: 0;
     max-width: none;
     border: 0;
-    border-top: 1px solid var(--color-border-separator);
+    border-top: var(--border-hairline) solid var(--color-border-separator);
     padding: var(--space-md) 10px calc(var(--space-md) + var(--space-mobile-safe-bottom));
     border-radius: var(--radius-sheet) var(--radius-sheet) 0 0;
     box-shadow: var(--shadow-sheet);
@@ -4927,7 +5224,7 @@ button:disabled {
     z-index: var(--layer-drawer);
     width: 100%;
     border-inline-start: none;
-    border-top: 1px solid var(--color-border-separator);
+    border-top: var(--border-hairline) solid var(--color-border-separator);
     box-shadow: var(--shadow-dialog);
     animation: overlay-in var(--duration-overlay) var(--ease-out);
   }
@@ -5195,7 +5492,7 @@ button:disabled {
   min-height: 0;
   overflow: hidden;
   background: var(--color-bg-surface);
-  border-inline-start: 1px solid var(--color-border-separator);
+  border-inline-start: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .git-panel-header {
@@ -5204,7 +5501,7 @@ button:disabled {
   justify-content: space-between;
   height: 36px;
   padding: 0 var(--space-md);
-  border-bottom: 1px solid var(--color-border-separator);
+  border-bottom: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .git-panel-title {
@@ -5647,7 +5944,7 @@ button:disabled {
 }
 
 .git-commit {
-  border-bottom: 1px solid var(--color-border-separator);
+  border-bottom: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .git-commit:last-child {
@@ -5964,13 +6261,13 @@ button:disabled {
   justify-content: space-between;
   gap: var(--space-md);
   padding: var(--space-sm) var(--space-lg);
-  border-bottom: 1px solid var(--color-border-separator);
+  border-bottom: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .file-diff-notice {
   margin: 0;
   padding: var(--space-md) var(--space-lg);
-  border-bottom: 1px solid var(--color-border-separator);
+  border-bottom: var(--border-hairline) solid var(--color-border-separator);
   color: var(--color-status-warning);
   background: color-mix(in srgb, var(--color-status-warning) 10%, transparent);
   font-size: var(--text-sm);
@@ -6023,7 +6320,7 @@ button:disabled {
   display: flex;
   gap: 2px;
   padding: var(--space-xs) var(--space-lg) 0;
-  border-bottom: 1px solid var(--color-border-separator);
+  border-bottom: var(--border-hairline) solid var(--color-border-separator);
 }
 
 .file-diff-tab {

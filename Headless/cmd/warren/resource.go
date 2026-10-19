@@ -48,18 +48,12 @@ func resourceCommand(args []string) error {
 		return newUsageError("session create accepts at most one context ID", actionUsageText(commandName, action))
 	}
 	if resource == "session" && (action == "create" || action == "add") &&
-		(len(positionals(params)) > 0 || stringValue(params, "workspace") != "") &&
-		stringValue(params, "group") != "" {
-		return newUsageError("workspace and --group are mutually exclusive", actionUsageText(commandName, action))
+		len(positionals(params)) == 0 && stringValue(params, "workspace") == "" {
+		return newUsageError("missing WORKSPACE_ID", actionUsageText(commandName, action))
 	}
 	if resource == "session" && action == "move" {
-		workspaceID := stringValue(params, "workspace")
-		groupID := stringValue(params, "group")
-		if workspaceID != "" && groupID != "" {
-			return newUsageError("--workspace and --group are mutually exclusive", actionUsageText(commandName, action))
-		}
-		if workspaceID == "" && groupID == "" {
-			return newUsageError("missing --workspace WORKSPACE_ID or --group GROUP_ID", actionUsageText(commandName, action))
+		if stringValue(params, "workspace") == "" {
+			return newUsageError("missing --workspace WORKSPACE_ID", actionUsageText(commandName, action))
 		}
 		_, expectedWorkspaceSpecified := params["expected-workspace"]
 		if !expectedWorkspaceSpecified {
@@ -103,7 +97,7 @@ func resourceCommand(args []string) error {
 		if resource == "workspace" && len(positionals(params)) > 1 {
 			return newUsageError("workspace list accepts at most one project ID", actionUsageText(commandName, action))
 		}
-		if (resource == "task" || resource == "project" || resource == "terminal-group") && len(positionals(params)) > 0 {
+		if (resource == "task" || resource == "project") && len(positionals(params)) > 0 {
 			return newUsageError(fmt.Sprintf("%s list does not accept positional arguments", commandName), actionUsageText(commandName, action))
 		}
 	}
@@ -207,12 +201,6 @@ func resourceCommand(args []string) error {
 				return newUsageError(err.Error(), actionUsageText(commandName, action))
 			}
 			return printValue(limitListRows(filtered, limit))
-		case "terminal-group":
-			filtered, err := filterTerminalGroupRows(state.TerminalGroups, params)
-			if err != nil {
-				return newUsageError(err.Error(), actionUsageText(commandName, action))
-			}
-			return printValue(limitListRows(filtered, limit))
 		case "pane":
 			filtered, err := filterPaneGroupRows(state.PaneGroups, params)
 			if err != nil {
@@ -298,21 +286,6 @@ func resourceCommand(args []string) error {
 		result = &map[string]any{}
 	case "workspace.move":
 		method = "workspace.move"
-		result = &map[string]any{}
-	case "terminal-group.create", "terminal-group.add":
-		method = "terminal-group.create"
-		result = &api.TerminalGroup{}
-	case "terminal-group.remove", "terminal-group.delete":
-		method = "terminal-group.remove"
-		result = &map[string]any{}
-	case "terminal-group.rename":
-		method = "terminal-group.rename"
-		result = &map[string]any{}
-	case "terminal-group.home":
-		method = "terminal-group.home"
-		result = &map[string]any{}
-	case "terminal-group.move":
-		method = "terminal-group.move"
 		result = &map[string]any{}
 	case "pane.create":
 		method = "pane-group.create"

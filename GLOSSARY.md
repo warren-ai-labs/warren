@@ -42,19 +42,9 @@ The identity of one Git repository rooted at its main checkout. A Project owns
 the repository identity and the set of Git Workspaces derived from that
 repository. It is metadata about the repository, not a terminal runtime.
 
-**Terminal Group**:
-A Host-owned ordered container for standalone terminal sessions that are not
-bound to a Project or Workspace. The first Group is the default destination
-for newly created standalone sessions. A Group may define a default startup
-directory; when it does not, the Host user's home directory is used.
-
-**Session Scope**:
-The single ownership context of a Warren Terminal Session. A scope is either a
-Workspace or a Terminal Group. A Session never belongs to both contexts and
-never exists without one.
-
 **Warren Terminal Session**:
-A Host-owned terminal execution resource belonging to one Session Scope. It has
+A Host-owned terminal execution resource belonging to exactly one Workspace. It
+never exists without one. It has
 a durable lifecycle independent of client connectivity; ending it is an explicit
 command on its sidebar entry, never a side effect of closing a view.
 _Avoid_: Session
@@ -80,7 +70,7 @@ optional and does not represent terminal lifecycle or client connectivity.
 
 **ACP Session**:
 A Warren Session whose Agent is driven over the Agent Client Protocol instead of
-a terminal. It has a Session Scope, a Tab, and an Agent Execution like any Agent
+a terminal. It belongs to a Workspace, has a Tab, and an Agent Execution like any Agent
 Session, but owns no Ghostline runtime; its primary surface is the Conversation
 surface. Its handler is fixed at creation.
 _Avoid_: Chat Session, headless Agent
@@ -97,16 +87,16 @@ surface of an ACP Session.
 
 **Tab**:
 A device-local window entry that references one Warren Terminal Session within a
-Workspace View or Terminal Group View. Tab projection and tab order are client
+Workspace View. Tab projection and tab order are client
 model, not Host state. A Tab whose Session is rendered is a handle on that Pane,
 so closing it removes the Pane from the arrangement and leaves the referenced
 Session running and reachable as an ordinary Tab.
 
 **Pane Group**:
 A Host-owned whole-screen arrangement of running Warren Terminal Sessions,
-belonging to exactly one Workspace or Terminal Group. The Host stores its owner,
+belonging to exactly one Workspace. The Host stores its owner,
 name, order, pane tree, and revision, and projects it through the roster, so
-several arrangements may coexist in one scope and any client can render them.
+several arrangements may coexist in one Workspace and any client can render them.
 Editing an arrangement never creates, moves, or ends a Session.
 _Avoid_: split layout, device-local layout
 

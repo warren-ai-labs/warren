@@ -31,7 +31,7 @@ enum WarrenDesktopCommandPaletteSelection {
     }
 }
 
-/// Task, project, workspace, terminal-group, session, and tab search presented
+/// Task, project, workspace, session, and tab search presented
 /// from the AppKit-owned Command+K menu.
 ///
 /// Rows render in one global ranking rather than in per-kind sections. Sections
@@ -445,7 +445,6 @@ struct WarrenDesktopCommandPalette: View {
             action = .selectWorkspace(workspace.id)
         case .project(let id): action = .selectProject(id)
         case .workspace(let id): action = .selectWorkspace(id)
-        case .terminalGroup(let id): action = .selectTerminalGroup(id)
         case .session(let id): action = .openSession(id)
         case .tab(let id): action = .selectTab(id)
         }

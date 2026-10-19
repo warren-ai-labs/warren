@@ -371,6 +371,13 @@ type openCodeReaderCloser interface {
 	Close() error
 }
 
+// openCodeTitleReader is implemented by readers that can report the title the
+// provider generated for a conversation. It is optional so a fixture reader is
+// not forced to answer questions about sessions it never modelled.
+type openCodeTitleReader interface {
+	ReadSessionTitle(ctx context.Context, sessionID string) (string, error)
+}
+
 // DefaultFinder implements the stock Codex/Claude finder and OpenCode's
 // current SQLite binding finder. The old Find method remains available for the
 // other providers and returns the cache path for OpenCode.
@@ -473,18 +480,38 @@ func findSQLiteOpenCodeSessions(ctx context.Context, databasePath, workspacePath
 	// second schema silently would make a corrupt or old database look valid and
 	// could bind a Warren session to the wrong conversation.
 	query := `SELECT id, project_id, directory, time_created, time_updated FROM session`
+	conditions := []string{}
 	args := []any{}
 	if wantedID != "" {
-		query += " WHERE id = ?"
+		// Resolve the conversation's root before querying: a child session
+		// belongs to its root's conversation, and resolving first keeps the row
+		// that is read the one the caller actually means. Querying while the
+		// outer result set is open would also deadlock the single read
+		// connection this reader is allowed.
+		wantedID = resolveOpenCodeRootSessionID(ctx, db, wantedID)
+		conditions = append(conditions, "id = ?")
 		args = append(args, wantedID)
-	} else if strings.TrimSpace(workspacePath) != "" {
-		if sqliteTableExists(ctx, db, "project") {
-			query += " WHERE (directory = ? OR project_id IN (SELECT id FROM project WHERE worktree = ?))"
-			args = append(args, workspacePath, workspacePath)
-		} else {
-			query += " WHERE directory = ?"
-			args = append(args, workspacePath)
+	} else {
+		// Discovery only considers root conversations. Every delegated task of an
+		// OpenCode run gets its own child session, and a child is not the
+		// conversation a Warren Session is showing, so it can never be its
+		// binding. An exact request is not filtered here: it is repaired instead,
+		// because the caller already named the session it means.
+		if clause := openCodeRootSessionClause(ctx, db); clause != "" {
+			conditions = append(conditions, clause)
 		}
+		if strings.TrimSpace(workspacePath) != "" {
+			if sqliteTableExists(ctx, db, "project") {
+				conditions = append(conditions, "(directory = ? OR project_id IN (SELECT id FROM project WHERE worktree = ?))")
+				args = append(args, workspacePath, workspacePath)
+			} else {
+				conditions = append(conditions, "directory = ?")
+				args = append(args, workspacePath)
+			}
+		}
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -635,6 +662,62 @@ func sqliteTableExists(ctx context.Context, db *sql.DB, table string) bool {
 	return db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name) == nil
 }
 
+func sqliteColumnExists(ctx context.Context, db *sql.DB, table, column string) bool {
+	rows, err := db.QueryContext(ctx, "SELECT name FROM pragma_table_info(?)", table)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			continue
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
+}
+
+// openCodeRootSessionClause restricts a discovery query to root conversations.
+// It returns "" when the database has no parent_id column, which keeps a schema
+// Warren does not recognise from losing every candidate to a failed query.
+func openCodeRootSessionClause(ctx context.Context, db *sql.DB) string {
+	if !sqliteColumnExists(ctx, db, "session", "parent_id") {
+		return ""
+	}
+	return "(parent_id IS NULL OR parent_id = '')"
+}
+
+// openCodeMaxSessionDepth bounds the walk to a conversation's root. A provider
+// cycle must not turn one lookup into an unbounded loop.
+const openCodeMaxSessionDepth = 32
+
+// resolveOpenCodeRootSessionID walks a session up to the conversation that owns
+// it. A child session belongs to its root's conversation, so an exact request
+// that names one is repaired by following parentID rather than discarded: the
+// Warren Session keeps showing the conversation the terminal is really in.
+// A container that cannot answer the question leaves the ID untouched.
+func resolveOpenCodeRootSessionID(ctx context.Context, db *sql.DB, sessionID string) string {
+	if sessionID == "" || !sqliteColumnExists(ctx, db, "session", "parent_id") {
+		return sessionID
+	}
+	current := sessionID
+	for depth := 0; depth < openCodeMaxSessionDepth; depth++ {
+		var parent sql.NullString
+		if err := db.QueryRowContext(ctx, "SELECT parent_id FROM session WHERE id = ?", current).Scan(&parent); err != nil {
+			return current
+		}
+		parentID := strings.TrimSpace(parent.String)
+		if parentID == "" || parentID == current {
+			return current
+		}
+		current = parentID
+	}
+	return current
+}
+
 func ensureOpenCodeSessionDirectoryIndex(databasePath string) {
 	if strings.TrimSpace(databasePath) == "" {
 		return
@@ -728,6 +811,50 @@ func (r sqliteOpenCodeReader) invalidateVersion() {
 	r.state.mu.Lock()
 	r.state.versionObserved = false
 	r.state.mu.Unlock()
+}
+
+// ReadSessionTitle returns the title OpenCode generated for one conversation.
+// A child session is never named: OpenCode titles a subagent session after the
+// task it was delegated ("… (@explore subagent)"), which describes the
+// delegate's work rather than the conversation a Warren Session is showing.
+func (r sqliteOpenCodeReader) ReadSessionTitle(ctx context.Context, sessionID string) (string, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return "", nil
+	}
+	db, err := r.database(ctx)
+	if err != nil {
+		return "", err
+	}
+	if r.state == nil {
+		defer db.Close()
+	}
+	queryContext, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if !sqliteTableExists(queryContext, db, "session") {
+		return "", nil
+	}
+	var title string
+	var parent sql.NullString
+	if err := db.QueryRowContext(queryContext,
+		"SELECT title, parent_id FROM session WHERE id = ?",
+		sessionID,
+	).Scan(&title, &parent); err != nil {
+		return "", err
+	}
+	if parent.Valid && strings.TrimSpace(parent.String) != "" {
+		return "", nil
+	}
+	title = strings.TrimSpace(title)
+	if openCodePlaceholderTitle(title) {
+		return "", nil
+	}
+	return title, nil
+}
+
+// openCodePlaceholderTitle reports OpenCode's own untitled marker, which is
+// what a session carries until the provider names it.
+func openCodePlaceholderTitle(title string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(title)), "new session")
 }
 
 func (r sqliteOpenCodeReader) ReadMessages(ctx context.Context, sessionID string, updatedSince int64) ([]openCodeSourceMessage, error) {
@@ -910,13 +1037,16 @@ type OpenCodeTailer struct {
 	cacheLines   int
 	cacheBytes   int64
 	updatedSince int64
-	pollMu       sync.Mutex
-	mu           sync.Mutex
-	stop         chan struct{}
-	done         chan struct{}
-	loadDone     chan struct{}
-	started      bool
-	once         sync.Once
+	// titleRead stops the title lookup once the provider has named the bound
+	// conversation, so an unnamed session is not re-queried on every poll.
+	titleRead bool
+	pollMu    sync.Mutex
+	mu        sync.Mutex
+	stop      chan struct{}
+	done      chan struct{}
+	loadDone  chan struct{}
+	started   bool
+	once      sync.Once
 }
 
 func NewOpenCodeTailer(binding OpenCodeBinding) (*OpenCodeTailer, error) {
@@ -961,6 +1091,36 @@ func StartOpenCodeSessionTailer(binding OpenCodeBinding) (*OpenCodeTailer, error
 // Path returns the Warren-owned JSONL cache consumed by the transcript
 // watcher.
 func (t *OpenCodeTailer) Path() string { return t.cachePath }
+
+// TakeTitle returns the title OpenCode generated for the bound conversation,
+// once. OpenCode names a session shortly after its first message, so a poll
+// before that returns "". A transient read failure is not remembered: the
+// caller's own deadline bounds how long the lookup is retried.
+func (t *OpenCodeTailer) TakeTitle() string {
+	t.mu.Lock()
+	if t.titleRead {
+		t.mu.Unlock()
+		return ""
+	}
+	t.mu.Unlock()
+	reader, ok := t.reader.(openCodeTitleReader)
+	if !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	title, err := reader.ReadSessionTitle(ctx, t.binding.SessionID)
+	if err != nil {
+		return ""
+	}
+	if title == "" {
+		return ""
+	}
+	t.mu.Lock()
+	t.titleRead = true
+	t.mu.Unlock()
+	return title
+}
 
 func (t *OpenCodeTailer) Close() {
 	t.once.Do(func() {

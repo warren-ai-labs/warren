@@ -41,20 +41,6 @@ final class WarrenStateStoreTests: XCTestCase {
             title: "Review",
             sessionID: secondSession.id
         )
-        let firstGroupID = TerminalGroupID()
-        let secondGroupID = TerminalGroupID()
-        let firstGroupTab = ClientTab(
-            id: "group-first",
-            title: "Remote shell",
-            sessionID: TerminalSessionID(),
-            kind: .shell
-        )
-        let secondGroupTab = ClientTab(
-            id: "group-second",
-            title: "Remote Codex",
-            sessionID: TerminalSessionID(),
-            kind: .codex
-        )
         let window = try XCTUnwrap(ClientWindowLayout(
             id: windowID,
             workspaceViews: [
@@ -67,19 +53,6 @@ final class WarrenStateStoreTests: XCTestCase {
                     workspaceID: secondWorkspace.id,
                     tabs: [secondTab],
                     activeTabID: secondTab.id
-                ),
-            ],
-            activeTerminalGroupID: firstGroupID,
-            terminalGroupViews: [
-                ClientTerminalGroupView(
-                    terminalGroupID: firstGroupID,
-                    tabs: [firstGroupTab],
-                    activeTabID: firstGroupTab.id
-                ),
-                ClientTerminalGroupView(
-                    terminalGroupID: secondGroupID,
-                    tabs: [secondGroupTab],
-                    activeTabID: secondGroupTab.id
                 ),
             ]
         ))
@@ -108,44 +81,6 @@ final class WarrenStateStoreTests: XCTestCase {
 
         XCTAssertEqual(loaded, state)
         XCTAssertTrue(FileManager.default.fileExists(atPath: database.url.path))
-    }
-
-    func testSQLiteDeleteSessionRemovesTerminalGroupTabReferences() async throws {
-        let database = try TemporaryStateDatabase()
-        defer { try? database.cleanup() }
-        let repository = try SQLiteHostStateRepository(databaseURL: database.url)
-        let state = try makeRecoverableState()
-        try await repository.save(state)
-
-        let clientID = ClientID()
-        let windowID = ClientWindowID()
-        let groupID = TerminalGroupID()
-        let tab = ClientTab(
-            id: "group-session",
-            title: "Remote session",
-            sessionID: state.terminalSessions[0].id
-        )
-        let window = try XCTUnwrap(ClientWindowLayout(
-            id: windowID,
-            activeTerminalGroupID: groupID,
-            terminalGroupViews: [
-                ClientTerminalGroupView(
-                    terminalGroupID: groupID,
-                    tabs: [tab],
-                    activeTabID: tab.id
-                ),
-            ]
-        ))
-        try await repository.saveClientLayout(ClientLayoutSnapshot(clientID: clientID, windows: [window]))
-
-        try await repository.deleteSession(state.terminalSessions[0].id)
-
-        let loaded = try await repository.loadClientLayout(
-            clientID: clientID,
-            defaultWindowID: windowID
-        )
-        XCTAssertEqual(loaded.windows[0].terminalGroupView(for: groupID)?.tabs, [])
-        XCTAssertNil(loaded.windows[0].terminalGroupView(for: groupID)?.activeTabID)
     }
 
     func testSQLiteDeleteWorkspaceRemovesSessionsAndReceipts() async throws {

@@ -9,12 +9,6 @@ import WarrenObservation
 /// Superset v2's workspace chrome is one 40pt row. Leading controls only
 /// appear when the left rail is collapsed; an expanded sidebar owns its own
 /// header controls, so the workspace never gets a duplicate 48pt top bar.
-/// The Inspector's on/off control at the trailing end of the tab bar.
-struct WarrenDesktopInspectorToggle {
-    let isOpen: Bool
-    let toggle: () -> Void
-}
-
 struct WarrenDesktopTabBar: View {
     /// What the bar draws, resolved once from the display mode and the layout.
     ///
@@ -26,34 +20,31 @@ struct WarrenDesktopTabBar: View {
     let tabMarks: [TerminalSessionID: WarrenActivityMark]
     let pinnedSessionIDs: Set<TerminalSessionID>
     let selectedTabID: String?
-    /// The pane group the track draws, when the scope's layout has one.
-    let splitGroup: WarrenDesktopSplitGroup?
+    /// Every pane group the track draws. Compact mode lists a scope's panes, so
+    /// it draws one run per arrangement; rich mode hands over only the activen
+    /// one.
+    let splitGroups: [WarrenDesktopSplitGroup]
     var onCopyPaneTitle: () -> Void = {}
+    /// The solo pill's title menu, built from the bar's own rename request and
+    /// the current editor list. Nil leaves the menu empty.
+    var soloTitleActions: ((WarrenDesktopSoloPaneIdentity.Model) -> [WarrenDesktopContextMenuAction])? = nil
     let chromeMode: WarrenDesktopChromeMode
     let isSidebarCollapsed: Bool
-    let connectionState: WarrenDesktopConnectionState
-    let endpointOptions: [WarrenDesktopEndpointOption]
-    let selectedEndpointID: String
-    let webStatus: WarrenDesktopWebStatus
-    let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
-    let embeddedEditorAvailable: Bool
-    /// Whether the editor region is up beside the Terminal. The IDE control
-    /// reports this rather than a content mode: there is no longer a mode to be
-    /// in.
-    let embeddedEditorSelected: Bool
-    let embeddedEditorDefault: Bool
-    let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
-    let isOverflowPresented: Bool
     let onToggleSidebar: () -> Void
-    let onSettings: () -> Void
+    /// The dot the collapsed sidebar button carries, or nil.
+    var sidebarAttentionMark: WarrenActivityMark? = nil
+    /// Reports the pointer over the collapsed sidebar button, for the peek
+    /// gesture.
+    var onSidebarButtonHover: ((Bool) -> Void)? = nil
     let onChromePopover: (WarrenDesktopChromePopover) -> Void
-    let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
-    let onOpenEmbeddedEditor: () -> Void
-    let onCloseEmbeddedEditor: () -> Void
-    let onSelectEndpoint: (String) -> Void
-    let onRetryConnection: () -> Void
-    let onStopConnection: () -> Void
-    let inspector: WarrenDesktopInspectorToggle?
+    /// The right sidebar's state and its toggle. The icon is the sidebar's own,
+    /// so it opens and closes the sidebar rather than a menu of panels.
+    let rightSidebarOpen: Bool
+    let rightSidebarAvailable: Bool
+    let onToggleRightSidebar: () -> Void
+    /// The Host picker entry while the rail is collapsed, or nil when the rail
+    /// is expanded.
+    let collapsedHost: WarrenDesktopCollapsedHost?
     let onSelectTab: (String) -> Void
     let onMoveTab: (String, String?) -> Void
     let onSplitDrop: (String, String, SplitDropTarget) -> Void
@@ -63,6 +54,9 @@ struct WarrenDesktopTabBar: View {
     let canAddTab: Bool
     let isAddingTab: Bool
     let onAddTab: () -> Void
+    /// Whether "+" opens the preset menu. Without one, "+" starts the
+    /// default Session directly.
+    let hasNewSessionMenu: Bool
     let onCloseTab: (String) -> Void
     let onCloseOtherTabs: (String) -> Void
     /// Closes every pane of the layout the named Tab belongs to.
@@ -70,12 +64,42 @@ struct WarrenDesktopTabBar: View {
     let onRequestRename: (WarrenDesktopRenameRequest) -> Void
     let onToggleSessionPin: (TerminalSessionID, Bool) -> Void
     let onDismissActivity: (TerminalSessionID, AgentActivityState) -> Void
+    /// The group pill's own commands. A Tab id names the member each applies to.
+    let zoomedTabID: String?
+    let onToggleZoom: (String) -> Void
+    let onSplitGroup: () -> Void
+    let onUngroup: () -> Void
+    let onMergeIntoGroup: (String) -> Void
+    /// Window-level chrome that sits just before the trailing capsule: the
+    /// approval tray's pill. It draws nothing while it has nothing to say.
+    let trailingAccessory: AnyView?
+    /// The notice center's bell, first in the trailing capsule. Nil leaves it
+    /// out, for a bar mounted without a notice center.
+    let noticeBell: AnyView?
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pendingTabID: String?
-    @State private var pendingTabGeneration = 0
+    @Namespace private var tabSelection
+    /// The width the track's viewport was given, so every Tab can be sized to
+    /// fill it evenly down to the floor.
+    @State private var trackViewport: CGFloat = 0
+    /// Whether the selection plate travels to the newly selected Tab. It does
+    /// not when the Tab is more than a viewport away: a plate sweeping across
+    /// several screens' worth of track reads as a stray highlight rather than as
+    /// "this one moved there".
+    @State private var plateTravels = true
+    @State private var previousSelectedIndex: Int?
+    @State private var plateTravelReset: Task<Void, Never>?
+    @Environment(\.warrenPaneGroupHover) private var injectedGroupHover
+    @StateObject private var ownGroupHover = WarrenDesktopPaneGroupHover()
+
+    /// The window shares its hover with the pane cards; a bar mounted on its
+    /// own keeps one of its own.
+    private var groupHover: WarrenDesktopPaneGroupHover {
+        injectedGroupHover ?? ownGroupHover
+    }
 
     init(
         presentation: WarrenDesktopPaneBarPresentation,
@@ -83,30 +107,19 @@ struct WarrenDesktopTabBar: View {
         tabMarks: [TerminalSessionID: WarrenActivityMark],
         pinnedSessionIDs: Set<TerminalSessionID>,
         selectedTabID: String?,
-        splitGroup: WarrenDesktopSplitGroup? = nil,
+        splitGroups: [WarrenDesktopSplitGroup] = [],
         onCopyPaneTitle: @escaping () -> Void = {},
+        soloTitleActions: ((WarrenDesktopSoloPaneIdentity.Model) -> [WarrenDesktopContextMenuAction])? = nil,
         chromeMode: WarrenDesktopChromeMode,
         isSidebarCollapsed: Bool,
-        connectionState: WarrenDesktopConnectionState,
-        endpointOptions: [WarrenDesktopEndpointOption],
-        selectedEndpointID: String,
-        webStatus: WarrenDesktopWebStatus,
-        externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
-        embeddedEditorAvailable: Bool,
-        embeddedEditorSelected: Bool,
-        embeddedEditorDefault: Bool,
-        externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl] = WarrenDesktopWorkspaceTabTrailingControl.defaultExternalControls,
-        isOverflowPresented: Bool = false,
         onToggleSidebar: @escaping () -> Void,
-        onSettings: @escaping () -> Void,
+        sidebarAttentionMark: WarrenActivityMark? = nil,
+        onSidebarButtonHover: ((Bool) -> Void)? = nil,
         onChromePopover: @escaping (WarrenDesktopChromePopover) -> Void,
-        onOpenInExternalIDE: @escaping (WarrenDesktopExternalIDEOption) -> Void,
-        onOpenEmbeddedEditor: @escaping () -> Void,
-        onCloseEmbeddedEditor: @escaping () -> Void = {},
-        onSelectEndpoint: @escaping (String) -> Void,
-        onRetryConnection: @escaping () -> Void = {},
-        onStopConnection: @escaping () -> Void = {},
-        inspector: WarrenDesktopInspectorToggle? = nil,
+        rightSidebarOpen: Bool = false,
+        rightSidebarAvailable: Bool = false,
+        onToggleRightSidebar: @escaping () -> Void = {},
+        collapsedHost: WarrenDesktopCollapsedHost? = nil,
         onSelectTab: @escaping (String) -> Void,
         onMoveTab: @escaping (String, String?) -> Void,
         onSplitDrop: @escaping (String, String, SplitDropTarget) -> Void = { _, _, _ in },
@@ -116,45 +129,39 @@ struct WarrenDesktopTabBar: View {
         canAddTab: Bool,
         isAddingTab: Bool,
         onAddTab: @escaping () -> Void,
+        hasNewSessionMenu: Bool = false,
         onCloseTab: @escaping (String) -> Void,
         onCloseOtherTabs: @escaping (String) -> Void,
         onCloseAllTabs: @escaping (String) -> Void,
         onRequestRename: @escaping (WarrenDesktopRenameRequest) -> Void,
         onToggleSessionPin: @escaping (TerminalSessionID, Bool) -> Void,
-        onDismissActivity: @escaping (TerminalSessionID, AgentActivityState) -> Void
+        onDismissActivity: @escaping (TerminalSessionID, AgentActivityState) -> Void,
+        zoomedTabID: String? = nil,
+        onToggleZoom: @escaping (String) -> Void = { _ in },
+        onSplitGroup: @escaping () -> Void = {},
+        onUngroup: @escaping () -> Void = {},
+        onMergeIntoGroup: @escaping (String) -> Void = { _ in },
+        trailingAccessory: AnyView? = nil,
+        noticeBell: AnyView? = nil
     ) {
         self.presentation = presentation
         self.tabTitles = tabTitles
         self.tabMarks = tabMarks
         self.pinnedSessionIDs = pinnedSessionIDs
         self.selectedTabID = selectedTabID
-        self.splitGroup = splitGroup
+        self.splitGroups = splitGroups
         self.onCopyPaneTitle = onCopyPaneTitle
+        self.soloTitleActions = soloTitleActions
         self.chromeMode = chromeMode
         self.isSidebarCollapsed = isSidebarCollapsed
-        self.connectionState = connectionState
-        self.endpointOptions = endpointOptions
-        self.selectedEndpointID = selectedEndpointID
-        self.webStatus = webStatus
-        self.externalIDEOptions = externalIDEOptions
-        self.embeddedEditorAvailable = embeddedEditorAvailable
-        self.embeddedEditorSelected = embeddedEditorSelected
-        self.embeddedEditorDefault = embeddedEditorDefault
-        self.externallyVisibleControls = WarrenDesktopWorkspaceTabTrailingControl.controlsForEndpointCount(
-            externallyVisibleControls,
-            endpointCount: endpointOptions.count
-        )
-        self.isOverflowPresented = isOverflowPresented
         self.onToggleSidebar = onToggleSidebar
-        self.onSettings = onSettings
+        self.sidebarAttentionMark = sidebarAttentionMark
+        self.onSidebarButtonHover = onSidebarButtonHover
         self.onChromePopover = onChromePopover
-        self.onOpenInExternalIDE = onOpenInExternalIDE
-        self.onOpenEmbeddedEditor = onOpenEmbeddedEditor
-        self.onCloseEmbeddedEditor = onCloseEmbeddedEditor
-        self.onSelectEndpoint = onSelectEndpoint
-        self.onRetryConnection = onRetryConnection
-        self.onStopConnection = onStopConnection
-        self.inspector = inspector
+        self.rightSidebarOpen = rightSidebarOpen
+        self.rightSidebarAvailable = rightSidebarAvailable
+        self.onToggleRightSidebar = onToggleRightSidebar
+        self.collapsedHost = collapsedHost
         self.onSelectTab = onSelectTab
         self.onMoveTab = onMoveTab
         self.onSplitDrop = onSplitDrop
@@ -164,147 +171,127 @@ struct WarrenDesktopTabBar: View {
         self.canAddTab = canAddTab
         self.isAddingTab = isAddingTab
         self.onAddTab = onAddTab
+        self.hasNewSessionMenu = hasNewSessionMenu
         self.onCloseTab = onCloseTab
         self.onCloseOtherTabs = onCloseOtherTabs
         self.onCloseAllTabs = onCloseAllTabs
         self.onRequestRename = onRequestRename
         self.onToggleSessionPin = onToggleSessionPin
         self.onDismissActivity = onDismissActivity
-    }
-
-    /// The track's width for a listing, including the slot a drawn group's
-    /// mark costs. The mark is not a Tab, so it has to be added here and to
-    /// every Tab origin behind it in the scroll follower.
-    static func tabTrackWidth(tabCount: Int, groupMarkSlotWidth: CGFloat = 0) -> CGFloat {
-        CGFloat(tabCount) * WarrenLayoutMetrics.tabWidth + groupMarkSlotWidth
+        self.zoomedTabID = zoomedTabID
+        self.onToggleZoom = onToggleZoom
+        self.onSplitGroup = onSplitGroup
+        self.onUngroup = onUngroup
+        self.onMergeIntoGroup = onMergeIntoGroup
+        self.trailingAccessory = trailingAccessory
+        self.noticeBell = noticeBell
     }
 
     private var tabs: [ClientTab] { presentation.listings }
 
+    private func addAction() {
+        if hasNewSessionMenu {
+            onChromePopover(.newSession)
+        } else {
+            onAddTab()
+        }
+    }
+
     private var rowElements: [WarrenDesktopTabRowElement] {
-        WarrenDesktopPaneBar.rowElements(listings: tabs, group: splitGroup)
+        WarrenDesktopPaneBar.rowElements(listings: tabs, groups: splitGroups)
     }
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        ZStack(alignment: .leading) {
-            Rectangle()
-                .fill(tokens.chromeSurface)
+        // One 32pt row on the window backdrop: a capsule of Tabs on the
+        // leading side, a capsule holding the panels and "+" buttons on the
+        // trailing side, and the backdrop between them as the drag area.
+        HStack(spacing: WarrenLayoutMetrics.cardGap) {
+            if chromeMode == .workspace, isSidebarCollapsed {
+                WarrenDesktopCollapsedWorkspaceLeading(
+                    onToggleSidebar: onToggleSidebar,
+                    host: collapsedHost,
+                    attentionMark: sidebarAttentionMark,
+                    onSidebarButtonHover: onSidebarButtonHover
+                )
+            }
 
-            HStack(spacing: 0) {
-                if chromeMode == .workspace, isSidebarCollapsed {
-                    WarrenDesktopCollapsedWorkspaceLeading(onToggleSidebar: onToggleSidebar)
-                }
-
-                if let solo = presentation.solo {
-                    // With no track this row is the only chrome above the
-                    // terminal, so the Session's identity belongs here rather
-                    // than in a third bar below the presets.
+            if let solo = presentation.solo {
+                // One pane: the capsule holds that Session's pill.
+                WarrenDesktopChromeCapsule {
                     WarrenDesktopSoloPaneIdentity(
                         identity: solo,
+                        menuActions: soloTitleActions?(solo) ?? [],
                         onCopyTitle: onCopyPaneTitle,
                         onClose: { onCloseTab(solo.tabID) }
                     )
                 }
-
-                if presentation.showsTrack {
-                WarrenOverflowFadeScrollView(
-                    .horizontal,
-                    fadeLength: WarrenLayoutMetrics.tabScrollFadeLength,
-                    surface: tokens.chromeSurface,
-                    showsEdgeChevrons: true
-                ) {
-                    HStack(spacing: 0) {
-                        ForEach(rowElements) { element in
-                            switch element {
-                            case .tab(let tab):
-                                tabItem(
-                                    tab,
-                                    showsTrailingSeparator: true,
-                                    dropBeforeTabID: tab.id,
-                                    canStartDrag: true
-                                )
-                            case .groupRun(let group, let runTabs, let dropBeforeTabID):
-                                groupRun(
-                                    group: group,
-                                    tabs: runTabs,
-                                    dropBeforeTabID: dropBeforeTabID
-                                )
-                            }
-                        }
-                    }
-                    .background {
-                        WarrenDesktopTabScrollFollower(
-                            selectedTabID: selectedTabID,
-                            tabIDs: rowElements.drawnTabIDs,
-                            groupMarkSlotWidth: rowElements.groupMarkSlotWidth,
-                            groupMarkAnchorIndex: rowElements.groupMarkAnchorIndex,
-                            reduceMotion: reduceMotion
-                        )
-                    }
-                    .frame(minHeight: WarrenLayoutMetrics.tabBarHeight)
-                }
-                .frame(
-                    maxWidth: Self.tabTrackWidth(
-                        tabCount: tabs.count,
-                        groupMarkSlotWidth: rowElements.groupMarkSlotWidth
-                    ),
-                    alignment: .leading
-                )
                 .layoutPriority(1)
-                }
+            }
 
-                WarrenDesktopTabAddSlot(
-                    action: onAddTab,
-                    isEnabled: canAddTab,
-                    isLoading: isAddingTab
-                )
+            if presentation.showsTrack {
+                // No outer container: the selected plate is the anchor, so the
+                // Tabs sit straight on the bar.
+                HStack(spacing: 2) {
+                    ForEach(rowElements.filter(\.drawsGroupMark)) { element in
+                        groupPill(element)
+                    }
+                    if !rowElements.trackTabs.isEmpty {
+                        track(tokens: tokens)
+                    }
+                }
+                .layoutPriority(1)
+            }
+
+            // The drag filler is the backdrop between the two capsules, like
+            // Superset's TabBar: it stays available when the track is full so
+            // there is always a native drag leaf. A Tab dropped here moves to
+            // the end of the track.
+            WarrenDesktopWindowDragRegion(identifier: "warren.tab-bar-drag-region")
+                .frame(minWidth: WarrenSpacing.standard, maxWidth: .infinity)
+                .frame(height: WarrenLayoutMetrics.tabBarHeight)
+                .accessibilityHidden(true)
                 .dropDestination(for: String.self) { tabIDs, _ in
                     guard let tabID = tabIDs.first else { return false }
                     onMoveTab(tabID, nil)
                     return true
                 }
 
-                // The drag filler lives outside the scroll view, exactly like
-                // Superset's TabBar: it stays available when the track is full
-                // so there is always a small native drag leaf.
-                WarrenDesktopWindowDragRegion(identifier: "warren.tab-bar-drag-region")
-                    .frame(minWidth: WarrenSpacing.standard, maxWidth: .infinity)
-                    .accessibilityHidden(true)
+            if let trailingAccessory {
+                trailingAccessory
+            }
 
-                if chromeMode == .workspace {
-                    WarrenDesktopWorkspaceTabTrailing(
-                        connectionState: connectionState,
-                        endpointOptions: endpointOptions,
-                        selectedEndpointID: selectedEndpointID,
-                        webStatus: webStatus,
-                        externalIDEOptions: externalIDEOptions,
-                        embeddedEditorAvailable: embeddedEditorAvailable,
-                        embeddedEditorSelected: embeddedEditorSelected,
-                        embeddedEditorDefault: embeddedEditorDefault,
-                        externallyVisibleControls: externallyVisibleControls,
-                        isOverflowPresented: isOverflowPresented,
-                        onSettings: onSettings,
-                        onChromePopover: onChromePopover,
-                        onOpenInExternalIDE: onOpenInExternalIDE,
-                        onOpenEmbeddedEditor: onOpenEmbeddedEditor,
-                        onCloseEmbeddedEditor: onCloseEmbeddedEditor,
-                        onSelectEndpoint: onSelectEndpoint,
-                        onRetryConnection: onRetryConnection,
-                        onStopConnection: onStopConnection,
-                        inspector: inspector
+            // Everything that is not a Tab sits in one capsule: the bell
+            // (only while the sidebar is hidden), the right sidebar's toggle
+            // and "+" (the presets).
+            WarrenDesktopChromeCapsule {
+                HStack(spacing: 2) {
+                    if let noticeBell {
+                        noticeBell
+                    }
+                    // The way back to a Tab the track has scrolled away from.
+                    if presentation.showsTrack, trackOverflows {
+                        overflowButton(tokens: tokens)
+                    }
+                    if chromeMode == .workspace, rightSidebarAvailable {
+                        WarrenDesktopRightSidebarToggle(
+                            isOpen: rightSidebarOpen,
+                            action: onToggleRightSidebar
+                        )
+                    }
+                    WarrenDesktopTabAddSlot(
+                        action: addAction,
+                        isEnabled: canAddTab,
+                        isLoading: isAddingTab
                     )
                 }
             }
-            .frame(height: WarrenLayoutMetrics.tabBarHeight)
+            .fixedSize(horizontal: true, vertical: false)
         }
         .frame(height: WarrenLayoutMetrics.tabBarHeight)
-        .overlay(alignment: .bottom) {
-            WarrenDesktopChromeDivider()
-        }
         .onChange(of: selectedTabID) { selectedID in
-            pendingTabGeneration &+= 1
             pendingTabID = nil
+            updatePlateTravel(to: selectedID)
         }
         .onChange(of: tabs) { _ in
             // Workspace changes can remove or reuse a pending target without
@@ -313,8 +300,16 @@ struct WarrenDesktopTabBar: View {
             // disabled for the timeout.
             guard let pendingTabID,
                   !tabs.contains(where: { $0.id == pendingTabID }) else { return }
-            pendingTabGeneration &+= 1
             self.pendingTabID = nil
+        }
+        .task(id: pendingTabID) {
+            // A rejected selection should not leave the tab rail looking
+            // busy. The normal path clears this as soon as selectedTabID
+            // publishes, which also cancels this wait.
+            guard pendingTabID != nil else { return }
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            pendingTabID = nil
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace tab bar")
@@ -323,14 +318,11 @@ struct WarrenDesktopTabBar: View {
     /// One Tab of the track, with the pending feedback the bar owns.
     ///
     /// `dropBeforeTabID` is the Tab a drop on this one moves its source in
-    /// front of. It differs from the Tab itself for a pane group's members,
-    /// where every drop resolves to the group's leading edge.
+    /// front of.
     @ViewBuilder
     private func tabItem(
         _ tab: ClientTab,
-        showsTrailingSeparator: Bool,
-        dropBeforeTabID: String?,
-        canStartDrag: Bool
+        dropBeforeTabID: String?
     ) -> some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let mark = tab.sessionID.flatMap { tabMarks[$0] }
@@ -339,9 +331,10 @@ struct WarrenDesktopTabBar: View {
             displayTitle: tabTitles[tab.id] ?? tab.title,
             mark: mark,
             isSelected: selectedTabID == tab.id,
-            showsTrailingSeparator: showsTrailingSeparator,
-            canStartDrag: canStartDrag,
             isPinned: tab.sessionID.map(pinnedSessionIDs.contains) ?? false,
+            selectionNamespace: tabSelection,
+            width: trackTabWidth,
+            plateTravels: plateTravels,
             onSelect: { selectTab(tab.id) },
             onClose: { onCloseTab(tab.id) },
             onCloseOthers: { onCloseOtherTabs(tab.id) },
@@ -388,68 +381,226 @@ struct WarrenDesktopTabBar: View {
         .opacity(pendingTabID == tab.id ? 0.72 : 1)
         .overlay(alignment: .bottom) {
             // Keep the pending state visible while the selection itself
-            // remains free of a colored underline. The tab surface already
-            // carries the selected background and border.
-            Rectangle()
+            // stays a plain pill.
+            Capsule()
                 .fill(pendingTabID == tab.id ? tokens.info : .clear)
-                .frame(height: pendingTabID == tab.id ? 2 : 0)
+                .frame(width: 24, height: pendingTabID == tab.id ? 2 : 0)
                 .allowsHitTesting(false)
         }
     }
 
-    /// One pane group: the mark in front of its first member, and the rule that
-    /// binds the members to it.
-    ///
-    /// A drop anywhere in the run lands after the group, which is the only
-    /// position a Session from outside can take: the group leads the strip, and
-    /// the Tab the drop goes in front of is the first one that follows it. The
-    /// group is one placement, so nothing can be inserted between its members —
-    /// that is also the only reason the rule under them can keep meaning "these
-    /// belong together".
-    @ViewBuilder
-    private func groupRun(
-        group: WarrenDesktopSplitGroup,
-        tabs runTabs: [ClientTab],
-        dropBeforeTabID: String?
-    ) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let color = WarrenDesktopSplitGroupPalette.color(for: group.scopeKey, tokens: tokens)
-        HStack(spacing: 0) {
-            WarrenDesktopSplitGroupMark(tree: group.tree, color: color)
-                .padding(.leading, WarrenLayoutMetrics.tabGroupMarkLeadingInset)
-                .padding(.trailing, WarrenLayoutMetrics.tabGroupMarkTrailingInset)
-                // The mark is part of the group for drops as well, so landing on
-                // it lands beside the group instead of on nothing.
-                .dropDestination(for: String.self) { tabIDs, _ in
-                    guard let sourceID = tabIDs.first else { return false }
-                    onMoveTab(sourceID, dropBeforeTabID)
-                    return true
-                }
-            ForEach(Array(runTabs.enumerated()), id: \.element.id) { index, tab in
-                tabItem(
-                    tab,
-                    showsTrailingSeparator: WarrenDesktopTabRowElement
-                        .memberShowsTrailingSeparator(index: index, count: runTabs.count),
-                    dropBeforeTabID: dropBeforeTabID,
-                    // A member cannot be pulled out of its group: the layout,
-                    // not the Tab strip, decides which Session sits where.
-                    canStartDrag: false
-                )            }
+    /// Decides whether the plate slides to `selectedID`, and lets it slide again
+    /// once this change has settled.
+    private func updatePlateTravel(to selectedID: String?) {
+        let ids = rowElements.trackTabs.map(\.id)
+        guard let selectedID,
+              let target = ids.firstIndex(of: selectedID),
+              let previous = previousSelectedIndex,
+              trackViewport > 0 else {
+            previousSelectedIndex = selectedID.flatMap(ids.firstIndex(of:))
+            plateTravels = true
+            return
         }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(color.opacity(WarrenLayoutMetrics.tabGroupRuleOpacity))
-                .frame(height: WarrenLayoutMetrics.tabGroupRuleHeight)
-                .allowsHitTesting(false)
-        }
-        .warrenSemanticElement(
-            id: "tabgroup.\(group.scopeKey)",
-            role: .group,
-            label: "Split group",
-            value: "\(runTabs.count) panes"
+        plateTravels = WarrenDesktopTabTrack.plateTravels(
+            from: previous,
+            to: target,
+            tabWidth: trackTabWidth,
+            viewport: trackViewport
         )
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Split group of \(runTabs.count) panes")
+        previousSelectedIndex = target
+        // The next move should slide again.
+        plateTravelReset?.cancel()
+        plateTravelReset = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            plateTravels = true
+        }
+    }
+
+    /// The track's overflow control: how many Tabs there are, and every one of
+    /// them, so a Tab scrolled off the end is still one click away.
+    private func overflowButton(tokens: WarrenColorTokens) -> some View {
+        let actions: [WarrenDesktopContextMenuAction] = tabs.map { tab in
+            .check(
+                title: tabTitles[tab.id] ?? tab.title,
+                isOn: selectedTabID == tab.id
+            ) {
+                onSelectTab(tab.id)
+            }
+        }
+        return HStack(spacing: 3) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+            Text("\(tabs.count)")
+                .font(.system(size: 11))
+                .monospacedDigit()
+        }
+        .foregroundStyle(tokens.mutedForeground)
+        .padding(.horizontal, 5)
+        .frame(height: 20)
+        .contentShape(.rect)
+        .warrenMenuButton(actions, title: "All tabs")
+        .warrenTooltip("All \(tabs.count) tabs")
+        .accessibilityLabel("All \(tabs.count) tabs")
+        .accessibilityIdentifier("tab.overflow")
+    }
+
+    /// The width every Tab takes in the track at the measured viewport.
+    private var trackTabWidth: CGFloat {
+        WarrenDesktopTabTrack.tabWidth(
+            count: rowElements.trackTabs.count,
+            viewport: trackViewport,
+            groupMarkTotalWidth: rowElements.groupMarkTotalWidth
+        )
+    }
+
+    /// Whether the Tabs no longer fit at the floor width.
+    private var trackOverflows: Bool {
+        WarrenDesktopTabTrack.overflows(
+            count: rowElements.trackTabs.count,
+            tabWidth: trackTabWidth,
+            viewport: trackViewport,
+            groupMarkTotalWidth: rowElements.groupMarkTotalWidth
+        )
+    }
+
+    /// The scrolling run of Tabs outside the group.
+    private func track(tokens: WarrenColorTokens) -> some View {
+        let trackTabs = rowElements.trackTabs
+        let tabWidth = trackTabWidth
+        return WarrenOverflowFadeScrollView(
+            .horizontal,
+            fadeLength: WarrenLayoutMetrics.tabScrollFadeLength,
+            surface: tokens.windowBackdrop,
+            showsEdgeChevrons: false
+        ) {
+            HStack(spacing: 0) {
+                ForEach(trackTabs) { tab in
+                    tabItem(tab, dropBeforeTabID: tab.id)
+                }
+            }
+            .background {
+                WarrenDesktopTabScrollFollower(
+                    selectedTabID: selectedTabID,
+                    tabIDs: trackTabs.map(\.id),
+                    tabWidth: tabWidth,
+                    reduceMotion: reduceMotion
+                )
+            }
+            .frame(height: WarrenLayoutMetrics.tabPillHeight)
+            .animation(
+                WarrenMotion.selection(reduceMotion: reduceMotion),
+                value: selectedTabID
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: WarrenDesktopTabTrackWidthKey.self,
+                    value: geo.size.width
+                )
+            }
+        }
+        .onPreferenceChange(WarrenDesktopTabTrackWidthKey.self) { width in
+            guard abs(width - trackViewport) > 0.5 else { return }
+            trackViewport = width
+        }
+    }
+
+    /// The pane group's pill, and the shelf it drops.
+    ///
+    /// The pill is pinned in front of the scrolling track: the group is one
+    /// placement that leads the strip, and its icons lift above the pill's
+    /// bounds, which a scroll view would clip.
+    @ViewBuilder
+    private func groupPill(_ element: WarrenDesktopTabRowElement) -> some View {
+        if case .groupRun(let group, let runTabs, _) = element {
+            let model = groupPresentation(group: group, tabs: runTabs)
+            let actions = groupActions(model)
+            let hover = groupHover
+            WarrenDesktopPaneGroupPill(group: model, actions: actions, hover: hover)
+                .overlay(alignment: .topLeading) {
+                    WarrenDesktopPaneGroupShelfLayer(group: model, actions: actions, hover: hover)
+                }
+                .zIndex(1)
+        }
+    }
+
+    private func groupPresentation(
+        group: WarrenDesktopSplitGroup,
+        tabs runTabs: [ClientTab]
+    ) -> WarrenDesktopPaneGroupPresentation {
+        let frames = group.tree.unitFrames()
+        let members = runTabs.map { tab in
+            WarrenDesktopPaneGroupPresentation.Member(
+                tab: tab,
+                title: tabTitles[tab.id] ?? tab.title,
+                mark: tab.sessionID.flatMap { tabMarks[$0] },
+                activity: group.activity[tab.id] ?? "",
+                icon: group.icons[tab.id] ?? WarrenDesktopAppIcon(kind: tab.kind),
+                unitFrame: frames[tab.id] ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+            )
+        }
+        let ids = Set(runTabs.map(\.id))
+        let selectedMember = selectedTabID.flatMap { ids.contains($0) ? $0 : nil }
+        return WarrenDesktopPaneGroupPresentation(
+            scopeKey: group.scopeKey,
+            title: group.title.isEmpty ? "Split group" : group.title,
+            context: group.context,
+            members: members,
+            currentTabID: selectedMember ?? group.activeTabID ?? runTabs.first?.id,
+            containsSelection: selectedMember != nil,
+            canSplit: group.tree.count < SplitLayoutTree.maxPanes
+        )
+    }
+
+    private func groupActions(_ model: WarrenDesktopPaneGroupPresentation) -> WarrenDesktopPaneGroupActions {
+        WarrenDesktopPaneGroupActions(
+            selectMember: { selectTab($0) },
+            selectGroup: {
+                guard !model.containsSelection, let tabID = model.currentTabID else { return }
+                selectTab(tabID)
+            },
+            toggleZoom: onToggleZoom,
+            isZoomed: { $0 == zoomedTabID },
+            closeMember: onCloseTab,
+            split: onSplitGroup,
+            ungroup: onUngroup,
+            merge: onMergeIntoGroup,
+            splitDrop: onSplitDrop,
+            contextMenu: contextMenuActions(for:)
+        )
+    }
+
+    /// One Tab's context menu, shared by the track's pills and the group's
+    /// members.
+    private func contextMenuActions(for tab: ClientTab) -> [WarrenDesktopContextMenuAction] {
+        guard let sessionID = tab.sessionID else { return [] }
+        let mark = tabMarks[sessionID]
+        let targets = sessionMoveTargets.filter {
+            $0.destination != sessionMoveDestinations[sessionID]
+        }
+        return WarrenDesktopTabItem.contextMenuActions(
+            sessionID: sessionID,
+            isPinned: pinnedSessionIDs.contains(sessionID),
+            hasActivity: mark != nil,
+            workspaceMoveTargets: targets,
+            onMoveSession: onMoveSession,
+            onTogglePin: {
+                onToggleSessionPin(sessionID, !pinnedSessionIDs.contains(sessionID))
+            },
+            onDismissActivity: {
+                guard let mark else { return }
+                onDismissActivity(sessionID, mark.activityState)
+            },
+            onRename: {
+                onRequestRename(.session(sessionID, title: tabTitles[tab.id] ?? tab.title))
+            },
+            onClose: { onCloseTab(tab.id) },
+            onCloseOthers: { onCloseOtherTabs(tab.id) },
+            onCloseAll: { onCloseAllTabs(tab.id) }
+        )
     }
 
     private func selectTab(_ tabID: String) {
@@ -458,17 +609,8 @@ struct WarrenDesktopTabBar: View {
             onSelectTab(tabID)
             return
         }
-        pendingTabGeneration &+= 1
-        let generation = pendingTabGeneration
         pendingTabID = tabID
         onSelectTab(tabID)
-        // A rejected selection should not leave the tab rail looking busy.
-        // The normal path clears this as soon as selectedTabID publishes.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-            if pendingTabGeneration == generation, pendingTabID == tabID {
-                pendingTabID = nil
-            }
-        }
     }
 }
 
@@ -529,11 +671,8 @@ enum WarrenDesktopTabScrollPosition {
 private struct WarrenDesktopTabScrollFollower: NSViewRepresentable {
     let selectedTabID: String?
     let tabIDs: [String]
-    /// The slot a drawn pane group's mark costs, and the Tab index it sits in
-    /// front of. Together they are the follower's only reason to stop treating
-    /// a Tab's origin as `index * tabWidth`.
-    let groupMarkSlotWidth: CGFloat
-    let groupMarkAnchorIndex: Int?
+    /// Every Tab's width, so the follower's origins match what the track drew.
+    let tabWidth: CGFloat
     let reduceMotion: Bool
 
     func makeNSView(context: Context) -> WarrenDesktopTabScrollFollowerView {
@@ -541,8 +680,7 @@ private struct WarrenDesktopTabScrollFollower: NSViewRepresentable {
         view.update(
             selectedTabID: selectedTabID,
             tabIDs: tabIDs,
-            groupMarkSlotWidth: groupMarkSlotWidth,
-            groupMarkAnchorIndex: groupMarkAnchorIndex,
+            tabWidth: tabWidth,
             reduceMotion: reduceMotion
         )
         return view
@@ -552,8 +690,7 @@ private struct WarrenDesktopTabScrollFollower: NSViewRepresentable {
         nsView.update(
             selectedTabID: selectedTabID,
             tabIDs: tabIDs,
-            groupMarkSlotWidth: groupMarkSlotWidth,
-            groupMarkAnchorIndex: groupMarkAnchorIndex,
+            tabWidth: tabWidth,
             reduceMotion: reduceMotion
         )
     }
@@ -562,8 +699,7 @@ private struct WarrenDesktopTabScrollFollower: NSViewRepresentable {
 private final class WarrenDesktopTabScrollFollowerView: NSView {
     private var selectedTabID: String?
     private var tabIDs: [String] = []
-    private var groupMarkSlotWidth: CGFloat = 0
-    private var groupMarkAnchorIndex: Int?
+    private var tabWidth = WarrenLayoutMetrics.tabWidth
     private var reduceMotion = false
     private var lastViewportWidth: CGFloat?
     private var scrollScheduled = false
@@ -585,31 +721,22 @@ private final class WarrenDesktopTabScrollFollowerView: NSView {
     func update(
         selectedTabID: String?,
         tabIDs: [String],
-        groupMarkSlotWidth: CGFloat,
-        groupMarkAnchorIndex: Int?,
+        tabWidth: CGFloat,
         reduceMotion: Bool
     ) {
         self.reduceMotion = reduceMotion
         guard self.selectedTabID != selectedTabID
             || self.tabIDs != tabIDs
-            || self.groupMarkSlotWidth != groupMarkSlotWidth
-            || self.groupMarkAnchorIndex != groupMarkAnchorIndex else { return }
+            || self.tabWidth != tabWidth else { return }
         self.selectedTabID = selectedTabID
         self.tabIDs = tabIDs
-        self.groupMarkSlotWidth = groupMarkSlotWidth
-        self.groupMarkAnchorIndex = groupMarkAnchorIndex
+        self.tabWidth = tabWidth
         scheduleScroll()
     }
 
     /// Where a Tab starts on the track.
-    ///
-    /// The mark is drawn before the group's first member, so that member and
-    /// everything after it are shifted by the mark's slot; Tabs in front of the
-    /// group keep their plain `index * tabWidth` origin.
     private func originX(forTabIndex index: Int) -> CGFloat {
-        let base = CGFloat(index) * WarrenLayoutMetrics.tabWidth
-        guard let groupMarkAnchorIndex, index >= groupMarkAnchorIndex else { return base }
-        return base + groupMarkSlotWidth
+        CGFloat(index) * tabWidth
     }
 
     private func scheduleScroll() {
@@ -630,7 +757,6 @@ private final class WarrenDesktopTabScrollFollowerView: NSView {
         let viewport = scrollView.contentView.bounds
         guard viewport.width > 0 else { return }
 
-        let tabWidth = WarrenLayoutMetrics.tabWidth
         let trackWidth = max(originX(forTabIndex: tabIDs.count), bounds.width)
         let originX = WarrenDesktopTabScrollPosition.revealOriginX(
             selectedMinX: self.originX(forTabIndex: selectedIndex),
@@ -687,25 +813,33 @@ extension WarrenDesktopPaneBar {
     /// rule say "these belong together".
     ///
     /// The stored Tab order is moved to match (`WarrenDesktopTabOrdering`), so
-    /// the run's position is only the bar's business for the frames between a
+    /// each run's position is only the bar's business for the frames between a
     /// layout change and that reorder landing. A Tab's drop target is the first
-    /// one that follows the group, since nothing can land inside it.
+    /// one that follows every run, since nothing can land inside a run.
     static func rowElements(
         listings: [ClientTab],
-        group: WarrenDesktopSplitGroup?
+        groups: [WarrenDesktopSplitGroup]
     ) -> [WarrenDesktopTabRowElement] {
-        guard let group, group.isDrawn else {
+        let drawn = groups.filter(\.isDrawn)
+        guard !drawn.isEmpty else {
             return listings.map { .tab(tab: $0) }
         }
-        let paneOrder = Dictionary(
-            uniqueKeysWithValues: group.tabIDs.enumerated().map { ($0.element, $0.offset) }
-        )
-        let members = listings
-            .filter { paneOrder[$0.id] != nil }
-            .sorted { (paneOrder[$0.id] ?? 0) < (paneOrder[$1.id] ?? 0) }
-        let rest = listings.filter { paneOrder[$0.id] == nil }
-        guard !members.isEmpty else { return listings.map { .tab(tab: $0) } }
-        return [.groupRun(group: group, tabs: members, dropBeforeTabID: rest.first?.id)]
+        var claimed: Set<String> = []
+        var runs: [(group: WarrenDesktopSplitGroup, tabs: [ClientTab])] = []
+        for group in drawn {
+            let paneOrder = Dictionary(
+                uniqueKeysWithValues: group.tabIDs.enumerated().map { ($0.element, $0.offset) }
+            )
+            let members = listings
+                .filter { paneOrder[$0.id] != nil && !claimed.contains($0.id) }
+                .sorted { (paneOrder[$0.id] ?? 0) < (paneOrder[$1.id] ?? 0) }
+            guard !members.isEmpty else { continue }
+            claimed.formUnion(members.map(\.id))
+            runs.append((group, members))
+        }
+        guard !runs.isEmpty else { return listings.map { .tab(tab: $0) } }
+        let rest = listings.filter { !claimed.contains($0.id) }
+        return runs.map { .groupRun(group: $0.group, tabs: $0.tabs, dropBeforeTabID: rest.first?.id) }
             + rest.map { WarrenDesktopTabRowElement.tab(tab: $0) }
     }
 
@@ -776,7 +910,7 @@ enum WarrenDesktopTabRowElement: Identifiable, Equatable {
         case .tab(let tab):
             return tab.id
         case .groupRun(let group, _, _):
-            return "tabgroup.\(group.scopeKey)"
+            return "tabgroup.\(group.id)"
         }
     }
 
@@ -784,51 +918,23 @@ enum WarrenDesktopTabRowElement: Identifiable, Equatable {
         if case .groupRun = self { return true }
         return false
     }
-
-    /// Whether the member at `index` of a run still draws the hairline that
-    /// divides it from the member after it.
-    ///
-    /// Only the last member does. The group's rule is what joins the members,
-    /// so a hairline between two of them would divide what the rule just
-    /// joined — while the last one still has to separate the group from
-    /// whatever Tab follows it.
-    static func memberShowsTrailingSeparator(index: Int, count: Int) -> Bool {
-        index == count - 1
-    }
 }
 
 extension Array where Element == WarrenDesktopTabRowElement {
-    /// The Tab index the group's mark sits in front of.
-    ///
-    /// The follower needs it because the mark is a slot rather than a Tab:
-    /// every Tab from this index on is shifted right by the mark's width, so a
-    /// Tab's origin is no longer `index * tabWidth`.
-    var groupMarkAnchorIndex: Int? {
-        var tabCount = 0
-        for element in self {
-            switch element {
-            case .tab:
-                tabCount += 1
-            case .groupRun:
-                return tabCount
-            }
+    /// The drawn group, which is pinned in front of the track.
+    var groupRunElement: WarrenDesktopTabRowElement? {
+        first(where: \.drawsGroupMark)
+    }
+
+    /// The Tabs the scrolling track draws: everything outside the group.
+    var trackTabs: [ClientTab] {
+        compactMap { element in
+            if case .tab(let tab) = element { return tab }
+            return nil
         }
-        return nil
     }
 
-    /// The extra track width one drawn group costs.
-    var groupMarkSlotWidth: CGFloat {
-        contains(where: \.drawsGroupMark)
-            ? WarrenLayoutMetrics.tabGroupMarkSlotWidth
-            : 0
-    }
-
-    /// The Tabs in the order the track draws them.
-    ///
-    /// Equal to the listing's order once the layout has moved the stored order
-    /// (`WarrenDesktopTabOrdering`); it differs only in the frames between a
-    /// layout change and that reorder landing, which is exactly why the scroll
-    /// follower reads this rather than either order on its own.
+    /// Every Tab in the order the bar draws them, the group's members first.
     var drawnTabIDs: [String] {
         flatMap { element -> [String] in
             switch element {
@@ -838,6 +944,69 @@ extension Array where Element == WarrenDesktopTabRowElement {
                 return tabs.map(\.id)
             }
         }
+    }
+
+    /// The drawn-Tab index each group's mark sits in front of, in draw order.
+    ///
+    /// The track's width and every Tab origin behind a mark are computed from
+    /// these, so they are the only reason a Tab's origin is not simply
+    /// `index * tabWidth` once a group is drawn.
+    var groupMarkAnchors: [Int] {
+        var anchors: [Int] = []
+        var tabCount = 0
+        for element in self {
+            switch element {
+            case .tab:
+                tabCount += 1
+            case .groupRun(let group, let tabs, _):
+                if group.isDrawn { anchors.append(tabCount) }
+                tabCount += tabs.count
+            }
+        }
+        return anchors
+    }
+
+    /// The extra track width every drawn group costs together.
+    var groupMarkTotalWidth: CGFloat {
+        WarrenLayoutMetrics.tabGroupMarkSlotWidth * CGFloat(groupMarkAnchors.count)
+    }
+}
+
+/// Caps a view's width at `maxWidth` without stretching it to the cap.
+///
+/// A plain `frame(maxWidth:)` grows to whatever the row offers, so a two-letter
+/// title would still take the whole cap. This measures the content's own width
+/// and clamps that, while still letting the content shrink when the row is
+/// narrower than the content itself.
+private struct WarrenDesktopClampedWidth: Layout {
+    let maxWidth: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        let ideal = subview.sizeThatFits(.unspecified)
+        let bounded = min(ideal.width, maxWidth)
+        return CGSize(
+            width: min(bounded, proposal.width ?? bounded),
+            height: min(ideal.height, proposal.height ?? ideal.height)
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let subview = subviews.first else { return }
+        subview.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+        )
     }
 }
 
@@ -851,20 +1020,37 @@ struct WarrenDesktopSoloPaneIdentity: View {
     struct Model: Equatable {
         let tabID: String
         let title: String
+        /// A shell's foreground command, drawn beside the title. Empty for an
+        /// idle shell and for every other kind.
+        var runningCommand: String = ""
         let fullTitle: String
+        /// The detail card's rows. The command is the full line, the directory
+        /// the Session's working directory, and the branch its Workspace's.
+        var commandLine: String = ""
+        var directory: String = ""
+        var branch: String = ""
+        var kindName: String = "Shell"
         let providerPresetID: String?
         let mark: WarrenActivityMark?
         let canClose: Bool
     }
 
     let identity: Model
+    /// The title's click menu. The bar owns the actions because it owns the
+    /// rename request and the editor list.
+    var menuActions: [WarrenDesktopContextMenuAction] = []
     let onCopyTitle: () -> Void
     let onClose: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.warrenForceHover) private var forceHover
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
+    /// The detail card trails the pointer by a beat so a title the pointer only
+    /// passes over never makes one.
+    @State private var showsDetails = false
+    @State private var detailTask: Task<Void, Never>?
 
     private var preset: WarrenDesktopSessionPreset? {
         identity.providerPresetID.flatMap { id in
@@ -878,48 +1064,49 @@ struct WarrenDesktopSoloPaneIdentity: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        HStack(spacing: WarrenSpacing.small) {
-            if let preset {
-                WarrenDesktopPresetIcon(preset: preset)
-                    .frame(width: 13, height: 13)
-                    .opacity(0.9)
-                    .accessibilityHidden(true)
+        HStack(spacing: 7) {
+            Group {
+                if let preset {
+                    WarrenDesktopSessionKindBadge(kind: preset.request.kind, size: 16)
+                } else {
+                    WarrenDesktopSessionKindBadge(kind: .shell, size: 16)
+                }
             }
 
-            Text(identity.title)
-                .font(WarrenTypography.activeTabTitle)
-                .foregroundStyle(tokens.foreground.opacity(0.88))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
+            titleArea(tokens: tokens)
+                .warrenMenuButton(menuActions)
+                .onHover(perform: titleHover)
+                .warrenMenuPanel(
+                    isPresented: $showsDetails,
+                    width: WarrenDesktopDetailCard.width,
+                    isPassive: true
+                ) {
+                    WarrenDesktopDetailCard(rows: detailRows)
+                }
 
-            if let mark = identity.mark {
-                WarrenDesktopActivityIndicator(mark: mark)
-            }
-
-            HStack(spacing: WarrenSpacing.xxs) {
+            HStack(spacing: 0) {
                 Button(action: onCopyTitle) {
                     Image(systemName: "doc.on.doc")
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(tokens.mutedForeground.opacity(0.7))
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(tokens.mutedForeground)
                         .frame(width: 18, height: 18)
                         .contentShape(.rect)
                 }
-                .buttonStyle(.plain)
-                .help("Copy Full Title")
+                .buttonStyle(WarrenChromeButtonStyle())
+                .warrenTooltip("Copy Full Title")
                 .accessibilityLabel("Copy Full Title")
 
                 if identity.canClose {
                     Button(action: onClose) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(tokens.mutedForeground.opacity(0.7))
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(tokens.mutedForeground)
                             .frame(width: 18, height: 18)
                             .contentShape(.rect)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(WarrenChromeButtonStyle())
                     // View-only, like every other pane close.
-                    .help("Close Pane (⌘W)")
+                    .warrenTooltip("Close Pane", shortcut: "⌘W")
                     .accessibilityLabel("Close Pane")
                     .warrenSemanticElement(
                         id: "pane.solo.close",
@@ -929,25 +1116,36 @@ struct WarrenDesktopSoloPaneIdentity: View {
                     )
                 }
             }
-            // The controls keep their own width so a squeezed row truncates the
-            // title instead of overlapping the buttons with it.
+            // The controls keep their own width so a squeezed pill truncates
+            // the title instead of overlapping the buttons with it.
             .fixedSize(horizontal: true, vertical: false)
             .opacity(showsControls ? 1 : 0)
+            .animation(
+                WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
+                value: showsControls
+            )
             .allowsHitTesting(showsControls)
             .accessibilityHidden(!showsControls)
         }
-        .padding(.leading, WarrenSpacing.medium)
-        .padding(.trailing, WarrenSpacing.compact)
-        .frame(minHeight: WarrenLayoutMetrics.tabBarHeight)
-        // The row is free, so this identity would happily take the whole width
-        // of a title it can grow to: a Session named after a long shell command
-        // made the row demand hundreds of points more than the window had, and
-        // the resulting overflow is centred on the window — which pushed the
-        // sidebar's leading edge off screen instead of clipping the title. The
-        // identity is the flexible part of the row; its title already
-        // truncates in the middle.
+        .padding(.leading, 5)
+        .padding(.trailing, 4)
+        .frame(height: WarrenLayoutMetrics.tabPillHeight)
+        .background(
+            tokens.selectedTabPillFill,
+            in: RoundedRectangle(cornerRadius: WarrenLayoutMetrics.tabPillRadius, style: .continuous)
+        )
+        // A Session named after a long shell command must not make the row
+        // demand more width than the window has: SwiftUI centres that overflow
+        // on the window and pushes the sidebar off screen. The pill is the
+        // flexible part of the row, capped at the width a long title is allowed
+        // to take; see `titleArea`.
         .onHover { isHovered = $0 }
-        .help(identity.fullTitle)
+        // A shell's command arriving or leaving changes the pill's width; the
+        // pill grows into it and the command fades in rather than appearing.
+        .animation(
+            WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion),
+            value: identity.runningCommand
+        )
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Pane \(identity.fullTitle)")
         .warrenSemanticElement(
@@ -957,404 +1155,225 @@ struct WarrenDesktopSoloPaneIdentity: View {
             value: identity.title
         )
     }
+
+    /// The Session's name, with a shell's running command beside it.
+    ///
+    /// The appended command is shown whole or not at all — a half command
+    /// reads as a different command — so the title gives up width first: the
+    /// pill drops the command before it shortens the title, and only a title
+    /// that still does not fit fades at its tail, with no ellipsis. The width
+    /// cap keeps a long name from taking the whole row while a short one still
+    /// hugs its own width.
+    private func titleArea(tokens: WarrenColorTokens) -> some View {
+        WarrenDesktopClampedWidth(maxWidth: WarrenLayoutMetrics.soloPillTitleMaxWidth) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 5) {
+                    titleText(tokens: tokens)
+                    runningCommandText(tokens: tokens)
+                }
+                titleText(tokens: tokens)
+                fadingTitleText(tokens: tokens)
+            }
+        }
+    }
+
+    private func titleText(tokens: WarrenColorTokens) -> some View {
+        Text(identity.title)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(tokens.foreground.opacity(0.95))
+            .lineLimit(1)
+            .textSelection(.enabled)
+    }
+
+    /// The title when it does not fit: it keeps its start, drops the ellipsis,
+    /// and fades over the last 28 points instead.
+    private func fadingTitleText(tokens: WarrenColorTokens) -> some View {
+        WarrenDesktopFadingLine(edge: .trailing) {
+            titleText(tokens: tokens)
+        }
+    }
+
+    @ViewBuilder
+    private func runningCommandText(tokens: WarrenColorTokens) -> some View {
+        if !identity.runningCommand.isEmpty {
+            Text("· \(identity.runningCommand)")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(tokens.mutedForeground)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    /// The rows the pointer reveals: the full command, where the Session is,
+    /// the Workspace's branch, and what kind of Session it is.
+    private var detailRows: [WarrenDesktopDetailCard.Row] {
+        var rows: [WarrenDesktopDetailCard.Row] = []
+        if !identity.commandLine.isEmpty {
+            rows.append(.init(label: "Command", value: identity.commandLine))
+        }
+        if !identity.directory.isEmpty {
+            rows.append(.init(label: "Directory", value: identity.directory))
+        }
+        if !identity.branch.isEmpty {
+            rows.append(.init(label: "Branch", value: identity.branch))
+        }
+        rows.append(.init(label: "Kind", value: identity.kindName))
+        return rows
+    }
+
+    /// Shows the detail card only after the pointer has rested on the title.
+    private func titleHover(_ isInside: Bool) {
+        detailTask?.cancel()
+        detailTask = nil
+        guard isInside else {
+            showsDetails = false
+            return
+        }
+        detailTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
+            showsDetails = true
+        }
+    }
 }
 
 private struct WarrenDesktopCollapsedWorkspaceLeading: View {
     let onToggleSidebar: () -> Void
+    let host: WarrenDesktopCollapsedHost?
+    var attentionMark: WarrenActivityMark? = nil
+    var onSidebarButtonHover: ((Bool) -> Void)? = nil
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
         HStack(spacing: WarrenSpacing.xs) {
-            WarrenDesktopWindowDragRegion()
-                .frame(width: max(
-                    WarrenLayoutMetrics.macTrafficLightInset
-                        - WarrenLayoutMetrics.sidebarCollapsedWidth,
-                    0
-                ))
+            // The rail's card owns the real traffic lights when it is docked.
+            // With the rail collapsed there is no card, so the window's own
+            // lights move into the title bar to stay where they always are.
+            WarrenDesktopTrafficLights()
+                .padding(.leading, 8)
 
             WarrenDesktopChromeButton(
                 systemImage: "sidebar.left",
                 label: "Expand sidebar",
                 hint: "Show the project and workspace list",
-                action: onToggleSidebar
+                action: onToggleSidebar,
+                shortcut: "⌘B"
             )
+            .overlay(alignment: .topTrailing) {
+                if let attentionMark {
+                    WarrenDesktopSidebarAttentionDot(mark: attentionMark)
+                }
+            }
+            .onHover { onSidebarButtonHover?($0) }
+
+            // The Host panel is the entry to Settings and Public Access, so it
+            // has to stay reachable while the rail is collapsed.
+            if let host {
+                hostButton(host)
+            }
         }
         .padding(.horizontal, WarrenSpacing.xs)
         .frame(minHeight: WarrenLayoutMetrics.tabBarHeight)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace navigation")
     }
-}
 
-/// The trailing controls are ordered from workspace actions to global utilities.
-/// Settings is kept as a compatibility case for persisted layouts, but is now
-/// rendered in the sidebar footer to match the workspace navigation model.
-public enum WarrenDesktopWorkspaceTabTrailingControl: CaseIterable, Hashable, Sendable {
-    case externalIDE
-    case endpoint
-    case web
-    case settings
-
-    public static let maximumExternalButtonCount = 4
-    /// Locked priority for the workspace trailing chrome: IDE → Endpoint →
-    /// Web → Settings.
-    public static let defaultExternalControls: [Self] = [
-        .externalIDE,
-        .web,
-        .settings,
-    ]
-
-    public static func normalizedExternalControls(_ controls: [Self]) -> [Self] {
-        var seen = Set<Self>()
-        return Array(
-            controls
-                .filter { seen.insert($0).inserted }
-                .prefix(maximumExternalButtonCount)
+    private func hostButton(_ host: WarrenDesktopCollapsedHost) -> some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        return Button(action: host.toggle) {
+            HStack(spacing: 5) {
+                Text(host.initial)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(tokens.foreground.opacity(0.8))
+                    .frame(width: 20, height: 20)
+                    .background(
+                        tokens.foreground.opacity(0.07),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
+                    .overlay(alignment: .bottomTrailing) {
+                        if host.isPublicAccessOn {
+                            Circle()
+                                .fill(tokens.success)
+                                .frame(width: 6, height: 6)
+                                .padding(1)
+                                .background(Circle().fill(tokens.workbenchCardFill))
+                                .offset(x: 3, y: 3)
+                        }
+                    }
+            }
+            .frame(width: 28, height: WarrenLayoutMetrics.tabPillHeight)
+            .background(
+                host.isPickerPresented ? tokens.selectedTabPillFill : .clear,
+                in: RoundedRectangle(cornerRadius: WarrenLayoutMetrics.tabPillRadius, style: .continuous)
+            )
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help("Host \(host.name)")
+        .accessibilityLabel("Host \(host.name)")
+        .accessibilityValue(host.isPublicAccessOn ? "Public Access on" : "")
+        .warrenSemanticElement(
+            id: "collapsed-host",
+            role: .button,
+            label: "Host",
+            value: host.name,
+            isSelected: host.isPickerPresented,
+            action: host.toggle
         )
     }
-
-    /// Resolve the explicit priority for the current endpoint count. The locked
-    /// order is IDE → Endpoint → Web → Notifications → Settings; Endpoint is
-    /// only exposed when more than one execution server exists. It is inserted
-    /// at priority slot 2 (index 1) so the resolved array is already sorted
-    /// for `layout(direct:overflow:)`.
-    public static func controlsForEndpointCount(
-        _ controls: [Self],
-        endpointCount: Int
-    ) -> [Self] {
-        let normalized = normalizedExternalControls(controls)
-        guard endpointCount > 1, !normalized.contains(.endpoint) else {
-            return normalized
-        }
-
-        var visible = normalized
-        visible.insert(.endpoint, at: min(1, visible.count))
-        return normalizedExternalControls(visible)
-    }
-
-    /// Produces direct top-bar controls and the one-level overflow list. The
-    /// overflow button itself reserves one of the five visible slots.
-    public static func layout(
-        externallyVisibleControls: [Self],
-        availableControls: [Self]
-    ) -> (direct: [Self], overflow: [Self]) {
-        let available = allCases.filter { availableControls.contains($0) }
-        let requested = normalizedExternalControls(externallyVisibleControls)
-            .filter { available.contains($0) }
-        let hidden = available.filter { !requested.contains($0) }
-        let directLimit = hidden.isEmpty
-            ? maximumExternalButtonCount
-            : max(maximumExternalButtonCount - 1, 0)
-        let direct = Array(requested.prefix(directLimit))
-        let overflow = available.filter { !direct.contains($0) }
-        return (direct, overflow)
-    }
-
-    var title: String {
-        switch self {
-        case .externalIDE: "Open in IDE"
-        case .endpoint: "Execution Server"
-        case .web: "Public Access"
-        case .settings: "Settings"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .externalIDE: "macwindow"
-        case .endpoint: "server.rack"
-        case .web: "globe"
-        case .settings: "gearshape"
-        }
-    }
-
-    var accessibilityHint: String {
-        switch self {
-        case .externalIDE: "Choose an application for the current workspace"
-        case .endpoint: "Switch the execution server"
-        case .web: "Manage Public Access"
-        case .settings: "Open Warren settings"
-        }
-    }
-
-    static func available(
-        externalIDEOptions: [WarrenDesktopExternalIDEOption]?,
-        embeddedEditorAvailable: Bool = false
-    ) -> [Self] {
-        allCases.filter { control in
-            control != .settings
-                && (control != .externalIDE
-                    || embeddedEditorAvailable
-                    || !(externalIDEOptions?.isEmpty ?? true))
-        }
-    }
 }
 
-private struct WarrenDesktopWorkspaceTabTrailing: View {
-    let connectionState: WarrenDesktopConnectionState
-    let endpointOptions: [WarrenDesktopEndpointOption]
-    let selectedEndpointID: String
-    let webStatus: WarrenDesktopWebStatus
-    let externalIDEOptions: [WarrenDesktopExternalIDEOption]?
-    let embeddedEditorAvailable: Bool
-    let embeddedEditorSelected: Bool
-    let embeddedEditorDefault: Bool
-    let externallyVisibleControls: [WarrenDesktopWorkspaceTabTrailingControl]
-    let isOverflowPresented: Bool
-    let onSettings: () -> Void
-    let onChromePopover: (WarrenDesktopChromePopover) -> Void
-    let onOpenInExternalIDE: (WarrenDesktopExternalIDEOption) -> Void
-    let onOpenEmbeddedEditor: () -> Void
-    let onCloseEmbeddedEditor: () -> Void
-    let onSelectEndpoint: (String) -> Void
-    let onRetryConnection: () -> Void
-    let onStopConnection: () -> Void
-    var inspector: WarrenDesktopInspectorToggle?
+/// The Host picker entry the collapsed rail keeps in the top bar.
+struct WarrenDesktopCollapsedHost {
+    let name: String
+    let initial: String
+    let isPublicAccessOn: Bool
+    let isPickerPresented: Bool
+    let toggle: () -> Void
+}
+
+/// The right sidebar's toggle.
+///
+/// The icon is the sidebar's own (`sidebar.right`), and it used to open a menu
+/// of panels instead of doing what it drew. It is a real switch now: selected
+/// while the sidebar is up, and no Public Access dot — that moved to the Host
+/// name, where it stays visible with the sidebar closed.
+struct WarrenDesktopRightSidebarToggle: View {
+    let isOpen: Bool
+    let action: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        HStack(spacing: WarrenSpacing.xxs) {
-            ForEach(controlLayout.direct, id: \.self) {
-                trailingControl($0, tokens: tokens)
-            }
-            if !controlLayout.overflow.isEmpty {
-                WarrenDesktopOverflowButton(
-                    isPresented: isOverflowPresented,
-                    action: { onChromePopover(.overflow) }
-                )
-            }
-            if let inspector {
-                // Last, at the window's edge, beside the region it opens
-                // (after Synara's right-dock toggle).
-                WarrenDesktopChromeButton(
-                    systemImage: "sidebar.right",
-                    label: inspector.isOpen ? "Hide Inspector" : "Show Inspector",
-                    hint: "Changes, history, and files beside the terminal (⌥⌘B)",
-                    action: inspector.toggle,
-                    tint: inspector.isOpen ? tokens.foreground : nil,
-                    edgeSpaced: true
-                )
-                .warrenSemanticElement(
-                    id: "workspace-inspector.toggle",
-                    role: .button,
-                    label: inspector.isOpen ? "Hide Inspector" : "Show Inspector",
-                    isSelected: inspector.isOpen,
-                    action: inspector.toggle
-                )
-            }
-        }
-        .padding(.horizontal, WarrenSpacing.xs)
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(minHeight: WarrenLayoutMetrics.tabBarHeight)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Workspace actions")
-    }
-
-    private var controlLayout: (direct: [WarrenDesktopWorkspaceTabTrailingControl], overflow: [WarrenDesktopWorkspaceTabTrailingControl]) {
-        WarrenDesktopWorkspaceTabTrailingControl.layout(
-            externallyVisibleControls: externallyVisibleControls,
-            availableControls: WarrenDesktopWorkspaceTabTrailingControl.available(
-                externalIDEOptions: externalIDEOptions,
-                embeddedEditorAvailable: embeddedEditorAvailable
-            )
-        )
-    }
-
-    @ViewBuilder
-    private func trailingControl(
-        _ control: WarrenDesktopWorkspaceTabTrailingControl,
-        tokens: WarrenColorTokens
-    ) -> some View {
-        switch control {
-        case .externalIDE:
-            if embeddedEditorAvailable {
-                WarrenDesktopIDEControl(
-                    embeddedEditorSelected: embeddedEditorSelected,
-                    embeddedEditorDefault: embeddedEditorDefault,
-                    onOpenEmbeddedEditor: onOpenEmbeddedEditor,
-                    onCloseEmbeddedEditor: onCloseEmbeddedEditor,
-                    onPresentChoices: { onChromePopover(.externalIDE) }
-                )
-                .warrenSemanticElement(
-                    id: "workspace-ide.open",
-                    role: .button,
-                    label: embeddedEditorSelected
-                        ? "Close Embedded Editor"
-                        : "Open in IDE",
-                    value: embeddedEditorSelected
-                        ? "Editor open"
-                        : (embeddedEditorDefault
-                            ? "Embedded editor default"
-                            : "Choose an IDE"),
-                    isSelected: embeddedEditorSelected,
-                    action: idePrimaryAction
-                )
-            } else if let externalIDEOptions, !externalIDEOptions.isEmpty {
-                WarrenDesktopExternalIDEMenu(
-                    options: externalIDEOptions,
-                    onPresent: { onChromePopover(.externalIDE) },
-                    onOpen: onOpenInExternalIDE
-                )
-            }
-        case .endpoint:
-            WarrenDesktopEndpointControl(
-                connectionState: connectionState,
-                endpoints: endpointOptions,
-                selectedID: selectedEndpointID,
-                onPresent: { onChromePopover(.endpoint) },
-                onSelect: onSelectEndpoint
-            )
-        case .web:
-            WarrenDesktopChromeButton(
-                systemImage: "globe",
-                label: "Web",
-                hint: webStatus.tunnelRunning
-                    ? "Public Access is on"
-                    : (webStatus.isRunning ? "Web is running" : "Web is stopped"),
-                action: { onChromePopover(.web) },
-                tint: webStatus.tunnelRunning
-                    ? tokens.info
-                    : (webStatus.isRunning ? tokens.success : nil),
-                edgeSpaced: true
-            )
-        case .settings:
-            WarrenDesktopChromeButton(
-                systemImage: "gearshape",
-                label: "Settings",
-                hint: "Open Warren settings",
-                action: onSettings,
-                edgeSpaced: true
-            )
-        }
-    }
-
-    private func idePrimaryAction() {
-        switch WarrenDesktopIDEPrimaryAction.resolve(
-            embeddedEditorDefault: embeddedEditorDefault,
-            embeddedEditorSelected: embeddedEditorSelected
-        ) {
-        case .openEmbeddedEditor:
-            onOpenEmbeddedEditor()
-        case .closeEmbeddedEditor:
-            onCloseEmbeddedEditor()
-        case .presentChoices:
-            onChromePopover(.externalIDE)
-        }
-    }
-}
-
-enum WarrenDesktopIDEPrimaryAction: Equatable {
-    case openEmbeddedEditor
-    case closeEmbeddedEditor
-    case presentChoices
-
-    /// The control is tinted while the editor region is up, so a lit control has
-    /// to turn it off: that used to be the editor Tab's close box, and the Tab is
-    /// gone. Without this the lit control only reopened the picker, leaving the
-    /// region with no visible way to close it.
-    static func resolve(
-        embeddedEditorDefault: Bool,
-        embeddedEditorSelected: Bool
-    ) -> Self {
-        if embeddedEditorSelected {
-            return .closeEmbeddedEditor
-        }
-        return embeddedEditorDefault ? .openEmbeddedEditor : .presentChoices
-    }
-}
-
-private struct WarrenDesktopIDEControl: View {
-    let embeddedEditorSelected: Bool
-    let embeddedEditorDefault: Bool
-    let onOpenEmbeddedEditor: () -> Void
-    let onCloseEmbeddedEditor: () -> Void
-    let onPresentChoices: () -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-
-    var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        WarrenDesktopChromeButton(
-            systemImage: "macwindow",
-            label: embeddedEditorSelected ? "Close Embedded Editor" : "Open in IDE",
-            hint: hint,
-            action: primaryAction,
-            tint: embeddedEditorSelected ? tokens.info : nil,
-            edgeSpaced: true
-        )
-    }
-
-    private var hint: String {
-        switch WarrenDesktopIDEPrimaryAction.resolve(
-            embeddedEditorDefault: embeddedEditorDefault,
-            embeddedEditorSelected: embeddedEditorSelected
-        ) {
-        case .openEmbeddedEditor: "Open the embedded editor"
-        case .closeEmbeddedEditor: "Close the embedded editor"
-        case .presentChoices: "Choose an IDE"
-        }
-    }
-
-    private func primaryAction() {
-        switch WarrenDesktopIDEPrimaryAction.resolve(
-            embeddedEditorDefault: embeddedEditorDefault,
-            embeddedEditorSelected: embeddedEditorSelected
-        ) {
-        case .openEmbeddedEditor:
-            onOpenEmbeddedEditor()
-        case .closeEmbeddedEditor:
-            onCloseEmbeddedEditor()
-        case .presentChoices:
-            onPresentChoices()
-        }
-    }
-}
-
-private struct WarrenDesktopEndpointControl: View {
-    let connectionState: WarrenDesktopConnectionState
-    let endpoints: [WarrenDesktopEndpointOption]
-    let selectedID: String
-    let onPresent: () -> Void
-    let onSelect: (String) -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-    @FocusState private var isFocused: Bool
-
-    private var selectedEndpoint: WarrenDesktopEndpointOption? {
-        endpoints.first { $0.id == selectedID }
-    }
-
-    var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let presentation = WarrenDesktopConnectionPresentation(connectionState)
-        let endpointColor = selectedEndpoint.map {
-            WarrenDesktopEndpointAppearance.color(
-                for: $0.id,
-                in: endpoints,
-                tokens: tokens
-            )
-        } ?? tokens.mutedForeground
-        Button(action: onPresent) {
-            Image(systemName: "server.rack")
-                .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
-                .padding(.top, 2)
-                .padding(.trailing, 2)
-                .foregroundStyle(endpointColor)
+        Button(action: action) {
+            Image(systemName: isOpen ? "rectangle.righthalf.inset.filled" : "sidebar.right")
+                .font(.system(size: 13, weight: .regular))
+                .frame(width: 28, height: WarrenLayoutMetrics.tabPillHeight)
+                .contentShape(.rect)
                 .accessibilityHidden(true)
-                .frame(width: 28, height: 28)
         }
-        .buttonStyle(WarrenChromeButtonStyle(isFocused: isFocused))
-        .frame(width: 28, height: 28)
-        .contentShape(.rect)
-        .fixedSize(horizontal: true, vertical: false)
-        .focused($isFocused)
-        .foregroundStyle(tokens.mutedForeground)
-        .accessibilityLabel("Execution server: \(selectedEndpoint?.label ?? "Server")")
-        .accessibilityHint("\(presentation.label). Click for details.")
+        .buttonStyle(WarrenChromeButtonStyle())
+        .frame(width: 28, height: WarrenLayoutMetrics.tabPillHeight)
+        .background(
+            isOpen ? tokens.selectedTabPillFill : .clear,
+            in: RoundedRectangle(cornerRadius: WarrenLayoutMetrics.tabPillRadius, style: .continuous)
+        )
+        .foregroundStyle(isOpen ? tokens.foreground : tokens.mutedForeground)
+        .warrenTooltip(isOpen ? "Hide Right Sidebar" : "Show Right Sidebar", shortcut: "\u{2325}\u{2318}B")
+        .accessibilityLabel("Right Sidebar")
+        .accessibilityValue(isOpen ? "Shown" : "Hidden")
+        .accessibilityHint("Toggle the right sidebar")
+        .warrenSemanticElement(
+            id: "right-sidebar.toggle",
+            role: .button,
+            label: "Right Sidebar",
+            value: isOpen ? "Shown" : "Hidden",
+            isSelected: isOpen,
+            action: action
+        )
     }
-
 }

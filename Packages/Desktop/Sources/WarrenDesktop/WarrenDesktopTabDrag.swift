@@ -101,6 +101,12 @@ struct WarrenDesktopTabDragHandle: NSViewRepresentable {
     let isEnabled: Bool
     let onSelect: () -> Void
     let onSplitDrop: (String, String, SplitDropTarget) -> Void
+    /// Called once the press crosses the threshold and a drag session starts.
+    var onDragStarted: () -> Void = {}
+    /// Leaves the row's top-trailing control (a Session's subagent count chip)
+    /// its own clicks, so a handle that covers the whole row does not swallow
+    /// the chip's toggle.
+    var excludesTopTrailingControl = false
 
     @Environment(\.warrenTabDrag) private var drag
 
@@ -111,6 +117,8 @@ struct WarrenDesktopTabDragHandle: NSViewRepresentable {
         view.drag = drag
         view.onSelect = onSelect
         view.onSplitDrop = onSplitDrop
+        view.onDragStarted = onDragStarted
+        view.excludesTopTrailingControl = excludesTopTrailingControl
         return view
     }
 
@@ -120,6 +128,8 @@ struct WarrenDesktopTabDragHandle: NSViewRepresentable {
         nsView.drag = drag
         nsView.onSelect = onSelect
         nsView.onSplitDrop = onSplitDrop
+        nsView.onDragStarted = onDragStarted
+        nsView.excludesTopTrailingControl = excludesTopTrailingControl
     }
 }
 
@@ -129,6 +139,13 @@ final class WarrenDesktopTabDragHandleView: NSView, NSDraggingSource {
     weak var drag: WarrenDesktopTabDrag?
     var onSelect: (() -> Void)?
     var onSplitDrop: ((String, String, SplitDropTarget) -> Void)?
+    var onDragStarted: (() -> Void)?
+    var excludesTopTrailingControl = false
+
+    /// The band at the row's top-trailing edge a chip can claim: the chip's
+    /// height (16, centred in the 18pt title line) plus the row's own inset,
+    /// and enough width for the chip and a pin after it.
+    static let topTrailingControlExclusion = NSRect(x: 0, y: 0, width: 44, height: 26)
 
     private var mouseDownPoint: NSPoint?
     private var didStartDrag = false
@@ -144,6 +161,16 @@ final class WarrenDesktopTabDragHandleView: NSView, NSDraggingSource {
     /// their existing hit paths.
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard isEnabled, bounds.contains(point) else { return nil }
+        if excludesTopTrailingControl {
+            let control = Self.topTrailingControlExclusion
+            let band = NSRect(
+                x: bounds.maxX - control.width,
+                y: bounds.minY + control.minY,
+                width: control.width,
+                height: control.height
+            )
+            if band.contains(point) { return nil }
+        }
         guard let event = NSApp.currentEvent, event.type == .leftMouseDown else {
             return nil
         }
@@ -188,6 +215,7 @@ final class WarrenDesktopTabDragHandleView: NSView, NSDraggingSource {
     private func beginDrag(event: NSEvent) {
         didStartDrag = true
         mouseDownPoint = nil
+        onDragStarted?()
         escapePressed = false
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 {

@@ -82,24 +82,18 @@ private enum UIProbe {
 
         let initialWorkspace = WarrenDesktopFixture.preview.projection.groups[0].workspaces[0]
         let initialProject = WarrenDesktopFixture.preview.projection.groups[0].project
-        let collapsedSnapshot = recorder.snapshot()
-        guard !collapsedSnapshot.nodes.isEmpty else { throw UIProbeError.noSemanticNodes }
-        guard collapsedSnapshot.nodes.first(where: {
+        let initialSnapshot = recorder.snapshot()
+        guard !initialSnapshot.nodes.isEmpty else { throw UIProbeError.noSemanticNodes }
+        // Every row starts open; only the user folds one away.
+        guard initialSnapshot.nodes.first(where: {
             $0.id == "project.\(initialProject.id.description)"
-        })?.value == "Collapsed" else {
+        })?.value == "Expanded" else {
             throw NSError(
                 domain: "Warren.UIProbe",
                 code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Project rows must be collapsed initially."]
+                userInfo: [NSLocalizedDescriptionKey: "Project rows must be expanded initially."]
             )
         }
-        try recorder.perform(
-            .press,
-            on: "project.\(initialProject.id.description)"
-        )
-        hostingView.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        hostingView.layoutSubtreeIfNeeded()
         try recorder.perform(
             .press,
             on: "workspace.project-list.\(initialWorkspace.id.description)"
@@ -130,21 +124,72 @@ private enum UIProbe {
         if !invalidFrames.isEmpty {
             violations.append("Non-positive semantic frames: \(invalidFrames.joined(separator: ", "))")
         }
-        let undersizedSidebarRows = snapshot.nodes.filter {
-            if $0.id.hasPrefix("project."),
-               !$0.id.hasSuffix(".new-workspace"),
-               !$0.id.hasSuffix(".toggle") {
-                return $0.frame.width < 250 || $0.frame.height < 28
+        // A sidebar row draws its controls inside the same band, so the row's
+        // navigation target ends where the first control begins. A target that
+        // stops earlier leaves a strip that looks like part of the row and does
+        // nothing, which a probe that only asks whether a target exists cannot
+        // see. The allowance is the spacing the tree separates one row's
+        // elements by; anything wider is an unhandled band.
+        let rowElementSpacing: CGFloat = 8
+        // The smallest row the tree draws. A navigation target under this is a
+        // sliver however wide it is.
+        let minimumRowTargetHeight: CGFloat = 22
+        let sidebarRowPrefixes = [
+            "project.",
+            "workspace.project-list.",
+            "workspace-session.project-list.",
+        ]
+        let allIDs = Set(snapshot.nodes.map(\.id))
+        let sidebarRows = snapshot.nodes.filter { node in
+            guard sidebarRowPrefixes.contains(where: { node.id.hasPrefix($0) }) else { return false }
+            // A control inside a row carries the row's id as its prefix; only
+            // the row itself is a row.
+            return !allIDs.contains { other in
+                other != node.id && node.id.hasPrefix(other + ".")
             }
-            if $0.id.hasPrefix("workspace.project-list.") {
-                return $0.frame.width < 240 || $0.frame.height < 26
-            }
-            return false
-        }.map(\.id)
-        if !undersizedSidebarRows.isEmpty {
+        }
+        let sliverTargets = sidebarRows
+            .filter { $0.frame.height < minimumRowTargetHeight }
+            .map(\.id)
+        if !sliverTargets.isEmpty {
             violations.append(
-                "Sidebar navigation targets do not cover their rows: " +
-                    undersizedSidebarRows.joined(separator: ", ")
+                "Sidebar navigation targets are too small to hit: " +
+                    sliverTargets.sorted().joined(separator: ", ")
+            )
+        }
+        // The sidebar's own column, so a window-wide surface that happens to be
+        // centred in a row's band — the terminal — is not read as one of the
+        // row's controls.
+        let sidebarColumn = sidebarRows.map(\.frame.x).min().map { minX in
+            let maxX = sidebarRows.map { $0.frame.x + $0.frame.width }.max() ?? minX
+            return minX ..< maxX
+        }
+        var unhandledRowBands: [String] = []
+        for row in sidebarRows {
+            let trailingEdge = row.frame.x + row.frame.width
+            let band = row.frame.y ..< (row.frame.y + row.frame.height)
+            let controls = snapshot.nodes
+                .filter { $0.id != row.id }
+                .filter { node in
+                    let center = node.frame.y + node.frame.height / 2
+                    return band.contains(center)
+                        && node.frame.x >= trailingEdge
+                        && (sidebarColumn?.contains(node.frame.x) ?? true)
+                }
+                .sorted { $0.frame.x < $1.frame.x }
+            var previous = trailingEdge
+            for control in controls {
+                if control.frame.x - previous > rowElementSpacing {
+                    unhandledRowBands.append(row.id)
+                    break
+                }
+                previous = control.frame.x + control.frame.width
+            }
+        }
+        if !unhandledRowBands.isEmpty {
+            violations.append(
+                "Sidebar navigation targets leave part of their row unhandled: " +
+                    unhandledRowBands.sorted().joined(separator: ", ")
             )
         }
 

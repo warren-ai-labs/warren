@@ -125,6 +125,124 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.31.0",
+        dateISO: "2026-10-19",
+        date: "October 19, 2026",
+        title: "Warren answers Agents sooner over a slow link.",
+        summary:
+          "A minor release that removes fixed waits from the Agent path: the transcript watcher reads at 50ms after input and while a turn works, PTY submission continues as soon as the TUI echoes and goes quiet, and the new opt-in `output-ack-v1` capability bounds terminal output in flight to about one round trip. It also counts waiting Agents on the Dock icon and posts a macOS notification while Warren is in the background. The JSON control protocol remains at 4.0 and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Bound terminal output in flight with `output-ack-v1`. A client that negotiates the capability acknowledges received output with `session.ack`; the Host keeps about one round trip plus 200ms in flight and pauses the reader beyond that, so a keystroke echo or Agent event is no longer stuck behind seconds of queued PTY output on a slow link. A reader held back for over a second skips its backlog and receives a fresh terminal state in place, instead of the connection closing for a re-anchor.",
+              "Tell a person away from the window that an Agent is waiting. The Desktop counts the current Host's waiting Sessions on the Dock icon, posts one macOS notification per new request while Warren is in the background, lets an approval be allowed or rejected from the notification, and withdraws the notification once nobody is asking. Settings > Notifications has a switch for each.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Answer Agent messages without fixed waits. The transcript watcher reads at 50ms right after input and while a turn is working, then back at 500ms when idle, and PTY submission continues once the TUI has echoed the input and gone quiet, still capped at 300ms. Codex's queue poll stays on the idle cadence.",
+              "Open an iOS Agent Session without terminal output. The Agent view subscribes to the Agent stream directly and no longer carries TUI redraws it never shows; the terminal stream attaches when the user switches to the terminal.",
+              "Name a Session the same way on every client. The kind promotion moves into `SessionTitle`, iOS resolves with the owning Workspace's path, and the roster carries `resultSentence` so the iOS Inbox row says what a finished Agent did. A new iOS Agent Session is named New Session.",
+              "Cut Relay round trips on resume, reconnect, and session switch: an expiring access capability is refreshed before dialing, the Session holding the control lease is restored first, the resume probe ceiling grows with measured round trips, and iOS sends the old unsubscribe alongside the new subscribe.",
+              "Say Host instead of server or endpoint in Desktop copy.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Keep a slow Relay stream from stalling the Host socket. Each stream drains its own bounded inbound queue, and a delivery failure closes only that stream instead of reconnecting every client; the connector also probes the Relay right after the machine wakes from sleep.",
+              "Close races in output flow control and Relay streams: record output as sent before enqueueing it, allow a held-back reader 1s plus two round trips before skipping its backlog, let a backlog skip yield to a subscribe already in flight, check and clear the terminal attachment atomically, and queue a Relay CLOSE behind undelivered body frames.",
+              "Keep the iOS terminal reachable after opening a Session in the Agent view.",
+              "Keep a panel that rises above its anchor inside the window.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0 and this release migrates no state. It adds the opt-in `output-ack-v1` capability; a client that does not negotiate it behaves as before.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
+        version: "0.30.0",
+        dateISO: "2026-10-19",
+        date: "October 19, 2026",
+        title: "Warren rebuilds the Desktop workbench.",
+        summary:
+          "A major release that rebuilds the Desktop workbench — sidebar, top bar, menus, the conversation pane, and a separate Settings window — around what a Session is really doing: a shell's own prompt state, an agent's own conversation name, and one row per running subagent. Terminal Groups are removed, so every Session now belongs to a Workspace. The JSON control protocol remains at 4.0 and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Let a Host record per-provider ACP server commands in `~/.warren/settings.json` (`acpCommands`). A Chat Session created without an explicit command now uses that entry, so Desktop, Web, iOS, and `warren agent create --agent-handler acp` can route chat through an ACP server that carries the provider's credentials instead of the built-in adapter resolved from `PATH`. An explicit request `command` still wins, and an empty entry keeps the built-in.",
+              "Give every Session row the same two lines. A row no longer changes height as turns start and end: every row draws what the Session is doing and what it last did and how long ago, with the resting line one colour tier below a working one, a slow highlight on a working Agent's line that Reduce Motion removes, a fade at the tail instead of a truncation glyph, and a chip that counts the subagents a Session is running and opens their rows in place.",
+              "Read a shell's prompt state from the shell itself. With OSC 133 marks in the shell integration (zsh and fish), a shell row's title says where it is instead of repeating its command, and its second line says what it is running, what it last ran, and, when that command exited non-zero without being interrupted, its exit code. The state comes from ghostline v1.5.0's `SessionMetadata.Shell`; a shell that reports no marks keeps the foreground-process line it had. A command that starts an agent CLI turns the Session back into an Agent.",
+              "Rebuild the conversation pane. Answers occupy the reading column with no bubble; user messages sit in a right-aligned bubble that folds past eight lines; one line carries the turn's work and expands into its steps; thinking collapses to its own line; changed files open in the inspector's Changes tab; and the composer holds attachments, the permission mode, the context figure, and the model beside a send key that becomes a stop key while the agent works. Decisions, plans, and queued prompts stack on the composer, and a decision is the only thing in the pane drawn with the accent colour.",
+              "Show what a subagent is doing. Warren tails the child transcripts Claude and Codex write and attaches every event to the child's stable identity (`subagentId`), with `parentCallId` linking the spawn call. A Session shows one row per subagent and the commands it is running, and a subagent's activity never changes the parent Session's status, attention, or turn.",
+              "Use the name an agent CLI generates for its own conversation as the Session title. Codex, Claude Code, OpenCode, and Qoder all name the conversation they are running, so Warren reads those names instead of spending a second model call on the same exchange. A name the user set still wins, and a Host-generated name is replaced by the agent's own. Subagent conversations are never used.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Polish the Web client's chrome. The sidebar and tab strips fade their scroll edges with a seven-stop non-linear alpha ramp, structural separators are true hairlines on Retina, compact controls press with a sampled spring, and keyboard focus draws the ring plus a soft accent halo. The sidebar list and both tab strips are single Tab stops now, with the arrows, Home/End, and PageUp/PageDown to walk them.",
+              "Shorten what a row reports to the width it has: a path keeps its last segment, a `--flag value` pair either becomes the object it names or goes away, a compound command keeps its first command, and a generated title is bounded by display width with the verb first. A title the user set, and a name an agent generated for its own conversation, are never rewritten.",
+              "Unify the sidebar's time format and count vocabulary. Ages read `now / 5m / 2h / 3d / 2w` and then a date; durations read `18s / 3m / 1h`; a turn's counts rank edits, Git writes, commands, fetches, searches, and reads, with unknown tools folded into one `Used n tools`.",
+              "Keep the Host's own title request as a fallback for every agent. An agent that names its own conversation gets a 30-second grace period first, a name that arrives later still replaces the Host's title for another minute, and an agent that never names the conversation falls back to the configured LLM request as before. The Settings switch now reads as the fallback it is.",
+              "Give every Session one name. The top bar, the sidebar row, a split pane's header, a tab, and the window title now resolve the same `SessionTitle`: the user's name wins, then an Agent's own or generated name, then a kind name, then a custom command's summary, then a shell's location. A shell's running command travels beside the title rather than inside it.",
+              "Drop the verb from a shell row's second line. It says only the command now, in the monospaced face, shortened by the same `CommandSummary` the top bar uses.",
+              "Let a resting shell's row collapse to one line. Ten minutes after its last command ends — or right away if it never ran — a shell row drops to a 30pt line, and running a command brings the second line back. A failed command stays two lines until the Session has been looked at once.",
+              "Make a section's add control a permanent part of its heading. Projects and Tasks always show the small grey `+` left of the fold arrow instead of revealing it on hover.",
+              "Slide the selected plate between top-bar tabs. A Tab's selection is the sidebar's fill with a hairline border, and the plate travels on the shared `WarrenMotion.selection` spring instead of fading in place. The tab track no longer sits in an outer capsule.",
+              "Put the blocking dialogs on one container. `WarrenDialog` owns the ground, the padding, the title block and the S/M/L widths (400 / 480 / 720), so the rename prompt, the message dialog, and the task, workspace and project delete confirmations draw inside it.",
+              "Draw settings in its own window. ⌘, opens one 860×620 window that can sit beside the terminal it changes while the main window stays live. The navigation is 220pt wide with monochrome SF Symbols, settings rows are 44pt tall, and Settings' palette derives every value from the shared tokens.",
+              "Give a resting Agent row the Host's result sentence. At the end of a turn the Host asks its title endpoint for one past-tense line describing what the turn did, so a resting row says what happened instead of `Edited 2 files`; when the endpoint is not configured or fails, the row keeps its counts.",
+              "Give Settings the shared code chip and a real setup-script editor. `$1`, `$2`, and `WARREN_*` draw as one monospaced code chip, and a project's setup script shows its first line with a `+N lines` marker and an Edit… button that opens the whole script.",
+              "Merge the Launch Commands list. One row per preset carries its order, its visibility, and its command on a second monospaced line; clicking the row opens the command editor under it.",
+              "Put the editor choice in the Settings editor list. Each row carries the same white checkmark column a single-choice menu uses, and a chosen colour card draws the same white ring a focused field uses.",
+              "Let a Launch Commands row be dragged onto another to reorder it; a row that holds the keyboard also answers ⌥↑ / ⌥↓.",
+              "Give the Relay connection row its on/off switch. Enrolling a Host keeps it enrolled; the switch only starts or stops the tunnel, so pausing a Relay no longer means resetting the enrollment.",
+              "Draw New workspace, New Task, the worktree importer, the Superset importer, and the setup-script editor in the shared `WarrenDialog`, so every blocking flow shares one ground, one padding scale, and keycap buttons.",
+              "Give the AI Titles page the shared validated form. Its fields stay a page-local draft, a primary Save & Test saves and checks the endpoint with a spinner, and a Test button (disabled until there is a draft) checks without saving.",
+              "Keep the Relay invite and the LAN pairing PIN inline with a countdown bar. The invite's QR no longer opens a popover, and both rows show how much of their window is left as a thin bar under the text.",
+              "Rework the Terminal page's previews. The font preview keeps a fixed 132pt height, the pane-title template renders its result right under it behind a ↳, and the placeholder chips show only the placeholder so all nine fit in two rows.",
+              "Use the app's own segmented control for the Usage range instead of the system one, so the chart does not borrow the platform accent.",
+              "Size Tabs by the room the track has. A Tab is 200pt wide when there are few and narrows evenly down to a 96pt floor; past the floor the track scrolls under its two edge fades and a `⌄ N` control lists every Tab.",
+              "Put Public Access's state in a header row: a dot, the address it serves (or not published), and a switch at the tail.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Stop the sidebar jumping under a shell row's hover card. Hover cards now draw without the menu layer's click-catching scrim and never take the pointer, and a shell row's collapse and expansion animate the rows below it instead of only itself.",
+              "Give the chrome's state changes their motion. Menus and hover cards fade in and out, the sidebar's rows move when a Session opens or closes or a Workspace folds, the controls that hovering reveals fade in, the solo pill grows into a shell's running command, and the Hosts heading cross-fades to its count.",
+              "Keep a Session's pane arrangement when its activity line changes. The projection copy that updates that line rebuilt every relationship by hand and left the pane groups behind, so an Agent step could erase the Host's split arrangements until the next roster snapshot.",
+              "Stop truncating a public response when a route's delivery queue fills. A route's buffer is now bounded in bytes by the sender's whole window, and a per-route delivery goroutine hands frames to the consumer in order, so a full handoff buffer never stalls the tunnel or loses a frame.",
+              "Install the managed agent hooks even when the agent CLI has never run, so its configuration directory does not exist yet. Codex, Claude Code, and Qoder were all affected, and the failure was invisible because every developer machine already had those directories.",
+              "Stop binding an OpenCode Session to a session OpenCode created to delegate work. Every subagent task runs in its own child session, and Warren treated the newest `session.created` as the conversation the terminal was in. The bind plugin now ignores a child session (`parentID`), discovery only offers root conversations, and a binding that already names a child is repaired to the conversation that owns it.",
+            ],
+          },
+          {
+            title: "Removed",
+            items: [
+              "Remove Terminal Groups, the Host-owned containers (default `Inbox`) for standalone shell Sessions. Every Session now belongs to a Workspace. The `terminal-group.*` methods are gone, the roster no longer carries `terminalGroups`, `session.create` requires a `workspace`, and the CLI drops the `warren terminal-group` resource and every `--group` flag. The Web client, search, and docs drop the group surface, and the Raycast extension is removed.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0 and this release migrates no state.",
+              "Terminal Groups are removed, a breaking change for clients and scripts: `session.create` requires a `workspace`, the `terminal-group.*` methods and every `--group` flag are gone, and the roster no longer carries `terminalGroups`. Update clients and scripts to this release.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.25.0",
         dateISO: "2026-10-12",
         date: "October 12, 2026",
@@ -1532,6 +1650,124 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.31.0",
+        dateISO: "2026-10-19",
+        date: "2026 年 10 月 19 日",
+        title: "Warren 在慢链路上更快回应 Agent。",
+        summary:
+          "次版本：去掉 Agent 路径上的固定等待——收到输入后以及回合进行中，transcript watcher 以 50ms 读取，PTY 提交在 TUI 回显且输出安静后立即继续，新增可选的 `output-ack-v1` 能力把在途终端输出限制在约一个往返。同时把等待中的 Agent 计数到 Dock 图标，并在 Warren 处于后台时发一条 macOS 通知。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "新增 `output-ack-v1`，限制在途终端输出。协商该能力的客户端用 `session.ack` 确认已收到的输出；Host 保持在途约一个往返加 200ms，超过就暂停读取，因此慢链路上按键回显或 Agent 事件不再堵在数秒排队输出之后。被压后超过一秒的读取方会跳过积压，就地收到一份新的终端状态，而不是断开连接重新锚定。",
+              "在窗口外提醒有人 agent 在等待。Desktop 把当前 Host 等待中的 Session 计数到 Dock 图标；Warren 处于后台时，每个新请求发一条 macOS 通知；可以直接在通知里通过审批托盘放行或拒绝；无人等待时撤回通知。Settings > Notifications 为各项提供开关。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "去掉 Agent 消息的固定等待。收到输入后以及回合进行中，transcript watcher 以 50ms 读取，空闲时回到 500ms；PTY 提交在 TUI 回显输入并安静后立即继续，仍以 300ms 为上限。Codex 的队列轮询保持空闲节奏。",
+              "打开 iOS Agent Session 时不再订阅终端输出。Agent 视图直接订阅 Agent 流，不再背负它从不显示的 TUI 重绘；切换到终端时再附加终端流。未协商 `agent-streams-v1` 的 Host 保持原路径。",
+              "让 Session 在所有客户端上同名。kind 提升逻辑移入 `SessionTitle`，iOS 用所属 Workspace 的路径解析，roster 携带 `resultSentence`，iOS Inbox 行因此像 Desktop 侧边栏一样说明已完成的 Agent 做了什么。iOS 上新建的 Agent Session 命名为 New Session。",
+              "减少 resume、重连和切换 Session 时的 Relay 往返：即将过期的 access capability 在拨号前刷新，持有控制租约的 Session 先恢复，resume 探测上限随实测往返增长，iOS 把旧的 unsubscribe 与新的 subscribe 一起发送。",
+              "Desktop 文案把 server 或 endpoint 统一称为 Host。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "阻止慢 Relay 流卡住 Host socket。每条流各自排空有界入站队列；投递失败只关闭该流，不再让所有客户端重连；连接器在机器从睡眠唤醒后立即探测 Relay。",
+              "关闭输出流控与 Relay 流中的竞态：入队前先记录输出已发送；被压后的读取方在跳过积压前允许 1 秒加两个往返；积压跳过让位于已在途的 subscribe；原子地检查并清除终端附加；把 Relay 的 CLOSE 排到未投递的 body 帧之后。",
+              "在 Agent 视图中打开 Session 后，iOS 终端仍然可达。",
+              "向上超出锚点的面板保持在窗口内。",
+            ],
+          },
+          {
+            title: "发行说明",
+            items: [
+              "JSON 控制协议仍为 4.0，本版本不迁移任何状态。新增可选的 `output-ack-v1` 能力；未协商的客户端行为不变。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该压缩包适合内部或临时测试，不适合公开发布。",
+            ],
+          },
+        ],
+      },
+      {
+        version: "0.30.0",
+        dateISO: "2026-10-19",
+        date: "2026 年 10 月 19 日",
+        title: "Warren 重建 Desktop 工作台。",
+        summary:
+          "大版本：围绕 Session 的真实状态重建 Desktop 工作台——侧边栏、顶栏、菜单、对话面板，以及独立的 Settings 窗口——并展示 shell 自身的提示符状态、agent 自己生成的对话名，以及每个运行中子 agent 的独立行。Terminal Group 被移除，每个 Session 都归属一个 Workspace。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "让 Host 在 `~/.warren/settings.json` 中按 provider 记录 ACP server 命令（`acpCommands`）。未显式指定命令创建的 Chat Session 现在会使用该配置，因此 Desktop、Web、iOS 和 `warren agent create --agent-handler acp` 都可以把聊天交给携带该 provider 凭据的 ACP server，而不是 `PATH` 上解析到的内置适配器。请求中显式的 `command` 仍然优先，条目为空则保留内置适配器。",
+              "让每个 Session 行都保持两行。行高不再随回合开始和结束而变化：每一行都显示 Session 正在做什么、上一次做了什么以及多久以前。休息态那一行比工作态低一档颜色，工作中的 Agent 那一行有缓慢高亮（“减弱动态效果”会去掉），末尾用渐隐代替截断省略号，标题行还有一个芯片统计 Session 正在运行的子 agent 数量并就地展开它们的行。",
+              "从 shell 自身读取提示符状态。shell 集成（zsh 与 fish）中带有 OSC 133 标记时，shell 行的标题显示它所在的位置，而不是重复它的命令；第二行显示正在运行什么、上一次运行了什么，以及该命令未被中断且以非零退出时的退出码。状态来自 ghostline v1.5.0 的 `SessionMetadata.Shell`；没有标记的 shell 保持原有的前台进程行。启动 agent CLI 的命令会让 Session 重新变成 Agent。",
+              "重建对话面板。回答占据阅读栏，不带气泡；用户消息是右对齐气泡，超过八行折叠；一行承载本回合的工作并可展开为具体步骤；thinking 折叠成自己的一行；变更文件在 inspector 的 Changes 标签页中打开；composer 上放附件、权限模式、上下文数值和模型，旁边的发送键在 agent 工作时变成停止键。决策、计划和排队 prompt 叠放在 composer 上，决策是面板中唯一使用强调色的元素。",
+              "展示子 agent 正在做什么。Warren 现在跟踪 Claude 和 Codex 写入的子会话 transcript，把每个事件挂到子 agent 的稳定标识（`subagentId`）上，并用 `parentCallId` 关联发起调用的位置。Session 为每个子 agent 显示一行及其正在运行的命令，子 agent 的活动不会改变父 Session 的状态、attention 或回合。",
+              "用 agent CLI 为自己对话生成的名字作为 Session 标题。Codex、Claude Code、OpenCode 和 Qoder 都会给正在运行的对话命名，Warren 现在直接读取这些名字，不必为同一次交互再花一次模型调用。用户设置的名字仍然优先，Host 生成的名字会被 agent 自己的名字替换。子 agent 的对话永不使用。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "打磨 Web 客户端的界面。侧边栏和标签条用七段非线性 alpha 渐变软化滚动边缘；结构性分隔在 Retina 上是真正的一像素细线；紧凑控件用采样过的弹簧按压；键盘焦点同时画焦点环和柔和的强调色光晕。侧边栏列表和两条标签条各是一个 Tab 停靠点，用方向键、Home/End 和 PageUp/PageDown 在其中移动。",
+              "按可用宽度缩短每一行报告的内容：路径只保留最后一段，`--flag value` 要么变成它命名的对象要么直接去掉，复合命令只保留第一条命令，生成的标题按显示宽度截断（约 30 个拉丁字符或 16 个中日韩字符）并以动词开头。用户设置的标题和 agent 为自己对话生成的名字永不改写。",
+              "统一侧边栏的时间格式与计数用语。时间显示为 `now / 5m / 2h / 3d / 2w` 之后是日期；时长显示为 `18s / 3m / 1h`；一回合的计数按编辑、Git 写入、命令、拉取、搜索、读取排序，未知工具合并为一条 `Used n tools`。",
+              "把 Host 自己的标题请求保留为所有 agent 的后备。会为自己对话命名的 agent 先获得 30 秒宽限期，之后到达的名字在接下来一分钟内仍会替换 Host 的标题；从不为自己对话命名的 agent 则照常走配置的 LLM 请求。Settings 中的开关现在如其名，是一个后备开关。",
+              "让每个 Session 只有一个名字。顶栏、侧边栏行、分屏面板标题栏、标签和窗口标题现在都解析同一个 `SessionTitle`：用户的名字优先，其次是 Agent 自己或生成的名字，再次是 kind 名字，再次是自定义命令的摘要，最后是 shell 的位置。shell 正在运行的命令与标题并排显示，而不是嵌在标题里。",
+              "去掉 shell 行第二行的动词。现在只显示命令，使用等宽字体，并由顶栏使用的同一个 `CommandSummary` 缩短。",
+              "让休息中的 shell 行折叠为一行。最后一条命令结束十分钟后——或从未运行则立即——shell 行降为 30pt 高的一行，运行命令会让第二行立即恢复。失败的命令保持两行，直到该 Session 被查看过一次。",
+              "让分组的添加控件常驻在它的标题中。Projects 和 Tasks 始终在折叠箭头左侧显示小的灰色 `+`，不再悬停才显示。",
+              "让选中底板在顶栏标签之间滑动。标签的选中态是侧边栏的填充色加一像素描边，底板在共享的 `WarrenMotion.selection` 弹簧上滑动到新选中的标签，而不是原地淡入。标签轨道不再包在外层胶囊里。",
+              "把阻塞式对话框统一到同一个容器。`WarrenDialog` 现在负责底色、内边距、标题区和 S/M/L 宽度（400 / 480 / 720），重命名提示、消息对话框，以及 Task、Workspace、Project 的删除确认都画在它内部。",
+              "让设置在独立窗口中显示。⌘, 打开一个 860×620 的窗口（最小 720×480，记忆位置），可以与被修改的终端并排，主窗口保持可用。导航宽 220pt，使用单色 SF Symbols；设置行高 44pt；Settings 的调色板全部取自共享 token，不再与 App 其余部分脱节。",
+              "让休息中的 Agent 行显示 Host 的结果句。回合结束时 Host 向标题接口请求一句描述本回合做了什么的过去式句子（`Fixed the resize race, added 3 tests`），休息行因此显示发生了什么，而不是 `Edited 2 files`；未配置接口或请求失败时，行仍显示计数。",
+              "让 Settings 使用共享代码芯片和真正的启动脚本编辑器。`$1`、`$2` 和 `WARREN_*` 画成一个等宽代码芯片并在旁标注，项目的启动脚本显示第一行（附 `+N lines`）和一个 Edit… 按钮，打开承载完整脚本的 L 对话框。",
+              "合并 Launch Commands 列表。每个预设一行，携带顺序、可见性和第二行等宽命令；点击该行在其下方打开命令编辑器。",
+              "把编辑器选择放进 Settings 的编辑器列表。每行带与单项选择菜单相同的白色对勾列，点击行即为设为 Open in Editor；选中的颜色卡片画与聚焦输入框相同的白色圆环。",
+              "允许把一行 Launch Command 拖到另一行上重新排序，拖动时抬起该行；持有键盘焦点的行也响应 ⌥↑ / ⌥↓。",
+              "给 Relay 连接行加上开关。注册 Host 后保持注册状态，开关只启停隧道，暂停 Relay 不再需要重置注册。",
+              "把 New workspace、New Task、worktree 导入器、Superset 导入器和启动脚本编辑器都画在共享的 `WarrenDialog` 中，让每个阻塞流程共用同一底色、同一内边距尺度和键帽按钮。",
+              "让 AI Titles 页使用共享的校验表单。字段保持为页面本地草稿，主按钮 Save & Test 保存并带 spinner 检查接口，Test 按钮（无草稿时禁用）只检查不保存，结果显示在按钮旁。",
+              "把 Relay 邀请和局域网配对 PIN 与倒计时条并排显示。邀请的二维码不再打开弹层，两行都在文字下方用细条显示剩余窗口时间。",
+              "重做 Terminal 页的预览。字体预览保持固定 132pt 高度，面板标题模板在自身下方以 ↳ 开头渲染结果，占位符芯片只显示占位符（说明作为 tooltip），九个全部能放进两行。",
+              "Usage 范围改用 App 自己的分段控件，不再借用系统控件和平台强调色。",
+              "按轨道可用空间决定 Tab 宽度。标签少时宽 200pt，随数量增加均匀收窄至 96pt 下限；超过下限后轨道在两侧边缘渐隐下滚动，并用 `⌄ N` 控件列出所有标签。",
+              "把 Public Access 的状态放进标题行：一个圆点、它提供的地址（或未发布），以及尾部的开关。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "阻止侧边栏在 shell 行悬停卡片下跳动。悬停卡片（shell 行的和顶栏标题的）现在不再画在菜单层捕获点击的遮罩上，也永不接收指针；shell 行的折叠与展开会带动下方各行动画，而不是只动自己。",
+              "给界面的状态变化补上动效。菜单和悬停卡片淡入淡出；Session 打开或关闭、Workspace 折叠进空闲行时侧边栏各行移动；悬停才出现的控件淡入；solo 胶囊长成 shell 的运行命令；Hosts 标题交叉淡变为计数。",
+              "在 Session 的活动行变化时保留它的 pane 排布。更新该行的投影副本此前手工重建了每个关系，丢下了 pane 分组，因此一个 Agent 步骤可能抹掉 Host 的分屏排布，直到下一次 roster 快照。",
+              "路由投递队列填满时不再截断公共响应。路由缓冲现按字节、以发送方的整个窗口为上限；每条路由的投递 goroutine 按序把帧交给消费者，因此交接缓冲写满也不会阻塞隧道或丢帧。",
+              "即使 agent CLI 从未运行、配置目录还不存在，也安装托管的 agent hooks。此前安装器只创建 Warren 自己的 hook 脚本目录，然后把 `hooks.json` 写进 agent 的配置目录，因而报 `no such file or directory`；daemon 记录警告并在没有 hook 的情况下继续运行。Codex、Claude Code 和 Qoder 都受影响，而因为每台开发机都已有这些目录，故障一直不可见。",
+              "不再把 OpenCode Session 绑定到 OpenCode 为委派工作而创建的会话上。每个子 agent 任务都在自己的子会话中运行，而 Warren 把最新的 `session.created` 当作终端所在的对话，于是子 agent 把绑定指向了 agent 的内部工作，投影对话、活动覆盖层和 Session 标题都跟着子会话走。bind 插件现在忽略子会话（`parentID`），发现只提供根对话，已经指向子会话的绑定会被修复到拥有它的对话，而不是丢弃。",
+            ],
+          },
+          {
+            title: "移除",
+            items: [
+              "移除 Terminal Groups，即 Host 为独立 shell Session 持有的容器（默认 `Inbox`）。现在每个 Session 都归属一个 Workspace。`terminal-group.*` 方法被移除，roster 和 `roster.delta` 不再携带 `terminalGroups`，Session 与 Pane Group 记录去掉 `terminalGroup` 和 `scope`。`session.create` 要求 `workspace` 且没有默认分组回退；`session.move`、`pane-group.create` 和 `browser.session.create`/`list` 只接受 `workspace`。CLI 移除 `warren terminal-group` 资源及所有 `--group` 标志，`warren session create` 要求 Workspace。Web 客户端、搜索（`g:` 与 `group:` 前缀）和文档移除分组表面，唯一命令是打开 Terminal Group 中 shell 的 Raycast 扩展也被移除。[RFC 0003](docs/rfc/0003-terminal-groups.md) 标记为已撤回。",
+            ],
+          },
+          {
+            title: "发行说明",
+            items: [
+              "JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+              "Terminal Group 被移除，对客户端和脚本是破坏性变更：`session.create` 要求 `workspace`，`terminal-group.*` 方法和所有 `--group` 标志被移除，roster 不再携带 `terminalGroups`。客户端和脚本需升级到本版本。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该压缩包适合内部或临时测试，不适合公开发布。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.25.0",
         dateISO: "2026-10-12",

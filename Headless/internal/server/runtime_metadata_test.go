@@ -17,6 +17,7 @@ type metadataRuntime struct {
 	process     string
 	commandLine string
 	directory   string
+	shell       *runtime.ShellMetadata
 	mu          sync.Mutex
 	calls       int
 }
@@ -25,7 +26,12 @@ func (r *metadataRuntime) Metadata(context.Context, string) (runtime.RuntimeMeta
 	r.mu.Lock()
 	r.calls++
 	r.mu.Unlock()
-	return runtime.RuntimeMetadata{Process: r.process, CommandLine: r.commandLine, Directory: r.directory}, nil
+	return runtime.RuntimeMetadata{
+		Process:     r.process,
+		CommandLine: r.commandLine,
+		Directory:   r.directory,
+		Shell:       r.shell,
+	}, nil
 }
 
 func (r *metadataRuntime) metadataCalls() int {
@@ -45,6 +51,10 @@ func TestRosterOverlaysRuntimeMetadata(t *testing.T) {
 		process:       "npm",
 		commandLine:   "npm run dev",
 		directory:     "/work/live",
+		shell: &runtime.ShellMetadata{
+			AtPrompt:    true,
+			LastCommand: "npm run dev",
+		},
 	}
 	service := &Service{
 		Store:           state,
@@ -80,6 +90,9 @@ func TestRosterOverlaysRuntimeMetadata(t *testing.T) {
 	session := roster.Sessions[0]
 	if session.Process != "npm" || session.CommandLine != "npm run dev" || session.Directory != "/work/live" {
 		t.Fatalf("roster metadata = %q/%q/%q, want npm/npm run dev//work/live", session.Process, session.CommandLine, session.Directory)
+	}
+	if session.Shell == nil || !session.Shell.AtPrompt || session.Shell.LastCommand != "npm run dev" {
+		t.Fatalf("roster shell metadata = %#v, want atPrompt with lastCommand npm run dev", session.Shell)
 	}
 }
 
@@ -129,5 +142,8 @@ func TestRosterFallsBackToLaunchDirectory(t *testing.T) {
 	}
 	if got := roster.Sessions[0].Directory; got != "/work/launch" {
 		t.Fatalf("directory = %q, want the workspace path", got)
+	}
+	if roster.Sessions[0].Shell != nil {
+		t.Fatalf("shell metadata = %#v, want nil when the runtime reported no marker", roster.Sessions[0].Shell)
 	}
 }

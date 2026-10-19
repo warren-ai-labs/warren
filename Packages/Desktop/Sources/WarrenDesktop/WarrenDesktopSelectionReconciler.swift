@@ -10,48 +10,36 @@ public struct WarrenDesktopNavigationMemory: Codable, Equatable, Hashable, Senda
     public var workspaceByProjectID: [String: String]
     /// The last tab selected in each workspace.
     public var tabByWorkspaceID: [String: String]
-    /// The last tab selected in each terminal group.
-    public var tabByTerminalGroupID: [String: String]
     /// The MRU stack of sidebar selections (most recent at the end).
     public var selectionHistory: [String]
     /// The MRU stack of tabs selected in each workspace (most recent at the end).
     public var tabHistoryByWorkspaceID: [String: [String]]
-    /// The MRU stack of tabs selected in each terminal group (most recent at the end).
-    public var tabHistoryByTerminalGroupID: [String: [String]]
 
     public var isEmpty: Bool {
         workspaceByProjectID.isEmpty
             && tabByWorkspaceID.isEmpty
-            && tabByTerminalGroupID.isEmpty
             && selectionHistory.isEmpty
             && tabHistoryByWorkspaceID.isEmpty
-            && tabHistoryByTerminalGroupID.isEmpty
     }
 
     public init(
         workspaceByProjectID: [String: String] = [:],
         tabByWorkspaceID: [String: String] = [:],
-        tabByTerminalGroupID: [String: String] = [:],
         selectionHistory: [String] = [],
-        tabHistoryByWorkspaceID: [String: [String]] = [:],
-        tabHistoryByTerminalGroupID: [String: [String]] = [:]
+        tabHistoryByWorkspaceID: [String: [String]] = [:]
     ) {
         self.workspaceByProjectID = workspaceByProjectID
         self.tabByWorkspaceID = tabByWorkspaceID
-        self.tabByTerminalGroupID = tabByTerminalGroupID
         self.selectionHistory = selectionHistory
         self.tabHistoryByWorkspaceID = tabHistoryByWorkspaceID
-        self.tabHistoryByTerminalGroupID = tabHistoryByTerminalGroupID
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         workspaceByProjectID = try container.decodeIfPresent([String: String].self, forKey: .workspaceByProjectID) ?? [:]
         tabByWorkspaceID = try container.decodeIfPresent([String: String].self, forKey: .tabByWorkspaceID) ?? [:]
-        tabByTerminalGroupID = try container.decodeIfPresent([String: String].self, forKey: .tabByTerminalGroupID) ?? [:]
         selectionHistory = try container.decodeIfPresent([String].self, forKey: .selectionHistory) ?? []
         tabHistoryByWorkspaceID = try container.decodeIfPresent([String: [String]].self, forKey: .tabHistoryByWorkspaceID) ?? [:]
-        tabHistoryByTerminalGroupID = try container.decodeIfPresent([String: [String]].self, forKey: .tabHistoryByTerminalGroupID) ?? [:]
     }
 }
 
@@ -138,17 +126,6 @@ public enum WarrenDesktopNavigationReducer {
             )
         case .openWorkspace(let workspaceID):
             return reduce(state, action: .selectWorkspace(workspaceID), in: projection)
-        case .selectTerminalGroup(let groupID):
-            let next = WarrenDesktopNavigationState(
-                selection: .terminalGroup(groupID),
-                selectedTabID: rememberedTab(
-                    in: groupID,
-                    memory: state.memory,
-                    projection: projection
-                ) ?? firstTabID(inTerminalGroup: groupID, projection: projection),
-                memory: state.memory
-            )
-            return remembering(next, in: projection)
         case .selectTab(let tabID):
             guard projection.tabs.contains(where: { $0.id == tabID }) else { return state }
             let selection = selection(for: tabID, in: projection) ?? state.selection
@@ -234,14 +211,6 @@ public enum WarrenDesktopNavigationReducer {
                 selectedTabID: state.selectedTabID,
                 memory: nextMemory
             )
-        case .deleteTerminalGroup(let groupID):
-            var nextMemory = state.memory
-            forget(terminalGroupID: groupID, from: &nextMemory)
-            return WarrenDesktopNavigationState(
-                selection: state.selection,
-                selectedTabID: state.selectedTabID,
-                memory: nextMemory
-            )
         case .deleteProject(let projectID):
             var nextMemory = state.memory
             forget(projectID: projectID, from: &nextMemory)
@@ -260,9 +229,6 @@ public enum WarrenDesktopNavigationReducer {
              .dismissActivity,
              .moveTab, .moveSession, .moveProject, .moveWorkspace,
              .requestNewSession, .launchSession,
-             .requestNewTerminalGroupSession, .launchTerminalGroupSession,
-             .createTerminalGroup, .renameTerminalGroup, .setTerminalGroupHome,
-             .moveTerminalGroup,
              .toggleSidebar, .openNotifications:
             return state
         }
@@ -333,11 +299,6 @@ public enum WarrenDesktopNavigationReducer {
             stack.removeAll { $0 == tabID }
             stack.append(tabID)
             memory.tabHistoryByWorkspaceID[workspaceID.description] = stack
-        case .terminalGroup(let groupID):
-            var stack = memory.tabHistoryByTerminalGroupID[groupID.description] ?? []
-            stack.removeAll { $0 == tabID }
-            stack.append(tabID)
-            memory.tabHistoryByTerminalGroupID[groupID.description] = stack
         case .project:
             break
         }
@@ -367,8 +328,6 @@ public enum WarrenDesktopNavigationReducer {
         switch selection {
         case .workspace(let workspaceID):
             stack = memory.tabHistoryByWorkspaceID[workspaceID.description] ?? []
-        case .terminalGroup(let groupID):
-            stack = memory.tabHistoryByTerminalGroupID[groupID.description] ?? []
         case .project:
             stack = []
         }
@@ -416,25 +375,6 @@ public enum WarrenDesktopNavigationReducer {
     }
 
     private static func rememberedTab(
-        in groupID: TerminalGroupID,
-        memory: WarrenDesktopNavigationMemory,
-        projection: WarrenDesktopProjection
-    ) -> String? {
-        if let tabID = memory.tabByTerminalGroupID[groupID.description],
-           projection.terminalGroupID(forTabID: tabID) == groupID {
-            return tabID
-        }
-        if let stack = memory.tabHistoryByTerminalGroupID[groupID.description] {
-            for tabID in stack.reversed() {
-                if projection.terminalGroupID(forTabID: tabID) == groupID {
-                    return tabID
-                }
-            }
-        }
-        return nil
-    }
-
-    private static func rememberedTab(
         for selection: WarrenDesktopSidebarSelection?,
         memory: WarrenDesktopNavigationMemory,
         projection: WarrenDesktopProjection
@@ -442,8 +382,6 @@ public enum WarrenDesktopNavigationReducer {
         switch selection {
         case .workspace(let workspaceID):
             return rememberedTab(in: workspaceID, memory: memory, projection: projection)
-        case .terminalGroup(let groupID):
-            return rememberedTab(in: groupID, memory: memory, projection: projection)
         case .project, nil:
             return nil
         }
@@ -469,9 +407,6 @@ public enum WarrenDesktopNavigationReducer {
             if let workspace = projection.workspace(id: workspaceID) {
                 next.memory.workspaceByProjectID[workspace.projectID.description] = workspaceID.description
             }
-        case .terminalGroup(let groupID):
-            next.memory.tabByTerminalGroupID[groupID.description] = tabID
-            recordTab(tabID, for: selection, in: &next.memory)
         case .project:
             break
         }
@@ -492,12 +427,8 @@ public enum WarrenDesktopNavigationReducer {
 
     private static func forget(tabID: String, from memory: inout WarrenDesktopNavigationMemory) {
         memory.tabByWorkspaceID = memory.tabByWorkspaceID.filter { $0.value != tabID }
-        memory.tabByTerminalGroupID = memory.tabByTerminalGroupID.filter { $0.value != tabID }
         for (key, stack) in memory.tabHistoryByWorkspaceID {
             memory.tabHistoryByWorkspaceID[key] = stack.filter { $0 != tabID }
-        }
-        for (key, stack) in memory.tabHistoryByTerminalGroupID {
-            memory.tabHistoryByTerminalGroupID[key] = stack.filter { $0 != tabID }
         }
     }
 
@@ -507,13 +438,6 @@ public enum WarrenDesktopNavigationReducer {
         memory.workspaceByProjectID = memory.workspaceByProjectID.filter { $0.value != workspaceID.description }
         memory.tabByWorkspaceID.removeValue(forKey: workspaceID.description)
         memory.tabHistoryByWorkspaceID.removeValue(forKey: workspaceID.description)
-    }
-
-    private static func forget(terminalGroupID: TerminalGroupID, from memory: inout WarrenDesktopNavigationMemory) {
-        let key = WarrenDesktopSidebarSelection.terminalGroup(terminalGroupID).serializedKey
-        memory.selectionHistory.removeAll { $0 == key }
-        memory.tabByTerminalGroupID.removeValue(forKey: terminalGroupID.description)
-        memory.tabHistoryByTerminalGroupID.removeValue(forKey: terminalGroupID.description)
     }
 
     private static func forget(projectID: ProjectID, from memory: inout WarrenDesktopNavigationMemory) {
@@ -542,8 +466,6 @@ public enum WarrenDesktopNavigationReducer {
             return projection.workspaceID(forTabID: tabID) == workspaceID
         case .project(let projectID):
             return workspace(for: tabID, in: projection)?.projectID == projectID
-        case .terminalGroup(let groupID):
-            return projection.terminalGroupID(forTabID: tabID) == groupID
         }
     }
 
@@ -557,8 +479,6 @@ public enum WarrenDesktopNavigationReducer {
             return firstTabID(inProject: projectID, projection: projection)
         case .workspace(let workspaceID):
             return firstTabID(inWorkspace: workspaceID, projection: projection)
-        case .terminalGroup(let groupID):
-            return firstTabID(inTerminalGroup: groupID, projection: projection)
         }
     }
 
@@ -574,8 +494,6 @@ public enum WarrenDesktopNavigationReducer {
             }
         case .workspace(let workspaceID):
             return projection.tabs(in: workspaceID)
-        case .terminalGroup(let groupID):
-            return projection.tabs(in: groupID)
         }
     }
 
@@ -597,31 +515,18 @@ public enum WarrenDesktopNavigationReducer {
         }?.id
     }
 
-    private static func firstTabID(
-        inTerminalGroup groupID: TerminalGroupID,
-        projection: WarrenDesktopProjection
-    ) -> String? {
-        projection.tabs(in: groupID).first?.id
-    }
-
     private static func selection(
         for tabID: String,
         in projection: WarrenDesktopProjection
     ) -> WarrenDesktopSidebarSelection? {
-        if let workspace = workspace(for: tabID, in: projection) {
-            return .workspace(workspace.id)
-        }
-        return projection.terminalGroupID(forTabID: tabID).map { .terminalGroup($0) }
+        workspace(for: tabID, in: projection).map { .workspace($0.id) }
     }
 
     private static func selection(
         for sessionID: TerminalSessionID,
         in projection: WarrenDesktopProjection
     ) -> WarrenDesktopSidebarSelection? {
-        if let workspace = projection.workspace(for: sessionID) {
-            return .workspace(workspace.id)
-        }
-        return projection.terminalGroup(for: sessionID).map { .terminalGroup($0.id) }
+        projection.workspace(for: sessionID).map { .workspace($0.id) }
     }
 
     private static func workspace(
@@ -640,8 +545,6 @@ public enum WarrenDesktopNavigationReducer {
             projection.groups.contains { $0.project.id == projectID }
         case .workspace(let workspaceID):
             projection.workspace(id: workspaceID) != nil
-        case .terminalGroup(let groupID):
-            projection.terminalGroup(id: groupID) != nil
         }
     }
 
@@ -657,16 +560,11 @@ public enum WarrenDesktopNavigationReducer {
                 return .workspace(workspace.id)
             }
         }
-        if let group = projection.terminalGroups.first {
-            return .terminalGroup(group.id)
-        }
         return projection.groups.first.map { .project($0.project.id) }
     }
 }
 
 // Kept package-internal while probes and older tests migrate to the public API.
-typealias WarrenDesktopReconciledState = WarrenDesktopNavigationState
-
 enum WarrenDesktopSelectionReconciler {
     static func reconcile(
         selection: WarrenDesktopSidebarSelection?,

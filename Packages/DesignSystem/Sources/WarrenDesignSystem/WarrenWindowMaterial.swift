@@ -66,24 +66,6 @@ public extension EnvironmentValues {
     }
 }
 
-private struct WarrenGlassLayoutKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
-public extension EnvironmentValues {
-    /// Whether the person turned the translucent window on, regardless of
-    /// whether the window can show it.
-    ///
-    /// Layout that came with the glass design — the Conversation's composer
-    /// stack, for one — reads this rather than the material, because it is
-    /// about arrangement, not translucency. Reduce Transparency takes the
-    /// glass away; it should not also rearrange the screen.
-    var warrenGlassLayout: Bool {
-        get { self[WarrenGlassLayoutKey.self] }
-        set { self[WarrenGlassLayoutKey.self] = newValue }
-    }
-}
-
 #if os(macOS)
 /// The window's one coat: the system's behind-window blur with a single
 /// translucent layer of `background` on top.

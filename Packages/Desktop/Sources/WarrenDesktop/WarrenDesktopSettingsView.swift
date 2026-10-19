@@ -44,76 +44,102 @@ private enum WarrenSetupScriptContract {
 }
 
 private extension WarrenDesktopSettingsSection {
-    var iconName: String {
+    /// A monochrome SF Symbol for the navigation item. The design drops the
+    /// coloured tile: colour means status in Warren, so settings navigation
+    /// stays grey and only a status dot carries a colour.
+    var symbol: String {
         switch self {
         case .appearance: "circle.lefthalf.filled"
-        case .terminalFont: "terminal"
-        case .terminalTitle: "textformat"
-        case .terminalRuntime: "cpu"
+        case .terminal: "terminal"
         case .splits: "rectangle.split.2x1"
-        case .aiTitles: "sparkles"
-        case .presets: "hammer"
-        case .workspaces: "arrow.triangle.branch"
+        case .presets: "play.rectangle"
+        case .externalIDEs: "chevron.left.forwardslash.chevron.right"
         case .notifications: "bell"
-        case .externalIDEs: "macwindow"
-        case .usageOverview: "chart.bar.xaxis"
-        case .usage: "chart.line.uptrend.xyaxis"
-        case .relay: "point.3.connected.trianglepath.dotted"
-        case .lanPairing: "lock.shield"
+        case .workspaces: "arrow.triangle.branch"
+        case .terminalRuntime: "server.rack"
+        case .aiTitles: "sparkles"
+        case .usage: "chart.bar"
+        case .relay: "antenna.radiowaves.left.and.right"
+        case .lanPairing: "wifi"
         case .publicAccess: "globe"
         }
     }
 
+    /// The sentence beside the scope chip: what this page governs.
     var detail: String {
         switch self {
-        case .appearance: "Light, dark, or follow macOS, and a translucent window."
-        case .terminalFont: "Applied to every terminal surface."
-        case .terminalTitle: "Auxiliary context below the preset bar."
-        case .terminalRuntime: "Engine that owns new sessions on the headless daemon."
+        case .appearance: "Other clients keep their own appearance."
+        case .terminal: "Applied to every terminal surface."
         case .splits: "Split panes and their keyboard shortcuts."
-        case .aiTitles: "Generate concise titles from the opening exchange."
-        case .presets: "Choose visible presets and customize every launch command."
-        case .workspaces: "Configure workspace behavior and task visibility."
-        case .notifications: "Choose how Warren alerts you when background Agents finish."
-        case .externalIDEs: "Choose the IDE button default and manage workspace editors."
-        case .usageOverview: "Review daily totals, activity heatmap, and cost breakdowns."
-        case .usage: "Token consumption per Agent, with equivalent API cost."
-        case .relay: "Connect once and share with iPhone."
-        case .lanPairing: "Arm a temporary PIN window for a trusted iPhone."
+        case .presets: "Which presets show, in what order, and what each one runs."
+        case .externalIDEs: "What the IDE button opens, and which editors it lists."
+        case .notifications: "How Warren tells you an Agent needs you or finished."
+        case .workspaces: "Empty-workspace behavior and per-project setup scripts."
+        case .terminalRuntime: "The engine that owns new sessions on the daemon."
+        case .aiTitles: "Naming sessions from their opening exchange."
+        case .usage: "Token consumption and its equivalent API cost."
+        case .relay: "Enroll this Host and share it with iPhone."
+        case .lanPairing: "A temporary PIN window for a trusted iPhone."
         case .publicAccess: "Publish this Host's Web UI through the enrolled Relay."
+        }
+    }
+
+    /// How wide the page's column may grow before it stops and centres.
+    var contentMaxWidth: CGFloat {
+        switch self {
+        case .usage: 1160
+        default: 760
         }
     }
 
     var searchTerms: [String] {
         switch self {
         case .appearance:
-            [rawValue, detail, "appearance", "theme", "light", "dark", "system", "color", "colour", "palette", "contrast", "glass", "translucent window", "transparency", "translucent", "blur"]
-        case .terminalFont: [rawValue, detail, "font", "family", "size", "typography"]
-        case .terminalTitle: [rawValue, detail, "title", "template", "placeholder", "preview"]
-        case .terminalRuntime: [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
-        case .splits: [rawValue, detail, "split", "pane", "emacs", "chord", "C-x", "keyboard", "shortcut"]
-        case .aiTitles: [rawValue, detail, "openai", "api", "model", "base", "key", "summary", "automatic"]
-        case .presets: [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "opencode", "pi", "trae", "agent", "visible", "hidden", "acp", "chat", "cli", "interface"]
-        case .workspaces: [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "setup", "script", "environment", "env", "variables", "WARREN", "shell", "AI", "Claude", "Codex", "sidebar", "tasks", "visibility"]
-        case .notifications: [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background"]
-        case .externalIDEs: [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland", "android", "custom", "path", "open"]
-        case .usageOverview: [rawValue, detail, "usage", "overview", "token", "tokens", "cost", "spend", "price", "pricing", "stats", "statistics", "heatmap", "quota", "budget", "cache", "models.dev", "claude", "codex", "rebuild", "history"]
-        case .usage: [rawValue, detail, "usage", "token", "tokens", "cost", "spend", "price", "pricing", "stats", "statistics", "heatmap", "quota", "budget", "cache", "models.dev", "claude", "codex"]
-        case .relay: [rawValue, detail, "relay", "connect", "enrollment", "ticket", "host", "remote", "iphone", "qr"]
-        case .lanPairing: [rawValue, detail, "pairing", "pin", "lan", "bonjour", "iphone", "mobile", "discovery", "security"]
-        case .publicAccess: [rawValue, detail, "relay", "route", "hostname", "path", "endpoint", "tunnel", "internet"]
+            [rawValue, detail, "appearance", "theme", "light", "dark", "system", "color", "colour",
+             "palette", "contrast", "glass", "translucent window", "transparency", "translucent",
+             "blur", "sidebar", "tasks", "app icon", "icon", "dock", "caramel", "charcoal", "ember",
+             "paper", "cream"]
+        case .terminal:
+            [rawValue, detail, "terminal", "font", "family", "size", "typography", "title", "template",
+             "placeholder", "preview", "auxiliary"]
+        case .splits:
+            [rawValue, detail, "split", "pane", "emacs", "chord", "C-x", "keyboard", "shortcut"]
+        case .presets:
+            [rawValue, detail, "preset", "command", "launch", "shell", "claude", "codex", "opencode",
+             "pi", "qoder", "antigravity", "trae", "agent", "visible", "hidden", "acp", "chat", "cli",
+             "interface"]
+        case .externalIDEs:
+            [rawValue, detail, "ide", "editor", "embedded", "code-server", "default", "vscode", "goland",
+             "android", "custom", "path", "open"]
+        case .notifications:
+            [rawValue, detail, "sound", "audio", "chime", "agent", "complete", "background", "approval",
+             "badge", "dock", "alert", "waiting"]
+        case .workspaces:
+            [rawValue, detail, "workspace", "project", "git", "worktree", "import", "checkout", "setup",
+             "script", "environment", "env", "variables", "WARREN", "shell", "AI", "Claude", "Codex",
+             "sidebar", "tasks", "visibility"]
+        case .terminalRuntime:
+            [rawValue, detail, "ghostline", "tmux", "runtime", "engine", "session", "headless"]
+        case .aiTitles:
+            [rawValue, detail, "openai", "api", "model", "base", "key", "summary", "automatic"]
+        case .usage:
+            [rawValue, detail, "usage", "overview", "token", "tokens", "cost", "spend", "price",
+             "pricing", "stats", "statistics", "heatmap", "quota", "budget", "cache", "models.dev",
+             "claude", "codex", "rebuild", "history"]
+        case .relay:
+            [rawValue, detail, "relay", "connect", "enrollment", "ticket", "host", "remote", "iphone", "qr"]
+        case .lanPairing:
+            [rawValue, detail, "pairing", "pin", "lan", "bonjour", "iphone", "mobile", "discovery", "security"]
+        case .publicAccess:
+            [rawValue, detail, "relay", "route", "hostname", "path", "endpoint", "tunnel", "internet", "web"]
         }
-    }
-
-    var isTerminalSection: Bool {
-        self != .appearance && self != .notifications && self != .usageOverview && self != .usage
-            && self != .relay && self != .lanPairing && self != .publicAccess
     }
 }
 
-/// Settings mirror Superset's route layout: a slim window-chrome row on top,
-/// a 224pt sidebar with Back/title/search/grouped navigation on the left, and
-/// a page-headed detail column (`max-w-5xl`) on the right.
+/// The redesigned Settings surface: a 256pt navigation card and a content card
+/// on the window's black ground. The navigation is split into the preferences
+/// that belong to this Mac and the values that belong to the selected Host, so
+/// "which machine am I editing" is answered before a page is read.
 struct WarrenDesktopSettingsView: View {
     let onBack: () -> Void
     let hostName: String
@@ -126,6 +152,9 @@ struct WarrenDesktopSettingsView: View {
     let lanPairing: WarrenDesktopLANPairing
     let onLANPairing: ((Bool, @escaping (Result<WarrenDesktopLANPairing, Error>) -> Void) -> Void)?
     let relaySettings: WarrenDesktopRelaySettings
+    /// Turns the enrolled Relay on or off. Enrollment is kept either way, so
+    /// this is the switch on the connection row, not a lifecycle command.
+    let onSetRelayEnabled: ((Bool) -> Void)?
     let onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     let relayDevices: [WarrenDesktopRelayDevice]
     let onLoadRelayDevices: (() -> Void)?
@@ -146,13 +175,14 @@ struct WarrenDesktopSettingsView: View {
     let onSetProjectSetupScript: (ProjectID, String) -> Void
     let usageStats: WarrenUsageStats
     let usageState: WarrenUsageLoadState
-    /// Requests a fetch for the given day range and optional detail day.
-    /// Optional so hosts that do not wire usage simply show the section's
-    /// empty state.
     let onLoadUsage: ((Int, String?, Bool) -> Void)?
-    /// Replaces only the Host's derived Usage projections from retained Agent
-    /// history. The settings page asks for confirmation before invoking it.
     let onRebuildUsage: ((@escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void) -> Void)?
+
+    /// The Hosts the window knows about, and the one its values currently come
+    /// from. Empty means a single-Host window: the host row is a read-out.
+    var hostOptions: [WarrenDesktopEndpointOption]
+    var selectedHostID: String?
+    var onSelectHost: ((String) -> Void)?
 
     @AppStorage(WarrenPreferenceKey.terminalTitleTemplate)
     private var titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
@@ -188,6 +218,10 @@ struct WarrenDesktopSettingsView: View {
     private var embeddedEditorOpenLinks = false
     @AppStorage(WarrenPreferenceKey.agentCompletionSoundEnabled)
     private var agentCompletionSoundEnabled = true
+    @AppStorage(WarrenPreferenceKey.agentAttentionAlertsEnabled)
+    private var agentAttentionAlertsEnabled = true
+    @AppStorage(WarrenPreferenceKey.agentAttentionDockBadgeEnabled)
+    private var agentAttentionDockBadgeEnabled = true
     @AppStorage(WarrenPreferenceKey.usageRange)
     private var usageRange = WarrenUsageRange.month
     @AppStorage(WarrenPreferenceKey.sidebarShowTasks)
@@ -198,7 +232,11 @@ struct WarrenDesktopSettingsView: View {
     private var appearanceModeRawValue = WarrenAppearanceMode.defaultValue.rawValue
     @AppStorage(WarrenPreferenceKey.appearanceLiquidGlass)
     private var liquidGlassEnabled = false
+    @AppStorage(WarrenPreferenceKey.appearanceAppIcon)
+    private var appIconRawValue = WarrenAppIconColorway.defaultValue.rawValue
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var selectionNamespace
     @State private var openAIBaseURLDraft = ""
     @State private var openAIModelDraft = ""
     @State private var openAIKeyDraft = ""
@@ -214,22 +252,17 @@ struct WarrenDesktopSettingsView: View {
     @State private var relayInvite: WarrenDesktopRelayInvite?
     @State private var relayInviteBusy = false
     @State private var relayInviteError: String?
-    @State private var relayInviteQRPresented = false
     @State private var lanPairingBusy = false
     @State private var lanPairingError: String?
     @State private var usageRebuildConfirmation = false
     @State private var usageRebuildBusy = false
     @State private var usageRebuildError: String?
     @State private var usageRebuildSummary: WarrenUsageRebuildSummary?
-    /// The day picked in either Usage surface, shared so Overview can open the
-    /// Detail page on the day the person clicked.
     @State private var usageSelectedDay: String?
-    @State private var copiedSettingsSection: WarrenDesktopSettingsSection?
+    @State private var usageShowsDetail = false
+    @ObservedObject private var copyFeedback = WarrenCopyFeedback.shared
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
-    /// A deeplink can select a page and prefill the Relay URL and bounded-use
-    /// enrollment key. The key is consumed only when the user starts joining.
     var initialSettingsSection: WarrenDesktopSettingsSection?
     var publicAccessPrefill: WarrenDesktopPublicAccessPrefill?
     var relayPrefill: WarrenDesktopRelayPrefill?
@@ -244,16 +277,32 @@ struct WarrenDesktopSettingsView: View {
             if case .testing = self { return true }
             return false
         }
+
+        var failure: String? {
+            if case .failed(let message) = self { return message }
+            return nil
+        }
     }
 
     private typealias SettingsSection = WarrenDesktopSettingsSection
 
-    @State private var selectedSection: SettingsSection = .terminalFont
+    @State private var selectedSection: SettingsSection = .terminal
     @State private var searchQuery = ""
     @FocusState private var searchFocused: Bool
     @State private var installedIDEs: [InstalledIDE] = []
     @State private var customIDEs = WarrenDesktopCustomIDEStore.load()
+    /// The editor the IDE button opens. The same key the root view uses, so
+    /// the checkmark here and the button's action can never disagree.
+    @AppStorage("warren.desktop.externalIDEID") private var externalIDEID = ""
     @State private var setupScriptValues: [ProjectID: String] = [:]
+    @State private var editingSetupScriptProjectID: ProjectID?
+    @State private var editingPresetID: String?
+    /// The preset being dragged, so it can be lifted while the pointer carries
+    /// it and the row it is over can take it.
+    @State private var draggedPresetID: String?
+    /// The preset row that holds the keyboard, which is what makes ⌥↑ / ⌥↓
+    /// unambiguous: they act on the row the user is standing on.
+    @FocusState private var focusedPresetID: String?
 
     @MainActor
     init(
@@ -268,6 +317,7 @@ struct WarrenDesktopSettingsView: View {
         lanPairing: WarrenDesktopLANPairing = .init(),
         onLANPairing: ((Bool, @escaping (Result<WarrenDesktopLANPairing, Error>) -> Void) -> Void)? = nil,
         relaySettings: WarrenDesktopRelaySettings = .init(),
+        onSetRelayEnabled: ((Bool) -> Void)? = nil,
         onResetRelay: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         relayDevices: [WarrenDesktopRelayDevice] = [],
         onLoadRelayDevices: (() -> Void)? = nil,
@@ -292,7 +342,10 @@ struct WarrenDesktopSettingsView: View {
         onRebuildUsage: ((@escaping (Result<WarrenUsageRebuildSummary, Error>) -> Void) -> Void)? = nil,
         initialSettingsSection: WarrenDesktopSettingsSection? = nil,
         publicAccessPrefill: WarrenDesktopPublicAccessPrefill? = nil,
-        relayPrefill: WarrenDesktopRelayPrefill? = nil
+        relayPrefill: WarrenDesktopRelayPrefill? = nil,
+        hostOptions: [WarrenDesktopEndpointOption] = [],
+        selectedHostID: String? = nil,
+        onSelectHost: ((String) -> Void)? = nil
     ) {
         self.onBack = onBack
         self.hostName = hostName
@@ -305,6 +358,7 @@ struct WarrenDesktopSettingsView: View {
         self.lanPairing = lanPairing
         self.onLANPairing = onLANPairing
         self.relaySettings = relaySettings
+        self.onSetRelayEnabled = onSetRelayEnabled
         self.onResetRelay = onResetRelay
         self.relayDevices = relayDevices
         self.onLoadRelayDevices = onLoadRelayDevices
@@ -335,7 +389,10 @@ struct WarrenDesktopSettingsView: View {
         self.initialSettingsSection = initialSettingsSection
         self.publicAccessPrefill = publicAccessPrefill
         self.relayPrefill = relayPrefill
-        _selectedSection = State(initialValue: initialSettingsSection ?? .terminalFont)
+        self.hostOptions = hostOptions
+        self.selectedHostID = selectedHostID ?? hostOptions.first?.id
+        self.onSelectHost = onSelectHost
+        _selectedSection = State(initialValue: initialSettingsSection ?? .terminal)
     }
 
     private var visibleSections: [SettingsSection] {
@@ -346,36 +403,29 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
+    private var thisMacSections: [SettingsSection] {
+        visibleSections.filter { $0.scope == .thisMac }
+    }
+
+    private var hostSections: [SettingsSection] {
+        visibleSections.filter { $0.scope == .host }
+    }
+
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        VStack(spacing: 0) {
-            chromeRow(tokens: tokens)
-
-            WarrenDesktopChromeDivider()
-
-            HStack(spacing: 0) {
-                navigationPanel(tokens: tokens)
-                    .frame(width: WarrenLayoutMetrics.settingsNavigationWidth)
-
-                Rectangle()
-                    .fill(tokens.material == .glass ? tokens.chromeDivider : tokens.border)
-                    .frame(width: WarrenSpacing.hairline)
-
-                detailPanel(tokens: tokens)
-            }
+        let palette = WarrenSettingsPalette.resolved(for: colorScheme)
+        HStack(spacing: 8) {
+            navigationPanel(palette: palette)
+                .frame(width: 220)
+            detailPanel(palette: palette)
         }
-        .background(tokens.canvas)
+        .padding(8)
+        .background(palette.windowBackdrop)
+        .overlay { setupScriptDialogLayer }
         .onExitCommand(perform: onBack)
         .onAppear(perform: applyDeepLinkPrefill)
-        .onChange(of: initialSettingsSection) { _ in
-            applyDeepLinkPrefill()
-        }
-        .onChange(of: publicAccessPrefill) { _ in
-            applyDeepLinkPrefill()
-        }
-        .onChange(of: relayPrefill) { _ in
-            applyDeepLinkPrefill()
-        }
+        .onChange(of: initialSettingsSection) { _ in applyDeepLinkPrefill() }
+        .onChange(of: publicAccessPrefill) { _ in applyDeepLinkPrefill() }
+        .onChange(of: relayPrefill) { _ in applyDeepLinkPrefill() }
         .onChange(of: searchQuery) { _ in
             if !visibleSections.contains(selectedSection), let first = visibleSections.first {
                 selectedSection = first
@@ -383,272 +433,62 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
-    private func chromeRow(tokens: WarrenColorTokens) -> some View {
-        HStack(spacing: 0) {
-            WarrenDesktopTrafficLights()
-                .frame(width: WarrenLayoutMetrics.macTrafficLightInset, alignment: .leading)
+    // MARK: - Navigation
 
-            WarrenDesktopWindowDragRegion()
-                .frame(maxWidth: .infinity)
-                .accessibilityHidden(true)
-        }
-        .frame(height: WarrenLayoutMetrics.tabBarHeight)
-        .background(tokens.chromeSurface)
-    }
-
-    private func navigationPanel(tokens: WarrenColorTokens) -> some View {
-        let appearanceGroup = visibleSections.filter {
-            $0 == .appearance || $0 == .terminalFont || $0 == .terminalTitle
-                || $0 == .terminalRuntime || $0 == .splits
-        }
-        let workflowGroup = visibleSections.filter {
-            $0 == .presets || $0 == .workspaces || $0 == .externalIDEs
-        }
-        let aiGroup = visibleSections.filter {
-            $0 == .aiTitles || $0 == .notifications
-        }
-        let remoteGroup = visibleSections.filter {
-            $0 == .relay || $0 == .lanPairing || $0 == .publicAccess
-        }
-        let usageSections = visibleSections.filter {
-            $0 == .usageOverview || $0 == .usage
-        }
-
-        return VStack(alignment: .leading, spacing: 0) {
-            Button(action: onBack) {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.backward")
-                        .font(.system(size: 12, weight: .regular))
-                    Text("Back to app")
-                        .font(.system(size: 13, weight: .regular))
-                }
-                .foregroundStyle(tokens.mutedForeground)
-                .padding(.horizontal, 12)
-                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 6)
-            .padding(.top, 4)
-            .accessibilityLabel("Back to Warren")
-
-            Text("Settings")
-                .font(WarrenTypography.screenTitle)
-                .foregroundStyle(tokens.foreground)
-                .padding(.horizontal, 16)
-                .padding(.top, 6)
-                .padding(.bottom, 12)
-
-            searchField(tokens: tokens)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 10)
-
-            Rectangle()
-                .fill(tokens.border.opacity(0.35))
-                .frame(height: WarrenSpacing.hairline)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 6)
+    private func navigationPanel(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            searchField(palette: palette)
+                .padding(.top, 12)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    if !appearanceGroup.isEmpty {
-                        groupLabel("Appearance & Terminal", tokens: tokens)
-                        ForEach(appearanceGroup) { section in
-                            navigationItem(section, tokens: tokens)
-                        }
+                VStack(alignment: .leading, spacing: 24) {
+                    if !thisMacSections.isEmpty {
+                        sectionGroup(title: "THIS MAC", sections: thisMacSections, palette: palette)
                     }
-
-                    if !workflowGroup.isEmpty {
-                        groupLabel("Workflow & Presets", tokens: tokens)
-                        ForEach(workflowGroup) { section in
-                            navigationItem(section, tokens: tokens)
-                        }
+                    if !hostSections.isEmpty {
+                        hostGroup(palette: palette)
                     }
-
-                    if !aiGroup.isEmpty {
-                        groupLabel("Intelligence & Alerts", tokens: tokens)
-                        ForEach(aiGroup) { section in
-                            navigationItem(section, tokens: tokens)
-                        }
-                    }
-
-                    if !remoteGroup.isEmpty {
-                        groupLabel("Remote Access", tokens: tokens)
-                        ForEach(remoteGroup) { section in
-                            navigationItem(section, tokens: tokens)
-                        }
-                    }
-
-                    if !usageSections.isEmpty {
-                        groupLabel("Observability", tokens: tokens)
-                        usageRootNavigationItem(tokens: tokens)
-                    }
-
                     if visibleSections.isEmpty {
-                        VStack(spacing: WarrenSpacing.compact) {
+                        VStack(spacing: 8) {
                             Image(systemName: "magnifyingglass")
                                 .font(.system(size: 20))
-                                .foregroundStyle(tokens.mutedForeground.opacity(0.5))
+                                .foregroundStyle(palette.inkQuiet.opacity(0.5))
                             Text("No settings match your search")
                                 .font(.system(size: 12))
-                                .foregroundStyle(tokens.mutedForeground)
+                                .foregroundStyle(palette.inkQuiet)
                         }
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, WarrenSpacing.large)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.bottom, WarrenSpacing.medium)
+                .padding(.top, 18)
+                .padding(.bottom, 16)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(tokens.sidebarSurface)
-    }
-
-    private func usageViewTabs(tokens: WarrenColorTokens) -> some View {
-        HStack(spacing: 2) {
-            usageTabButton(
-                title: "Overview",
-                icon: "chart.bar.xaxis",
-                section: .usageOverview,
-                isSelected: selectedSection == .usageOverview,
-                id: "settings.usage.view.Overview",
-                tokens: tokens
-            )
-
-            usageTabButton(
-                title: "Usage",
-                icon: "chart.xyaxis.line",
-                section: .usage,
-                isSelected: selectedSection == .usage,
-                id: "settings.usage.view.Usage",
-                tokens: tokens
-            )
+        .background(palette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(palette.cardBorder, lineWidth: 1)
         }
-        .padding(3)
-        .background(tokens.cardSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
-        )
+        .animation(WarrenMotion.selection(reduceMotion: reduceMotion), value: selectedSection)
     }
 
-    private func usageTabButton(
-        title: String,
-        icon: String,
-        section: SettingsSection,
-        isSelected: Bool,
-        id: String,
-        tokens: WarrenColorTokens
-    ) -> some View {
-        Button {
-            selectedSection = section
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: isSelected ? .medium : .regular))
-                Text(title)
-                    .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
-            }
-            .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isSelected ? tokens.muted.opacity(0.85) : Color.clear)
-            )
-            .overlay(
-                Group {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
-                    }
-                }
-            )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityValue(isSelected ? "Selected" : "")
-        .accessibilityIdentifier(id)
-        .warrenSemanticElement(
-            id: id,
-            role: .button,
-            label: title,
-            isSelected: isSelected,
-            action: { selectedSection = section }
-        )
-    }
-
-    private func usageRootNavigationItem(tokens: WarrenColorTokens) -> some View {
-        let isSelected = selectedSection == .usageOverview || selectedSection == .usage
-        return Button {
-            if selectedSection != .usage && selectedSection != .usageOverview {
-                selectedSection = .usageOverview
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "chart.line.uptrend.xyaxis")
-                    .font(.system(size: 13, weight: .regular))
-                    .frame(width: 18)
-                    .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
-                    .accessibilityHidden(true)
-
-                Text("Usage")
-                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
-                    .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, minHeight: 32)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isSelected ? tokens.fillSelected : Color.clear)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Usage")
-        .accessibilityValue(isSelected ? "Selected" : "")
-        .accessibilityIdentifier("settings.section.Usage")
-        .warrenSemanticElement(
-            id: "settings.section.Usage",
-            role: .button,
-            label: "Usage",
-            isSelected: isSelected,
-            action: {
-                if selectedSection != .usage && selectedSection != .usageOverview {
-                    selectedSection = .usageOverview
-                }
-            }
-        )
-    }
-
-    private func groupLabel(_ title: String, tokens: WarrenColorTokens) -> some View {
-        Text(title)
-            .font(.system(size: 10, weight: .medium))
-            .textCase(.uppercase)
-            .tracking(1.0)
-            .foregroundStyle(tokens.mutedForeground.opacity(0.55))
-            .padding(.horizontal, 10)
-            .padding(.top, 14)
-            .padding(.bottom, 4)
-    }
-
-    private func searchField(tokens: WarrenColorTokens) -> some View {
+    private func searchField(palette: WarrenSettingsPalette) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(tokens.mutedForeground)
+                .font(.system(size: 13))
+                .foregroundStyle(palette.inkFaint)
                 .frame(width: 14)
                 .accessibilityHidden(true)
 
             TextField("Search settings…", text: $searchQuery)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12.5, weight: .regular))
+                .font(.system(size: 12.5))
+                .foregroundStyle(palette.inkBody)
                 .focused($searchFocused)
 
             if !searchQuery.isEmpty {
@@ -656,578 +496,1018 @@ struct WarrenDesktopSettingsView: View {
                     searchQuery = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 12, weight: .regular))
+                        .font(.system(size: 12))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(tokens.mutedForeground)
+                .foregroundStyle(palette.inkFaint)
                 .accessibilityLabel("Clear settings search")
             }
         }
         .padding(.horizontal, 10)
-        .frame(height: 32)
-        .background(tokens.inputSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .frame(height: 30)
+        // As with every settings field, a click anywhere on the box focuses it.
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { searchFocused = true }
+        }
+        .background(palette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(
-                    searchFocused ? tokens.highlight.opacity(0.65) : tokens.border.opacity(0.40),
-                    lineWidth: WarrenSpacing.hairline
-                )
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(searchFocused ? palette.focusRing : palette.cardBorder, lineWidth: 1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+
+    private func sectionGroup(
+        title: String,
+        sections: [SettingsSection],
+        palette: WarrenSettingsPalette
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 10.5, weight: .semibold))
+                .tracking(1.1)
+                .foregroundStyle(palette.inkFaint)
+                .padding(.horizontal, 10)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(sections) { section in
+                    navigationItem(section, palette: palette)
+                }
+            }
         }
     }
 
-    private func navigationItem(
-        _ section: SettingsSection,
-        tokens: WarrenColorTokens,
-        semanticID: String? = nil
-    ) -> some View {
-        let isSelected = selectedSection == section
-        let itemID = semanticID ?? "settings.section.\(section.id)"
-        return Button {
-            selectedSection = section
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: section.iconName)
-                    .font(.system(size: 13, weight: .regular))
-                    .frame(width: 18)
-                    .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
-                    .accessibilityHidden(true)
-
-                Text(section.rawValue)
-                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
-                    .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
+    private func hostGroup(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            hostRow(palette: palette)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(hostSections.enumerated()), id: \.element) { _, section in
+                    if section == .relay {
+                        Spacer().frame(height: 12)
+                    }
+                    navigationItem(section, palette: palette)
+                }
             }
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, minHeight: 32)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isSelected ? tokens.fillSelected : Color.clear)
-            )
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(section.rawValue)
-        .accessibilityValue(isSelected ? "Selected" : "")
-        .accessibilityIdentifier(itemID)
-        .warrenSemanticElement(
-            id: itemID,
-            role: .button,
-            label: section.rawValue,
-            isSelected: isSelected,
-            action: { selectedSection = section }
+    }
+
+    private func navigationItem(_ section: SettingsSection, palette: WarrenSettingsPalette) -> some View {
+        WarrenSettingsNavItem(
+            section: section,
+            status: navigationStatus(for: section),
+            isSelected: selectedSection == section,
+            palette: palette,
+            selectionNamespace: selectionNamespace,
+            // A search flattens the two groups into one list of matches, so each
+            // row has to say which scope it belongs to again.
+            scopeLabel: isSearching ? (section.scope == .thisMac ? "This Mac" : currentHostLabel) : nil,
+            onSelect: { selectedSection = section }
         )
     }
 
-    private func detailPanel(tokens: WarrenColorTokens) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                switch selectedSection {
-                case .appearance:
-                    appearanceSection(tokens: tokens)
-                case .terminalFont:
-                    terminalFontSection(tokens: tokens)
-                case .terminalTitle:
-                    terminalTitleSection(tokens: tokens)
-                case .terminalRuntime:
-                    terminalRuntimeSection(tokens: tokens)
-                case .splits:
-                    splitsSection(tokens: tokens)
-                case .aiTitles:
-                    aiTitlesSection(tokens: tokens)
-                case .presets:
-                    presetsSection(tokens: tokens)
-                case .workspaces:
-                    workspacesSection(tokens: tokens)
-                case .notifications:
-                    notificationsSection(tokens: tokens)
-                case .externalIDEs:
-                    externalIDEsSection(tokens: tokens)
-                case .usageOverview:
-                    usageOverviewSection(tokens: tokens)
-                case .usage:
-                    usageSection(tokens: tokens)
-                case .relay:
-                    relaySection(tokens: tokens)
-                case .lanPairing:
-                    lanPairingSection(tokens: tokens)
-                case .publicAccess:
-                    publicAccessSection(tokens: tokens)
-                }
+    private var isSearching: Bool {
+        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
-                // Scoped to the sections it actually resets. It reads as an
-                // available action on any page it appears on, which is wrong on
-                // a read-only panel like Usage.
-                if selectedSection.isTerminalSection {
-                    Button {
-                        titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
-                        fontFamily = TerminalFontPreference.defaultFamily
-                        fontSize = TerminalFontPreference.defaultSize
-                        shellCommand = ""
-                        claudeCommand = "claude"
-                        codexCommand = "codex --dangerously-bypass-hook-trust"
-                        opencodeCommand = "opencode"
-                        piCommand = "pi"
-                        traeCommand = "trae-cli interactive"
-                        presetOrder = WarrenDesktopSessionPreset.defaultOrderRawValue
-                        hiddenPresets = WarrenDesktopSessionPreset.defaultHiddenRawValue
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "arrow.counterclockwise")
-                                .font(.system(size: 11, weight: .medium))
-                            Text("Restore terminal defaults")
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(tokens.mutedForeground)
-                    .padding(.top, WarrenSpacing.medium)
-                    .accessibilityIdentifier("settings.restore-defaults")
-                }
-            }
-            .frame(maxWidth: WarrenLayoutMetrics.settingsContentWideMaxWidth)
-            .padding(.horizontal, 40)
-            .padding(.vertical, 32)
-            .frame(maxWidth: .infinity, alignment: .top)
-            .id(selectedSection)
+    /// The one status a page can carry on its navigation tile.
+    private func navigationStatus(for section: SettingsSection) -> WarrenStatusTone? {
+        switch section {
+        case .relay:
+            guard relaySettings.isEnrolled else { return nil }
+            return relaySettings.enabled ? .ok : .warning
+        case .publicAccess:
+            if webStatus.publicAccessBusy { return .busy }
+            return webStatus.tunnelRunning || webStatus.publicAccessAuthenticated ? .ok : nil
+        case .lanPairing:
+            return lanPairing.enabled ? .warning : nil
+        case .aiTitles:
+            if openAITestStatus.isTesting { return .busy }
+            if openAITestStatus.failure != nil { return .failed }
+            return nil
+        default:
+            return nil
         }
     }
 
-    private func terminalFontSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Terminal font", section: .terminalFont, tokens: tokens) {
-            WarrenSettingsCard(tokens: tokens) {
-                WarrenSettingsRow("Font family", description: "Typeface applied to every terminal surface", tokens: tokens) {
-                    WarrenSettingsInput(
-                        TerminalFontPreference.defaultFamily,
-                        text: $fontFamily,
-                        monospaced: true,
-                        tokens: tokens
-                    )
-                    .frame(width: 320)
-                }
+    private var currentHostLabel: String {
+        hostOptions.first { $0.id == selectedHostID }?.label ?? hostName
+    }
 
-                WarrenSettingsCardDivider(tokens: tokens)
-
-                WarrenSettingsRow("Font size", description: "Point size for terminal text rendering", tokens: tokens) {
-                    HStack(spacing: WarrenSpacing.compact) {
-                        Text("\(Self.fontSizeLabel(fontSize)) pt")
-                            .font(.system(size: 13, weight: .medium))
-                            .monospacedDigit()
-                            .foregroundStyle(tokens.foreground)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(tokens.fillHover)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .strokeBorder(tokens.border.opacity(0.35), lineWidth: WarrenSpacing.hairline)
-                            )
-                        Stepper("", value: $fontSize, in: 8...32, step: 1)
-                            .labelsHidden()
-                    }
-                }
+    private func hostRow(palette: WarrenSettingsPalette) -> some View {
+        let hasChoices = hostOptions.count > 1 && onSelectHost != nil
+        let row = HStack(spacing: 13) {
+            hostTile(palette: palette)
+            Text(currentHostLabel)
+                .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(palette.inkQuiet)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 6)
+            if hasChoices {
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(palette.inkFaint)
             }
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 30)
+        .contentShape(Rectangle())
 
-            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                WarrenSettingsSectionHeader("Terminal Preview", description: "Live preview rendered with selected typography", tokens: tokens)
-
-                VStack(spacing: 0) {
-                    // Titlebar / tab header matching Superset FontPreview
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(tokens.success)
-                            .frame(width: 8, height: 8)
-                        Text("Terminal")
-                            .font(.system(size: 11.5, weight: .medium))
-                            .foregroundStyle(tokens.foreground)
-                        Spacer()
-                        Text("zsh")
-                            .font(.system(size: 10, weight: .regular))
-                            .foregroundStyle(tokens.mutedForeground)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(tokens.fillHover)
-                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        return Group {
+            if hasChoices {
+                row
+                    .warrenMenuPanel(width: 248, title: "Settings apply to") {
+                        hostPickerPanel(palette: palette)
                     }
-                    .padding(.horizontal, 14)
-                    .frame(height: 32)
-                    .background(tokens.cardSurface)
-
-                    Rectangle()
-                        .fill(tokens.border.opacity(0.35))
-                        .frame(height: WarrenSpacing.hairline)
-
-                    // Terminal body with authentic multi-line shell session
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 6) {
-                            Text("~/workspace $")
-                                .foregroundStyle(tokens.highlight)
-                            Text("mastra dev")
-                                .foregroundStyle(tokens.foreground)
-                        }
-                        Text("→ Loaded 3 tools · 1 agent · 0 workflows")
-                            .foregroundStyle(tokens.mutedForeground)
-
-                        HStack(spacing: 6) {
-                            Text("~/workspace $")
-                                .foregroundStyle(tokens.highlight)
-                            Text("bun test")
-                                .foregroundStyle(tokens.foreground)
-                        }
-                        HStack(spacing: 6) {
-                            Text("✓")
-                                .foregroundStyle(tokens.success)
-                            Text("14 tests passed · 0.24s")
-                                .foregroundStyle(tokens.foreground.opacity(0.9))
-                        }
-
-                        HStack(spacing: 6) {
-                            Text("~/workspace $")
-                                .foregroundStyle(tokens.highlight)
-                            Text("git status --short")
-                                .foregroundStyle(tokens.foreground)
-                        }
-                        HStack(spacing: 6) {
-                            Text(" M")
-                                .foregroundStyle(tokens.warning)
-                            Text("src/settings/appearance.tsx")
-                                .foregroundStyle(tokens.mutedForeground)
-                        }
-
-                        HStack(spacing: 4) {
-                            Text("~/workspace $")
-                                .foregroundStyle(tokens.highlight)
-                            Rectangle()
-                                .fill(tokens.foreground)
-                                .frame(width: 8, height: 14)
-                        }
-                    }
-                    .font(.custom(normalizedFont.family, size: normalizedFont.size))
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(tokens.background)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                        .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
-                )
+            } else {
+                row
             }
         }
     }
 
-    private static func fontSizeLabel(_ value: Double) -> String {
-        let safe = value.isFinite
-            ? min(max(value, 8), 32)
-            : TerminalFontPreference.defaultSize
-        return String(Int(safe))
+    private func hostTile(palette: WarrenSettingsPalette) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+        let option = hostOptions.first { $0.id == selectedHostID }
+        return Text(String(currentHostLabel.prefix(1)).lowercased())
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(palette.inkBody)
+            .frame(width: 20, height: 20)
+            .background(shape.fill(palette.controlFill))
+            .overlay { shape.strokeBorder(palette.controlSelectedBorder, lineWidth: 1) }
+            .overlay(alignment: .bottomTrailing) {
+                connectionDot(option?.probeState, palette: palette)
+            }
+            .accessibilityHidden(true)
     }
 
-    private func terminalTitleSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Pane auxiliary title", section: .terminalTitle, tokens: tokens) {
-            WarrenSettingsCard(tokens: tokens) {
-                WarrenSettingsRow(
-                    "Auxiliary template",
-                    description: "Custom format string driving the auxiliary bar below preset buttons",
-                    tokens: tokens
-                ) {
-                    WarrenSettingsInput(
-                        TerminalDisplayTitleTemplate.defaultValue.rawValue,
-                        text: $titleTemplate,
-                        monospaced: true,
-                        tokens: tokens
-                    )
-                    .frame(width: 380)
-                }
-
-                WarrenSettingsCardDivider(tokens: tokens)
-
-                WarrenSettingsRow(
-                    "Evaluated preview",
-                    description: "Sample rendering using current workspace context",
-                    tokens: tokens
-                ) {
-                    Text(preview)
-                        .font(WarrenTypography.compactCode)
-                        .foregroundStyle(tokens.highlight)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(tokens.highlight.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                }
-            }
-
-            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                WarrenSettingsSectionHeader("Template Placeholders", description: "Click any token to insert into template", tokens: tokens)
-
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 155), spacing: WarrenSpacing.compact)],
-                    alignment: .leading,
-                    spacing: WarrenSpacing.compact
-                ) {
-                    ForEach(TerminalDisplayTitleTemplate.placeholders, id: \.token) { placeholder in
-                        Button {
-                            if !titleTemplate.isEmpty, !titleTemplate.hasSuffix(" ") { titleTemplate += " " }
-                            titleTemplate += placeholder.token
-                        } label: {
-                            HStack {
-                                Text(placeholder.token)
-                                    .font(WarrenTypography.compactCode)
-                                    .foregroundStyle(tokens.foreground)
-                                Spacer()
-                                Text(placeholder.description)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(tokens.mutedForeground)
+    private func hostPickerPanel(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(hostOptions) { option in
+                Button {
+                    onSelectHost?(option.id)
+                } label: {
+                    HStack(spacing: 9) {
+                        Text(String(option.label.prefix(1)).lowercased())
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(palette.inkBody)
+                            .frame(width: 20, height: 20)
+                            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(palette.controlFill))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .strokeBorder(palette.controlSelectedBorder, lineWidth: 1)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(tokens.cardSurface)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .strokeBorder(tokens.border.opacity(0.35), lineWidth: WarrenSpacing.hairline)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-    }
-
-    private func presetsSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Launch commands", section: .presets, tokens: tokens) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                WarrenSettingsSectionHeader("Session Presets Order & Visibility", description: "This order controls the preset buttons; opening a workspace preserves it.", tokens: tokens)
-
-                WarrenSettingsCard(tokens: tokens) {
-                    ForEach(Array(orderedPresets.enumerated()), id: \.element.id) { index, preset in
-                        if index > 0 {
-                            WarrenSettingsCardDivider(tokens: tokens)
-                        }
-                        HStack(spacing: WarrenSpacing.compact) {
-                            WarrenDesktopPresetIcon(preset: preset)
-                                .frame(width: 18, height: 18)
-                            Text(preset.presetBarTitle)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(tokens.foreground)
-                            Spacer()
-                            Toggle("Show \(preset.presetBarTitle)", isOn: presetVisibilityBinding(for: preset))
-                                .labelsHidden()
-                                .toggleStyle(.switch)
-                                .controlSize(.small)
-                                .accessibilityIdentifier("settings.preset-visibility.\(preset.id)")
-
-                            HStack(spacing: 4) {
-                                presetMoveButton(
-                                    preset: preset,
-                                    direction: -1,
-                                    symbolName: "chevron.up",
-                                    disabled: index == 0,
-                                    tokens: tokens
-                                )
-                                presetMoveButton(
-                                    preset: preset,
-                                    direction: 1,
-                                    symbolName: "chevron.down",
-                                    disabled: index == orderedPresets.count - 1,
-                                    tokens: tokens
-                                )
+                            .overlay(alignment: .bottomTrailing) {
+                                connectionDot(option.probeState, palette: palette)
+                            }
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(option.label)
+                                .font(.system(size: 13))
+                                .foregroundStyle(palette.inkBody)
+                                .lineLimit(1)
+                            if let detail = option.detail {
+                                Text(detail)
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(palette.meta)
+                                    .lineLimit(1)
                             }
                         }
-                        .padding(.horizontal, WarrenSpacing.standard)
-                        .padding(.vertical, 10)
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                WarrenSettingsSectionHeader("Agent Interface", description: "Claude, Codex, and OpenCode can run as their terminal CLI or as a Chat over ACP.", tokens: tokens)
-
-                WarrenSettingsCard(tokens: tokens) {
-                    WarrenSettingsRow(
-                        title: "Launch As",
-                        subtitle: "Ask each time shows Terminal and Chat under the clicked preset.",
-                        tokens: tokens
-                    ) {
-                        Picker("Launch as", selection: agentInterfaceSelection) {
-                            ForEach(WarrenAgentInterface.allCases, id: \.self) { mode in
-                                Text(mode.displayName).tag(mode)
-                            }
+                        Spacer(minLength: 8)
+                        if option.id == selectedHostID {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(palette.inkBody)
                         }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .font(WarrenTypography.settingsControl)
-                        .frame(width: 320)
-                        .accessibilityIdentifier("settings.agent-interface.picker")
                     }
+                    .padding(.horizontal, 8)
+                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(WarrenDesktopMenuRowStyle())
             }
-
-            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                WarrenSettingsSectionHeader("Launch Commands", description: "Commands executed when launching new sessions for each agent.", tokens: tokens)
-
-                WarrenSettingsCard(tokens: tokens) {
-                    ForEach(Array(orderedPresets.enumerated()), id: \.element.id) { index, preset in
-                        if index > 0 {
-                            WarrenSettingsCardDivider(tokens: tokens)
-                        }
-                        presetCommandRow(for: preset, tokens: tokens)
-                    }
-                }
-            }
-
-            Text(
-                "Hidden presets stay configurable here but do not appear in the "
-                    + "preset bar. Commands are typed into a plain shell after it opens, so "
-                    + "quitting an agent with Ctrl+C / Ctrl+D keeps the "
-                    + "terminal tab alive. Leave Shell empty for a bare "
-                    + "terminal."
-            )
-            .font(.system(size: 12))
-            .foregroundStyle(tokens.mutedForeground)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 2)
         }
     }
 
     @ViewBuilder
-    private func presetCommandRow(for preset: WarrenDesktopSessionPreset, tokens: WarrenColorTokens) -> some View {
-        // A browser preset has no command line, so it gets the reason why
-        // instead of an input field that would silently discard what is typed.
-        if preset.request.kind == .browser {
-            HStack(spacing: WarrenSpacing.standard) {
-                HStack(spacing: WarrenSpacing.compact) {
-                    WarrenDesktopPresetIcon(preset: preset)
-                        .frame(width: 16, height: 16)
-                    Text(preset.presetBarTitle)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(tokens.foreground)
-                }
-                .frame(width: 150, alignment: .leading)
+    private func connectionDot(
+        _ state: WarrenDesktopEndpointOption.ProbeState?,
+        palette: WarrenSettingsPalette
+    ) -> some View {
+        switch state {
+        case .reachable:
+            dot(palette.success, ring: palette.card)
+        case .failed:
+            dot(palette.dangerText, ring: palette.card)
+        case .checking:
+            dot(palette.inkQuiet, ring: palette.card)
+        case .unknown, .none:
+            EmptyView()
+        }
+    }
 
-                Text("No command: the Host launches Chromium itself.")
+    private func dot(_ color: Color, ring: Color) -> some View {
+        Circle()
+            .fill(color)
+            .frame(width: 6, height: 6)
+            .overlay { Circle().strokeBorder(ring, lineWidth: 1.5) }
+            .offset(x: 2, y: 2)
+            .accessibilityHidden(true)
+    }
+
+    // MARK: - Detail
+
+    private func detailPanel(palette: WarrenSettingsPalette) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                pageHeader(for: selectedSection, palette: palette)
+                pageContent(for: selectedSection, palette: palette)
+            }
+            // The column follows the window up to the page's own limit, then
+            // stays centred. A form stops at a reading width, past which a row's
+            // label and its control drift so far apart that the eye loses the
+            // pairing; Usage is charts and figures and keeps growing. The column
+            // used to stop at 656pt for every page and hug the left edge, so a
+            // wider window only added empty space on the right while a year of
+            // the activity calendar still did not fit.
+            .frame(maxWidth: selectedSection.contentMaxWidth, alignment: .leading)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 22)
+            .frame(maxWidth: .infinity, alignment: .top)
+            .id(selectedSection)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(palette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(palette.cardBorder, lineWidth: 1)
+        }
+    }
+
+    private func pageHeader(for section: SettingsSection, palette: WarrenSettingsPalette) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(section.rawValue)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(palette.ink)
+                scopeRow(for: section, palette: palette)
+            }
+
+            Spacer(minLength: 12)
+
+            headerAccessory(for: section, palette: palette)
+        }
+    }
+
+    @ViewBuilder
+    private func scopeRow(for section: SettingsSection, palette: WarrenSettingsPalette) -> some View {
+        HStack(spacing: 7) {
+            if section.scope == .thisMac {
+                Text("This Mac")
                     .font(.system(size: 12))
-                    .foregroundStyle(tokens.mutedForeground)
-                Spacer(minLength: 0)
+                    .foregroundStyle(palette.inkQuiet)
+            } else {
+                hostScopeChip(palette: palette)
             }
-            .padding(.horizontal, WarrenSpacing.standard)
-            .padding(.vertical, 10)
-        } else {
-            commandBackedPresetCommandRow(for: preset, tokens: tokens)
+            Text("·")
+                .font(.system(size: 12))
+                .foregroundStyle(palette.inkFaint)
+            Text(section.detail)
+                .font(.system(size: 12))
+                .foregroundStyle(palette.inkQuiet)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private func commandBackedPresetCommandRow(
-        for preset: WarrenDesktopSessionPreset,
-        tokens: WarrenColorTokens
-    ) -> some View {
-        let binding: Binding<String> = {
-            switch preset.request.kind {
-            case .shell: return $shellCommand
-            case .claude: return $claudeCommand
-            case .codex: return $codexCommand
-            case .opencode: return $opencodeCommand
-            case .pi: return $piCommand
-            case .qoder: return $qoderCommand
-            case .antigravity: return $antigravityCommand
-            case .trae: return $traeCommand
-            case .custom: return .constant("")
-            case .browser: return .constant("")
-            }
-        }()
-        let placeholder: String = {
-            switch preset.request.kind {
-            case .shell: return "default shell (empty)"
-            case .claude: return "claude"
-            case .codex: return "codex --dangerously-bypass-hook-trust"
-            case .opencode: return "opencode"
-            case .pi: return "pi"
-            case .qoder: return "qoder"
-            case .antigravity: return "agy"
-            case .trae: return "trae-cli interactive"
-            case .custom: return ""
-            case .browser: return ""
-            }
-        }()
-
-        return HStack(spacing: WarrenSpacing.standard) {
-            HStack(spacing: WarrenSpacing.compact) {
-                WarrenDesktopPresetIcon(preset: preset)
-                    .frame(width: 16, height: 16)
-                Text(preset.presetBarTitle)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(tokens.foreground)
-            }
-            .frame(width: 150, alignment: .leading)
-
-            WarrenSettingsInput(placeholder, text: binding, monospaced: true, tokens: tokens)
-        }
-        .padding(.horizontal, WarrenSpacing.standard)
-        .padding(.vertical, 10)
-    }
-
-    private func workspaceScriptRow(
-        _ project: Project,
-        tokens: WarrenColorTokens
-    ) -> some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-            HStack(alignment: .center, spacing: WarrenSpacing.small) {
-                Image(systemName: "folder")
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(tokens.primary)
-
-                Text(project.name)
-                    .font(WarrenTypography.settingsBodyEmphasis)
-                    .foregroundStyle(tokens.foreground)
-
-                Text(project.rootPath)
-                    .font(WarrenTypography.compactCode)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                Spacer()
-            }
-
-            HStack(spacing: WarrenSpacing.compact) {
-                WarrenSettingsInput(
-                    "scripts/setup.sh",
-                    text: Binding(
-                        get: { setupScriptValues[project.id] ?? project.setupScript ?? "" },
-                        set: { setupScriptValues[project.id] = $0 }
-                    ),
-                    monospaced: true,
-                    tokens: tokens
-                )
-                .accessibilityIdentifier("settings.project.setup-script.\(project.id)")
-
-                Button("Save") {
-                    saveSetupScript(for: project)
+    private func hostScopeChip(palette: WarrenSettingsPalette) -> some View {
+        HStack(spacing: 6) {
+            Text(String(currentHostLabel.prefix(1)).lowercased())
+                .font(.system(size: 9.5, design: .monospaced))
+                .foregroundStyle(palette.inkBody)
+                .frame(width: 16, height: 16)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(palette.controlFill))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .strokeBorder(palette.controlSelectedBorder, lineWidth: 1)
                 }
-                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                .accessibilityIdentifier("settings.workspaces.setup-script.save.\(project.id)")
+                .overlay(alignment: .bottomTrailing) {
+                    connectionDot(hostOptions.first { $0.id == selectedHostID }?.probeState, palette: palette)
+                }
+            Text(currentHostLabel)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(palette.inkBody)
+                .lineLimit(1)
+        }
+    }
 
-                Button("Clear") {
-                    setupScriptValues[project.id] = ""
-                    onSetProjectSetupScript(project.id, "")
+    @ViewBuilder
+    private func headerAccessory(for section: SettingsSection, palette: WarrenSettingsPalette) -> some View {
+        switch section {
+        case .usage:
+            WarrenSettingsSegmented(
+                options: WarrenUsageRange.allCases.map { ($0, $0.rawValue) },
+                selection: $usageRange,
+                accessibilityID: "settings.usage.range"
+            )
+        case .relay, .lanPairing:
+            EmptyView()
+        default:
+            copyLinkButton(for: section, palette: palette)
+        }
+    }
+
+    private func copyLinkButton(for section: SettingsSection, palette: WarrenSettingsPalette) -> some View {
+        let copied = copyFeedback.confirms(Self.deepLinkCopySource(section))
+        return Button {
+            copySettingsDeepLink(for: section)
+        } label: {
+            Image(systemName: copied ? "checkmark" : "link")
+                .font(.system(size: 14))
+                .foregroundStyle(palette.inkQuiet)
+                .frame(width: 26, height: 26)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(section == .publicAccess ? "Copy setup link" : "Copy link")
+        .accessibilityLabel(section == .publicAccess ? "Copy Public Access setup link" : "Copy \(section.rawValue) settings link")
+        .accessibilityIdentifier("settings.section.\(section.deepLinkValue).deeplink")
+    }
+
+    @ViewBuilder
+    private func pageContent(for section: SettingsSection, palette: WarrenSettingsPalette) -> some View {
+        switch section {
+        case .appearance: appearanceSection(palette: palette)
+        case .terminal: terminalSection(palette: palette)
+        case .splits: splitsSection(palette: palette)
+        case .presets: presetsSection(palette: palette)
+        case .externalIDEs: externalIDEsSection(palette: palette)
+        case .notifications: notificationsSection(palette: palette)
+        case .workspaces: workspacesSection(palette: palette)
+        case .terminalRuntime: terminalRuntimeSection(palette: palette)
+        case .aiTitles: aiTitlesSection(palette: palette)
+        case .usage: usageSection(palette: palette)
+        case .relay: relaySection(palette: palette)
+        case .lanPairing: lanPairingSection(palette: palette)
+        case .publicAccess: publicAccessSection(palette: palette)
+        }
+    }
+
+    // MARK: - Appearance
+
+    private func appearanceSection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            WarrenSettingsGroup("Color scheme", footnote: "Light uses Ember Paper for both the window and the terminal, with an ANSI palette tuned for light backgrounds.") {
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(WarrenAppearanceMode.allCases, id: \.self) { mode in
+                        WarrenSettingsChoiceCard(
+                            label: mode.displayName,
+                            sublabel: Self.appearanceSublabel(mode),
+                            isSelected: appearanceSelection.wrappedValue == mode,
+                            preview: AppearanceChoicePreview(mode: mode)
+                        ) {
+                            appearanceSelection.wrappedValue = mode
+                        }
+                        .accessibilityIdentifier("settings.appearance.\(mode.rawValue)")
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+                .padding(.bottom, 14)
+
+                WarrenSettingsRowDivider()
+
+                WarrenSettingsToggleRow(
+                    title: "Translucent Window",
+                    description: reduceTransparency
+                        ? "Locked while Reduce Transparency is on in macOS Accessibility settings."
+                        : "Lets the desktop show through the window, including behind terminals.",
+                    isOn: $liquidGlassEnabled,
+                    isEnabled: !reduceTransparency,
+                    accessibilityID: "settings.appearance.liquid-glass"
+                )
+            }
+
+            WarrenSettingsGroup("App Icon", footnote: "Changes the icon in the Dock and the app switcher while Warren is running. Finder keeps the Caramel icon.") {
+                HStack(spacing: 14) {
+                    ForEach(WarrenAppIconColorway.allCases, id: \.self) { colorway in
+                        AppIconChoice(
+                            colorway: colorway,
+                            isSelected: appIconSelection.wrappedValue == colorway
+                        ) {
+                            appIconSelection.wrappedValue = colorway
+                        }
+                        .accessibilityIdentifier("settings.appearance.app-icon.\(colorway.rawValue)")
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+                .padding(.bottom, 14)
+            }
+
+            WarrenSettingsGroup("Sidebar") {
+                WarrenSettingsToggleRow(
+                    title: "Show Tasks",
+                    description: "Keep Tasks above Projects in the sidebar.",
+                    isOn: $showsTasks,
+                    accessibilityID: "settings.appearance.show-tasks"
+                )
+            }
+        }
+    }
+
+    private static func appearanceSublabel(_ mode: WarrenAppearanceMode) -> String {
+        switch mode {
+        case .system: "Follows macOS"
+        case .light: "Ember Paper"
+        case .dark: "Ember"
+        }
+    }
+
+    // MARK: - Terminal
+
+    private func terminalSection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            WarrenSettingsGroup("Font") {
+                WarrenSettingsRow("Family") {
+                    WarrenSettingsPicker(
+                        label: "Font family",
+                        value: fontFamily,
+                        options: monospacedFamilies.map { ($0, $0, nil) },
+                        selection: $fontFamily,
+                        monospaced: true,
+                        sourceNote: "Monospaced fonts on this Mac",
+                        accessibilityID: "settings.terminal.font-family"
+                    )
+                }
+
+                WarrenSettingsRowDivider()
+
+                WarrenSettingsRow("Size") {
+                    WarrenSettingsStepper(
+                        value: $fontSize,
+                        range: 9...24,
+                        unit: "pt",
+                        display: { String(Int($0.rounded())) },
+                        accessibilityID: "settings.terminal.font-size"
+                    )
+                }
+
+                WarrenSettingsRowDivider()
+
+                TerminalFontPreview(preference: normalizedFont, palette: palette, title: preview)
+            }
+
+            WarrenSettingsGroup("Pane title", accessory: "The line under each pane's header") {
+                VStack(alignment: .leading, spacing: 6) {
+                    WarrenSettingsTextField(
+                        placeholder: TerminalDisplayTitleTemplate.defaultValue.rawValue,
+                        text: $titleTemplate,
+                        monospaced: true,
+                        accessibilityID: "settings.terminal.title-template"
+                    )
+                    HStack(spacing: 6) {
+                        Text("↳")
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(palette.inkFaint)
+                            .accessibilityHidden(true)
+                        Text(renderedTitle)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(palette.meta)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .accessibilityLabel("Preview \(renderedTitle)")
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+
+                WarrenSettingsRowDivider()
+
+                FlowingChips(
+                    tokens: TerminalDisplayTitleTemplate.placeholders.map { ($0.token, $0.description) },
+                    palette: palette,
+                    onInsert: insertPlaceholder
+                )
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+            }
+
+            Button("Restore Terminal Defaults") {
+                titleTemplate = TerminalDisplayTitleTemplate.defaultValue.rawValue
+                fontFamily = TerminalFontPreference.defaultFamily
+                fontSize = TerminalFontPreference.defaultSize
+            }
+            .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+            .padding(.leading, 14)
+            .accessibilityIdentifier("settings.restore-defaults")
+
+            crossLink(
+                "The engine that runs new Sessions is a Host setting, in",
+                to: .terminalRuntime,
+                palette: palette,
+                identifier: "settings.terminal.goto-runtime"
+            )
+        }
+    }
+
+    private func insertPlaceholder(_ token: String) {
+        if !titleTemplate.isEmpty, !titleTemplate.hasSuffix(" ") { titleTemplate += " " }
+        titleTemplate += token
+    }
+
+    // MARK: - Splits
+
+    private func splitsSection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            WarrenSettingsGroup("Shortcuts") {
+                let shortcuts: [(String, [String])] = [
+                    ("Split Right", ["⌘", "D"]),
+                    ("Split Below", ["⇧", "⌘", "D"]),
+                    ("Close Split Pane", ["⇧", "⌘", "W"]),
+                    ("Maximize Pane", ["⇧", "⌘", "↩"]),
+                    ("Cycle Pane Focus", ["⌘", "]"]),
+                ]
+                ForEach(Array(shortcuts.enumerated()), id: \.offset) { index, item in
+                    if index > 0 { WarrenSettingsRowDivider() }
+                    WarrenSettingsRow(item.0) {
+                        WarrenSettingsKeycaps(keys: item.1)
+                    }
+                }
+            }
+
+            WarrenSettingsGroup("Emacs chords") {
+                WarrenSettingsToggleRow(
+                    title: "C-x Split Chords",
+                    description: "Adds C-x 2, C-x 3, C-x 0, C-x 1 and C-x o. While on, Warren takes C-x instead of the terminal. C-g cancels; C-x C-x sends a literal C-x.",
+                    isOn: $splitChordsEnabled,
+                    accessibilityID: "settings.splits.emacs-chords"
+                )
+            }
+        }
+    }
+
+    // MARK: - Launch commands
+
+    private func presetsSection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            WarrenSettingsGroup("Agent interface") {
+                WarrenSettingsRow(
+                    "Launch As",
+                    description: "Claude, Codex and OpenCode can run as their CLI or as a Chat over ACP. Ask each time shows both under the clicked preset."
+                ) {
+                    WarrenSettingsSegmented(
+                        options: WarrenAgentInterface.allCases.map { ($0, $0.displayName) },
+                        selection: agentInterfaceSelection,
+                        accessibilityID: "settings.agent-interface.picker"
+                    )
+                }
+            }
+
+            WarrenSettingsGroup(
+                "Presets",
+                accessory: "Order here is the order in the + menu",
+                footnote: "Commands are typed into a plain shell after it opens, so quitting an agent with Ctrl-C or Ctrl-D keeps the tab alive. Leave Shell empty for a bare terminal. Hidden presets keep their command. Click a row to edit it."
+            ) {
+                ForEach(Array(orderedPresets.enumerated()), id: \.element.id) { index, preset in
+                    if index > 0 { WarrenSettingsRowDivider() }
+                    mergedPresetRow(preset, index: index, palette: palette)
+                }
+            }
+        }
+    }
+
+    /// One row per preset, carrying its order, its visibility, and its command:
+    /// the two old lists read as the same list to a user, so they are one now.
+    /// Clicking the row (outside its controls) opens the command editor under it.
+    private func mergedPresetRow(
+        _ preset: WarrenDesktopSessionPreset,
+        index: Int,
+        palette: WarrenSettingsPalette
+    ) -> some View {
+        let isVisible = !WarrenDesktopSessionPreset.normalizedHidden(hiddenPresets).contains(preset.id)
+        let isEditing = editingPresetID == preset.id
+        let isEditable = preset.request.kind != .browser && preset.request.kind != .custom
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Button {
+                    guard isEditable else { return }
+                    editingPresetID = isEditing ? nil : preset.id
+                } label: {
+                    HStack(spacing: 10) {
+                        WarrenDesktopPresetIcon(preset: preset)
+                            .frame(width: 18, height: 18)
+                            .opacity(isVisible ? 1 : 0.45)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(preset.presetBarTitle)
+                                .font(.system(size: 13))
+                                .foregroundStyle(isVisible ? palette.inkBody : palette.inkFaint)
+                            Text(presetCommandSummary(preset))
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .foregroundStyle(palette.meta)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        Spacer(minLength: 8)
+                    }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .font(WarrenTypography.settingsAction)
-                .foregroundStyle(tokens.mutedForeground)
-                .disabled((setupScriptValues[project.id] ?? project.setupScript ?? "").isEmpty)
-                .accessibilityIdentifier("settings.project.setup-script.clear.\(project.id)")
+                .disabled(!isEditable)
+                .focusable()
+                .focused($focusedPresetID, equals: preset.id)
+
+                HStack(spacing: 4) {
+                    presetMoveButton(preset: preset, direction: -1, symbolName: "arrow.up", disabled: index == 0)
+                    presetMoveButton(preset: preset, direction: 1, symbolName: "arrow.down", disabled: index == orderedPresets.count - 1)
+                }
+                WarrenSettingsSwitch(isOn: presetVisibilityBinding(for: preset))
+                    .accessibilityLabel("Show \(preset.presetBarTitle)")
+                    .accessibilityIdentifier("settings.preset-visibility.\(preset.id)")
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 48)
+            .background(
+                draggedPresetID == preset.id ? palette.selected : Color.clear,
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            .shadow(
+                color: .black.opacity(draggedPresetID == preset.id ? 0.45 : 0),
+                radius: 10,
+                y: 8
+            )
+            .draggable(preset.id) {
+                Text(preset.presetBarTitle)
+                    .font(.system(size: 12))
+                    .padding(6)
+                    .background(palette.card)
+                    .onAppear { draggedPresetID = preset.id }
+            }
+            .dropDestination(for: String.self) { ids, _ in
+                guard let dragged = ids.first, dragged != preset.id else { return false }
+                presetOrder = WarrenDesktopSessionPreset.moving(
+                    dragged,
+                    before: preset.id,
+                    in: presetOrder
+                )
+                return true
+            }
+            .overlay(alignment: .leading) {
+                // ⌥↑ / ⌥↓ belong to the row the keyboard is on. The buttons carry
+                // the shortcuts and draw nothing.
+                if focusedPresetID == preset.id {
+                    HStack(spacing: 0) {
+                        Button("") {
+                            presetOrder = WarrenDesktopSessionPreset.moving(
+                                preset.id,
+                                by: -1,
+                                in: presetOrder
+                            )
+                        }
+                        .keyboardShortcut(.upArrow, modifiers: .option)
+                        Button("") {
+                            presetOrder = WarrenDesktopSessionPreset.moving(
+                                preset.id,
+                                by: 1,
+                                in: presetOrder
+                            )
+                        }
+                        .keyboardShortcut(.downArrow, modifiers: .option)
+                    }
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+                }
+            }
+
+            if isEditing {
+                WarrenSettingsTextField(
+                    placeholder: commandPlaceholder(for: preset),
+                    text: commandBinding(for: preset),
+                    monospaced: true,
+                    onSubmit: { editingPresetID = nil },
+                    accessibilityID: "settings.preset-command.\(preset.id)"
+                )
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
             }
         }
-        .padding(.horizontal, WarrenSpacing.standard)
-        .padding(.vertical, 10)
-        .accessibilityIdentifier("settings.project.card.\(project.id)")
+        .animation(WarrenMotion.selection(reduceMotion: reduceMotion), value: isEditing)
+        .animation(WarrenMotion.selection(reduceMotion: reduceMotion), value: draggedPresetID)
+        .onDrop(of: [.plainText], isTargeted: nil) { _ in
+            draggedPresetID = nil
+            return false
+        }
     }
 
+    private func presetCommandSummary(_ preset: WarrenDesktopSessionPreset) -> String {
+        if preset.request.kind == .browser { return "Launched by the Host" }
+        let command = commandBinding(for: preset).wrappedValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return command.isEmpty ? "Empty: bare terminal" : command
+    }
+
+    private func commandBinding(for preset: WarrenDesktopSessionPreset) -> Binding<String> {
+        switch preset.request.kind {
+        case .shell: return $shellCommand
+        case .claude: return $claudeCommand
+        case .codex: return $codexCommand
+        case .opencode: return $opencodeCommand
+        case .pi: return $piCommand
+        case .qoder: return $qoderCommand
+        case .antigravity: return $antigravityCommand
+        case .trae: return $traeCommand
+        case .custom, .browser: return .constant("")
+        }
+    }
+
+    private func commandPlaceholder(for preset: WarrenDesktopSessionPreset) -> String {
+        switch preset.request.kind {
+        case .shell: return "Empty: bare terminal"
+        case .claude: return "claude"
+        case .codex: return "codex --dangerously-bypass-hook-trust"
+        case .opencode: return "opencode"
+        case .pi: return "pi"
+        case .qoder: return "qoder"
+        case .antigravity: return "agy"
+        case .trae: return "trae-cli interactive"
+        case .custom, .browser: return ""
+        }
+    }
+
+    private func presetMoveButton(
+        preset: WarrenDesktopSessionPreset,
+        direction: Int,
+        symbolName: String,
+        disabled: Bool
+    ) -> some View {
+        let directionLabel = direction < 0 ? "up" : "down"
+        return Button {
+            presetOrder = WarrenDesktopSessionPreset.moving(preset.id, by: direction, in: presetOrder)
+        } label: {
+            Image(systemName: symbolName)
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityLabel("Move \(preset.presetBarTitle) \(directionLabel)")
+        .accessibilityIdentifier("settings.preset-order.\(preset.id).\(directionLabel)")
+    }
+
+    // MARK: - Editors
+
+    /// The single-choice column: which editor Open in Editor uses. Empty for
+    /// the rows that are not it, so every name keeps the same column.
+    private func editorCheck(_ isSelected: Bool) -> some View {
+        Image(systemName: "checkmark")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(WarrenSettingsPalette.resolved(for: colorScheme).ink)
+            .frame(width: 14)
+            .opacity(isSelected ? 1 : 0)
+            .accessibilityHidden(true)
+    }
+
+    private func externalIDEsSection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            WarrenSettingsGroup("Embedded editor") {
+                WarrenSettingsToggleRow(
+                    title: "Open Embedded Editor by Default",
+                    description: "The IDE button opens it directly instead of showing the picker.",
+                    isOn: $embeddedEditorDefaultIDE,
+                    accessibilityID: "settings.external-ides.embedded-editor-default"
+                )
+                WarrenSettingsRowDivider()
+                WarrenSettingsToggleRow(
+                    title: "Open Terminal Links in Embedded Editor",
+                    description: "⌘-click a file path or file URL in the terminal to open it there.",
+                    isOn: $embeddedEditorOpenLinks,
+                    accessibilityID: "settings.external-ides.embedded-editor-open-links"
+                )
+            }
+
+            WarrenSettingsGroup("Found on this Mac", footnote: "The list is whatever Warren detects.") {
+                if installedIDEs.isEmpty {
+                    WarrenSettingsEmptyRow(text: "No supported editors found on this Mac.")
+                } else {
+                    ForEach(Array(installedIDEs.enumerated()), id: \.element.id) { index, ide in
+                        if index > 0 { WarrenSettingsRowDivider() }
+                        Button { externalIDEID = ide.id } label: {
+                            WarrenSettingsListRow(
+                                title: ide.name,
+                                subtitle: ide.path,
+                                leading: {
+                                    HStack(spacing: 8) {
+                                        editorCheck(externalIDEID == ide.id)
+                                        Image(nsImage: ide.icon)
+                                            .resizable()
+                                            .scaledToFit()
+                                            .frame(width: 18, height: 18)
+                                    }
+                                },
+                                trailing: { EmptyView() }
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Use \(ide.name) for Open in Editor")
+                        .accessibilityAddTraits(externalIDEID == ide.id ? [.isSelected] : [])
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                WarrenSettingsGroup("Custom") {
+                    if customIDEs.isEmpty {
+                        WarrenSettingsEmptyRow(text: "No custom editors yet.")
+                    } else {
+                        ForEach(Array(customIDEs.enumerated()), id: \.element.id) { index, ide in
+                            if index > 0 { WarrenSettingsRowDivider() }
+                            let optionID = "custom:\(ide.id.uuidString)"
+                            Button { externalIDEID = optionID } label: {
+                                WarrenSettingsListRow(
+                                    title: ide.name,
+                                    subtitle: ide.path,
+                                    leading: {
+                                        HStack(spacing: 8) {
+                                            editorCheck(externalIDEID == optionID)
+                                            Image(nsImage: WarrenDesktopExternalIDEIcon.normalized(
+                                                NSWorkspace.shared.icon(forFile: ide.path)
+                                            ))
+                                            .resizable()
+                                            .scaledToFit()
+                                            .frame(width: 18, height: 18)
+                                        }
+                                    },
+                                    trailing: {
+                                        WarrenSettingsInlineButton(systemImage: "trash", label: "Remove \(ide.name)") {
+                                            removeCustomIDE(ide)
+                                        }
+                                    }
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Use \(ide.name) for Open in Editor")
+                            .accessibilityAddTraits(externalIDEID == optionID ? [.isSelected] : [])
+                        }
+                    }
+                }
+
+                Button {
+                    addCustomIDE()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus").font(.system(size: 12, weight: .medium))
+                        Text("Add Editor…")
+                    }
+                }
+                .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                .padding(.leading, 14)
+                .accessibilityIdentifier("settings.external-ides.add")
+            }
+        }
+        .onAppear { installedIDEs = Self.probeInstalledIDEs() }
+    }
+
+    // MARK: - Notifications
+
+    private func notificationsSection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            WarrenSettingsGroup("Agent needs you") {
+                WarrenSettingsToggleRow(
+                    title: "Notify While Warren Is in the Background",
+                    description: "A macOS notification when an Agent stops for an approval or a question. An approval can be allowed or rejected from the notification. Muting the notice center silences these too.",
+                    isOn: $agentAttentionAlertsEnabled,
+                    accessibilityID: "settings.notifications.agent-attention-alerts"
+                )
+                WarrenSettingsRowDivider()
+                WarrenSettingsToggleRow(
+                    title: "Count Waiting Sessions on the Dock Icon",
+                    description: "The Dock badge shows how many Sessions on this Host are waiting on you.",
+                    isOn: $agentAttentionDockBadgeEnabled,
+                    accessibilityID: "settings.notifications.agent-attention-dock-badge"
+                )
+            }
+            WarrenSettingsGroup("Agent completion") {
+                WarrenSettingsToggleRow(
+                    title: "Play Completion Sound",
+                    description: "A short system sound when an Agent turn finishes in a background pane. The active window and aborted turns stay silent.",
+                    isOn: $agentCompletionSoundEnabled,
+                    accessibilityID: "settings.notifications.agent-completion-sound"
+                )
+            }
+        }
+    }
+
+    // MARK: - Workspaces
+
+    private func workspacesSection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            WarrenSettingsGroup("Empty workspace") {
+                WarrenSettingsToggleRow(
+                    title: "Start the First Agent",
+                    description: "Selecting an empty workspace launches the first Agent in Launch Commands order.",
+                    isOn: Binding(get: { autoStartAI }, set: { onSetAutoStartAI($0) }),
+                    accessibilityID: "settings.workspaces.auto-start-ai"
+                )
+                WarrenSettingsRowDivider()
+                WarrenSettingsToggleRow(
+                    title: "Open a Shell",
+                    description: autoStartAI
+                        ? "Off while the first Agent starts on its own."
+                        : "Double-clicking an empty workspace opens a plain Shell.",
+                    isOn: Binding(get: { autoOpenShell }, set: { onSetAutoOpenShell($0) }),
+                    isEnabled: !autoStartAI,
+                    accessibilityID: "settings.workspaces.auto-open-shell"
+                )
+            }
+
+            WarrenSettingsGroup("Setup scripts", accessory: "Runs when a worktree is created") {
+                if projects.isEmpty {
+                    WarrenSettingsEmptyRow(text: "No repositories are configured on this Host yet.")
+                } else {
+                    ForEach(Array(projects.enumerated()), id: \.element.id) { index, project in
+                        if index > 0 { WarrenSettingsRowDivider() }
+                        setupScriptRow(project, palette: palette)
+                    }
+                }
+            }
+
+            WarrenSettingsGroup("Script environment") {
+                environmentRow(code: "$1  $2", description: "Main repository path, then the new worktree path.", palette: palette)
+                ForEach(WarrenSetupScriptContract.environmentVariables) { variable in
+                    WarrenSettingsRowDivider()
+                    environmentRow(code: variable.name, description: variable.description, palette: palette)
+                }
+            }
+        }
+        .onAppear { syncSetupScriptValues() }
+    }
+
+    private func setupScriptRow(_ project: Project, palette: WarrenSettingsPalette) -> some View {
+        WarrenSettingsListRow(
+            title: project.name,
+            subtitle: setupScriptSummary(project),
+            leading: { EmptyView() },
+            trailing: {
+                Button("Edit…") { editingSetupScriptProjectID = project.id }
+                    .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                    .accessibilityLabel("Edit setup script for \(project.name)")
+            }
+        )
+    }
+
+    /// The row says only what fits: the script's first line and how many more
+    /// there are, or that there is none. The whole script is in the dialog.
+    private func setupScriptSummary(_ project: Project) -> String {
+        let script = setupScriptValues[project.id] ?? project.setupScript ?? ""
+        guard !script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "No script"
+        }
+        let lines = script.split(separator: "\n", omittingEmptySubsequences: false)
+        let first = lines.first.map(String.init) ?? ""
+        return lines.count > 1 ? "\(first)  +\(lines.count - 1) lines" : first
+    }
+
+    @ViewBuilder
+    private var setupScriptDialogLayer: some View {
+        if let id = editingSetupScriptProjectID,
+           let project = projects.first(where: { $0.id == id }) {
+            WarrenDesktopSetupScriptDialog(
+                script: Binding(
+                    get: { setupScriptValues[id] ?? project.setupScript ?? "" },
+                    set: { setupScriptValues[id] = $0 }
+                ),
+                onClear: {
+                    setupScriptValues[id] = ""
+                    onSetProjectSetupScript(id, "")
+                    editingSetupScriptProjectID = nil
+                },
+                onCancel: { editingSetupScriptProjectID = nil },
+                onSave: {
+                    saveSetupScript(for: project)
+                    editingSetupScriptProjectID = nil
+                }
+            )
+        }
+    }
+
+    private func environmentRow(code: String, description: String, palette: WarrenSettingsPalette) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            WarrenDesktopCodeChip(text: code)
+                .frame(width: 120, alignment: .leading)
+            Text(description)
+                .font(.system(size: 11.5))
+                .foregroundStyle(palette.meta)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
 
     private func saveSetupScript(for project: Project) {
         onSetProjectSetupScript(
@@ -1242,354 +1522,332 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
-    private var orderedPresets: [WarrenDesktopSessionPreset] {
-        WarrenDesktopSessionPreset.orderedPinned(by: presetOrder)
-    }
+    // MARK: - Terminal runtime
 
-    private func presetVisibilityBinding(for preset: WarrenDesktopSessionPreset) -> Binding<Bool> {
-        Binding(
-            get: { !WarrenDesktopSessionPreset.normalizedHidden(hiddenPresets).contains(preset.id) },
-            set: { visible in
-                hiddenPresets = WarrenDesktopSessionPreset.settingVisibility(
-                    of: preset.id,
-                    visible: visible,
-                    in: hiddenPresets
-                )
-            }
-        )
-    }
-
-    private func settingsInputField(
-        _ label: String,
-        text: Binding<String>,
-        placeholder: String = "",
-        monospaced: Bool = true
+    /// The two pages whose names are easy to confuse point at each other, so a
+    /// reader who opened the wrong one is one click from the right one.
+    private func crossLink(
+        _ text: String,
+        to section: SettingsSection,
+        palette: WarrenSettingsPalette,
+        identifier: String
     ) -> some View {
-        WarrenInputField(
-            label,
-            text: text,
-            placeholder: placeholder,
-            monospaced: monospaced,
-            labelFont: WarrenTypography.settingsBody,
-            inputFont: WarrenTypography.settingsControl
-        )
-    }
-
-    private func presetMoveButton(
-        preset: WarrenDesktopSessionPreset,
-        direction: Int,
-        symbolName: String,
-        disabled: Bool,
-        tokens: WarrenColorTokens
-    ) -> some View {
-        let directionLabel = direction < 0 ? "up" : "down"
-        return Button {
-            presetOrder = WarrenDesktopSessionPreset.moving(preset.id, by: direction, in: presetOrder)
+        Button {
+            selectedSection = section
         } label: {
-            Image(systemName: symbolName)
-                .font(.system(size: 11, weight: .medium))
-                .frame(width: 22, height: 22)
-                .background(tokens.fillHover)
-                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            HStack(spacing: 6) {
+                Text(text)
+                    .font(.system(size: 12))
+                    .foregroundStyle(palette.inkQuiet)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(palette.inkFaint)
+                Text(section.rawValue)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(palette.inkBody)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(disabled ? tokens.mutedForeground.opacity(0.3) : tokens.mutedForeground)
-        .disabled(disabled)
-        .accessibilityLabel("Move \(preset.presetBarTitle) \(directionLabel)")
-        .accessibilityIdentifier("settings.preset-order.\(preset.id).\(directionLabel)")
+        .padding(.leading, 14)
+        .accessibilityIdentifier(identifier)
     }
 
-    @ViewBuilder
-    private func presetCommandField(for preset: WarrenDesktopSessionPreset) -> some View {
-        switch preset.request.kind {
-        case .shell:
-            settingsInputField("Shell", text: $shellCommand, placeholder: "default shell (empty)")
-        case .claude:
-            settingsInputField("Claude", text: $claudeCommand, placeholder: "claude")
-        case .codex:
-            settingsInputField(
-                "Codex",
-                text: $codexCommand,
-                placeholder: "codex --dangerously-bypass-hook-trust"
+    private func terminalRuntimeSection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            terminalRuntimeEngine(palette: palette)
+            crossLink(
+                "Font and title template are set per Mac in",
+                to: .terminal,
+                palette: palette,
+                identifier: "settings.terminal-runtime.goto-terminal"
             )
-        case .opencode:
-            settingsInputField("OpenCode", text: $opencodeCommand, placeholder: "opencode")
-        case .pi:
-            settingsInputField("Pi", text: $piCommand, placeholder: "pi")
-        case .qoder:
-            settingsInputField("Qoder", text: $qoderCommand, placeholder: "qoder")
-        case .antigravity:
-            settingsInputField("Antigravity", text: $antigravityCommand, placeholder: "agy")
-        case .trae:
-            WarrenInputField("Trae", text: $traeCommand, placeholder: "trae-cli interactive")
-        case .custom:
-            EmptyView()
-        case .browser:
-            // A browser preset has no command: the Host launches Chromium itself.
-            EmptyView()
         }
     }
 
-    private func workspacesSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Workspaces", section: .workspaces, tokens: tokens) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                WarrenSettingsSectionHeader("Navigation & Startup", description: "Configure sidebar items and actions when opening workspaces.", tokens: tokens)
-
-                WarrenSettingsCard(tokens: tokens) {
-                    WarrenSettingsRow(
-                        title: "Show Tasks",
-                        subtitle: "Keep Tasks visible above Projects in the desktop sidebar.",
-                        tokens: tokens
-                    ) {
-                        Toggle("Show Tasks", isOn: $showsTasks)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .accessibilityIdentifier("settings.workspaces.show-tasks")
-                    }
-
-                    WarrenSettingsCardDivider(tokens: tokens)
-
-                    WarrenSettingsRow(
-                        title: "Open Shell on Empty Workspace",
-                        subtitle: "Double-clicking an empty workspace creates a plain Shell session if automatic AI startup is not active.",
-                        tokens: tokens
-                    ) {
-                        Toggle("Open a Shell when opening an empty workspace", isOn: Binding(
-                            get: { autoOpenShell },
-                            set: { onSetAutoOpenShell($0) }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .accessibilityIdentifier("settings.workspaces.auto-open-shell")
-                    }
-
-                    WarrenSettingsCardDivider(tokens: tokens)
-
-                    WarrenSettingsRow(
-                        title: "Start First AI on Empty Workspace",
-                        subtitle: "Selecting an empty workspace automatically launches the first configured AI agent in Launch commands order.",
-                        tokens: tokens
-                    ) {
-                        Toggle("Start the first AI when entering an empty workspace", isOn: Binding(
-                            get: { autoStartAI },
-                            set: { onSetAutoStartAI($0) }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .accessibilityIdentifier("settings.workspaces.auto-start-ai")
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                WarrenSettingsSectionHeader("Workspace Setup Scripts", description: "Run scripts during workspace creation to initialize project environments.", tokens: tokens)
-
-                if projects.isEmpty {
-                    WarrenSettingsCard(tokens: tokens) {
-                        Text("No repositories or workspaces are configured on this Host yet.")
-                            .font(WarrenTypography.settingsSupporting)
-                            .foregroundStyle(tokens.mutedForeground)
-                            .padding(WarrenSpacing.standard)
-                    }
-                } else {
-                    WarrenSettingsCard(tokens: tokens) {
-                        ForEach(Array(projects.enumerated()), id: \.element.id) { index, project in
-                            if index > 0 {
-                                WarrenSettingsCardDivider(tokens: tokens)
-                            }
-                            workspaceScriptRow(project, tokens: tokens)
-                        }
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                WarrenSettingsSectionHeader("Setup Script Environment", description: "Variables added to the inherited daemon environment. First two positional arguments are main repo path and worktree path.", tokens: tokens)
-
-                WarrenSettingsCard(tokens: tokens) {
-                    ForEach(WarrenSetupScriptContract.environmentVariables, id: \.name) { variable in
-                        if variable.id != (WarrenSetupScriptContract.environmentVariables.first?.id ?? "") {
-                            WarrenSettingsCardDivider(tokens: tokens)
-                        }
-                        HStack(alignment: .center, spacing: WarrenSpacing.standard) {
-                            Text(variable.name)
-                                .font(WarrenTypography.compactCode)
-                                .foregroundStyle(tokens.primary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(tokens.primary.opacity(0.12))
-                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                                .frame(width: 220, alignment: .leading)
-
-                            Text(variable.description)
-                                .font(.system(size: 12))
-                                .foregroundStyle(tokens.mutedForeground)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer()
-                        }
-                        .padding(.horizontal, WarrenSpacing.standard)
-                        .padding(.vertical, 10)
-                        .accessibilityElement(children: .combine)
-                        .accessibilityIdentifier("settings.setup-script.environment.\(variable.id)")
-                    }
-                }
-            }
-        }
-        .onAppear { syncSetupScriptValues() }
-    }
-
-    private func notificationsSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Agent completion sound", section: .notifications, tokens: tokens) {
-            WarrenSettingsCard(tokens: tokens) {
-                WarrenSettingsRow(
-                    title: "Play Completion Sound",
-                    subtitle: "Warren plays a short system sound when an Agent turn completes in a background pane. Active window and aborted turns stay silent.",
-                    tokens: tokens
-                ) {
-                    HStack(spacing: WarrenSpacing.compact) {
-                        Button("Play test sound") {
-                            WarrenDesktopNotificationSound.playAgentCompletionSoundIfEnabled()
-                        }
-                        .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                        .disabled(!agentCompletionSoundEnabled)
-                        .accessibilityIdentifier("settings.notifications.play-test-sound")
-
-                        Toggle("Play a sound when an Agent completes", isOn: $agentCompletionSoundEnabled)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .accessibilityIdentifier("settings.notifications.agent-completion-sound")
-                    }
-                }
+    private func terminalRuntimeEngine(palette: WarrenSettingsPalette) -> some View {
+        WarrenSettingsGroup(
+            "Engine",
+            footnote: "Only one engine ships today, so this is a read-out instead of a picker. Sessions keep the engine they were created with; a new default applies to new sessions only."
+        ) {
+            WarrenSettingsRow(
+                "Default Runtime",
+                description: "libghostty-vt snapshots match the client exactly; the detached server keeps sessions alive across daemon upgrades."
+            ) {
+                Text(defaultRuntime ?? "ghostline")
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(palette.inkQuiet)
+                    .accessibilityIdentifier("settings.terminal-runtime.picker")
             }
         }
     }
 
-    private func usageOverviewSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Usage", section: .usageOverview, tokens: tokens) {
-            VStack(alignment: .leading, spacing: 20) {
-                usageViewTabs(tokens: tokens)
+    // MARK: - AI titles
 
-                WarrenDesktopUsageOverviewPanel(
-                    stats: usageStats,
-                    state: usageState,
-                    tokens: tokens,
-                    range: $usageRange,
-                    selectedDay: $usageSelectedDay,
-                    onLoad: { days, day, force in onLoadUsage?(days, day, force) },
-                    onOpenDetail: { _ in selectedSection = .usage }
+    private func aiTitlesSection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            WarrenSettingsGroup {
+                WarrenSettingsToggleRow(
+                    title: "Generate Titles Automatically",
+                    description: "Codex, Claude Code, OpenCode, and Qoder name their own conversations and Warren keeps those names. This switch adds a title from the LLM below whenever an agent has not named the conversation.",
+                    isOn: Binding(
+                        get: { openAITitleEnabled },
+                        set: { onSetOpenAISetting("openaiTitleEnabled", $0 ? "true" : "false") }
+                    ),
+                    accessibilityID: "settings.ai-titles.enabled"
                 )
-                .onAppear { onLoadUsage?(usageRange.days, usageSelectedDay, false) }
+            }
 
-                VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                    WarrenSettingsSectionHeader("Maintenance", tokens: tokens)
-                    usageRebuildSection(tokens: tokens)
+            VStack(alignment: .leading, spacing: 12) {
+                WarrenSettingsGroup("Endpoint", accessory: "OpenAI-compatible") {
+                    WarrenSettingsRow("Base URL") {
+                        WarrenSettingsTextField(
+                            placeholder: "https://api.openai.com/v1",
+                            text: $openAIBaseURLDraft,
+                            monospaced: true,
+                            width: WarrenSettingsMetrics.fieldWidth,
+                            isEnabled: !openAITestStatus.isTesting,
+                            accessibilityID: "settings.ai-titles.base-url"
+                        )
+                    }
+                    WarrenSettingsRowDivider()
+                    WarrenSettingsRow("Model") {
+                        WarrenSettingsTextField(
+                            placeholder: "gpt-4o-mini",
+                            text: $openAIModelDraft,
+                            monospaced: true,
+                            width: WarrenSettingsMetrics.fieldWidth,
+                            isEnabled: !openAITestStatus.isTesting,
+                            accessibilityID: "settings.ai-titles.model"
+                        )
+                    }
+                    WarrenSettingsRowDivider()
+                    WarrenSettingsRow("API Key", description: "Stored only on this host.") {
+                        WarrenSettingsTextField(
+                            placeholder: "••••••••3f2a",
+                            text: $openAIKeyDraft,
+                            isSecure: true,
+                            monospaced: true,
+                            width: WarrenSettingsMetrics.fieldWidth,
+                            isEnabled: !openAITestStatus.isTesting,
+                            accessibilityID: "settings.ai-titles.api-key"
+                        )
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Button {
+                        testOpenAISettings(save: true)
+                    } label: {
+                        HStack(spacing: 6) {
+                            if openAITestStatus.isTesting {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(openAITestStatus.isTesting ? "Testing…" : "Save & Test")
+                        }
+                    }
+                    .buttonStyle(WarrenSettingsButtonStyle(kind: .primary))
+                    .disabled(openAITestStatus.isTesting)
+                    .accessibilityIdentifier("settings.ai-titles.save-and-test")
+                    .warrenSemanticElement(
+                        id: "settings.ai-titles.save-and-test",
+                        role: .button,
+                        label: "Save and test AI title connection",
+                        isEnabled: !openAITestStatus.isTesting,
+                        action: { testOpenAISettings(save: true) }
+                    )
+
+                    Button("Test") {
+                        testOpenAISettings(save: false)
+                    }
+                    .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                    .disabled(openAITestStatus.isTesting || !hasUnsavedOpenAIDraft)
+                    .accessibilityIdentifier("settings.ai-titles.test")
+                    .warrenSemanticElement(
+                        id: "settings.ai-titles.test",
+                        role: .button,
+                        label: "Test AI title connection",
+                        isEnabled: !openAITestStatus.isTesting && hasUnsavedOpenAIDraft,
+                        action: { testOpenAISettings(save: false) }
+                    )
+
+                    switch openAITestStatus {
+                    case .idle:
+                        EmptyView()
+                    case .testing:
+                        WarrenSettingsStatusLine(tone: .busy, text: "Testing connection…")
+                    case .succeeded:
+                        WarrenSettingsStatusLine(tone: .ok, text: "Connection succeeded.")
+                    case .failed(let message):
+                        WarrenSettingsStatusLine(tone: .failed, text: message, isError: true)
+                    }
+                }
+                .padding(.leading, 14)
+            }
+        }
+        .onAppear(perform: seedOpenAIFields)
+    }
+
+    private func saveOpenAIField(_ key: String, _ value: String) {
+        onSetOpenAISetting(key, value.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func saveOpenAISettings() {
+        saveOpenAIField("openaiBaseURL", openAIBaseURLDraft)
+        saveOpenAIField("openaiModel", openAIModelDraft)
+        let key = openAIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !key.isEmpty {
+            onSetOpenAISetting("openaiKey", key)
+            openAIKeyDraft = ""
+        }
+    }
+
+    private var hasUnsavedOpenAIDraft: Bool {
+        openAIBaseURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            != openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            || openAIModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                != openAIModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            || !openAIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func testOpenAISettings(save: Bool = true) {
+        guard !openAITestStatus.isTesting else { return }
+        if save { saveOpenAISettings() }
+        let baseURL = openAIBaseURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = openAIModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = openAIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        openAITestStatus = .testing
+        Task { @MainActor in
+            do {
+                try await onTestOpenAI(baseURL, model, key.isEmpty ? nil : key)
+                openAITestStatus = .succeeded
+            } catch {
+                openAITestStatus = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func seedOpenAIFields() {
+        openAIBaseURLDraft = openAIBaseURL
+        openAIModelDraft = openAIModel
+        openAIKeyDraft = ""
+    }
+
+    // MARK: - Usage
+
+    private func usageSection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            if usageShowsDetail {
+                Button {
+                    usageShowsDetail = false
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.backward").font(.system(size: 11, weight: .medium))
+                        Text("Back to overview")
+                    }
+                }
+                .buttonStyle(WarrenSettingsButtonStyle(kind: .plain))
+                .padding(.leading, 6)
+            }
+
+            // The panel's cards sit on the page itself. Wrapped in a settings
+            // group they were boxes inside a box of the same fill, with two
+            // borders and 28pt of the column spent on the wrapper's padding.
+            Group {
+                if usageShowsDetail {
+                    WarrenDesktopUsagePanel(
+                        stats: usageStats,
+                        state: usageState,
+                        tokens: usageTokens,
+                        range: $usageRange,
+                        selectedDay: $usageSelectedDay,
+                        onLoad: { days, day, force in onLoadUsage?(days, day, force) },
+                        mode: .detail,
+                        showsRangePicker: false
+                    )
+                } else {
+                    WarrenDesktopUsageOverviewPanel(
+                        stats: usageStats,
+                        state: usageState,
+                        tokens: usageTokens,
+                        range: $usageRange,
+                        selectedDay: $usageSelectedDay,
+                        onLoad: { days, day, force in onLoadUsage?(days, day, force) },
+                        onOpenDetail: { day in
+                            usageSelectedDay = day
+                            usageShowsDetail = true
+                        },
+                        showsRangePicker: false
+                    )
+                }
+            }
+            .onAppear { onLoadUsage?(usageRange.days, usageSelectedDay, false) }
+
+            WarrenSettingsGroup("Maintenance") {
+                WarrenSettingsRow(
+                    "Rebuild Usage Data",
+                    description: "Recounts every call from the stored transcripts. Use it after upgrading, or when totals look inflated."
+                ) {
+                    HStack(spacing: 10) {
+                        if let summary = usageRebuildSummary {
+                            WarrenSettingsStatusLine(
+                                tone: .ok,
+                                text: WarrenUsageFormatting.rebuildOutcome(summary)
+                            )
+                        } else if let usageRebuildError, !usageRebuildError.isEmpty {
+                            WarrenSettingsStatusLine(tone: .failed, text: usageRebuildError, isError: true)
+                        } else {
+                            WarrenSettingsStatusLine(
+                                tone: .ok,
+                                text: WarrenUsageFormatting.rebuildAge(usageStats.lastRebuild)
+                            )
+                        }
+                        Button(usageRebuildBusy ? "Rebuilding…" : "Rebuild…") {
+                            usageRebuildConfirmation = true
+                        }
+                        .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                        .disabled(usageRebuildBusy || onRebuildUsage == nil)
+                        .accessibilityIdentifier("settings.usage.rebuild")
+                    }
                 }
             }
         }
-        .alert("Rebuild Usage data?", isPresented: $usageRebuildConfirmation) {
-            Button("Rebuild Usage data", role: .destructive) {
-                rebuildUsage()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(
-                "Warren will re-read the transcripts of every Agent that reports token "
+        .overlay { usageRebuildDialog }
+    }
+
+    /// The rebuild confirmation is a `WarrenDialog` like every other blocking
+    /// flow, so its ground, padding and buttons match the rest of the app
+    /// instead of arriving as a system alert.
+    @ViewBuilder
+    private var usageRebuildDialog: some View {
+        if usageRebuildConfirmation {
+            WarrenDialog(
+                "Rebuild Usage data?",
+                message: "Warren will re-read the transcripts of every Agent that reports token "
                     + "counts and replace those Agents' Usage aggregates. An Agent whose "
                     + "transcripts cannot be found keeps its current numbers. The Agent "
                     + "journal and all other databases remain unchanged."
-            )
-        }
-    }
-
-    private func usageSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Usage", section: .usage, tokens: tokens) {
-            VStack(alignment: .leading, spacing: 20) {
-                usageViewTabs(tokens: tokens)
-
-                WarrenDesktopUsagePanel(
-                    stats: usageStats,
-                    state: usageState,
-                    tokens: tokens,
-                    range: $usageRange,
-                    selectedDay: $usageSelectedDay,
-                    onLoad: { days, day, force in onLoadUsage?(days, day, force) }
-                )
-                .onAppear { onLoadUsage?(usageRange.days, usageSelectedDay, false) }
-            }
-        }
-    }
-
-    private func usageRebuildSection(tokens: WarrenColorTokens) -> some View {
-        WarrenSettingsCard(tokens: tokens) {
-            WarrenSettingsRow(
-                title: "Rebuild Usage Data",
-                // When to press it, in one line. What it does in detail belongs to
-                // the confirmation, which is the moment anyone needs to know.
-                subtitle: "Recounts every call from the stored transcripts. Use it after upgrading, or when totals look inflated.",
-                tokens: tokens
             ) {
-                HStack(spacing: WarrenSpacing.compact) {
-                    if usageRebuildBusy {
-                        ProgressView()
-                            .controlSize(.small)
+                EmptyView()
+            } footer: {
+                WarrenDesktopDialogFooter(
+                    confirmLabel: "Rebuild",
+                    isDestructive: true,
+                    onCancel: { usageRebuildConfirmation = false },
+                    onConfirm: {
+                        usageRebuildConfirmation = false
+                        rebuildUsage()
                     }
-                    Button(usageRebuildBusy ? "Rebuilding…" : "Rebuild Usage data") {
-                        usageRebuildConfirmation = true
-                    }
-                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                    .disabled(usageRebuildBusy || onRebuildUsage == nil)
-                    .accessibilityIdentifier("settings.usage.rebuild")
-                }
-            }
-
-            // The age of the stored figures, taken from the rebuild that just
-            // finished when there is one so the line moves without waiting for
-            // the panel to refetch.
-            WarrenSettingsCardDivider(tokens: tokens)
-            HStack(alignment: .top, spacing: WarrenSpacing.small) {
-                Image(systemName: "clock.arrow.circlepath")
-                    .foregroundStyle(tokens.mutedForeground)
-                Text(
-                    WarrenUsageFormatting.rebuildAge(
-                        usageRebuildSummary?.stamp ?? usageStats.lastRebuild
-                    )
                 )
-                .font(WarrenTypography.settingsSupporting)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, WarrenSpacing.standard)
-            .padding(.vertical, WarrenSpacing.compact)
-            .accessibilityIdentifier("settings.usage.rebuild.age")
-
-            if let usageRebuildError, !usageRebuildError.isEmpty {
-                WarrenSettingsCardDivider(tokens: tokens)
-                HStack(spacing: WarrenSpacing.small) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(tokens.destructive)
-                    Text("Usage rebuild failed: \(usageRebuildError)")
-                        .font(WarrenTypography.settingsSupporting)
-                        .foregroundStyle(tokens.destructive)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.horizontal, WarrenSpacing.standard)
-                .padding(.vertical, WarrenSpacing.compact)
-                .accessibilityIdentifier("settings.usage.rebuild.error")
-            } else if let usageRebuildSummary {
-                WarrenSettingsCardDivider(tokens: tokens)
-                HStack(alignment: .top, spacing: WarrenSpacing.small) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(tokens.success)
-                    Text(WarrenUsageFormatting.rebuildOutcome(usageRebuildSummary))
-                        .font(WarrenTypography.settingsSupporting)
-                        .foregroundStyle(tokens.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.horizontal, WarrenSpacing.standard)
-                .padding(.vertical, WarrenSpacing.compact)
-                .accessibilityIdentifier("settings.usage.rebuild.summary")
-            }
+            .onExitCommand { usageRebuildConfirmation = false }
         }
+    }
+
+    /// The usage panels still read the appearance tokens for their own cards.
+    private var usageTokens: WarrenColorTokens {
+        WarrenColorTokens.resolved(for: colorScheme)
     }
 
     private func rebuildUsage() {
@@ -1602,8 +1860,6 @@ struct WarrenDesktopSettingsView: View {
                 usageRebuildBusy = false
                 switch result {
                 case .success(let summary):
-                    // Reporting what changed is the point: a rebuild that says
-                    // nothing leaves no way to tell a correction from a no-op.
                     usageRebuildSummary = summary
                     onLoadUsage?(usageRange.days, usageSelectedDay, true)
                 case .failure(let error):
@@ -1613,439 +1869,330 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
-    private func externalIDEsSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("External IDEs", section: .externalIDEs, tokens: tokens) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                WarrenSettingsSectionHeader("Editor Preferences", description: "Default behaviors for opening files and projects.", tokens: tokens)
+    // MARK: - Relay
 
-                WarrenSettingsCard(tokens: tokens) {
-                    WarrenSettingsRow(
-                        title: "Embedded Editor by Default",
-                        subtitle: "Open Embedded Editor directly from the IDE button without opening the picker menu.",
-                        tokens: tokens
-                    ) {
-                        Toggle(
-                            "Open Embedded Editor directly from the IDE button",
-                            isOn: $embeddedEditorDefaultIDE
+    private func relaySection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            WarrenSettingsGroup("Connection") {
+                HStack(spacing: 12) {
+                    WarrenSettingsStatusDot(
+                        tone: relaySettings.isEnrolled
+                            ? (relaySettings.enabled ? .ok : .warning)
+                            : .failed,
+                        ring: palette.box
+                    )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(relaySettings.isEnrolled
+                            ? (relaySettings.relayURL.isEmpty ? "Relay" : relaySettings.relayURL)
+                            : "Not configured")
+                            .font(.system(size: 12.5, design: .monospaced))
+                            .foregroundStyle(palette.inkBody)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(relaySettings.isEnrolled
+                            ? "Enrolled. Reconnects on its own after sleep."
+                            : "Enter an enrollment key from your Relay administrator to connect this Host.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(palette.meta)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    if relaySettings.isEnrolled {
+                        // The word "Paused" said the same thing while being a
+                        // control the reader had to find elsewhere.
+                        WarrenSettingsSwitch(
+                            isOn: Binding(
+                                get: { relaySettings.enabled },
+                                set: { onSetRelayEnabled?($0) }
+                            )
                         )
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .accessibilityIdentifier("settings.external-ides.embedded-editor-default")
-                    }
-
-                    WarrenSettingsCardDivider(tokens: tokens)
-
-                    WarrenSettingsRow(
-                        title: "Open Terminal Links in Embedded Editor",
-                        subtitle: "⌘-clicking file paths or file URLs in the terminal opens them in the Embedded Editor.",
-                        tokens: tokens
-                    ) {
-                        Toggle(
-                            "Open terminal links in Embedded Editor by default",
-                            isOn: $embeddedEditorOpenLinks
-                        )
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .accessibilityIdentifier("settings.external-ides.embedded-editor-open-links")
+                        .disabled(onSetRelayEnabled == nil || relayResetBusy)
+                        .accessibilityLabel("Relay")
+                        .accessibilityIdentifier("settings.relay.switch")
                     }
                 }
-            }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(minHeight: 48)
 
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                WarrenSettingsSectionHeader("Installed IDEs", description: "Applications detected on this Mac.", tokens: tokens)
+                WarrenSettingsRowDivider()
 
-                WarrenSettingsCard(tokens: tokens) {
-                    if installedIDEs.isEmpty {
-                        Text("No supported IDEs found on this Mac.")
-                            .font(WarrenTypography.settingsSupporting)
-                            .foregroundStyle(tokens.mutedForeground)
-                            .padding(WarrenSpacing.standard)
-                    } else {
-                        ForEach(Array(installedIDEs.enumerated()), id: \.element.id) { index, ide in
-                            if index > 0 {
-                                WarrenSettingsCardDivider(tokens: tokens)
-                            }
-                            ideRow(icon: ide.icon, name: ide.name, path: ide.path, tokens: tokens)
-                        }
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                HStack {
-                    WarrenSettingsSectionHeader("Custom IDEs", description: "Custom app bundles or executables that accept directory paths.", tokens: tokens)
-                    Spacer()
-                    Button {
-                        addCustomIDE()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 11, weight: .medium))
-                            Text("Add IDE…")
-                        }
-                    }
-                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                    .accessibilityIdentifier("settings.external-ides.add")
-                }
-
-                WarrenSettingsCard(tokens: tokens) {
-                    if customIDEs.isEmpty {
-                        Text("No custom IDEs added yet.")
-                            .font(WarrenTypography.settingsSupporting)
-                            .foregroundStyle(tokens.mutedForeground)
-                            .padding(WarrenSpacing.standard)
-                    } else {
-                        ForEach(Array(customIDEs.enumerated()), id: \.element.id) { index, ide in
-                            if index > 0 {
-                                WarrenSettingsCardDivider(tokens: tokens)
-                            }
-                            customIDERow(ide: ide, tokens: tokens)
-                        }
-                    }
-                }
-            }
-
-            Text(
-                "The workspace menu lists IDEs installed on this Mac plus "
-                    + "your custom entries. A custom entry can be an app "
-                    + "bundle or an executable that opens a directory, for "
-                    + "example /usr/local/bin/code."
-            )
-            .font(WarrenTypography.settingsSupporting)
-            .foregroundStyle(tokens.mutedForeground)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, WarrenSpacing.xxs)
-        }
-        .onAppear {
-            installedIDEs = Self.probeInstalledIDEs()
-        }
-    }
-
-    private func ideRow(
-        icon: NSImage,
-        name: String,
-        path: String,
-        tokens: WarrenColorTokens
-    ) -> some View {
-        HStack(spacing: WarrenSpacing.standard) {
-            Image(nsImage: icon)
-                .resizable()
-                .scaledToFit()
-                .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
-                       height: WarrenLayoutMetrics.externalIDEIconSize)
-            Text(name)
-                .font(WarrenTypography.settingsBodyEmphasis)
-                .foregroundStyle(tokens.foreground)
-            Spacer()
-            Text(path)
-                .font(WarrenTypography.compactCode)
-                .foregroundStyle(tokens.mutedForeground)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-        .padding(.horizontal, WarrenSpacing.standard)
-        .padding(.vertical, WarrenSpacing.compact)
-    }
-
-    private func customIDERow(
-        ide: WarrenDesktopCustomIDE,
-        tokens: WarrenColorTokens
-    ) -> some View {
-        HStack(spacing: WarrenSpacing.standard) {
-            Image(nsImage: WarrenDesktopExternalIDEIcon.normalized(
-                NSWorkspace.shared.icon(forFile: ide.path)
-            ))
-            .resizable()
-            .scaledToFit()
-            .frame(width: WarrenLayoutMetrics.externalIDEIconSize,
-                   height: WarrenLayoutMetrics.externalIDEIconSize)
-            Text(ide.name)
-                .font(WarrenTypography.settingsBodyEmphasis)
-                .foregroundStyle(tokens.foreground)
-            Spacer()
-            Text(ide.path)
-                .font(WarrenTypography.compactCode)
-                .foregroundStyle(tokens.mutedForeground)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Button(role: .destructive) {
-                removeCustomIDE(ide)
-            } label: {
-                Image(systemName: "trash")
-                    .font(WarrenTypography.settingsMeta)
-                    .frame(width: WarrenLayoutMetrics.sidebarActionButtonSize,
-                           height: WarrenLayoutMetrics.sidebarActionButtonSize)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(tokens.mutedForeground)
-            .accessibilityLabel("Remove \(ide.name)")
-        }
-        .padding(.horizontal, WarrenSpacing.standard)
-        .padding(.vertical, WarrenSpacing.compact)
-    }
-
-    private func addCustomIDE() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.applicationBundle, .executable]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.prompt = "Add"
-        panel.message = "Choose an IDE app bundle or executable"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let ide = WarrenDesktopCustomIDE(name: Self.displayName(for: url), path: url.path)
-        customIDEs.append(ide)
-        WarrenDesktopCustomIDEStore.save(customIDEs)
-    }
-
-    private func removeCustomIDE(_ ide: WarrenDesktopCustomIDE) {
-        customIDEs.removeAll { $0.id == ide.id }
-        WarrenDesktopCustomIDEStore.save(customIDEs)
-    }
-
-    private static func displayName(for url: URL) -> String {
-        if let bundle = Bundle(url: url),
-           let name = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String,
-           !name.isEmpty {
-            return name
-        }
-        return url.deletingPathExtension().lastPathComponent
-    }
-
-    private static func probeInstalledIDEs() -> [InstalledIDE] {
-        WarrenDesktopExternalIDE.supported.compactMap { ide in
-            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: ide.bundleIdentifier) else {
-                return nil
-            }
-            return InstalledIDE(
-                id: ide.id.rawValue,
-                name: ide.name,
-                path: url.path,
-                icon: WarrenDesktopExternalIDEIcon.normalized(
-                    NSWorkspace.shared.icon(forFile: url.path),
-                    opticalScale: WarrenDesktopExternalIDEIcon.opticalScale(for: ide.id.rawValue)
-                )
-            )
-        }
-    }
-
-    private func relaySection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Relay", section: .relay, tokens: tokens) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                WarrenSettingsSectionHeader("Host Connection", description: "Connect this Host once to Relay, then pair with iPhone or browsers. Warren reconnects automatically.", tokens: tokens)
-
-                WarrenSettingsCard(tokens: tokens) {
-                    HStack(spacing: WarrenSpacing.standard) {
-                        WarrenStatusIndicator(
-                            color: relayStatusColor(tokens: tokens),
-                            isActive: relayEnrollmentBusy || relayResetBusy,
-                            accessibilityLabel: relayStatusLabel
-                        )
-                        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                            Text(relayStatusLabel)
-                                .font(WarrenTypography.settingsBodyEmphasis)
-                                .foregroundStyle(tokens.foreground)
-                            Text(relaySettings.isEnrolled
-                                ? "Connected. You can share this Host with iPhone or browsers."
-                                : "Enter an enrollment key from your Relay administrator to connect this Host.")
-                                .font(WarrenTypography.settingsSupporting)
-                                .foregroundStyle(tokens.mutedForeground)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(WarrenSpacing.standard)
-
-                    WarrenSettingsCardDivider(tokens: tokens)
-
-                    relayConnectionForm(tokens: tokens)
-                }
+                relayConnectionForm(palette: palette)
+                    .warrenSemanticElement(
+                        id: "settings.relay.connection",
+                        role: .group,
+                        label: "Relay connection"
+                    )
             }
 
             if relaySettings.isEnrolled {
-                VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                    WarrenSettingsSectionHeader("Share with iPhone", description: "Create a reusable pairing invite for iPhone or any browser.", tokens: tokens)
-
-                    WarrenSettingsCard(tokens: tokens) {
-                        VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
-                            HStack(spacing: WarrenSpacing.compact) {
-                                Button(relayInviteBusy ? "Preparing…" : "Share with iPhone") {
-                                    createRelayInvite()
-                                }
-                                .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
-                                .disabled(relayInviteBusy || onRelayPairing == nil)
-                                .accessibilityIdentifier("settings.relay.share")
-                                .warrenSemanticElement(
-                                    id: "settings.relay.share",
-                                    role: .button,
-                                    label: "Share with iPhone",
-                                    isEnabled: !relayInviteBusy && onRelayPairing != nil,
-                                    action: createRelayInvite
-                                )
-
-                                if relayInviteBusy {
-                                    WarrenStatusIndicator(
-                                        color: tokens.info,
-                                        isActive: true,
-                                        accessibilityLabel: "Creating Relay pairing link"
-                                    )
-                                }
-                            }
-
-                            if let relayInvite {
-                                HStack(alignment: .top, spacing: WarrenSpacing.compact) {
-                                    VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                                        Text(relayInvite.url.absoluteString)
-                                            .font(WarrenTypography.compactCode)
-                                            .foregroundStyle(tokens.foreground)
-                                            .textSelection(.enabled)
-                                            .lineLimit(2)
-                                            .truncationMode(.middle)
-                                        Text(relayInviteExpiryText(relayInvite))
-                                            .font(WarrenTypography.settingsSupporting)
-                                            .foregroundStyle(tokens.mutedForeground)
-                                    }
-                                    Spacer(minLength: 0)
-                                    Button("Copy") { copyRelayInvite(relayInvite) }
-                                        .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                                    Button("Show QR") { relayInviteQRPresented = true }
-                                        .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                                }
-                                .padding(WarrenSpacing.compact)
-                                .background(tokens.fillHover)
-                                .clipShape(.rect(cornerRadius: WarrenRadius.small))
-                            }
-
-                            if let relayInviteError, !relayInviteError.isEmpty {
-                                Text(relayInviteError)
-                                    .font(WarrenTypography.settingsSupporting)
-                                    .foregroundStyle(tokens.warning)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .accessibilityLabel("Relay pairing error: \(relayInviteError)")
-                            }
+                WarrenSettingsGroup("Share with iPhone") {
+                    WarrenSettingsRow(
+                        "Pairing Invite",
+                        description: "A reusable link for Warren on iPhone or any browser."
+                    ) {
+                        Button(relayInviteBusy ? "Preparing…" : "Create Invite") {
+                            createRelayInvite()
                         }
-                        .padding(WarrenSpacing.standard)
+                        .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                        .disabled(relayInviteBusy || onRelayPairing == nil)
+                        .accessibilityIdentifier("settings.relay.share")
+                        .warrenSemanticElement(
+                            id: "settings.relay.share",
+                            role: .button,
+                            label: "Share with iPhone",
+                            isEnabled: !relayInviteBusy && onRelayPairing != nil,
+                            action: createRelayInvite
+                        )
+                    }
+
+                    if let relayInvite {
+                        WarrenSettingsRowDivider()
+                        relayInviteReveal(relayInvite, palette: palette)
+                    }
+
+                    if let relayInviteError, !relayInviteError.isEmpty {
+                        WarrenSettingsRowDivider()
+                        WarrenSettingsStatusLine(tone: .failed, text: relayInviteError, isError: true)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
                     }
                 }
 
-                relayDevicesSection(tokens: tokens)
+                relayDevicesSection(palette: palette)
             }
         }
         .onAppear(perform: seedRelayFields)
         .onChange(of: relaySettings) { _ in seedRelayFields() }
-        .popover(isPresented: $relayInviteQRPresented) {
-            relayInviteQRPopover()
-        }
     }
 
-    private func lanPairingSection(tokens: WarrenColorTokens) -> some View {
-        TimelineView(.periodic(from: .now, by: 1)) { timeline in
-            lanPairingContent(at: timeline.date, tokens: tokens)
-        }
-    }
+    private func relayConnectionForm(palette: WarrenSettingsPalette) -> some View {
+        // Rows carry their own inset, like every other group's. The form used
+        // to be padded again on top of that, so its labels and fields sat 14pt
+        // in from the status row above them and from every other page.
+        VStack(alignment: .leading, spacing: 0) {
+            WarrenSettingsRow("Relay URL") {
+                WarrenSettingsTextField(
+                    placeholder: "https://relay.example.com",
+                    text: $relayRegistrationURL,
+                    monospaced: true,
+                    width: WarrenSettingsMetrics.fieldWidth,
+                    accessibilityID: "settings.relay.join-url"
+                )
+                .warrenSemanticElement(id: "settings.relay.join-url", role: .text, label: "Relay URL")
+            }
 
-    private func lanPairingContent(at date: Date, tokens: WarrenColorTokens) -> some View {
-        let isOpen = lanPairingIsOpen(at: date)
-        return settingsSection("LAN pairing", section: .lanPairing, tokens: tokens) {
-                VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                    WarrenSettingsSectionHeader("Pairing Status", description: "Enable a temporary window when an iPhone is ready to pair on the local network.", tokens: tokens)
+            WarrenSettingsRowDivider()
 
-                    WarrenSettingsCard(tokens: tokens) {
-                        HStack(spacing: WarrenSpacing.standard) {
-                            WarrenStatusIndicator(
-                                color: isOpen ? tokens.success : tokens.mutedForeground,
-                                isActive: lanPairingBusy,
-                                accessibilityLabel: isOpen ? "Pairing window open" : "Pairing window closed"
-                            )
-                            VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                                Text(isOpen ? "Pairing window open" : "Pairing window closed")
-                                    .font(WarrenTypography.settingsBodyEmphasis)
-                                    .foregroundStyle(tokens.foreground)
-                                Text(isOpen
-                                    ? "Enter the PIN on iPhone now. This window is not enabled by discovery."
-                                    : "No iPhone can pair until you explicitly open a window.")
-                                    .font(WarrenTypography.settingsSupporting)
-                                    .foregroundStyle(tokens.mutedForeground)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            Spacer(minLength: 0)
+            WarrenSettingsRow("Enrollment key") {
+                WarrenSettingsTextField(
+                    placeholder: "XXXX-XXXX-XXXX-XXXX",
+                    text: $relayEnrollmentKey,
+                    isSecure: true,
+                    monospaced: true,
+                    width: WarrenSettingsMetrics.fieldWidth,
+                    accessibilityID: "settings.relay.enrollment-key"
+                )
+                .warrenSemanticElement(id: "settings.relay.enrollment-key", role: .text, label: "Relay enrollment key")
+            }
 
-                            HStack(spacing: WarrenSpacing.compact) {
-                                Button(isOpen ? "Regenerate PIN" : "Enable LAN pairing") {
-                                    setLANPairing(enabled: true)
-                                }
-                                .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
-                                .disabled(lanPairingBusy || onLANPairing == nil)
-                                .accessibilityIdentifier("settings.lan-pairing.enable")
+            WarrenSettingsRowDivider()
 
-                                if isOpen {
-                                    Button("Disable pairing", role: .destructive) {
-                                        setLANPairing(enabled: false)
-                                    }
-                                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                                    .disabled(lanPairingBusy || onLANPairing == nil)
-                                    .accessibilityIdentifier("settings.lan-pairing.disable")
-                                }
-
-                                if lanPairingBusy {
-                                    WarrenStatusIndicator(
-                                        color: tokens.info,
-                                        isActive: true,
-                                        accessibilityLabel: "Updating LAN pairing"
-                                    )
-                                }
-                            }
-                        }
-                        .padding(WarrenSpacing.standard)
-
-                        if isOpen {
-                            WarrenSettingsCardDivider(tokens: tokens)
-
-                            VStack(spacing: WarrenSpacing.small) {
-                                Text("PAIRING PIN")
-                                    .font(WarrenTypography.settingsMeta)
-                                    .foregroundStyle(tokens.mutedForeground)
-                                    .tracking(1.5)
-
-                                Text(lanPairing.pin.isEmpty ? "------" : lanPairing.pin)
-                                    .font(.system(size: 38, weight: .light, design: .monospaced))
-                                    .foregroundStyle(tokens.primary)
-                                    .textSelection(.enabled)
-                                    .accessibilityLabel("Pairing PIN \(lanPairing.pin)")
-                                    .accessibilityIdentifier("settings.lan-pairing.pin")
-
-                                Text(lanPairingExpiryText(at: date))
-                                    .font(WarrenTypography.settingsSupporting)
-                                    .foregroundStyle(tokens.mutedForeground)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, WarrenSpacing.large)
-                            .background(tokens.fillHover.opacity(0.3))
-                        }
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Button(relayEnrollmentBusy ? "Connecting…" : "Connect Relay") {
+                        enrollRelay()
                     }
+                    .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                    .disabled(
+                        relayEnrollmentBusy
+                            || relayResetBusy
+                            || onRelayEnroll == nil
+                            || relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+                    .accessibilityIdentifier("settings.relay.connect")
                     .warrenSemanticElement(
-                        id: "settings.lan-pairing",
-                        role: .group,
-                        label: "LAN pairing"
+                        id: "settings.relay.connect",
+                        role: .button,
+                        label: "Connect Relay",
+                        isEnabled: !relayEnrollmentBusy
+                            && !relayResetBusy
+                            && onRelayEnroll != nil
+                            && !relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            && !relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        action: enrollRelay
+                    )
+
+                    Spacer()
+
+                    Button("Reset Enrollment…") {
+                        resetRelay()
+                    }
+                    .buttonStyle(WarrenSettingsButtonStyle(kind: .danger))
+                    .disabled(relayEnrollmentBusy || relayResetBusy || onResetRelay == nil)
+                    .accessibilityIdentifier("settings.relay.reset")
+                    .warrenSemanticElement(
+                        id: "settings.relay.reset",
+                        role: .button,
+                        label: "Reset local Relay enrollment",
+                        isEnabled: !relayEnrollmentBusy && !relayResetBusy && onResetRelay != nil,
+                        action: resetRelay
                     )
                 }
 
-                if let lanPairingError, !lanPairingError.isEmpty {
-                    Text(lanPairingError)
-                        .font(WarrenTypography.settingsSupporting)
-                        .foregroundStyle(tokens.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityLabel("LAN pairing error: \(lanPairingError)")
+                if let relayEnrollmentError, !relayEnrollmentError.isEmpty {
+                    WarrenSettingsStatusLine(tone: .failed, text: relayEnrollmentError, isError: true)
                 }
+                if !relaySettings.lastError.isEmpty {
+                    WarrenSettingsStatusLine(tone: .warning, text: relaySettings.lastError)
+                }
+                if let relayResetError, !relayResetError.isEmpty {
+                    WarrenSettingsStatusLine(tone: .failed, text: relayResetError, isError: true)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+    }
 
-                Text(
-                    "The PIN is shown only in this Desktop settings window. Pairing issues a scoped iPhone token; it does not expose the Host token or open pairing automatically."
-                )
-                .font(WarrenTypography.settingsSupporting)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, WarrenSpacing.xxs)
+    private func relayInviteReveal(_ invite: WarrenDesktopRelayInvite, palette: WarrenSettingsPalette) -> some View {
+        WarrenSettingsReveal {
+            HStack(alignment: .top, spacing: 18) {
+                if let image = qrCodeImage(for: invite.url.absoluteString) {
+                    Image(nsImage: image)
+                        .interpolation(.none)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 108, height: 108)
+                        .padding(8)
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(invite.url.absoluteString)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(palette.inkBody)
+                        .textSelection(.enabled)
+                        .lineLimit(3)
+                        .truncationMode(.middle)
+                    Text(relayInviteExpiryText(invite))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(palette.meta)
+                    WarrenSettingsCountdownBar(
+                        expiresAt: invite.expiresAt,
+                        total: invite.expiresIn
+                    )
+                    .frame(maxWidth: 220)
+                    Button {
+                        copyRelayInvite(invite)
+                    } label: {
+                        let copied = copyFeedback.confirms(Self.relayInviteCopySource)
+                        HStack(spacing: 6) {
+                            Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 11))
+                            Text(copied ? "Copied" : "Copy Link")
+                        }
+                    }
+                    .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                }
             }
         }
+    }
+
+    private func relayDevicesSection(palette: WarrenSettingsPalette) -> some View {
+        WarrenSettingsGroup("Devices", accessory: "Phones and browsers with access") {
+            if relayDevices.isEmpty {
+                WarrenSettingsEmptyRow(text: "No other devices are currently associated.")
+            } else {
+                ForEach(Array(relayDevices.enumerated()), id: \.element.id) { index, device in
+                    if index > 0 { WarrenSettingsRowDivider() }
+                    WarrenSettingsListRow(
+                        title: device.clientID.isEmpty ? "Native device" : device.clientID,
+                        subtitle: device.lastSeenAt.map { "Last active \($0.formatted(.relative(presentation: .named)))" } ?? "Last active unavailable",
+                        leading: {
+                            Image(systemName: "iphone")
+                                .font(.system(size: 14))
+                                .foregroundStyle(palette.inkQuiet)
+                                .frame(width: 18)
+                        },
+                        trailing: {
+                            Button("Revoke") {
+                                onRevokeRelayDevice?(device.id) { _ in onLoadRelayDevices?() }
+                            }
+                            .buttonStyle(WarrenSettingsButtonStyle(kind: .danger))
+                            .disabled(onRevokeRelayDevice == nil)
+                            .accessibilityIdentifier("settings.relay.device.revoke.\(device.id)")
+                        }
+                    )
+                }
+            }
+        }
+        .onAppear { onLoadRelayDevices?() }
+    }
+
+    // MARK: - LAN pairing
+
+    private func lanPairingSection(palette: WarrenSettingsPalette) -> some View {
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            lanPairingContent(at: timeline.date, palette: palette)
+        }
+    }
+
+    private func lanPairingContent(at date: Date, palette: WarrenSettingsPalette) -> some View {
+        let isOpen = lanPairingIsOpen(at: date)
+        return VStack(alignment: .leading, spacing: 24) {
+            WarrenSettingsGroup(
+                "Pairing window",
+                footnote: "Only trust an iPhone you can see. The window closes on its own; turning it off ends it early."
+            ) {
+                WarrenSettingsToggleRow(
+                    title: "Pairing Window",
+                    description: "Opens a short window in which an iPhone on this network can pair with a PIN.",
+                    isOn: Binding(
+                        get: { isOpen },
+                        set: { setLANPairing(enabled: $0) }
+                    ),
+                    isEnabled: !lanPairingBusy && onLANPairing != nil,
+                    accessibilityID: "settings.lan-pairing.toggle"
+                )
+
+                if isOpen {
+                    WarrenSettingsRowDivider()
+                    WarrenSettingsReveal {
+                        HStack(spacing: 18) {
+                            Text(lanPairing.pin.isEmpty ? "------" : lanPairing.pin)
+                                .font(.system(size: 28, weight: .medium, design: .monospaced))
+                                .tracking(3)
+                                .foregroundStyle(palette.ink)
+                                .accessibilityLabel("Pairing PIN \(lanPairing.pin)")
+                                .accessibilityIdentifier("settings.lan-pairing.pin")
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Enter this PIN on the iPhone.")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(palette.meta)
+                                Text(lanPairingExpiryText(at: date))
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(palette.meta)
+                                WarrenSettingsCountdownBar(
+                                    expiresAt: lanPairing.expiresAt,
+                                    total: lanPairing.expiresIn
+                                )
+                                .frame(width: 180)
+                            }
+                        }
+                    }
+                }
+
+                if let lanPairingError, !lanPairingError.isEmpty {
+                    WarrenSettingsRowDivider()
+                    WarrenSettingsStatusLine(tone: .failed, text: lanPairingError, isError: true)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                }
+            }
+        }
+        .warrenSemanticElement(id: "settings.lan-pairing", role: .group, label: "LAN pairing")
+    }
 
     private func lanPairingIsOpen(at date: Date) -> Bool {
         guard lanPairing.enabled else { return false }
@@ -2067,9 +2214,7 @@ struct WarrenDesktopSettingsView: View {
     }
 
     private func formatPairingTTL(_ seconds: Int) -> String {
-        if seconds >= 60 {
-            return "\(max(1, seconds / 60)) min"
-        }
+        if seconds >= 60 { return "\(max(1, seconds / 60)) min" }
         return "\(max(1, seconds)) sec"
     }
 
@@ -2087,198 +2232,322 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
-    private func relayConnectionForm(tokens: WarrenColorTokens) -> some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
-            HStack(spacing: WarrenSpacing.standard) {
-                Text("Relay URL")
-                    .font(WarrenTypography.settingsBodyEmphasis)
-                    .foregroundStyle(tokens.foreground)
-                    .frame(width: 130, alignment: .leading)
+    // MARK: - Public access
 
-                TextField("https://relay.example.com", text: $relayRegistrationURL)
-                    .textFieldStyle(.plain)
-                    .font(WarrenTypography.compactCode)
-                    .padding(.horizontal, 10)
-                    .frame(height: 32)
-                    .background(tokens.inputSurface)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(tokens.border.opacity(0.55), lineWidth: 1))
-                    .accessibilityLabel("Relay URL")
-                    .accessibilityIdentifier("settings.relay.join-url")
-                    .warrenSemanticElement(
-                        id: "settings.relay.join-url",
-                        role: .text,
-                        label: "Relay URL"
-                    )
+    /// The page's own state, as a header row: a dot, what it is serving, and a
+    /// switch at the tail. The word "Enabled" told the same thing while also
+    /// being a control the user had to find elsewhere.
+    private func publicAccessStatusRow(palette: WarrenSettingsPalette) -> some View {
+        HStack(spacing: 12) {
+            WarrenSettingsStatusDot(
+                tone: webStatus.tunnelRunning
+                    ? .ok
+                    : ((webStatus.publicAccessError?.isEmpty == false) ? .failed : .warning),
+                ring: palette.box
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(webStatus.tunnelRunning
+                    ? (webStatus.secureURL?.absoluteString ?? webStatus.publicHostname ?? "")
+                    : "Not published")
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(palette.inkBody)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(webStatus.tunnelRunning
+                    ? "Anyone with the link can open this Host's Web UI."
+                    : "Publish this Host's Web UI through the enrolled Relay.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(palette.meta)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            HStack(spacing: WarrenSpacing.standard) {
-                Text("Enrollment key")
-                    .font(WarrenTypography.settingsBodyEmphasis)
-                    .foregroundStyle(tokens.foreground)
-                    .frame(width: 130, alignment: .leading)
-
-                SecureField("XXXX-XXXX-XXXX-XXXX", text: $relayEnrollmentKey)
-                    .textFieldStyle(.plain)
-                    .font(WarrenTypography.compactCode)
-                    .padding(.horizontal, 10)
-                    .frame(height: 32)
-                    .background(tokens.inputSurface)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(tokens.border.opacity(0.55), lineWidth: 1))
-                    .textContentType(.oneTimeCode)
-                    .accessibilityLabel("Relay enrollment key")
-                    .accessibilityIdentifier("settings.relay.enrollment-key")
-                    .warrenSemanticElement(
-                        id: "settings.relay.enrollment-key",
-                        role: .text,
-                        label: "Relay enrollment key"
-                    )
-            }
-
-            HStack(spacing: WarrenSpacing.compact) {
-                Button(relayEnrollmentBusy ? "Connecting…" : "Connect Relay") {
-                    enrollRelay()
-                }
-                .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
-                .disabled(
-                    relayEnrollmentBusy
-                        || relayResetBusy
-                        || onRelayEnroll == nil
-                        || relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            Spacer(minLength: 0)
+            WarrenSettingsSwitch(
+                isOn: Binding(
+                    get: { webStatus.tunnelRunning },
+                    set: { publish in
+                        if publish {
+                            onWebTest?(
+                                publicAccessHostname.trimmingCharacters(in: .whitespacesAndNewlines),
+                                publicAccessPathPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+                            )
+                        } else {
+                            onWebStop?()
+                        }
+                    }
                 )
-                .accessibilityIdentifier("settings.relay.connect")
-                .warrenSemanticElement(
-                    id: "settings.relay.connect",
-                    role: .button,
-                    label: "Connect Relay",
-                    isEnabled: !relayEnrollmentBusy
-                        && !relayResetBusy
-                        && onRelayEnroll != nil
-                        && !relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        && !relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                    action: enrollRelay
-                )
+            )
+            .disabled(webStatus.publicAccessBusy || onWebTest == nil || onWebStop == nil)
+            .accessibilityLabel("Public Access")
+            .accessibilityIdentifier("settings.public-access.switch")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(minHeight: 48)
+    }
 
-                if relayEnrollmentBusy {
-                    WarrenStatusIndicator(
-                        color: tokens.info,
-                        isActive: true,
-                        accessibilityLabel: "Connecting to Relay"
-                    )
+    private func publicAccessSection(palette: WarrenSettingsPalette) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 12) {
+                WarrenSettingsGroup {
+                    publicAccessStatusRow(palette: palette)
                 }
 
-                Spacer()
-
-                Button("Reset local enrollment", role: .destructive) {
-                    resetRelay()
+                WarrenSettingsGroup(
+                    "Route",
+                    footnote: "Public Access and the owner's Relay traffic share this host's Relay enrollment and Host Secret."
+                ) {
+                    WarrenSettingsRow("Public Hostname", description: "Assigned by your Relay.") {
+                        WarrenSettingsTextField(
+                            placeholder: "Relay-assigned hostname",
+                            text: $publicAccessHostname,
+                            monospaced: true,
+                            width: WarrenSettingsMetrics.fieldWidth,
+                            accessibilityID: "settings.public-access.public-hostname"
+                        )
+                    }
+                    WarrenSettingsRowDivider()
+                    WarrenSettingsRow("Path Prefix") {
+                        WarrenSettingsTextField(
+                            placeholder: "/",
+                            text: $publicAccessPathPrefix,
+                            monospaced: true,
+                            width: WarrenSettingsMetrics.fieldWidth,
+                            accessibilityID: "settings.public-access.path-prefix"
+                        )
+                    }
+                    if let relayURL = webStatus.relayURL {
+                        WarrenSettingsRowDivider()
+                        WarrenSettingsRow(WarrenPublicAccessCopy.relayURL) {
+                            WarrenSettingsReadout(value: relayURL.absoluteString)
+                        }
+                    }
+                    if let publicEndpoint = webStatus.secureURL {
+                        WarrenSettingsRowDivider()
+                        WarrenSettingsRow(WarrenPublicAccessCopy.publicEndpoint) {
+                            WarrenSettingsReadout(value: publicEndpoint.absoluteString, copyable: true)
+                        }
+                    }
                 }
-                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                .disabled(relayEnrollmentBusy || relayResetBusy || onResetRelay == nil)
-                .accessibilityIdentifier("settings.relay.reset")
-                .warrenSemanticElement(
-                    id: "settings.relay.reset",
-                    role: .button,
-                    label: "Reset local Relay enrollment",
-                    isEnabled: !relayEnrollmentBusy && !relayResetBusy && onResetRelay != nil,
-                    action: resetRelay
-                )
-            }
 
-            if let relayEnrollmentError, !relayEnrollmentError.isEmpty {
-                Text(relayEnrollmentError)
-                    .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(tokens.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Relay enrollment error: \(relayEnrollmentError)")
-            }
+                HStack(spacing: 8) {
+                    Button(publicAccessActionTitle) {
+                        onWebTest?(
+                            publicAccessHostname.trimmingCharacters(in: .whitespacesAndNewlines),
+                            publicAccessPathPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+                        )
+                    }
+                    .buttonStyle(WarrenSettingsButtonStyle(kind: .primary))
+                    .disabled(webStatus.publicAccessBusy || onWebTest == nil)
+                    .accessibilityIdentifier("settings.public-access.save-test")
 
-            if !relaySettings.lastError.isEmpty {
-                Text(relaySettings.lastError)
-                    .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(tokens.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Relay error: \(relaySettings.lastError)")
-            }
+                    Button("Turn Off") {
+                        onWebStop?()
+                    }
+                    .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                    .disabled(!webStatus.tunnelRunning || onWebStop == nil)
+                    .accessibilityIdentifier("settings.public-access.stop")
 
-            if let relayResetError, !relayResetError.isEmpty {
-                Text(relayResetError)
-                    .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(tokens.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Relay reset error: \(relayResetError)")
+                    if hasPublicAccessSetup {
+                        Button("Reset") {
+                            onWebReset?()
+                        }
+                        .buttonStyle(WarrenSettingsButtonStyle(kind: .plain))
+                        .disabled(webStatus.publicAccessBusy || onWebReset == nil)
+                        .accessibilityIdentifier("settings.public-access.reset")
+                    }
+
+                    statusLabel(palette: palette)
+                }
+                .padding(.leading, 14)
             }
         }
-        .padding(WarrenSpacing.standard)
-        .warrenSemanticElement(
-            id: "settings.relay.connection",
-            role: .group,
-            label: "Relay connection"
+        .onAppear(perform: seedPublicAccessFields)
+        .onChange(of: webStatus.publicHostname) { _ in seedPublicAccessFields() }
+        .onChange(of: webStatus.pathPrefix) { _ in seedPublicAccessFields() }
+        .onChange(of: webStatus.publicAccessEnabled) { _ in clearPublicAccessFieldsIfReset() }
+        .onChange(of: webStatus.publicAccessAuthenticated) { _ in clearPublicAccessFieldsIfReset() }
+    }
+
+    @ViewBuilder
+    private func statusLabel(palette: WarrenSettingsPalette) -> some View {
+        if webStatus.publicAccessBusy {
+            WarrenSettingsStatusLine(tone: .busy, text: "Testing connection…")
+        } else if let error = webStatus.publicAccessError, !error.isEmpty {
+            WarrenSettingsStatusLine(tone: .failed, text: error, isError: true)
+        } else if webStatus.tunnelRunning {
+            WarrenSettingsStatusLine(tone: .ok, text: "Public Access is on")
+        } else if webStatus.publicAccessAuthenticated {
+            WarrenSettingsStatusLine(tone: .ok, text: "Connected")
+        }
+    }
+
+    private var publicAccessActionTitle: String {
+        webStatus.publicAccessBusy ? "Testing…" : "Save & Test"
+    }
+
+    private var hasPublicAccessSetup: Bool {
+        webStatus.publicAccessAuthenticated
+            || webStatus.publicAccessEnabled
+            || webStatus.relayURL != nil
+            || webStatus.relayHostID != nil
+            || webStatus.routeID != nil
+    }
+
+    // MARK: - Deep links
+
+    private func copySettingsDeepLink(for section: SettingsSection) {
+        let publicAccess: WarrenDesktopPublicAccessPrefill?
+        let relay: WarrenDesktopRelayPrefill?
+        if section == .publicAccess {
+            let publicHostname = publicAccessHostname.trimmingCharacters(in: .whitespacesAndNewlines)
+            let pathPrefix = publicAccessPathPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+            publicAccess = WarrenDesktopPublicAccessPrefill(
+                publicHostname: publicHostname.isEmpty ? webStatus.publicHostname : publicHostname,
+                pathPrefix: pathPrefix.isEmpty ? webStatus.pathPrefix : pathPrefix
+            )
+        } else {
+            publicAccess = nil
+        }
+
+        if section == .relay {
+            relay = relayPrefill ?? WarrenDesktopRelayPrefill(relayURL: relaySettings.relayURL)
+        } else {
+            relay = nil
+        }
+
+        guard let url = WarrenDesktopSettingsDeepLink(
+            section: section,
+            publicAccess: publicAccess,
+            relay: relay
+        ).url else { return }
+        copyFeedback.copy(url.absoluteString, confirmingIn: Self.deepLinkCopySource(section))
+    }
+
+    private static func deepLinkCopySource(_ section: SettingsSection) -> String {
+        "settings.deeplink.\(section.rawValue)"
+    }
+
+    private func applyDeepLinkPrefill() {
+        if let initialSettingsSection {
+            selectedSection = initialSettingsSection
+        }
+        if let publicAccessPrefill {
+            if let publicHostname = publicAccessPrefill.publicHostname {
+                publicAccessHostname = publicHostname
+            }
+            if let pathPrefix = publicAccessPrefill.pathPrefix {
+                publicAccessPathPrefix = pathPrefix
+            }
+        }
+
+        if let relayPrefill {
+            if let relayURL = relayPrefill.relayURL { relayRegistrationURL = relayURL }
+            if let enrollmentKey = relayPrefill.enrollmentKey { relayEnrollmentKey = enrollmentKey }
+        } else {
+            seedRelayFields()
+        }
+    }
+
+    private func seedPublicAccessFields() {
+        if publicAccessHostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let publicHostname = webStatus.publicHostname,
+           !publicHostname.isEmpty {
+            publicAccessHostname = publicHostname
+        }
+        if publicAccessPathPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let pathPrefix = webStatus.pathPrefix,
+           !pathPrefix.isEmpty {
+            publicAccessPathPrefix = pathPrefix
+        }
+    }
+
+    private func clearPublicAccessFieldsIfReset() {
+        guard !webStatus.publicAccessEnabled,
+              !webStatus.publicAccessAuthenticated,
+              webStatus.relayURL == nil,
+              webStatus.relayHostID == nil,
+              webStatus.routeID == nil else {
+            return
+        }
+        publicAccessHostname = ""
+        publicAccessPathPrefix = ""
+    }
+
+    // MARK: - Shared plumbing
+
+    private var orderedPresets: [WarrenDesktopSessionPreset] {
+        WarrenDesktopSessionPreset.orderedPinned(by: presetOrder)
+    }
+
+    private func presetVisibilityBinding(for preset: WarrenDesktopSessionPreset) -> Binding<Bool> {
+        Binding(
+            get: { !WarrenDesktopSessionPreset.normalizedHidden(hiddenPresets).contains(preset.id) },
+            set: { visible in
+                hiddenPresets = WarrenDesktopSessionPreset.settingVisibility(
+                    of: preset.id,
+                    visible: visible,
+                    in: hiddenPresets
+                )
+            }
         )
     }
 
-    private func relayDevicesSection(tokens: WarrenColorTokens) -> some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-            HStack {
-                WarrenSettingsSectionHeader("Connected Devices", description: "Phones and browsers with active access to this Host.", tokens: tokens)
-                Spacer()
-                Button {
-                    onLoadRelayDevices?()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                .accessibilityLabel("Refresh connected devices")
-            }
-
-            WarrenSettingsCard(tokens: tokens) {
-                if relayDevices.isEmpty {
-                    Text("No other devices are currently associated.")
-                        .font(WarrenTypography.settingsSupporting)
-                        .foregroundStyle(tokens.mutedForeground)
-                        .padding(WarrenSpacing.standard)
-                } else {
-                    ForEach(Array(relayDevices.enumerated()), id: \.element.id) { index, device in
-                        if index > 0 {
-                            WarrenSettingsCardDivider(tokens: tokens)
-                        }
-                        HStack(spacing: WarrenSpacing.standard) {
-                            Image(systemName: "iphone.and.arrow.forward")
-                                .foregroundStyle(tokens.primary)
-                                .frame(width: 24)
-                            VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                                Text(device.clientID.isEmpty ? "Native device" : device.clientID)
-                                    .font(WarrenTypography.settingsBodyEmphasis)
-                                    .foregroundStyle(tokens.foreground)
-                                if let lastSeenAt = device.lastSeenAt {
-                                    Text("Last active \(lastSeenAt, style: .relative)")
-                                        .font(WarrenTypography.settingsMeta)
-                                        .foregroundStyle(tokens.mutedForeground)
-                                } else {
-                                    Text("Last active unavailable")
-                                        .font(WarrenTypography.settingsMeta)
-                                        .foregroundStyle(tokens.mutedForeground)
-                                }
-                            }
-                            Spacer()
-                            Button("Revoke", role: .destructive) {
-                                onRevokeRelayDevice?(device.id) { _ in
-                                    onLoadRelayDevices?()
-                                }
-                            }
-                            .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                            .disabled(onRevokeRelayDevice == nil)
-                            .accessibilityIdentifier("settings.relay.device.revoke.\(device.id)")
-                        }
-                        .padding(.horizontal, WarrenSpacing.standard)
-                        .padding(.vertical, WarrenSpacing.compact)
-                    }
-                }
-            }
-        }
-        .onAppear { onLoadRelayDevices?() }
+    private var agentInterfaceSelection: Binding<WarrenAgentInterface> {
+        Binding(
+            get: { WarrenAgentInterface(storedValue: agentInterfaceRawValue) },
+            set: { agentInterfaceRawValue = $0.rawValue }
+        )
     }
+
+    private var appearanceSelection: Binding<WarrenAppearanceMode> {
+        Binding(
+            get: { WarrenAppearanceMode(storedValue: appearanceModeRawValue) },
+            set: { mode in
+                appearanceModeRawValue = mode.rawValue
+                WarrenDesktopAppearance.apply(mode)
+            }
+        )
+    }
+
+    private var appIconSelection: Binding<WarrenAppIconColorway> {
+        Binding(
+            get: { WarrenAppIconColorway(storedValue: appIconRawValue) },
+            set: { colorway in
+                appIconRawValue = colorway.rawValue
+                WarrenDesktopDockIcon.apply(colorway)
+            }
+        )
+    }
+
+    private var normalizedFont: TerminalFontPreference {
+        TerminalFontPreference(family: fontFamily, size: fontSize)
+    }
+
+    private var renderedTitle: String {
+        TerminalDisplayTitleTemplate(rawValue: titleTemplate).render(.init(
+            session: "Claude", command: "claude", directory: "/Users/me/Workspace/warren",
+            workspace: "warren", branch: "main", host: "MacBook Pro", user: "me", os: "macOS"
+        ))
+    }
+
+    /// The title line under a pane's header, shown in the Terminal preview bar.
+    private var preview: String {
+        renderedTitle
+    }
+
+    private var monospacedFamilies: [String] {
+        let families = NSFontManager.shared.availableFontFamilies.filter { family in
+            guard let font = NSFont(name: family, size: 12) else { return false }
+            return font.isFixedPitch
+        }
+        var result = families.sorted()
+        if !result.contains(fontFamily) {
+            result.insert(fontFamily, at: 0)
+        }
+        return result
+    }
+
+    // MARK: - Relay actions
 
     private func createRelayInvite() {
         guard !relayInviteBusy, let onRelayPairing else { return }
@@ -2291,11 +2560,6 @@ struct WarrenDesktopSettingsView: View {
                 case let .success(value):
                     relayInvite = value
                     relayInviteError = nil
-                    // The common path is scanning immediately. Keep the link
-                    // available for copying, but present the QR as soon as it
-                    // has been created so users do not need a second pairing
-                    // step.
-                    relayInviteQRPresented = true
                 case let .failure(error):
                     relayInviteError = error.localizedDescription
                 }
@@ -2303,9 +2567,10 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
+    private static let relayInviteCopySource = "settings.relay-invite"
+
     private func copyRelayInvite(_ invite: WarrenDesktopRelayInvite) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(invite.url.absoluteString, forType: .string)
+        copyFeedback.copy(invite.url.absoluteString, confirmingIn: Self.relayInviteCopySource)
     }
 
     private func relayInviteExpiryText(_ invite: WarrenDesktopRelayInvite) -> String {
@@ -2330,32 +2595,6 @@ struct WarrenDesktopSettingsView: View {
     }
 
     @ViewBuilder
-    private func relayInviteQRPopover() -> some View {
-        VStack(spacing: WarrenSpacing.compact) {
-            if let relayInvite,
-               let image = qrCodeImage(for: relayInvite.url.absoluteString) {
-                Image(nsImage: image)
-                    .interpolation(.none)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 240, height: 240)
-                    .padding(WarrenSpacing.small)
-                    .background(Color.white)
-                    .clipShape(.rect(cornerRadius: WarrenRadius.small))
-                Text("Scan with Warren on iPhone")
-                    .font(WarrenTypography.settingsBody)
-                Text(relayInviteExpiryText(relayInvite))
-                    .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("QR code unavailable")
-                    .font(WarrenTypography.settingsBody)
-            }
-        }
-        .padding(WarrenSpacing.large)
-        .frame(width: 300)
-    }
-
     private func qrCodeImage(for value: String) -> NSImage? {
         guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
         filter.setValue(Data(value.utf8), forKey: "inputMessage")
@@ -2369,8 +2608,7 @@ struct WarrenDesktopSettingsView: View {
     }
 
     private func enrollRelay() {
-        guard !relayEnrollmentBusy,
-              let onRelayEnroll else { return }
+        guard !relayEnrollmentBusy, let onRelayEnroll else { return }
         let relayURL = relayRegistrationURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let enrollmentKey = relayEnrollmentKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !relayURL.isEmpty, !enrollmentKey.isEmpty else { return }
@@ -2381,8 +2619,6 @@ struct WarrenDesktopSettingsView: View {
                 relayEnrollmentBusy = false
                 switch result {
                 case .success:
-                    // Remove the bearer value as soon as the daemon confirms
-                    // the claim, even when the key allows more than one use.
                     relayEnrollmentKey = ""
                     relayEnrollmentError = nil
                 case let .failure(error):
@@ -2419,681 +2655,292 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
-    private var relayStatusLabel: String {
-        guard relaySettings.isEnrolled else { return "Not configured" }
-        return relaySettings.enabled ? "Relay enabled" : "Relay paused"
+    // MARK: - Custom IDEs
+
+    private func addCustomIDE() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.applicationBundle, .executable]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.prompt = "Add"
+        panel.message = "Choose an editor app bundle or executable"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let ide = WarrenDesktopCustomIDE(name: Self.displayName(for: url), path: url.path)
+        customIDEs.append(ide)
+        WarrenDesktopCustomIDEStore.save(customIDEs)
     }
 
-    private func relayStatusColor(tokens: WarrenColorTokens) -> Color {
-        guard relaySettings.isEnrolled else { return tokens.mutedForeground }
-        return relaySettings.enabled ? tokens.success : tokens.warning
+    private func removeCustomIDE(_ ide: WarrenDesktopCustomIDE) {
+        customIDEs.removeAll { $0.id == ide.id }
+        WarrenDesktopCustomIDEStore.save(customIDEs)
     }
 
-    private func settingsValueRow(_ label: String, value: String, tokens: WarrenColorTokens) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.small) {
-            Text(label)
-                .font(WarrenTypography.settingsBodyEmphasis)
-                .foregroundStyle(tokens.foreground)
-                .frame(width: 140, alignment: .leading)
-            Text(value)
-                .font(WarrenTypography.compactCode)
-                .foregroundStyle(tokens.mutedForeground)
-                .textSelection(.enabled)
-            Spacer()
+    private static func displayName(for url: URL) -> String {
+        if let bundle = Bundle(url: url),
+           let name = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String,
+           !name.isEmpty {
+            return name
         }
+        return url.deletingPathExtension().lastPathComponent
     }
 
-    private func publicAccessSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Public Access", section: .publicAccess, tokens: tokens) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                WarrenSettingsSectionHeader("Public Routing", description: "Expose this host's Web UI through its enrolled Warren Relay.", tokens: tokens)
-
-                WarrenSettingsCard(tokens: tokens) {
-                    VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
-                        HStack(spacing: WarrenSpacing.standard) {
-                            Text(WarrenPublicAccessCopy.publicHostname)
-                                .font(WarrenTypography.settingsBodyEmphasis)
-                                .foregroundStyle(tokens.foreground)
-                                .frame(width: 140, alignment: .leading)
-
-                            TextField("Relay-assigned hostname", text: $publicAccessHostname)
-                                .textFieldStyle(.plain)
-                                .font(WarrenTypography.compactCode)
-                                .padding(.horizontal, 10)
-                                .frame(height: 32)
-                                .background(tokens.inputSurface)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(tokens.border.opacity(0.55), lineWidth: 1))
-                                .accessibilityLabel(WarrenPublicAccessCopy.publicHostname)
-                                .accessibilityIdentifier("settings.public-access.public-hostname")
-                        }
-
-                        HStack(spacing: WarrenSpacing.standard) {
-                            Text(WarrenPublicAccessCopy.pathPrefix)
-                                .font(WarrenTypography.settingsBodyEmphasis)
-                                .foregroundStyle(tokens.foreground)
-                                .frame(width: 140, alignment: .leading)
-
-                            TextField("/", text: $publicAccessPathPrefix)
-                                .textFieldStyle(.plain)
-                                .font(WarrenTypography.compactCode)
-                                .padding(.horizontal, 10)
-                                .frame(height: 32)
-                                .background(tokens.inputSurface)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(tokens.border.opacity(0.55), lineWidth: 1))
-                                .accessibilityLabel(WarrenPublicAccessCopy.pathPrefix)
-                                .accessibilityIdentifier("settings.public-access.path-prefix")
-                        }
-                    }
-                    .disabled(webStatus.publicAccessBusy)
-                    .padding(WarrenSpacing.standard)
-
-                    if let relayURL = webStatus.relayURL {
-                        WarrenSettingsCardDivider(tokens: tokens)
-                        settingsValueRow(WarrenPublicAccessCopy.relayURL, value: relayURL.absoluteString, tokens: tokens)
-                            .padding(.horizontal, WarrenSpacing.standard)
-                            .padding(.vertical, WarrenSpacing.compact)
-                    }
-
-                    if let publicEndpoint = webStatus.secureURL {
-                        WarrenSettingsCardDivider(tokens: tokens)
-                        settingsValueRow(WarrenPublicAccessCopy.publicEndpoint, value: publicEndpoint.absoluteString, tokens: tokens)
-                            .padding(.horizontal, WarrenSpacing.standard)
-                            .padding(.vertical, WarrenSpacing.compact)
-                    }
-
-                    WarrenSettingsCardDivider(tokens: tokens)
-
-                    HStack(spacing: WarrenSpacing.compact) {
-                        WarrenStatusIndicator(
-                            color: publicAccessStatusColor(tokens: tokens),
-                            isActive: webStatus.publicAccessBusy,
-                            accessibilityLabel: publicAccessStatusLabel
-                        )
-                        Text(publicAccessStatusLabel)
-                            .font(WarrenTypography.settingsBodyEmphasis)
-                            .foregroundStyle(tokens.foreground)
-                        Spacer(minLength: 0)
-
-                        if hasPublicAccessSetup {
-                            Button(WarrenPublicAccessCopy.resetLocalSetup) {
-                                onWebReset?()
-                            }
-                            .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                            .disabled(webStatus.publicAccessBusy || onWebReset == nil)
-                            .accessibilityIdentifier("settings.public-access.reset")
-                        }
-
-                        Button(publicAccessActionTitle) {
-                            onWebTest?(
-                                publicAccessHostname.trimmingCharacters(in: .whitespacesAndNewlines),
-                                publicAccessPathPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-                            )
-                        }
-                        .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
-                        .disabled(webStatus.publicAccessBusy || onWebTest == nil)
-                        .accessibilityIdentifier("settings.public-access.save-test")
-                    }
-                    .padding(WarrenSpacing.standard)
-                }
+    private static func probeInstalledIDEs() -> [InstalledIDE] {
+        WarrenDesktopExternalIDE.supported.compactMap { ide in
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: ide.bundleIdentifier) else {
+                return nil
             }
-
-            if let error = webStatus.publicAccessError, !error.isEmpty {
-                Text(error)
-                    .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(tokens.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Public Access error: \(error)")
-            }
-
-            Text("Public Access and owner Relay traffic use the same Relay Host enrollment and Host Secret.")
-                .font(WarrenTypography.settingsSupporting)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, WarrenSpacing.xxs)
-        }
-        .onAppear(perform: seedPublicAccessFields)
-        .onChange(of: webStatus.publicHostname) { _ in seedPublicAccessFields() }
-        .onChange(of: webStatus.pathPrefix) { _ in seedPublicAccessFields() }
-        .onChange(of: webStatus.publicAccessEnabled) { _ in clearPublicAccessFieldsIfReset() }
-        .onChange(of: webStatus.publicAccessAuthenticated) { _ in clearPublicAccessFieldsIfReset() }
-    }
-
-    private var publicAccessActionTitle: String {
-        if webStatus.publicAccessBusy { return "Testing…" }
-        return "Save & Test"
-    }
-
-    private var hasPublicAccessSetup: Bool {
-        webStatus.publicAccessAuthenticated
-            || webStatus.publicAccessEnabled
-            || webStatus.relayURL != nil
-            || webStatus.relayHostID != nil
-            || webStatus.routeID != nil
-    }
-
-    private var publicAccessStatusLabel: String {
-        if webStatus.publicAccessBusy { return "Testing connection…" }
-        if webStatus.publicAccessError != nil { return "Connection failed" }
-        if webStatus.tunnelRunning { return "Public Access is on" }
-        if webStatus.publicAccessAuthenticated { return "Connected" }
-        return "Not tested"
-    }
-
-    private func publicAccessStatusColor(tokens: WarrenColorTokens) -> Color {
-        if webStatus.publicAccessBusy { return tokens.info }
-        if webStatus.publicAccessError != nil { return tokens.warning }
-        if webStatus.publicAccessAuthenticated { return tokens.success }
-        return tokens.mutedForeground
-    }
-
-    private func copySettingsDeepLink(for section: SettingsSection) {
-        let publicAccess: WarrenDesktopPublicAccessPrefill?
-        let relay: WarrenDesktopRelayPrefill?
-        if section == .publicAccess {
-            let publicHostname = publicAccessHostname.trimmingCharacters(in: .whitespacesAndNewlines)
-            let pathPrefix = publicAccessPathPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-            publicAccess = WarrenDesktopPublicAccessPrefill(
-                publicHostname: publicHostname.isEmpty ? webStatus.publicHostname : publicHostname,
-                pathPrefix: pathPrefix.isEmpty ? webStatus.pathPrefix : pathPrefix
-            )
-        } else {
-            publicAccess = nil
-        }
-
-        if section == .relay {
-            relay = relayPrefill ?? WarrenDesktopRelayPrefill(
-                relayURL: relaySettings.relayURL
-            )
-        } else {
-            relay = nil
-        }
-
-        guard let url = WarrenDesktopSettingsDeepLink(
-            section: section,
-            publicAccess: publicAccess,
-            relay: relay
-        ).url else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url.absoluteString, forType: .string)
-        copiedSettingsSection = section
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            if copiedSettingsSection == section {
-                copiedSettingsSection = nil
-            }
-        }
-    }
-
-    private func applyDeepLinkPrefill() {
-        if let initialSettingsSection {
-            selectedSection = initialSettingsSection
-        }
-        if let publicAccessPrefill {
-            if let publicHostname = publicAccessPrefill.publicHostname {
-                publicAccessHostname = publicHostname
-            }
-            if let pathPrefix = publicAccessPrefill.pathPrefix {
-                publicAccessPathPrefix = pathPrefix
-            }
-        }
-
-        if let relayPrefill {
-            if let relayURL = relayPrefill.relayURL {
-                relayRegistrationURL = relayURL
-            }
-            if let enrollmentKey = relayPrefill.enrollmentKey {
-                relayEnrollmentKey = enrollmentKey
-            }
-            // A settings link is a convenience for filling the form. Never
-            // consume its bearer key merely by opening the link; the user must
-            // explicitly press Connect.
-        } else {
-            seedRelayFields()
-        }
-    }
-
-    private func seedPublicAccessFields() {
-        if publicAccessHostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let publicHostname = webStatus.publicHostname,
-           !publicHostname.isEmpty {
-            publicAccessHostname = publicHostname
-        }
-        if publicAccessPathPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let pathPrefix = webStatus.pathPrefix,
-           !pathPrefix.isEmpty {
-            publicAccessPathPrefix = pathPrefix
-        }
-    }
-
-    private func clearPublicAccessFieldsIfReset() {
-        guard !webStatus.publicAccessEnabled,
-              !webStatus.publicAccessAuthenticated,
-              webStatus.relayURL == nil,
-              webStatus.relayHostID == nil,
-              webStatus.routeID == nil else {
-            return
-        }
-        publicAccessHostname = ""
-        publicAccessPathPrefix = ""
-    }
-
-    private var runtimeSelection: Binding<String> {
-        Binding(
-            get: { defaultRuntime ?? "ghostline" },
-            set: { onSetRuntime($0) }
-        )
-    }
-
-    private var agentInterfaceSelection: Binding<WarrenAgentInterface> {
-        Binding(
-            get: { WarrenAgentInterface(storedValue: agentInterfaceRawValue) },
-            set: { agentInterfaceRawValue = $0.rawValue }
-        )
-    }
-
-    /// Writes through to `NSApp.appearance` as well as to the preference.
-    ///
-    /// `@AppStorage` alone would repaint the SwiftUI tree but leave menus,
-    /// scrollers and panels on the old appearance until the next launch.
-    private var appearanceSelection: Binding<WarrenAppearanceMode> {
-        Binding(
-            get: { WarrenAppearanceMode(storedValue: appearanceModeRawValue) },
-            set: { mode in
-                appearanceModeRawValue = mode.rawValue
-                WarrenDesktopAppearance.apply(mode)
-            }
-        )
-    }
-
-    private func appearanceSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Appearance", section: .appearance, tokens: tokens) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                WarrenSettingsSectionHeader(
-                    "Color Scheme",
-                    description: "Applies to this Mac only. Other clients keep their own appearance.",
-                    tokens: tokens
+            return InstalledIDE(
+                id: ide.id.rawValue,
+                name: ide.name,
+                path: url.path,
+                icon: WarrenDesktopExternalIDEIcon.normalized(
+                    NSWorkspace.shared.icon(forFile: url.path),
+                    opticalScale: WarrenDesktopExternalIDEIcon.opticalScale(for: ide.id.rawValue)
                 )
-
-                WarrenSettingsCard(tokens: tokens) {
-                    WarrenSettingsRow(
-                        title: "Appearance",
-                        subtitle: "System follows the macOS setting, including its Auto schedule.",
-                        tokens: tokens
-                    ) {
-                        Picker("Appearance", selection: appearanceSelection) {
-                            ForEach(WarrenAppearanceMode.allCases, id: \.self) { mode in
-                                Text(mode.displayName).tag(mode)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .font(WarrenTypography.settingsControl)
-                        .frame(width: 240)
-                        .accessibilityIdentifier("settings.appearance.picker")
-                    }
-
-                    WarrenSettingsCardDivider(tokens: tokens)
-
-                    WarrenSettingsRow(
-                        title: "Translucent Window",
-                        subtitle: reduceTransparency
-                            ? "Unavailable while Reduce Transparency is on in macOS Accessibility settings."
-                            : "Lets the desktop show through the window, including behind terminals.",
-                        tokens: tokens
-                    ) {
-                        Toggle("Translucent Window", isOn: $liquidGlassEnabled)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .disabled(reduceTransparency)
-                            .accessibilityIdentifier("settings.appearance.liquid-glass")
-                    }
-                }
-            }
-
-            Text(
-                "Warren uses the Ember Paper theme for light mode across both the "
-                    + "desktop and terminal, with an ANSI palette calibrated for "
-                    + "high contrast and legibility on light backgrounds."
             )
-            .font(WarrenTypography.settingsSupporting)
-            .foregroundStyle(tokens.mutedForeground)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, WarrenSpacing.xxs)
         }
     }
+}
 
-    private func terminalRuntimeSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Terminal runtime", section: .terminalRuntime, tokens: tokens) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                WarrenSettingsSectionHeader("Engine Preference", description: "Underlying terminal emulation engine used for newly created sessions.", tokens: tokens)
+// MARK: - Navigation item
 
-                WarrenSettingsCard(tokens: tokens) {
-                    WarrenSettingsRow(
-                        title: "Default Runtime",
-                        subtitle: "libghostty-vt snapshots match the client exactly; detached server keeps sessions alive across daemon upgrades.",
-                        tokens: tokens
-                    ) {
-                        Picker("Default runtime", selection: runtimeSelection) {
-                            Text("ghostline (recommended)").tag("ghostline")
+private struct WarrenSettingsNavItem: View {
+    let section: WarrenDesktopSettingsSection
+    let status: WarrenStatusTone?
+    let isSelected: Bool
+    let palette: WarrenSettingsPalette
+    let selectionNamespace: Namespace.ID
+    /// Which scope the page belongs to. Drawn only while a search flattens the
+    /// two navigation groups.
+    var scopeLabel: String? = nil
+    let onSelect: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        let ring: Color = isSelected ? palette.selected : (hovering ? palette.hover : palette.card)
+        Button(action: onSelect) {
+            HStack(spacing: 10) {
+                Image(systemName: section.symbol)
+                    .font(.system(size: 15))
+                    .foregroundStyle(isSelected ? palette.ink : palette.inkQuiet)
+                    .frame(width: 20)
+                    .overlay(alignment: .topTrailing) {
+                        if let status {
+                            WarrenSettingsStatusDot(tone: status, ring: ring)
+                                .offset(x: 3, y: -3)
                         }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .font(WarrenTypography.settingsControl)
-                        .accessibilityIdentifier("settings.terminal-runtime.picker")
                     }
+                Text(section.rawValue)
+                    .font(.system(size: 13))
+                    .foregroundStyle(isSelected ? palette.ink : palette.inkBody)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if let scopeLabel {
+                    Text(scopeLabel)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(palette.inkFaint)
+                        .lineLimit(1)
                 }
             }
-
-            Text(
-                "This is a headless-daemon setting: the Desktop and Web are "
-                    + "only clients, and sessions keep the engine they were "
-                    + "created with. Changing the default affects newly "
-                    + "created sessions only."
-            )
-            .font(WarrenTypography.settingsSupporting)
-            .foregroundStyle(tokens.mutedForeground)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, WarrenSpacing.xxs)
-        }
-    }
-
-    private func splitsSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("Splits", section: .splits, tokens: tokens) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                WarrenSettingsSectionHeader("Keyboard Shortcuts", description: "Standard macOS shortcuts for organizing terminal panes.", tokens: tokens)
-
-                WarrenSettingsCard(tokens: tokens) {
-                    let shortcuts: [(String, String)] = [
-                        ("Split Right", "⌘D"),
-                        ("Split Below", "⇧⌘D"),
-                        ("Close Split Pane", "⇧⌘W"),
-                        ("Maximize Pane", "⇧⌘↩"),
-                        ("Cycle Pane Focus", "⌘]")
-                    ]
-                    ForEach(Array(shortcuts.enumerated()), id: \.offset) { index, item in
-                        if index > 0 {
-                            WarrenSettingsCardDivider(tokens: tokens)
-                        }
-                        HStack {
-                            Text(item.0)
-                                .font(WarrenTypography.settingsBodyEmphasis)
-                                .foregroundStyle(tokens.foreground)
-                            Spacer()
-                            Text(item.1)
-                                .font(WarrenTypography.compactCode)
-                                .foregroundStyle(tokens.mutedForeground)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(tokens.fillHover)
-                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                                .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).stroke(tokens.border.opacity(0.5), lineWidth: 1))
-                        }
-                        .padding(.horizontal, WarrenSpacing.standard)
-                        .padding(.vertical, WarrenSpacing.compact)
-                    }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 30)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(palette.selected)
+                        .matchedGeometryEffect(id: "settings-selection", in: selectionNamespace)
+                } else if hovering {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(palette.hover)
                 }
             }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel(section.rawValue)
+        .accessibilityValue(isSelected ? "Selected" : "")
+        .accessibilityIdentifier("settings.section.\(section.id)")
+        .warrenSemanticElement(
+            id: "settings.section.\(section.id)",
+            role: .button,
+            label: section.rawValue,
+            isSelected: isSelected,
+            action: onSelect
+        )
+    }
+}
 
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                WarrenSettingsSectionHeader("Chords & Sequences", description: "Alternative Emacs-style pane management keys.", tokens: tokens)
+// MARK: - App icon choice
 
-                WarrenSettingsCard(tokens: tokens) {
-                    WarrenSettingsRow(
-                        title: "Emacs C-x Split Chords",
-                        subtitle: "Adds C-x 2, C-x 3, C-x 0, C-x 1, and C-x o. While enabled, C-x is intercepted by Warren and not sent to the terminal. C-g cancels, C-x C-x sends literal C-x.",
-                        tokens: tokens
-                    ) {
-                        Toggle("Emacs C-x split chords", isOn: $splitChordsEnabled)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .accessibilityIdentifier("settings.splits.emacs-chords")
+/// One colorway of the app icon, drawn at Dock size. Five of these share a
+/// row, so the choice is the icon itself rather than a framed preview card.
+private struct AppIconChoice: View {
+    let colorway: WarrenAppIconColorway
+    let isSelected: Bool
+    let action: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let palette = WarrenSettingsPalette.resolved(for: colorScheme)
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Group {
+                    if let image = WarrenDesktopDockIcon.image(for: colorway) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .interpolation(.high)
+                    } else {
+                        Color.clear
                     }
                 }
-            }
-        }
-    }
-
-    private func aiTitlesSection(tokens: WarrenColorTokens) -> some View {
-        settingsSection("AI session titles", section: .aiTitles, tokens: tokens) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
-                WarrenSettingsSectionHeader("API Configuration", description: "OpenAI-compatible endpoint used to summarize session openings into titles.", tokens: tokens)
-
-                WarrenSettingsCard(tokens: tokens) {
-                    WarrenSettingsRow("API Base URL", description: "OpenAI-compatible endpoint", tokens: tokens) {
-                        WarrenSettingsInput(
-                            "https://api.openai.com/v1",
-                            text: $openAIBaseURLDraft,
-                            monospaced: true,
-                            tokens: tokens,
-                            onSubmit: { saveOpenAIField("openaiBaseURL", openAIBaseURLDraft) }
-                        )
-                        .frame(width: 380)
-                    }
-
-                    WarrenSettingsCardDivider(tokens: tokens)
-
-                    WarrenSettingsRow("Model", description: "OpenAI model name", tokens: tokens) {
-                        WarrenSettingsInput(
-                            "gpt-4o-mini",
-                            text: $openAIModelDraft,
-                            monospaced: true,
-                            tokens: tokens,
-                            onSubmit: { saveOpenAIField("openaiModel", openAIModelDraft) }
-                        )
-                        .frame(width: 380)
-                    }
-
-                    WarrenSettingsCardDivider(tokens: tokens)
-
-                    WarrenSettingsRow("API Key", description: "Key stored only on this host", tokens: tokens) {
-                        WarrenSettingsInput(
-                            "Leave blank to keep saved key",
-                            text: $openAIKeyDraft,
-                            isSecure: true,
-                            monospaced: true,
-                            tokens: tokens
-                        )
-                        .frame(width: 380)
-                        .accessibilityLabel("API key")
-                    }
-
-                    WarrenSettingsCardDivider(tokens: tokens)
-
-                    HStack(spacing: WarrenSpacing.compact) {
-                        Button("Save API settings") {
-                            saveOpenAISettings()
-                        }
-                        .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.settingsAction))
-                        .accessibilityIdentifier("settings.ai-titles.save")
-
-                        Button(openAITestStatus.isTesting ? "Testing…" : "Test connection") {
-                            testOpenAISettings()
-                        }
-                        .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.settingsAction))
-                        .disabled(openAITestStatus.isTesting)
-                        .accessibilityIdentifier("settings.ai-titles.test")
-                        .warrenSemanticElement(
-                            id: "settings.ai-titles.test",
-                            role: .button,
-                            label: "Test AI title connection",
-                            isEnabled: !openAITestStatus.isTesting,
-                            action: testOpenAISettings
-                        )
-
-                        Spacer()
-
-                        Text("Key is stored only on the host.")
-                            .font(WarrenTypography.settingsSupporting)
-                            .foregroundStyle(tokens.mutedForeground)
-                    }
-                    .padding(WarrenSpacing.standard)
-
-                    switch openAITestStatus {
-                    case .idle, .testing:
-                        EmptyView()
-                    case .succeeded:
-                        WarrenSettingsCardDivider(tokens: tokens)
-                        HStack(spacing: WarrenSpacing.compact) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(tokens.success)
-                            Text("Connection succeeded. Save settings to use this endpoint.")
-                                .font(WarrenTypography.settingsSupporting)
-                                .foregroundStyle(tokens.success)
-                        }
-                        .padding(.horizontal, WarrenSpacing.standard)
-                        .padding(.vertical, WarrenSpacing.compact)
-                    case .failed(let message):
-                        WarrenSettingsCardDivider(tokens: tokens)
-                        HStack(spacing: WarrenSpacing.compact) {
-                            Image(systemName: "exclamationmark.circle.fill")
-                                .foregroundStyle(tokens.destructive)
-                            Text("Connection failed: \(message)")
-                                .font(WarrenTypography.settingsSupporting)
-                                .foregroundStyle(tokens.destructive)
-                        }
-                        .padding(.horizontal, WarrenSpacing.standard)
-                        .padding(.vertical, WarrenSpacing.compact)
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-                WarrenSettingsSectionHeader("Automation", description: "Enable background title generation when sessions are started.", tokens: tokens)
-
-                WarrenSettingsCard(tokens: tokens) {
-                    WarrenSettingsRow(
-                        title: "Generate Titles Automatically",
-                        subtitle: "Warren sends the initial prompt to the configured LLM to generate a concise title for each new conversation.",
-                        tokens: tokens
-                    ) {
-                        Toggle(
-                            "Generate titles automatically",
-                            isOn: Binding(
-                                get: { openAITitleEnabled },
-                                set: { onSetOpenAISetting("openaiTitleEnabled", $0 ? "true" : "false") }
-                            )
-                        )
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .accessibilityIdentifier("settings.ai-titles.enabled")
-                    }
-                }
-            }
-        }
-        .onAppear(perform: seedOpenAIFields)
-    }
-
-    private func saveOpenAIField(_ key: String, _ value: String) {
-        onSetOpenAISetting(key, value.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    private func saveOpenAISettings() {
-        saveOpenAIField("openaiBaseURL", openAIBaseURLDraft)
-        saveOpenAIField("openaiModel", openAIModelDraft)
-        let key = openAIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !key.isEmpty {
-            onSetOpenAISetting("openaiKey", key)
-            openAIKeyDraft = ""
-        }
-    }
-
-    private func testOpenAISettings() {
-        guard !openAITestStatus.isTesting else { return }
-        let baseURL = openAIBaseURLDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = openAIModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key = openAIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        openAITestStatus = .testing
-        Task { @MainActor in
-            do {
-                try await onTestOpenAI(baseURL, model, key.isEmpty ? nil : key)
-                openAITestStatus = .succeeded
-            } catch {
-                openAITestStatus = .failed(error.localizedDescription)
-            }
-        }
-    }
-
-    private func seedOpenAIFields() {
-        openAIBaseURLDraft = openAIBaseURL
-        openAIModelDraft = openAIModel
-        openAIKeyDraft = ""
-    }
-
-    private func settingsSection<Content: View>(
-        _ title: String,
-        section: SettingsSection,
-        tokens: WarrenColorTokens,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 22) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
-                HStack(alignment: .top, spacing: WarrenSpacing.large) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(title)
-                            .font(WarrenTypography.settingsSectionTitle)
-                            .foregroundStyle(tokens.foreground)
-                        Text(section.detail)
-                            .font(WarrenTypography.settingsSupporting)
-                            .foregroundStyle(tokens.mutedForeground)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: WarrenSpacing.standard)
-                    if section != .relay {
-                        Button {
-                            copySettingsDeepLink(for: section)
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: copiedSettingsSection == section ? "checkmark" : "link")
-                                    .font(.system(size: 11, weight: .medium))
-                                Text(
-                                    copiedSettingsSection == section
-                                        ? "Copied"
-                                        : (section == .publicAccess ? "Copy setup link" : "Copy link")
-                                )
-                            }
-                            .font(.system(size: 12, weight: .medium))
-                            .padding(.horizontal, 10)
-                            .frame(height: 28)
-                            .background(tokens.fillHover)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .strokeBorder(tokens.border.opacity(0.35), lineWidth: WarrenSpacing.hairline)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(tokens.foreground)
-                        .help("Copy a Warren settings link")
-                        .accessibilityLabel(
-                            section == .publicAccess
-                                ? "Copy Public Access setup link"
-                                : "Copy \(section.rawValue) settings link"
-                        )
-                        .accessibilityIdentifier("settings.section.\(section.deepLinkValue).deeplink")
+                .frame(width: 64, height: 64)
+                .padding(3)
+                .overlay {
+                    if isSelected {
+                        // The same ring a chosen appearance card carries.
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(palette.ink.opacity(0.10), lineWidth: 3)
                     }
                 }
 
-                Rectangle()
-                    .fill(tokens.border.opacity(0.4))
-                    .frame(height: WarrenSpacing.hairline)
+                Text(colorway.displayName)
+                    .font(.system(size: 12))
+                    .foregroundStyle(isSelected ? palette.ink : palette.inkQuiet)
             }
-            .padding(.bottom, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(colorway.displayName) app icon")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .animation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion), value: isSelected)
+    }
+}
 
-            content()
+// MARK: - Appearance preview
+
+private struct AppearanceChoicePreview: View {
+    let mode: WarrenAppearanceMode
+
+    var body: some View {
+        switch mode {
+        case .system:
+            HStack(spacing: 0) {
+                mini(light: true)
+                mini(light: false)
+            }
+        case .light:
+            mini(light: true)
+        case .dark:
+            mini(light: false)
         }
     }
 
-    private var normalizedFont: TerminalFontPreference {
-        TerminalFontPreference(family: fontFamily, size: fontSize)
+    private func mini(light: Bool) -> some View {
+        let ground = light ? Color(red: 0.949, green: 0.937, blue: 0.925) : Color.black
+        let card = light ? Color.white : Color(red: 0.043, green: 0.043, blue: 0.043)
+        let line = light ? Color(red: 0.878, green: 0.859, blue: 0.839) : Color(red: 0.122, green: 0.122, blue: 0.122)
+        return ZStack(alignment: .topLeading) {
+            ground
+            HStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(card)
+                    .frame(width: 26)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous).strokeBorder(line, lineWidth: 1)
+                    }
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(card)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous).strokeBorder(line, lineWidth: 1)
+                    }
+            }
+            .padding(8)
+        }
+    }
+}
+
+// MARK: - Terminal preview
+
+private struct TerminalFontPreview: View {
+    let preference: TerminalFontPreference
+    let palette: WarrenSettingsPalette
+    let title: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Circle().fill(palette.success).frame(width: 8, height: 8)
+                Text("zsh")
+                    .font(.system(size: 11))
+                    .foregroundStyle(palette.meta)
+                Spacer()
+                Text(title)
+                    .font(.system(size: 11))
+                    .foregroundStyle(palette.inkQuiet)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+
+            Rectangle().fill(palette.rowDivider).frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 6) {
+                line(prompt: "~/workspace $", command: "mastra dev")
+                Text("→ Loaded 3 tools · 1 agent · 0 workflows")
+                    .foregroundStyle(palette.inkQuiet)
+                line(prompt: "~/workspace $", command: "bun test")
+                HStack(spacing: 6) {
+                    Text("✓").foregroundStyle(palette.success)
+                    Text("14 tests passed · 0.24s").foregroundStyle(palette.inkBody)
+                }
+                line(prompt: "~/workspace $", command: "git status --short")
+                HStack(spacing: 6) {
+                    Text(" M").foregroundStyle(palette.warning)
+                    Text("src/settings/appearance.tsx").foregroundStyle(palette.inkQuiet)
+                }
+            }
+            .font(.custom(preference.family, size: preference.size))
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 132, alignment: .topLeading)
+            .clipped()
+            .background(palette.windowBackdrop)
+        }
     }
 
-    private var preview: String {
-        "Preview: " + TerminalDisplayTitleTemplate(rawValue: titleTemplate).render(.init(
-            session: "Claude", command: "claude", directory: "/Users/me/Workspace/warren",
-            workspace: "warren", branch: "main", host: "MacBook Pro", user: "me", os: "macOS"
-        ))
+    private func line(prompt: String, command: String) -> some View {
+        HStack(spacing: 6) {
+            Text(prompt).foregroundStyle(palette.info)
+            Text(command).foregroundStyle(palette.inkBody)
+        }
     }
+}
+
+// MARK: - Flowing chips
+
+private struct FlowingChips: View {
+    let tokens: [(String, String)]
+    let palette: WarrenSettingsPalette
+    let onInsert: (String) -> Void
+
+    private let columns = [GridItem(.adaptive(minimum: 118), spacing: 6)]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+            ForEach(Array(tokens.enumerated()), id: \.offset) { _, token in
+                WarrenSettingsTokenChip(token: token.0) {
+                    onInsert(token.0)
+                }
+                .help(token.1)
+            }
+        }
+    }
+
 }
 
 private struct InstalledIDE: Identifiable {

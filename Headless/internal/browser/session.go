@@ -84,11 +84,9 @@ const recoveryTimeout = 45 * time.Second
 // The Warren Session record is the durable identity; this struct is the runtime
 // projection and dies with the Chromium process.
 type Session struct {
-	manager         *Manager
-	id              string
-	workspaceID     string
-	terminalGroupID string
-	scope           string
+	manager     *Manager
+	id          string
+	workspaceID string
 
 	mu sync.RWMutex
 
@@ -160,7 +158,7 @@ type frameSubscriber struct {
 
 // newSession builds the runtime projection. It does not launch Chromium; Start
 // does.
-func newSession(manager *Manager, id, workspaceID, terminalGroupID, scope string, headless bool, viewport api.BrowserViewport) *Session {
+func newSession(manager *Manager, id, workspaceID string, headless bool, viewport api.BrowserViewport) *Session {
 	if viewport.Width <= 0 || viewport.Height <= 0 {
 		viewport = api.BrowserViewport{Width: DefaultViewportWidth, Height: DefaultViewportHeight}
 	}
@@ -168,8 +166,6 @@ func newSession(manager *Manager, id, workspaceID, terminalGroupID, scope string
 		manager:                   manager,
 		id:                        id,
 		workspaceID:               workspaceID,
-		terminalGroupID:           terminalGroupID,
-		scope:                     scope,
 		headless:                  headless,
 		viewport:                  viewport,
 		viewportDeviceScaleFactor: defaultDeviceScaleFactor,
@@ -700,16 +696,14 @@ func (s *Session) Projection() api.BrowserSession {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	projection := api.BrowserSession{
-		ID:              s.id,
-		Scope:           s.scope,
-		WorkspaceID:     s.workspaceID,
-		TerminalGroupID: s.terminalGroupID,
-		Phase:           s.phase,
-		Error:           s.failure,
-		Headless:        s.headless,
-		Viewport:        s.viewport,
-		URL:             s.pageURL,
-		PageTitle:       s.pageTitle,
+		ID:          s.id,
+		WorkspaceID: s.workspaceID,
+		Phase:       s.phase,
+		Error:       s.failure,
+		Headless:    s.headless,
+		Viewport:    s.viewport,
+		URL:         s.pageURL,
+		PageTitle:   s.pageTitle,
 	}
 	if s.process != nil {
 		projection.Executable = s.process.executable

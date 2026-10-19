@@ -45,11 +45,6 @@ func printValue(value any) error {
 				fmt.Println(item.ID)
 			}
 			return nil
-		case []api.TerminalGroup:
-			for _, item := range items {
-				fmt.Println(item.ID)
-			}
-			return nil
 		case []api.PaneGroup:
 			for _, item := range items {
 				fmt.Println(item.ID)
@@ -98,12 +93,6 @@ func printValue(value any) error {
 			fmt.Println(items.ID)
 			return nil
 		case *api.Task:
-			fmt.Println(items.ID)
-			return nil
-		case api.TerminalGroup:
-			fmt.Println(items.ID)
-			return nil
-		case *api.TerminalGroup:
 			fmt.Println(items.ID)
 			return nil
 		case api.Session:
@@ -172,24 +161,18 @@ func printValue(value any) error {
 			rows = append(rows, workspaceRowCells(item))
 		}
 		printTable([]string{"ID", "PROJECT", "TASK", "NAME", "BRANCH", "MERGED", "PATH", "KIND", "SESSIONS", "PINNED", "CREATED"}, rows...)
-	case []api.TerminalGroup:
-		rows := make([][]string, 0, len(items))
-		for _, item := range items {
-			rows = append(rows, terminalGroupRowCells(item))
-		}
-		printTable([]string{"ID", "NAME", "HOME", "ORDER", "CREATED"}, rows...)
 	case []api.PaneGroup:
 		rows := make([][]string, 0, len(items))
 		for _, item := range items {
 			rows = append(rows, paneGroupRowCells(item))
 		}
-		printTable([]string{"ID", "SCOPE", "OWNER", "NAME", "PANES", "ORDER", "REVISION", "SESSIONS"}, rows...)
+		printTable([]string{"ID", "WORKSPACE", "NAME", "PANES", "ORDER", "REVISION", "SESSIONS"}, rows...)
 	case []SessionRow:
 		rows := make([][]string, 0, len(items))
 		for _, item := range items {
 			rows = append(rows, sessionRowCells(item))
 		}
-		printTable([]string{"WARREN SESSION ID", "PROJECT", "WORKSPACE", "GROUP", "BRANCH", "TITLE", "CURRENT", "KIND", "COMMAND", "RUN", "CWD", "AGENT/THREAD ID", "TRANSCRIPT PATH", "LIFECYCLE", "ACTIVITY", "ENDED AT", "PINNED", "CREATED"}, rows...)
+		printTable([]string{"WARREN SESSION ID", "PROJECT", "WORKSPACE", "BRANCH", "TITLE", "CURRENT", "KIND", "COMMAND", "RUN", "CWD", "AGENT/THREAD ID", "TRANSCRIPT PATH", "LIFECYCLE", "ACTIVITY", "ENDED AT", "PINNED", "CREATED"}, rows...)
 	case []ScreenPaneRow:
 		rows := make([][]string, 0, len(items))
 		for _, item := range items {
@@ -201,7 +184,7 @@ func printValue(value any) error {
 		for _, item := range items {
 			rows = append(rows, browserRowCells(item))
 		}
-		printTable([]string{"SESSION ID", "TITLE", "WORKSPACE / GROUP", "LIFECYCLE", "CREATED"}, rows...)
+		printTable([]string{"SESSION ID", "TITLE", "WORKSPACE", "LIFECYCLE", "CREATED"}, rows...)
 	case api.WorkspaceCreateResult:
 		printKVTable(workspaceCreateResultPairs(items))
 	case *api.WorkspaceCreateResult:
@@ -218,10 +201,6 @@ func printValue(value any) error {
 		printKVTable(taskPairs(items))
 	case *api.Task:
 		printKVTable(taskPairs(*items))
-	case api.TerminalGroup:
-		printKVTable(terminalGroupPairs(items))
-	case *api.TerminalGroup:
-		printKVTable(terminalGroupPairs(*items))
 	case api.Session:
 		printKVTable(sessionPairs(items))
 	case *api.Session:
@@ -330,22 +309,11 @@ func displayMergeState(value api.MergeState) string {
 	return ""
 }
 
-func terminalGroupRowCells(item api.TerminalGroup) []string {
-	return []string{
-		item.ID,
-		displayTruncated(item.Name, 25),
-		displayTruncatedPath(item.Home, 35),
-		strconv.Itoa(item.Order),
-		formatTime(item.CreatedAt),
-	}
-}
-
 func sessionRowCells(item SessionRow) []string {
 	return []string{
 		item.ID,
 		displayTruncated(item.ProjectName, 20),
 		displayTruncated(item.WorkspaceName, 20),
-		displayTruncated(item.TerminalGroupName, 20),
 		displayTruncated(item.Branch, 20),
 		displayTruncated(effectiveSessionTitle(item.Session), 30),
 		displayBool(item.Current),
@@ -403,22 +371,10 @@ func projectPairs(value api.Project) [][2]string {
 	}
 }
 
-func terminalGroupPairs(value api.TerminalGroup) [][2]string {
-	return [][2]string{
-		{"ID", value.ID},
-		{"NAME", value.Name},
-		{"HOME", displayValue(value.Home)},
-		{"ORDER", strconv.Itoa(value.Order)},
-		{"CREATED AT", formatTime(value.CreatedAt)},
-	}
-}
-
 func sessionPairs(value api.Session) [][2]string {
 	return [][2]string{
 		{"ID", value.ID},
-		{"SCOPE", value.ScopeKind()},
 		{"WORKSPACE", value.WorkspaceID},
-		{"TERMINAL GROUP", value.TerminalGroupID},
 		{"TITLE", effectiveSessionTitle(value)},
 		{"KIND", value.Kind},
 		{"COMMAND", displayValue(value.Command)},
@@ -472,9 +428,7 @@ func sessionMovePreflightPairs(value api.SessionMovePreflight) [][2]string {
 		{"ALLOWED", displayBool(value.Allowed)},
 		{"WARREN SESSION ID", value.Session.ID},
 		{"SOURCE WORKSPACE", displayValue(value.SourceWorkspaceID)},
-		{"SOURCE GROUP", displayValue(value.SourceTerminalGroupID)},
 		{"DESTINATION WORKSPACE", displayValue(value.DestinationWorkspaceID)},
-		{"DESTINATION GROUP", displayValue(value.DestinationTerminalGroupID)},
 		{"AGENT/THREAD ID", displayValue(value.Session.AgentSessionID)},
 		{"TRANSCRIPT PATH", displayValue(value.Session.TranscriptPath)},
 	}

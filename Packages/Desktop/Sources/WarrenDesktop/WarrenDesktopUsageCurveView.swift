@@ -18,7 +18,11 @@ public struct WarrenDesktopUsageCurveView: View {
     let include: ((WarrenUsageInterval) -> Bool)?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hoveredMinute: Int? = nil
+    /// The header's width, so the two segmented controls can drop under the
+    /// title instead of squeezing it to a few characters.
+    @State private var headerWidth: CGFloat = 0
 
     public init(
         intervals: [WarrenUsageInterval],
@@ -166,54 +170,73 @@ public struct WarrenDesktopUsageCurveView: View {
         active: [WarrenUsageCurvePoint],
         peak: Double
     ) -> some View {
-        HStack(alignment: .center, spacing: WarrenSpacing.small) {
-            VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                HStack(spacing: WarrenSpacing.xs) {
-                    Text(scopeLabel.map { "Intraday Timeline · \($0)" } ?? "Intraday Timeline")
-                        .font(WarrenTypography.settingsBodyEmphasis)
-                        .foregroundStyle(tokens.foreground)
-
-                    if let hoveredPoint {
-                        Text("·  \(minuteLabel(hoveredPoint.minute)): \(axisLabel(value(of: hoveredPoint)))")
-                            .font(WarrenTypography.settingsMeta)
-                            .foregroundStyle(tokens.highlight)
-                            .monospacedDigit()
-                    }
+        // Chosen by width rather than with `ViewThatFits`: the hovered value
+        // lengthens the title, and the controls must not jump on every hover.
+        let stacked = headerWidth > 0 && headerWidth < 600
+        return Group {
+            if stacked {
+                VStack(alignment: .leading, spacing: WarrenSpacing.compact) {
+                    headerTitle(hoveredPoint: hoveredPoint, peak: peak)
+                    HStack(spacing: WarrenSpacing.small) { headerControls }
                 }
-
-                if let day {
-                    Text("\(WarrenUsageFormatting.dayLabel(day)) · Peak \(peakLabel(for: peak))")
-                        .font(WarrenTypography.settingsMeta)
-                        .foregroundStyle(tokens.mutedForeground)
-                } else {
-                    Text("Select a day in the heatmap to view hourly distribution")
-                        .font(WarrenTypography.settingsMeta)
-                        .foregroundStyle(tokens.mutedForeground)
+            } else {
+                HStack(alignment: .center, spacing: WarrenSpacing.small) {
+                    headerTitle(hoveredPoint: hoveredPoint, peak: peak)
+                    Spacer(minLength: 0)
+                    headerControls
                 }
             }
-
-            Spacer(minLength: 0)
-
-            Picker("Metric", selection: $metric) {
-                ForEach(WarrenUsageCurveMetric.allCases) { option in
-                    Text(option.label).tag(option)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 130)
-            .accessibilityIdentifier("usage.curve.metric")
-
-            Picker("Granularity", selection: $granularity) {
-                ForEach(WarrenUsageCurveGranularity.allCases) { option in
-                    Text(option.label).tag(option)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 130)
-            .accessibilityIdentifier("usage.curve.granularity")
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .warrenMeasureWidth($headerWidth)
+    }
+
+    private func headerTitle(hoveredPoint: WarrenUsageCurvePoint?, peak: Double) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+            HStack(spacing: WarrenSpacing.xs) {
+                Text(scopeLabel.map { "Intraday Timeline · \($0)" } ?? "Intraday Timeline")
+                    .font(WarrenTypography.settingsBodyEmphasis)
+                    .foregroundStyle(tokens.foreground)
+
+                if let hoveredPoint {
+                    Text("·  \(minuteLabel(hoveredPoint.minute)): \(axisLabel(value(of: hoveredPoint)))")
+                        .font(WarrenTypography.settingsMeta)
+                        .foregroundStyle(tokens.highlight)
+                        .monospacedDigit()
+                }
+            }
+
+            if let day {
+                Text("\(WarrenUsageFormatting.dayLabel(day)) · Peak \(peakLabel(for: peak))")
+                    .font(WarrenTypography.settingsMeta)
+                    .foregroundStyle(tokens.mutedForeground)
+            } else {
+                Text("Select a day in the heatmap to view hourly distribution")
+                    .font(WarrenTypography.settingsMeta)
+                    .foregroundStyle(tokens.mutedForeground)
+            }
+        }
+        .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private var headerControls: some View {
+        // The page's own segmented control, like the range picker: the
+        // system one draws in the platform accent, which Warren keeps for
+        // live state.
+        WarrenSettingsSegmented(
+            options: WarrenUsageCurveMetric.allCases.map { ($0, $0.label) },
+            selection: $metric,
+            accessibilityID: "usage.curve.metric"
+        )
+        .fixedSize()
+
+        WarrenSettingsSegmented(
+            options: WarrenUsageCurveGranularity.allCases.map { ($0, $0.label) },
+            selection: $granularity,
+            accessibilityID: "usage.curve.granularity"
+        )
+        .fixedSize()
     }
 
     private func peakLabel(for peak: Double) -> String {
@@ -246,8 +269,8 @@ public struct WarrenDesktopUsageCurveView: View {
             }
             timeLabels(window: window)
         }
-        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: metric)
-        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: granularity)
+        .animation(WarrenMotion.selection(reduceMotion: reduceMotion), value: metric)
+        .animation(WarrenMotion.selection(reduceMotion: reduceMotion), value: granularity)
         .help(chartHelp(peak: peak))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(chartAccessibilityLabel(peak: peak))

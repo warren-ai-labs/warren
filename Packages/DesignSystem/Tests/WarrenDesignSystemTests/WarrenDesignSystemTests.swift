@@ -4,7 +4,10 @@ import XCTest
 
 final class WarrenDesignSystemTests: XCTestCase {
     func testSidebarWidthPolicySnapsAndClamps() {
-        XCTAssertEqual(WarrenLayoutMetrics.sidebarWidth(for: 119), 52)
+        // Below the snap threshold the rail collapses to nothing: the collapsed
+        // sidebar is no column at all, and the peek reuses the dragged width.
+        XCTAssertEqual(WarrenLayoutMetrics.sidebarCollapsedWidth, 0)
+        XCTAssertEqual(WarrenLayoutMetrics.sidebarWidth(for: 119), 0)
         XCTAssertEqual(WarrenLayoutMetrics.sidebarWidth(for: 220), 220)
         XCTAssertEqual(WarrenLayoutMetrics.sidebarWidth(for: 320), 320)
         XCTAssertEqual(WarrenLayoutMetrics.sidebarWidth(for: 401), 400)
@@ -275,6 +278,34 @@ final class WarrenDesignSystemTests: XCTestCase {
                 Self.contrastRatio(tint, WarrenColorTokens.light.background), 2.5,
                 "Light identity tint \(index) disappears on paper"
             )
+        }
+    }
+
+    /// A Host heading carries its hue in the foreground — the tile ring, the
+    /// hostname, the title rule — so both appearances have to offer the same
+    /// number of distinguishable hues, each readable as small text on the
+    /// sidebar surface.
+    func testHostForegroundTintsAreParallelDistinctAndReadable() {
+        let light = WarrenColorTokens.light.hostForegroundTints
+        let dark = WarrenColorTokens.dark.hostForegroundTints
+        XCTAssertEqual(light.count, dark.count)
+        XCTAssertEqual(light.count, 5)
+        XCTAssertEqual(Set(light.map(Self.rgbKey)).count, light.count)
+        XCTAssertEqual(Set(dark.map(Self.rgbKey)).count, dark.count)
+        for (name, tokens, palette) in [
+            ("light", WarrenColorTokens.light, light),
+            ("dark", WarrenColorTokens.dark, dark),
+        ] {
+            for (index, tint) in palette.enumerated() {
+                XCTAssertGreaterThan(
+                    Self.contrastRatio(
+                        Self.flatten(tint, over: tokens.sidebarSurface),
+                        tokens.sidebarSurface
+                    ),
+                    4.5,
+                    "\(name) Host foreground hue \(index) is below the small-text floor"
+                )
+            }
         }
     }
 

@@ -117,4 +117,93 @@ final class TerminalSessionPresentationTests: XCTestCase {
             TerminalSessionPresentation.isGeneratedDefaultTitle("My Agent", kind: .shell)
         )
     }
+
+    func testShellNameOnlyNamesAShellProcess() {
+        XCTAssertEqual(TerminalSessionPresentation.shellName(process: "zsh"), "zsh")
+        XCTAssertEqual(TerminalSessionPresentation.shellName(process: "/bin/fish"), "fish")
+        XCTAssertNil(TerminalSessionPresentation.shellName(process: "npm"))
+        XCTAssertNil(TerminalSessionPresentation.shellName(process: ""))
+    }
+
+    func testShellLocationTitleAtTheWorktreeRootNamesTheShell() {
+        XCTAssertEqual(
+            TerminalSessionPresentation.shellLocationTitle(
+                customTitle: nil,
+                title: "Shell",
+                kind: .shell,
+                shellName: "zsh",
+                directory: "/work/warren",
+                worktreeRoot: "/work/warren"
+            ),
+            "zsh"
+        )
+    }
+
+    func testShellLocationTitleInsideTheWorktreeIsRelative() {
+        XCTAssertEqual(
+            TerminalSessionPresentation.shellLocationTitle(
+                customTitle: nil,
+                title: "Shell",
+                kind: .shell,
+                shellName: "zsh",
+                directory: "/work/warren/Sources/WarrenKit",
+                worktreeRoot: "/work/warren"
+            ),
+            "Sources/WarrenKit"
+        )
+    }
+
+    func testShellLocationTitleOutsideTheWorktreeIsHomeShortened() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertEqual(
+            TerminalSessionPresentation.shellLocationTitle(
+                customTitle: nil,
+                title: "Shell",
+                kind: .shell,
+                shellName: "zsh",
+                directory: home + "/Downloads",
+                worktreeRoot: "/work/warren"
+            ),
+            "~/Downloads"
+        )
+    }
+
+    func testShellLocationTitleKeepsAUserSetOrAgentName() {
+        XCTAssertEqual(
+            TerminalSessionPresentation.shellLocationTitle(
+                customTitle: "relay 日志",
+                title: "Shell",
+                kind: .shell,
+                shellName: "zsh",
+                directory: "/work/warren",
+                worktreeRoot: "/work/warren"
+            ),
+            "relay 日志"
+        )
+        XCTAssertEqual(
+            TerminalSessionPresentation.shellLocationTitle(
+                customTitle: nil,
+                title: "Implement API",
+                kind: .shell,
+                shellName: "zsh",
+                directory: "/work/warren",
+                worktreeRoot: "/work/warren"
+            ),
+            "Implement API"
+        )
+    }
+
+    func testShellLocationTitleNormalizesTrailingSeparators() {
+        XCTAssertEqual(
+            TerminalSessionPresentation.shellLocationTitle(
+                customTitle: nil,
+                title: "Shell",
+                kind: .shell,
+                shellName: "fish",
+                directory: "/work/warren/",
+                worktreeRoot: "/work/warren"
+            ),
+            "fish"
+        )
+    }
 }

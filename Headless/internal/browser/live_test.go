@@ -42,7 +42,6 @@ func startLiveSession(t *testing.T, manager *Manager, headless bool) *Session {
 	defer cancel()
 	session, err := manager.Start(ctx, StartOptions{
 		SessionID: "test-" + t.Name(),
-		Scope:     "terminalGroup",
 		Headless:  headless,
 	})
 	if err != nil {

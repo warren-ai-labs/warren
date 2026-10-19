@@ -204,16 +204,16 @@ final class GhosttyAdapterTests: XCTestCase {
         XCTAssertTrue(surface.state.renderedConfig.contains("adjust-cell-height = 12%"))
         XCTAssertTrue(surface.state.renderedConfig.contains("copy-on-select = true"))
         XCTAssertTrue(surface.state.renderedConfig.contains("mouse-scroll-multiplier = precision:2"))
-        XCTAssertTrue(surface.state.renderedConfig.contains("search-foreground = #151110"))
+        XCTAssertTrue(surface.state.renderedConfig.contains("search-foreground = #0b0b0b"))
         XCTAssertTrue(surface.state.renderedConfig.contains("search-background = #ffe082"))
         XCTAssertTrue(surface.state.renderedConfig.contains("search-selected-background = #e07850"))
         let theme = surface.state.theme.dark.rendered
-        XCTAssertTrue(theme.contains("palette = 0=#151110"))
+        XCTAssertTrue(theme.contains("palette = 0=#0b0b0b"))
         XCTAssertTrue(theme.contains("palette = 1=#dc6b6b"))
-        XCTAssertTrue(theme.contains("palette = 8=#5c5856"))
+        XCTAssertTrue(theme.contains("palette = 8=#5c5c5c"))
         XCTAssertTrue(theme.contains("palette = 15=#ffffff"))
-        XCTAssertTrue(theme.contains("cursor-text = #151110"))
-        XCTAssertTrue(theme.contains("selection-background = #482b20"))
+        XCTAssertTrue(theme.contains("cursor-text = #0b0b0b"))
+        XCTAssertTrue(theme.contains("selection-background = #40261c"))
     }
 
     @MainActor
@@ -489,7 +489,7 @@ final class GhosttyAdapterTests: XCTestCase {
             (
                 "dark",
                 NSAppearance(named: .darkAqua),
-                "\u{1b}]10;rgb:eaea/e8e8/e6e6\u{1b}\\\u{1b}]11;rgb:1515/1111/1010\u{1b}\\"
+                "\u{1b}]10;rgb:eded/eded/eded\u{1b}\\\u{1b}]11;rgb:0b0b/0b0b/0b0b\u{1b}\\"
             ),
         ] {
             let alreadyRecorded = recorder.allBytes().count
@@ -870,7 +870,7 @@ final class GhosttyAdapterTests: XCTestCase {
         recorder.clear()
         surface.receive(Data("\u{1b}]10;?\u{1b}\\\u{1b}]11;?\u{1b}\\".utf8))
         let colorQueryExpected = Data(
-            "\u{1b}]10;rgb:eaea/e8e8/e6e6\u{1b}\\\u{1b}]11;rgb:1515/1111/1010\u{1b}\\".utf8
+            "\u{1b}]10;rgb:eded/eded/eded\u{1b}\\\u{1b}]11;rgb:0b0b/0b0b/0b0b\u{1b}\\".utf8
         )
         // `ghostty_surface_update_config` is delivered to Ghostty's I/O thread
         // through its mailbox, while `ghostty_surface_write_buffer` processes

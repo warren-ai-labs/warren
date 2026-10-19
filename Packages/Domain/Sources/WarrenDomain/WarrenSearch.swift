@@ -111,7 +111,6 @@ public enum WarrenSearchScope: String, Hashable, Sendable, CaseIterable {
     case session
     case workspace
     case project
-    case terminalGroup
     case tab
 
     /// Grouping order for rendered results. Tasks and Sessions lead because
@@ -122,8 +121,7 @@ public enum WarrenSearchScope: String, Hashable, Sendable, CaseIterable {
         case .session: return 1
         case .workspace: return 2
         case .project: return 3
-        case .terminalGroup: return 4
-        case .tab: return 5
+        case .tab: return 4
         }
     }
 
@@ -133,7 +131,6 @@ public enum WarrenSearchScope: String, Hashable, Sendable, CaseIterable {
         case .session: return "Session"
         case .workspace: return "Workspace"
         case .project: return "Project"
-        case .terminalGroup: return "Terminal Group"
         case .tab: return "Tab"
         }
     }
@@ -144,7 +141,6 @@ public enum WarrenSearchScope: String, Hashable, Sendable, CaseIterable {
         case .session: return "Sessions"
         case .workspace: return "Workspaces"
         case .project: return "Projects"
-        case .terminalGroup: return "Terminal Groups"
         case .tab: return "Tabs"
         }
     }
@@ -156,7 +152,6 @@ public enum WarrenSearchScope: String, Hashable, Sendable, CaseIterable {
         case .session: return ["s", "session"]
         case .workspace: return ["w", "workspace", "branch"]
         case .project: return ["p", "project"]
-        case .terminalGroup: return ["g", "group"]
         case .tab: return ["tab"]
         }
     }

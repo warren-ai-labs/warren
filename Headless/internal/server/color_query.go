@@ -3,11 +3,11 @@ package server
 import "github.com/abcdlsj/ghostline"
 
 const (
-	warrenTerminalForeground = "#eae8e6"
-	warrenTerminalBackground = "#151110"
+	warrenTerminalForeground = "#ededed"
+	warrenTerminalBackground = "#0b0b0b"
 )
 
-// WarrenColorQuery supplies Warren's Ember terminal colors to ghostline.
+// WarrenColorQuery supplies Warren's dark terminal colors to ghostline.
 func WarrenColorQuery(kind ghostline.ColorQueryKind) (string, bool) {
 	switch kind {
 	case ghostline.ColorQueryForeground:

@@ -8,13 +8,11 @@ enum WarrenDesktopDeletionRequest {
     case task(WarrenTask)
     case workspace(Workspace, project: Project?)
     case project(Project, workspaceCount: Int)
-    case terminalGroup(TerminalGroup, sessionCount: Int)
 }
 
 struct WarrenDesktopSidebarRows: View {
     let taskGroups: [WarrenDesktopTaskGroup]
     let groups: [WarrenDesktopProjectGroup]
-    let terminalGroups: [WarrenDesktopTerminalGroup]
     let workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary]
     let activeWorkspaceIDs: Set<WorkspaceID>
     /// Workspaces whose activity comes from a local editor marker rather than a
@@ -25,22 +23,21 @@ struct WarrenDesktopSidebarRows: View {
     let workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode
     let showsTasks: Bool
     /// Controls whether the current-host Projects/Workspaces tree is shown.
-    /// Multi-host mode reuses this view for current-host-only sections (Tasks
-    /// and Terminal Groups) and renders the scoped project tree separately.
+    /// Multi-host mode reuses this view for the current-host-only Tasks section
+    /// and renders the scoped project tree separately.
     let showsProjects: Bool
     @Binding var tree: WarrenDesktopSidebarTreeState
-    let isCollapsed: Bool
     let selection: WarrenDesktopSidebarSelection?
     let selectedTabID: String?
     let deletingProjectIDs: Set<ProjectID>
     let deletingWorkspaceIDs: Set<WorkspaceID>
     let endpointCapabilities: WarrenDesktopEndpointCapabilities
     let isInteractionDisabled: Bool
+    /// The Host's connection, which decides what an empty roster means.
+    let connectionState: WarrenDesktopConnectionState
     let onAddProject: () -> Void
     let onRequestTaskCreate: () -> Void
     let onFocusTask: (TaskID) -> Void
-    let onRequestTerminalGroupCreate: () -> Void
-    let onRequestTerminalGroupEdit: (TerminalGroup) -> Void
     let onAction: (WarrenDesktopAction) -> Void
     /// Drops a Session onto a pane. `nil` when no pane can accept one, which is
     /// every sidebar that is not mounted beside an arrangement.
@@ -54,7 +51,6 @@ struct WarrenDesktopSidebarRows: View {
     init(
         taskGroups: [WarrenDesktopTaskGroup],
         groups: [WarrenDesktopProjectGroup],
-        terminalGroups: [WarrenDesktopTerminalGroup],
         workspaceActivitySummaries: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary],
         activeWorkspaceIDs: Set<WorkspaceID> = [],
         editorMarkedWorkspaceIDs: Set<WorkspaceID> = [],
@@ -63,18 +59,16 @@ struct WarrenDesktopSidebarRows: View {
         showsTasks: Bool = true,
         showsProjects: Bool = true,
         tree: Binding<WarrenDesktopSidebarTreeState>,
-        isCollapsed: Bool,
         selection: WarrenDesktopSidebarSelection?,
         selectedTabID: String? = nil,
         deletingProjectIDs: Set<ProjectID>,
         deletingWorkspaceIDs: Set<WorkspaceID>,
         endpointCapabilities: WarrenDesktopEndpointCapabilities,
         isInteractionDisabled: Bool,
+        connectionState: WarrenDesktopConnectionState = .attached,
         onAddProject: @escaping () -> Void,
         onRequestTaskCreate: @escaping () -> Void,
         onFocusTask: @escaping (TaskID) -> Void,
-        onRequestTerminalGroupCreate: @escaping () -> Void,
-        onRequestTerminalGroupEdit: @escaping (TerminalGroup) -> Void,
         onAction: @escaping (WarrenDesktopAction) -> Void,
         onRequestRename: @escaping (WarrenDesktopRenameRequest) -> Void,
         onRequestDeletion: @escaping (WarrenDesktopDeletionRequest) -> Void,
@@ -83,7 +77,6 @@ struct WarrenDesktopSidebarRows: View {
     ) {
         self.taskGroups = taskGroups
         self.groups = groups
-        self.terminalGroups = terminalGroups
         self.workspaceActivitySummaries = workspaceActivitySummaries
         self.activeWorkspaceIDs = activeWorkspaceIDs
         self.editorMarkedWorkspaceIDs = editorMarkedWorkspaceIDs
@@ -92,18 +85,16 @@ struct WarrenDesktopSidebarRows: View {
         self.showsTasks = showsTasks
         self.showsProjects = showsProjects
         self._tree = tree
-        self.isCollapsed = isCollapsed
         self.selection = selection
         self.selectedTabID = selectedTabID
         self.deletingProjectIDs = deletingProjectIDs
         self.deletingWorkspaceIDs = deletingWorkspaceIDs
         self.endpointCapabilities = endpointCapabilities
         self.isInteractionDisabled = isInteractionDisabled
+        self.connectionState = connectionState
         self.onAddProject = onAddProject
         self.onRequestTaskCreate = onRequestTaskCreate
         self.onFocusTask = onFocusTask
-        self.onRequestTerminalGroupCreate = onRequestTerminalGroupCreate
-        self.onRequestTerminalGroupEdit = onRequestTerminalGroupEdit
         self.onAction = onAction
         self.onOpenEditor = onOpenEditor
         self.onSplitDropSession = onSplitDropSession
@@ -124,58 +115,100 @@ struct WarrenDesktopSidebarRows: View {
         // This list is bounded by the sidebar scroll view and also hosts
         // optional drag-frame measurement. Eager layout keeps geometry
         // feedback out of LazyVStack's placement cache during navigation.
-        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-            terminalGroupsSection
+        VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.sectionSpacing) {
             if showsTasks {
                 tasksSection
             }
             if showsProjects {
-                if !isCollapsed {
+                VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.sectionHeaderSpacing) {
                     projectsSectionHeader
-                }
-                if groups.isEmpty && !isCollapsed {
-                    noProjectsMessage
-                } else if tree.showsActiveOnly && visibleProjectGroups.isEmpty && !isCollapsed {
-                    noActiveWorkspacesMessage
-                }
-                if isCollapsed || !tree.projectsCollapsed || hasPendingProjectDeletion {
-                    ForEach(Array(visibleProjectGroups.enumerated()), id: \.element.id) { index, group in
-                        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                            projectRow(for: group)
-                            if isCollapsed
-                                || isProjectExpanded(group.project.id)
-                                || hasDeletingWorkspace(in: group.project.id) {
-                                ForEach(group.workspaces) { workspace in
-                                    WarrenDesktopSessionLeafGroup(
-                                        leafCount: ownsSessionLeaves(
-                                            workspace,
-                                            semanticScope: "project-list"
-                                        ) ? activeSessions(in: workspace.id).count : 0,
-                                        mode: workspaceDisplayMode,
-                                        workspaceGlyph: WarrenDesktopWorkspaceGlyph(workspace),
-                                        isCurrentScope: selection == .workspace(workspace.id)
-                                    ) {
-                                        workspaceRow(
-                                            workspace,
-                                            in: group,
-                                            taskName: taskName(for: workspace)
-                                        )
-                                    } leaves: {
-                                        workspaceSessionRows(
-                                            for: workspace,
-                                            project: group.project,
-                                            semanticScope: "project-list"
-                                        )
+                    if groups.isEmpty, connectionState.isSettling {
+                        WarrenDesktopSidebarSkeleton()
+                            .transition(.opacity)
+                    } else if groups.isEmpty, !connectionState.isConnected {
+                        WarrenDesktopSidebarEmptyState(
+                            reason: .hostUnavailable(
+                                isFailed: connectionState == .failed,
+                                detail: nil
+                            )
+                        )
+                    } else if groups.isEmpty {
+                        noProjectsMessage
+                    } else if tree.showsActiveOnly && visibleProjectGroups.isEmpty {
+                        noActiveWorkspacesMessage
+                    }
+                    if !tree.projectsCollapsed || hasPendingProjectDeletion {
+                        let bands = projectBands
+                        // Inactive projects fold into one row at the end of
+                        // the section.
+                        let listed = bands.listed
+                        let showsInactiveRow = !bands.inactive.isEmpty
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(listed) { group in
+                                let soloWorkspace = soloWorkspace(of: group)
+                                let split = workspaceSplit(of: group)
+                                VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.groupContentSpacing) {
+                                    projectRow(for: group, soloWorkspace: soloWorkspace)
+                                    if let soloWorkspace, isProjectExpanded(group.project.id) {
+                                        // One worktree is no choice, so the
+                                        // project holds its Sessions directly.
+                                        VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.sessionSpacing) {
+                                            workspaceSessionRows(
+                                                for: soloWorkspace,
+                                                project: group.project,
+                                                semanticScope: "project-list"
+                                            )
+                                        }
+                                    } else if soloWorkspace == nil, split.hasRows,
+                                        isProjectExpanded(group.project.id)
+                                        || hasDeletingWorkspace(in: group.project.id) {
+                                        VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.worktreeSpacing) {
+                                            ForEach(split.live) { workspace in
+                                                WarrenDesktopSessionLeafGroup(
+                                                    leafCount: showsSessionLeaves(
+                                                        workspace,
+                                                        semanticScope: "project-list"
+                                                    ) ? activeSessions(in: workspace.id).count : 0
+                                                ) {
+                                                    workspaceRow(
+                                                        workspace,
+                                                        in: group,
+                                                        taskName: taskName(for: workspace)
+                                                    )
+                                                } leaves: {
+                                                    workspaceSessionRows(
+                                                        for: workspace,
+                                                        project: group.project,
+                                                        semanticScope: "project-list"
+                                                    )
+                                                }
+                                            }
+                                            if split.showsIdleRow {
+                                                idleWorkspaceRows(split.idle, in: group)
+                                            }
+                                        }
                                     }
-                                    .padding(.top, workspaceDisplayMode.sessionGroupSpacing)
+                                }
+                                .warrenTreeGroupSeparator(
+                                    of: group,
+                                    in: listed,
+                                    isFollowed: showsInactiveRow
+                                ) {
+                                    isProjectFolded($0)
                                 }
                             }
+                            if showsInactiveRow {
+                                inactiveProjectRows(bands.inactive)
+                                    .warrenTreeGroupSeparator(
+                                        isFirst: listed.isEmpty,
+                                        isFolded: !tree.inactiveProjectsExpanded,
+                                        followsFolded: listed.last.map(isProjectFolded) ?? false,
+                                        isLast: true
+                                    )
+                            }
                         }
-                        // The gap separates one project's subtree from the next.
-                        // The first group already sits below the section header.
-                        .padding(.top, index == 0 ? 0 : projectGroupSpacing)
+                        .transition(.opacity)
                     }
-                    .transition(.opacity)
                 }
             }
         }
@@ -205,6 +238,7 @@ struct WarrenDesktopSidebarRows: View {
             )
         }
         .onChange(of: selection) { newSelection in
+            revealFoldedRows(for: newSelection)
             guard case .workspace(let workspaceID)? = newSelection,
                   let workspace = groups
                     .flatMap(\.workspaces)
@@ -214,9 +248,9 @@ struct WarrenDesktopSidebarRows: View {
                 .stateChange,
                 reduceMotion: reduceMotion
             )) {
-                tree.expandedProjectIDs.insert(workspace.projectID)
+                tree.collapsedProjectIDs.remove(workspace.projectID)
                 if let taskID = workspace.taskID {
-                    tree.expandedTaskIDs.insert(taskID)
+                    tree.collapsedTaskIDs.remove(taskID)
                 }
             }
         }
@@ -241,12 +275,12 @@ struct WarrenDesktopSidebarRows: View {
                 .stateChange,
                 reduceMotion: reduceMotion
             )) {
-                tree.expandedProjectIDs.formUnion(grownProjectIDs)
+                tree.collapsedProjectIDs.subtract(grownProjectIDs)
                 // If a workspace was created under a task, also expand that task.
                 for projectID in grownProjectIDs {
                     if let newWorkspace = newGroups.first(where: { $0.project.id == projectID })?.workspaces.last,
                        let taskID = newWorkspace.taskID {
-                        tree.expandedTaskIDs.insert(taskID)
+                        tree.collapsedTaskIDs.remove(taskID)
                         tree.tasksCollapsed = false
                     }
                 }
@@ -274,7 +308,7 @@ struct WarrenDesktopSidebarRows: View {
                 .stateChange,
                 reduceMotion: reduceMotion
             )) {
-                tree.expandedTaskIDs.formUnion(grownTaskIDs)
+                tree.collapsedTaskIDs.subtract(grownTaskIDs)
                 tree.tasksCollapsed = false
             }
         }
@@ -299,6 +333,40 @@ struct WarrenDesktopSidebarRows: View {
                     activeWorkspaceIDs: activeWorkspaceIDs
                 ))
             }
+        }
+    }
+
+    /// Opens the folded row a selection would otherwise be hidden in: the
+    /// inactive-projects row for a project in it, and a project's idle row
+    /// for a worktree in it.
+    private func revealFoldedRows(for selection: WarrenDesktopSidebarSelection?) {
+        let projectID: ProjectID?
+        var idleWorkspace: Workspace?
+        switch selection {
+        case .project(let id):
+            projectID = id
+        case .workspace(let workspaceID):
+            let workspace = groups.flatMap(\.workspaces).first { $0.id == workspaceID }
+            projectID = workspace?.projectID
+            if let workspace, !isWorkspaceLive(workspace) {
+                idleWorkspace = workspace
+            }
+        case nil:
+            projectID = nil
+        }
+        guard let projectID,
+              let group = groups.first(where: { $0.project.id == projectID })
+        else { return }
+        let opensInactive = !group.project.pinned && !isProjectActive(group)
+            && !tree.inactiveProjectsExpanded
+        let opensIdle = idleWorkspace.map { workspace in
+            !tree.expandedIdleWorkspaceProjectIDs.contains(projectID)
+                && projectListWorkspaces(of: group).contains { $0.id == workspace.id }
+        } ?? false
+        guard opensInactive || opensIdle else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            if opensInactive { tree.inactiveProjectsExpanded = true }
+            if opensIdle { tree.expandedIdleWorkspaceProjectIDs.insert(projectID) }
         }
     }
 
@@ -328,7 +396,7 @@ struct WarrenDesktopSidebarRows: View {
     private func revealProjects(_ projectIDs: Set<ProjectID>) {
         guard !projectIDs.isEmpty else { return }
         withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
-            tree.expandedProjectIDs.formUnion(projectIDs)
+            tree.collapsedProjectIDs.subtract(projectIDs)
             tree.projectsCollapsed = false
         }
     }
@@ -338,8 +406,12 @@ struct WarrenDesktopSidebarRows: View {
         return WarrenDesktopSidebarSectionHeader(
             title: "Projects",
             disclosureExpanded: !tree.projectsCollapsed,
-            actionVisible: false,
+            actionImage: "plus",
+            actionLabel: "Add Project…",
+            actionVisible: endpointCapabilities.canAddProject,
+            actionEnabled: !isInteractionDisabled,
             onToggle: toggleProjects,
+            onAction: onAddProject,
             additionalActions: [
                 WarrenDesktopSidebarSectionAction(
                     id: "toggle-all-projects",
@@ -352,7 +424,11 @@ struct WarrenDesktopSidebarRows: View {
                     isEnabled: !isInteractionDisabled && !groups.isEmpty,
                     action: toggleAllProjects
                 ),
-            ]
+            ],
+            foldMarks: visibleProjectGroups
+                .flatMap(\.workspaces)
+                .flatMap { activeSessions(in: $0.id) }
+                .map(\.activityMark)
         )
     }
     private var noProjectsMessage: some View {
@@ -388,34 +464,241 @@ struct WarrenDesktopSidebarRows: View {
         switch selection {
         case .workspace(let workspaceID):
             return session.workspaceID == workspaceID
-        case .terminalGroup(let groupID):
-            return session.terminalGroupID == groupID
         case .project, nil:
             return false
         }
-    }
-
-    /// Session leaves are only rendered where they can be read as leaves.
-    ///
-    /// The collapsed rail is 32pt of icons; a full-width leaf row there has no
-    /// parent to sit under and no room for its title, so rich mode falls back to
-    /// the workspace's aggregate marker until the rail is expanded again.
-    private var showsSessionRows: Bool {
-        workspaceDisplayMode.isRich && !isCollapsed
     }
 
     /// Whether a workspace's Session leaves belong to the copy rendered in
     /// `semanticScope`.
     ///
     /// Leaves follow navigation: a Task-linked workspace routes selection to its
-    /// Task copy, so the Projects copy stays context-only. The collapsed rail
-    /// lists no leaves at all. The row and both call sites ask this one question,
-    /// so the leaf count and the leaf rows cannot disagree.
+    /// Task copy, so the Projects copy stays context-only. The row and both call
+    /// sites ask this one question, so the leaf count and the leaf rows cannot
+    /// disagree.
+    private var showsSessionRows: Bool {
+        workspaceDisplayMode.isRich
+    }
     private func ownsSessionLeaves(
         _ workspace: Workspace,
         semanticScope: String
     ) -> Bool {
         showsSessionRows && !routesSelectionToTaskRow(workspace, semanticScope: semanticScope)
+    }
+
+    /// Whether a workspace's leaves are listed in this copy right now: it owns
+    /// them and the user has not folded them away.
+    private func showsSessionLeaves(
+        _ workspace: Workspace,
+        semanticScope: String
+    ) -> Bool {
+        ownsSessionLeaves(workspace, semanticScope: semanticScope)
+            && !tree.collapsedWorkspaceIDs.contains(workspace.id)
+    }
+
+    private func toggleWorkspaceLeaves(_ workspaceID: WorkspaceID) {
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            if tree.collapsedWorkspaceIDs.contains(workspaceID) {
+                tree.collapsedWorkspaceIDs.remove(workspaceID)
+            } else {
+                tree.collapsedWorkspaceIDs.insert(workspaceID)
+            }
+        }
+    }
+
+    /// The Workspaces a project lists. One that belongs to a Task the tree
+    /// shows is listed under that Task alone, so it is not drawn twice.
+    private func projectListWorkspaces(
+        of group: WarrenDesktopProjectGroup
+    ) -> [Workspace] {
+        guard showsTasks else { return group.workspaces }
+        let taskIDs = Set(taskGroups.map(\.task.id))
+        return group.workspaces.filter { workspace in
+            guard let taskID = workspace.taskID else { return true }
+            return !taskIDs.contains(taskID)
+        }
+    }
+
+    /// Whether a worktree keeps its own row rather than folding into its
+    /// project's idle row: it has a Session, or its row is the only place
+    /// something about it shows (a deletion in progress, an editor marker).
+    private func isWorkspaceLive(_ workspace: Workspace) -> Bool {
+        activeWorkspaceIDs.contains(workspace.id)
+            || !activeSessions(in: workspace.id).isEmpty
+            || deletingWorkspaceIDs.contains(workspace.id)
+            || editorMarkedWorkspaceIDs.contains(workspace.id)
+    }
+
+    /// A project's listed worktrees, split.
+    private func workspaceSplit(of group: WarrenDesktopProjectGroup) -> WarrenDesktopWorkspaceSplit {
+        let listed = projectListWorkspaces(of: group)
+        return WarrenDesktopWorkspaceSplit(listed, isLive: isWorkspaceLive)
+    }
+
+    /// Whether a project belongs to the active band. Every one of its
+    /// worktrees counts, including those listed under a Task, and a project
+    /// mid-deletion stays where its progress can be seen.
+    private func isProjectActive(_ group: WarrenDesktopProjectGroup) -> Bool {
+        deletingProjectIDs.contains(group.project.id)
+            || group.workspaces.contains(where: isWorkspaceLive)
+    }
+
+    private var projectBands: WarrenDesktopProjectBands<WarrenDesktopProjectGroup> {
+        WarrenDesktopProjectBands(
+            visibleProjectGroups,
+            project: \.project,
+            isActive: isProjectActive,
+            lastActiveAt: { WarrenDesktopActivityAge.lastActiveAt(of: $0.workspaces) }
+        )
+    }
+
+    /// The idle-worktrees row at the end of a project, and its list.
+    private func idleWorkspaceRows(
+        _ workspaces: [Workspace],
+        in group: WarrenDesktopProjectGroup
+    ) -> some View {
+        let projectID = group.project.id
+        let isExpanded = tree.expandedIdleWorkspaceProjectIDs.contains(projectID)
+        return VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.sessionSpacing) {
+            WarrenDesktopFoldedCountRow(
+                count: workspaces.count,
+                singular: "idle worktree",
+                plural: "idle worktrees",
+                height: WarrenDesktopSidebarMetrics.worktreeRowHeight,
+                isExpanded: isExpanded,
+                semanticID: "project-idle-worktrees.\(projectID.description)",
+                isEnabled: !isInteractionDisabled,
+                onToggle: { toggleIdleWorkspaces(projectID) }
+            )
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(workspaces) { workspace in
+                        let isProjectDeleting = deletingProjectIDs.contains(projectID)
+                        let routesToTask = routesSelectionToTaskRow(workspace, semanticScope: "project-list")
+                        WarrenDesktopIdleWorktreeRow(
+                            workspace: workspace,
+                            semanticScope: "project-list",
+                            isSelected: selection == .workspace(workspace.id) && !routesToTask,
+                            isEnabled: !isInteractionDisabled && !isProjectDeleting && !routesToTask,
+                            contextMenuActions: workspaceContextMenuActions(workspace, project: group.project),
+                            onSelect: { select(.workspace(workspace.id)) },
+                            onDoubleClick: {
+                                onAction(workspaceDisplayMode.isRich
+                                    ? .requestNewSession(workspace.id)
+                                    : .openWorkspace(workspace.id))
+                            }
+                        )
+                        .id("workspace.project-list.\(workspace.id.description)")
+                    }
+                }
+            }
+        }
+    }
+
+    /// The inactive-projects row at the end of the section, and its list.
+    private func inactiveProjectRows(_ inactive: [WarrenDesktopProjectGroup]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            WarrenDesktopFoldedCountRow(
+                count: inactive.count,
+                singular: "inactive project",
+                plural: "inactive projects",
+                height: WarrenDesktopSidebarMetrics.inactiveProjectsRowHeight,
+                isExpanded: tree.inactiveProjectsExpanded,
+                semanticID: "projects-inactive",
+                isEnabled: !isInteractionDisabled,
+                onToggle: toggleInactiveProjects
+            )
+            if tree.inactiveProjectsExpanded {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(inactive) { group in
+                        WarrenDesktopInactiveProjectRow(
+                            project: group.project,
+                            lastActiveAt: WarrenDesktopActivityAge.lastActiveAt(of: group.workspaces),
+                            semanticID: "project.\(group.project.id.description)",
+                            isSelected: selectedProjectID == group.project.id,
+                            isEnabled: !isInteractionDisabled,
+                            contextMenuActions: projectContextMenuActions(group),
+                            onSelect: { select(.project(group.project.id)) }
+                        )
+                        .id("project.\(group.project.id.description)")
+                    }
+                }
+                .padding(.top, WarrenDesktopSidebarMetrics.inactiveProjectListSpacing)
+            }
+        }
+    }
+
+    private func projectContextMenuActions(
+        _ group: WarrenDesktopProjectGroup
+    ) -> [WarrenDesktopContextMenuAction] {
+        WarrenDesktopProjectRow.contextMenuActions(
+            project: group.project,
+            isPinned: group.project.pinned,
+            onImportWorktrees: { onAction(.requestProjectWorktreeImport(group.project.id)) },
+            onConfigureSetupScript: { onAction(.requestProjectSetupScript(group.project.id)) },
+            onToggleAutoImportWorktrees: {
+                onAction(.setProjectAutoImportGitWorktrees(
+                    group.project.id,
+                    !group.project.autoImportGitWorktrees
+                ))
+            },
+            onRename: { onRequestRename(.project(group.project.id, name: group.project.name)) },
+            onTogglePin: { onAction(.setProjectPinned(group.project.id, !group.project.pinned)) },
+            onDelete: {
+                onRequestDeletion(.project(group.project, workspaceCount: group.workspaces.count))
+            }
+        )
+    }
+
+    private func workspaceContextMenuActions(
+        _ workspace: Workspace,
+        project: Project
+    ) -> [WarrenDesktopContextMenuAction] {
+        WarrenDesktopWorkspaceRow.contextMenuActions(
+            workspace: workspace,
+            isPinned: workspace.pinned,
+            tasks: taskGroups.map(\.task),
+            onTogglePin: { onAction(.setWorkspacePinned(workspace.id, !workspace.pinned)) },
+            onRename: { onRequestRename(.workspace(workspace.id, name: workspace.name)) },
+            onAttachToTask: { taskID in onAction(.attachWorkspaceToTask(taskID, workspace.id)) },
+            onDetachFromTask: { taskID in onAction(.detachWorkspaceFromTask(taskID, workspace.id)) },
+            onDelete: { onRequestDeletion(.workspace(workspace, project: project)) }
+        )
+    }
+
+    private func toggleIdleWorkspaces(_ projectID: ProjectID) {
+        guard !isInteractionDisabled else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            if tree.expandedIdleWorkspaceProjectIDs.contains(projectID) {
+                tree.expandedIdleWorkspaceProjectIDs.remove(projectID)
+            } else {
+                tree.expandedIdleWorkspaceProjectIDs.insert(projectID)
+            }
+        }
+    }
+
+    private func toggleInactiveProjects() {
+        guard !isInteractionDisabled else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            tree.inactiveProjectsExpanded.toggle()
+        }
+    }
+
+    /// The project's only listed Workspace, when the project holds that
+    /// Workspace's Sessions directly instead of drawing a row for it.
+    ///
+    /// A Workspace keeps its row whenever the row is the only place something
+    /// shows: no Sessions (the row is then what selects it), a deletion in
+    /// progress, or an open editor marker.
+    private func soloWorkspace(of group: WarrenDesktopProjectGroup) -> Workspace? {
+        let listed = projectListWorkspaces(of: group)
+        guard listed.count == 1, let workspace = listed.first,
+              ownsSessionLeaves(workspace, semanticScope: "project-list"),
+              !activeSessions(in: workspace.id).isEmpty,
+              !deletingWorkspaceIDs.contains(workspace.id),
+              !editorMarkedWorkspaceIDs.contains(workspace.id)
+        else { return nil }
+        return workspace
     }
 
     /// Whether this copy is context-only because the Task copy owns navigation.
@@ -466,53 +749,64 @@ struct WarrenDesktopSidebarRows: View {
     private var tasksSection: some View {
         Group {
             if !tree.showsActiveOnly || !visibleTaskGroups.isEmpty {
-                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                    if !isCollapsed {
-                        WarrenDesktopSidebarSectionHeader(
-                            title: "Tasks",
-                            disclosureExpanded: !tree.tasksCollapsed,
-                            actionImage: "plus",
-                            actionLabel: "New task",
-                            actionEnabled: !isInteractionDisabled,
-                            onToggle: toggleTasks,
-                            onAction: onRequestTaskCreate,
-                            additionalActions: []
-                        )
-                    }
+                VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.sectionHeaderSpacing) {
+                    WarrenDesktopSidebarSectionHeader(
+                        title: "Tasks",
+                        disclosureExpanded: !tree.tasksCollapsed,
+                        actionImage: "plus",
+                        actionLabel: "New Task…",
+                        actionEnabled: !isInteractionDisabled,
+                        onToggle: toggleTasks,
+                        onAction: onRequestTaskCreate,
+                        additionalActions: [],
+                        foldMarks: visibleTaskGroups
+                            .flatMap(\.workspaces)
+                            .flatMap { activeSessions(in: $0.id) }
+                            .map(\.activityMark)
+                    )
                     // An empty section states its own emptiness by having no
                     // rows. Placeholder copy repeats that at full row cost, and
                     // the section header's own "+" already says what to do
-                    // about it.
-                    if !tree.tasksCollapsed || isCollapsed {
-                        ForEach(visibleTaskGroups) { group in
-                            taskRow(group)
-                            if isCollapsed || tree.expandedTaskIDs.contains(group.task.id) {
-                                ForEach(group.workspaces) { workspace in
-                                    if let project = groups.first(where: { $0.project.id == workspace.projectID }) {
-                                        WarrenDesktopSessionLeafGroup(
-                                            leafCount: ownsSessionLeaves(
-                                                workspace,
-                                                semanticScope: "task-list"
-                                            ) ? activeSessions(in: workspace.id).count : 0,
-                                            mode: workspaceDisplayMode,
-                                            workspaceGlyph: WarrenDesktopWorkspaceGlyph(workspace),
-                                            isCurrentScope: selection == .workspace(workspace.id)
-                                        ) {
-                                            workspaceRow(
-                                                workspace,
-                                                in: project,
-                                                semanticScope: "task-list",
-                                                displayName: "\(project.project.name) · \(workspace.name)"
-                                            )
-                                        } leaves: {
-                                            workspaceSessionRows(
-                                                for: workspace,
-                                                project: project.project,
-                                                semanticScope: "task-list"
-                                            )
+                    // about it. The body is skipped outright when there is no
+                    // row, so an empty section keeps one heading gap whether
+                    // it is folded away or opened.
+                    if !tree.tasksCollapsed && !visibleTaskGroups.isEmpty {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(visibleTaskGroups) { group in
+                                VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.groupContentSpacing) {
+                                    taskRow(group)
+                                    if !tree.collapsedTaskIDs.contains(group.task.id) {
+                                        VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.worktreeSpacing) {
+                                            ForEach(group.workspaces) { workspace in
+                                                if let project = groups.first(where: { $0.project.id == workspace.projectID }) {
+                                                    WarrenDesktopSessionLeafGroup(
+                                                        leafCount: showsSessionLeaves(
+                                                            workspace,
+                                                            semanticScope: "task-list"
+                                                        ) ? activeSessions(in: workspace.id).count : 0
+                                                    ) {
+                                                        // A task's worktrees name their project,
+                                                        // since one task can span several.
+                                                        workspaceRow(
+                                                            workspace,
+                                                            in: project,
+                                                            semanticScope: "task-list",
+                                                            displayName: "\(project.project.name) · \(workspace.name)"
+                                                        )
+                                                    } leaves: {
+                                                        workspaceSessionRows(
+                                                            for: workspace,
+                                                            project: project.project,
+                                                            semanticScope: "task-list"
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         }
-                                        .padding(.top, workspaceDisplayMode.sessionGroupSpacing)
                                     }
+                                }
+                                .warrenTreeGroupSeparator(of: group, in: visibleTaskGroups) {
+                                    tree.collapsedTaskIDs.contains($0.task.id)
                                 }
                             }
                         }
@@ -528,8 +822,7 @@ struct WarrenDesktopSidebarRows: View {
             task: group.task,
             workspaceCount: group.workspaces.count,
             availableProjectGroups: groups,
-            isCollapsed: isCollapsed,
-            isExpanded: tree.expandedTaskIDs.contains(group.task.id),
+            isExpanded: !tree.collapsedTaskIDs.contains(group.task.id),
             isInteractionDisabled: isInteractionDisabled,
             onToggleExpansion: { toggleTask(group.task.id) },
             onAttachWorkspace: { workspaceID in
@@ -546,133 +839,12 @@ struct WarrenDesktopSidebarRows: View {
             },
             onDelete: {
                 onRequestDeletion(.task(group.task))
-            }
+            },
+            foldMarks: group.workspaces
+                .flatMap { activeSessions(in: $0.id) }
+                .map(\.activityMark)
         )
         .id("task.\(group.task.id.description)")
-    }
-
-    private var visibleTerminalGroups: [WarrenDesktopTerminalGroup] {
-        if tree.showsActiveOnly {
-            return terminalGroups.filter { $0.runningSessionCount > 0 }
-        }
-        return terminalGroups
-    }
-
-    private func ownsTerminalGroupSessionLeaves(
-        _ group: WarrenDesktopTerminalGroup
-    ) -> Bool {
-        showsSessionRows
-    }
-
-    private func activeSessions(
-        in group: WarrenDesktopTerminalGroup
-    ) -> [WarrenDesktopSession] {
-        group.sessions.filter { $0.state.isActive }
-    }
-
-    private func isTerminalGroupRowSelected(
-        _ group: WarrenDesktopTerminalGroup,
-        ownsSessionLeaves: Bool
-    ) -> Bool {
-        guard selection == .terminalGroup(group.id) else { return false }
-        guard ownsSessionLeaves else { return true }
-        return !activeSessions(in: group).contains(where: isSessionSelected)
-    }
-
-    private func terminalGroupRowContainsSelection(
-        _ group: WarrenDesktopTerminalGroup,
-        ownsSessionLeaves: Bool
-    ) -> Bool {
-        guard selection == .terminalGroup(group.id) else { return false }
-        return !isTerminalGroupRowSelected(group, ownsSessionLeaves: ownsSessionLeaves)
-    }
-
-    private func terminalGroupRow(
-        _ group: WarrenDesktopTerminalGroup,
-        ownsSessionLeaves: Bool
-    ) -> some View {
-        WarrenDesktopTerminalGroupRow(
-            group: group,
-            isCollapsed: isCollapsed,
-            isSelected: isTerminalGroupRowSelected(group, ownsSessionLeaves: ownsSessionLeaves),
-            containsSelection: terminalGroupRowContainsSelection(group, ownsSessionLeaves: ownsSessionLeaves),
-            isInteractionDisabled: isInteractionDisabled,
-            showsSessionChildren: ownsSessionLeaves && !activeSessions(in: group).isEmpty,
-            rowHeight: workspaceDisplayMode.rowHeight,
-            onSelect: { onAction(.selectTerminalGroup(group.id)) },
-            onDoubleClick: { onAction(.selectTerminalGroup(group.id)) },
-            onRename: { onRequestTerminalGroupEdit(group.group) },
-            onSetHome: { onRequestTerminalGroupEdit(group.group) },
-            onDelete: {
-                onRequestDeletion(.terminalGroup(
-                    group.group,
-                    sessionCount: group.sessions.count
-                ))
-            }
-        )
-    }
-
-    @ViewBuilder
-    private func terminalGroupSessionRows(
-        for group: WarrenDesktopTerminalGroup
-    ) -> some View {
-        ForEach(activeSessions(in: group)) { session in
-            WarrenDesktopWorkspaceSessionRow(
-                session: session,
-                terminalGroup: group.group,
-                isSelected: isSessionSelected(session),
-                isInteractionDisabled: isInteractionDisabled,
-                onOpen: { onAction(.openSession(session.id)) },
-                onRename: {
-                    onRequestRename(.session(session.id, title: session.displayTitle))
-                },
-                onTogglePin: {
-                    onAction(.setSessionPinned(session.id, !session.pinned))
-                },
-                onEnd: { onAction(.deleteSession(session.id)) },
-                onSplitDrop: onSplitDropSession
-            )
-        }
-    }
-
-    private var terminalGroupsSection: some View {
-        Group {
-            if !tree.showsActiveOnly || !visibleTerminalGroups.isEmpty {
-                VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-                    if !isCollapsed {
-                        WarrenDesktopSidebarSectionHeader(
-                            title: "Terminals",
-                            disclosureExpanded: !tree.terminalGroupsCollapsed,
-                            actionImage: "plus",
-                            actionLabel: "New terminal group",
-                            actionEnabled: !isInteractionDisabled,
-                            onToggle: toggleTerminalGroups,
-                            onAction: onRequestTerminalGroupCreate,
-                            additionalActions: []
-                        )
-                    }
-                    // No rows is the empty state; see the Tasks section above.
-                    if !tree.terminalGroupsCollapsed || isCollapsed {
-                        ForEach(visibleTerminalGroups) { group in
-                            let ownsLeaves = ownsTerminalGroupSessionLeaves(group)
-                            let liveSessions = activeSessions(in: group)
-                            WarrenDesktopSessionLeafGroup(
-                                leafCount: ownsLeaves ? liveSessions.count : 0,
-                                mode: workspaceDisplayMode,
-                                workspaceGlyph: .terminalGroup,
-                                isCurrentScope: selection == .terminalGroup(group.id)
-                            ) {
-                                terminalGroupRow(group, ownsSessionLeaves: ownsLeaves)
-                            } leaves: {
-                                terminalGroupSessionRows(for: group)
-                            }
-                            .padding(.top, workspaceDisplayMode.sessionGroupSpacing)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
     }
 
     private var selectedProjectID: ProjectID? {
@@ -681,8 +853,6 @@ struct WarrenDesktopSidebarRows: View {
             return projectID
         case .workspace(let workspaceID):
             return groups.first { $0.workspaces.contains { $0.id == workspaceID } }?.project.id
-        case .terminalGroup:
-            return nil
         case nil:
             return nil
         }
@@ -722,7 +892,7 @@ struct WarrenDesktopSidebarRows: View {
             baseGroups = groups
         }
 
-        guard !tree.projectsCollapsed || isCollapsed else {
+        guard !tree.projectsCollapsed else {
             return baseGroups.filter { group in
                 deletingProjectIDs.contains(group.project.id)
                     || hasDeletingWorkspace(in: group.project.id)
@@ -738,32 +908,37 @@ struct WarrenDesktopSidebarRows: View {
             onAction(.selectProject(projectID))
         case .workspace(let workspaceID):
             onAction(.selectWorkspace(workspaceID))
-        case .terminalGroup(let groupID):
-            onAction(.selectTerminalGroup(groupID))
         }
     }
 
     private func toggleProject(_ projectID: ProjectID) {
         guard !isInteractionDisabled else { return }
         withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
-            if tree.expandedProjectIDs.contains(projectID) {
-                tree.expandedProjectIDs.remove(projectID)
+            if tree.collapsedProjectIDs.contains(projectID) {
+                tree.collapsedProjectIDs.remove(projectID)
             } else {
-                tree.expandedProjectIDs.insert(projectID)
+                tree.collapsedProjectIDs.insert(projectID)
             }
         }
+    }
+
+    /// Whether a project shows only its own row: folded, and with no
+    /// worktree mid-deletion holding its worktree rows open.
+    private func isProjectFolded(_ group: WarrenDesktopProjectGroup) -> Bool {
+        !isProjectExpanded(group.project.id)
+            && (soloWorkspace(of: group) != nil || !hasDeletingWorkspace(in: group.project.id))
     }
 
     private func isProjectExpanded(_ projectID: ProjectID) -> Bool {
         WarrenSidebarDragPresentation.isExpanded(
             projectID,
-            persistedExpansions: tree.expandedProjectIDs,
+            persistedCollapses: tree.collapsedProjectIDs,
             autoCollapse: dragAutoCollapse
         )
     }
 
     private func setDragAutoCollapse(_ autoCollapse: WarrenSidebarDragAutoCollapse?) {
-        guard autoCollapse == nil || !isCollapsed else { return }
+        guard autoCollapse == nil else { return }
         guard dragAutoCollapse != autoCollapse else { return }
         var transaction = Transaction()
         transaction.disablesAnimations = true
@@ -781,24 +956,17 @@ struct WarrenDesktopSidebarRows: View {
 
     private var areAllProjectsExpanded: Bool {
         !groups.isEmpty
-            && groups.allSatisfy { tree.expandedProjectIDs.contains($0.project.id) }
+            && groups.allSatisfy { !tree.collapsedProjectIDs.contains($0.project.id) }
     }
 
     private func toggleAllProjects() {
         guard !isInteractionDisabled else { return }
         withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
             if areAllProjectsExpanded {
-                tree.expandedProjectIDs.removeAll()
+                tree.collapsedProjectIDs.formUnion(groups.map(\.project.id))
             } else {
-                tree.expandedProjectIDs.formUnion(groups.map(\.project.id))
+                tree.collapsedProjectIDs.subtract(groups.map(\.project.id))
             }
-        }
-    }
-
-    private func toggleTerminalGroups() {
-        guard !isInteractionDisabled else { return }
-        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
-            tree.terminalGroupsCollapsed.toggle()
         }
     }
 
@@ -812,17 +980,18 @@ struct WarrenDesktopSidebarRows: View {
     private func toggleTask(_ taskID: TaskID) {
         guard !isInteractionDisabled else { return }
         withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
-            if tree.expandedTaskIDs.contains(taskID) {
-                tree.expandedTaskIDs.remove(taskID)
+            if tree.collapsedTaskIDs.contains(taskID) {
+                tree.collapsedTaskIDs.remove(taskID)
             } else {
-                tree.expandedTaskIDs.insert(taskID)
+                tree.collapsedTaskIDs.insert(taskID)
             }
         }
     }
 
     @ViewBuilder
     private func projectRow(
-        for group: WarrenDesktopProjectGroup
+        for group: WarrenDesktopProjectGroup,
+        soloWorkspace: Workspace? = nil
     ) -> some View {
         let isProjectDeleting = deletingProjectIDs.contains(group.project.id)
         let hasDeletingWorkspace = group.workspaces.contains {
@@ -838,7 +1007,6 @@ struct WarrenDesktopSidebarRows: View {
             WarrenDesktopProjectRow(
                 project: group.project,
                 workspaceCount: group.workspaces.count,
-                isCollapsed: isCollapsed,
                 isSelected: selection == .project(group.project.id),
                 isExpanded: isProjectExpanded(group.project.id),
                 isPinned: group.project.pinned,
@@ -877,6 +1045,35 @@ struct WarrenDesktopSidebarRows: View {
                         group.project,
                         workspaceCount: group.workspaces.count
                     ))
+                },
+                foldMarks: projectListWorkspaces(of: group)
+                    .flatMap { activeSessions(in: $0.id) }
+                    .map(\.activityMark),
+                branchName: soloWorkspace.map { $0.branch ?? $0.name },
+                workspaceMenu: soloWorkspace.map { workspace in
+                    WarrenDesktopWorkspaceRow.contextMenuActions(
+                        workspace: workspace,
+                        isPinned: workspace.pinned,
+                        tasks: taskGroups.map(\.task),
+                        onTogglePin: {
+                            onAction(.setWorkspacePinned(workspace.id, !workspace.pinned))
+                        },
+                        onRename: {
+                            onRequestRename(.workspace(workspace.id, name: workspace.name))
+                        },
+                        onAttachToTask: { taskID in
+                            onAction(.attachWorkspaceToTask(taskID, workspace.id))
+                        },
+                        onDetachFromTask: { taskID in
+                            onAction(.detachWorkspaceFromTask(taskID, workspace.id))
+                        },
+                        onDelete: {
+                            onRequestDeletion(.workspace(workspace, project: group.project))
+                        }
+                    )
+                } ?? [],
+                onDoubleClick: soloWorkspace.map { workspace in
+                    { onAction(.requestNewSession(workspace.id)) }
                 }
             )
         }
@@ -891,7 +1088,8 @@ struct WarrenDesktopSidebarRows: View {
                                     id: group.project.id.description,
                                     kind: .project(group.project.id),
                                     name: group.project.name,
-                                    isLastOfList: group.project.id == groups.last?.project.id
+                                    isLastOfList: group.project.id
+                                        == groups.last(where: \.project.pinned)?.project.id
                                 ),
                                 frame: proxy.frame(
                                     in: .named(WarrenSidebarRowsDragCoordinateSpace.name)
@@ -932,7 +1130,11 @@ struct WarrenDesktopSidebarRows: View {
         // Leaves belong to the copy that owns navigation: a row the user cannot
         // act on must not list the only rows they can.
         let ownsLeaves = ownsSessionLeaves(workspace, semanticScope: semanticScope)
-        let leafCount = ownsLeaves ? activeSessions(in: workspace.id).count : 0
+        let sessions = ownsLeaves ? activeSessions(in: workspace.id) : []
+        // A folded row hands the selection fill back to itself: the leaf that
+        // would carry it is out of sight.
+        let showsLeaves = showsSessionLeaves(workspace, semanticScope: semanticScope)
+        let leafCount = showsLeaves ? sessions.count : 0
         ZStack {
             let activitySummary = workspaceActivitySummary(workspace.id)
             WarrenDesktopWorkspaceRow(
@@ -940,14 +1142,13 @@ struct WarrenDesktopSidebarRows: View {
                 semanticScope: semanticScope,
                 mark: activitySummary?.mark,
                 activeTabCount: activitySummary?.activeTabCount ?? 0,
-                isCollapsed: isCollapsed,
                 isSelected: isWorkspaceRowSelected(
                     workspace,
-                    ownsSessionLeaves: ownsLeaves
+                    ownsSessionLeaves: showsLeaves
                 ) && !isSelectionDisabled,
                 containsSelection: workspaceRowContainsSelection(
                     workspace,
-                    ownsSessionLeaves: ownsLeaves
+                    ownsSessionLeaves: showsLeaves
                 ) && !isSelectionDisabled,
                 isPinned: workspace.pinned,
                 isEditorMarked: editorMarkedWorkspaceIDs.contains(workspace.id),
@@ -957,7 +1158,12 @@ struct WarrenDesktopSidebarRows: View {
                 isMutationDisabled: false,
                 isSelectionDisabled: isSelectionDisabled,
                 showsSessionChildren: leafCount > 0,
-                rowHeight: workspaceDisplayMode.rowHeight,
+                leafDisclosure: sessions.isEmpty ? nil : WarrenDesktopLeafDisclosure(
+                    isExpanded: showsLeaves,
+                    marks: sessions.map(\.activityMark),
+                    toggle: { toggleWorkspaceLeaves(workspace.id) }
+                ),
+                rowHeight: WarrenDesktopSidebarMetrics.worktreeRowHeight,
                 taskName: taskName,
                 taskID: workspace.taskID,
                 tasks: taskGroups.map(\.task),
@@ -1055,6 +1261,7 @@ struct WarrenDesktopSidebarRows: View {
         semanticScope: String
     ) -> some View {
         ForEach(activeSessions(in: workspace.id)) { session in
+            let isExpanded = tree.expandedSubagentSessionIDs.contains(session.id)
             WarrenDesktopWorkspaceSessionRow(
                 session: session,
                 project: project,
@@ -1072,8 +1279,50 @@ struct WarrenDesktopSidebarRows: View {
                     onAction(.setSessionPinned(session.id, !session.pinned))
                 },
                 onEnd: { onAction(.deleteSession(session.id)) },
-                onSplitDrop: onSplitDropSession
+                onSplitDrop: onSplitDropSession,
+                isSubagentsExpanded: isExpanded,
+                isSubagentsDoneExpanded: tree.expandedSubagentDoneSessionIDs.contains(session.id),
+                onToggleSubagents: { toggleSubagents(session.id) },
+                onToggleSubagentsDone: { toggleSubagentsDone(session.id) },
+                onCollapseSubagents: { collapseSubagents(session.id) }
             )
+        }
+    }
+
+    /// Opens or folds one Session's subagent rows. Stored as an opened set so a
+    /// new Session keeps its children in the title's count chip.
+    private func toggleSubagents(_ sessionID: TerminalSessionID) {
+        guard !isInteractionDisabled else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            if tree.expandedSubagentSessionIDs.contains(sessionID) {
+                tree.expandedSubagentSessionIDs.remove(sessionID)
+                tree.expandedSubagentDoneSessionIDs.remove(sessionID)
+            } else {
+                tree.expandedSubagentSessionIDs.insert(sessionID)
+            }
+        }
+    }
+
+    private func toggleSubagentsDone(_ sessionID: TerminalSessionID) {
+        guard !isInteractionDisabled else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            if tree.expandedSubagentDoneSessionIDs.contains(sessionID) {
+                tree.expandedSubagentDoneSessionIDs.remove(sessionID)
+            } else {
+                tree.expandedSubagentDoneSessionIDs.insert(sessionID)
+            }
+        }
+    }
+
+    /// Closes one Session's subagent group without a user action. The design
+    /// collapses an all-done group when the parent's turn ends; clearing both
+    /// sets makes the next turn treat it as never opened.
+    private func collapseSubagents(_ sessionID: TerminalSessionID) {
+        guard tree.expandedSubagentSessionIDs.contains(sessionID)
+            || tree.expandedSubagentDoneSessionIDs.contains(sessionID) else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            tree.expandedSubagentSessionIDs.remove(sessionID)
+            tree.expandedSubagentDoneSessionIDs.remove(sessionID)
         }
     }
 
@@ -1081,10 +1330,6 @@ struct WarrenDesktopSidebarRows: View {
         in workspaceID: WorkspaceID
     ) -> [WarrenDesktopSession] {
         activeSessionsByWorkspaceID[workspaceID] ?? []
-    }
-
-    private var projectGroupSpacing: CGFloat {
-        workspaceDisplayMode.projectGroupSpacing
     }
 
     private func setDragMeasurementEnabled(_ enabled: Bool) {
@@ -1157,7 +1402,10 @@ struct WarrenDesktopSidebarRows: View {
         guard !isInteractionDisabled else { return true }
         switch info.kind {
         case .project(let projectID):
+            // Only the pinned band follows the Host's order; the active band
+            // is ordered by when each project became active.
             return isProjectDeletionPending(projectID)
+                || groups.first(where: { $0.project.id == projectID })?.project.pinned != true
         case .workspace(let workspaceID, let projectID):
             return isWorkspaceDeletionPending(workspaceID, projectID: projectID)
                 || hasDeletingWorkspace(in: projectID)
@@ -1186,21 +1434,34 @@ struct WarrenDesktopSidebarRows: View {
 /// A Terminal Session leaf shown below its owning Workspace by the rich
 /// presentation.
 ///
-/// The row is one line: the provider icon leads, the session title takes the
-/// remaining width, and the trailing slot carries the state. A second line
-/// naming the provider was tried and removed — the icon already carries it, and
-/// two lines inside a navigation row leaves neither enough vertical room.
+/// The first line is the title. The second line, shown only while there is
+/// something to report, is what the Session is doing; see `activityLine`. A
+/// second line naming the provider was tried and removed earlier, because the
+/// icon already carries it; an activity line earns its height by saying
+/// something the row could not otherwise say.
 ///
-/// Trailing detail is the activity marker alone, and only for a Session that
-/// reports Agent activity. The marker's color already separates a working Agent
-/// from a blocked or failed one, so a state word beside it only competed with
-/// the title for width; the full explanation still reaches assistive technology
-/// and the hover tooltip. A plain shell has no activity Warren can observe, so
-/// its leaf spends the trailing slot on nothing rather than on an invented
-/// marker.
+/// The state is the dot on the icon's corner and nothing else. Its color
+/// already separates a working Agent from a blocked or failed one, so a state
+/// word only competed with the title for width; the full explanation still
+/// reaches assistive technology and the hover tooltip. A plain shell has no
+/// activity Warren can observe, so its icon carries no dot rather than an
+/// invented one.
 enum WarrenDesktopSessionRowScope {
     case workspace(project: Project, workspace: Workspace, semanticScope: String)
-    case terminalGroup(TerminalGroup)
+
+    /// The Worktree the Session hangs under, which is the root a shell's
+    /// location title is made relative to.
+    var worktreePath: String {
+        switch self {
+        case let .workspace(_, workspace, _): return workspace.path
+        }
+    }
+
+    var workspace: Workspace {
+        switch self {
+        case let .workspace(_, workspace, _): return workspace
+        }
+    }
 }
 
 struct WarrenDesktopWorkspaceSessionRow: View {
@@ -1222,6 +1483,16 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     /// either door. Rich mode's tree is the only place a Workspace's other
     /// Sessions are listed, which is where a drop is most useful.
     var onSplitDrop: ((String, String, SplitDropTarget) -> Void)? = nil
+    /// Whether the Session's subagent rows are open. Persisted per Session.
+    var isSubagentsExpanded: Bool = false
+    /// Whether the completed subagents are open past the `N done` summary.
+    var isSubagentsDoneExpanded: Bool = false
+    var onToggleSubagents: (() -> Void)? = nil
+    var onToggleSubagentsDone: (() -> Void)? = nil
+    /// Called when the Session's turn ends with the group open, so the parent
+    /// can forget the expansion: the design collapses and hides an all-done
+    /// group at turn end, and it must not reopen on the next turn.
+    var onCollapseSubagents: (() -> Void)? = nil
 
     init(
         session: WarrenDesktopSession,
@@ -1234,7 +1505,12 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         onRename: (() -> Void)? = nil,
         onTogglePin: (() -> Void)? = nil,
         onEnd: (() -> Void)? = nil,
-        onSplitDrop: ((String, String, SplitDropTarget) -> Void)? = nil
+        onSplitDrop: ((String, String, SplitDropTarget) -> Void)? = nil,
+        isSubagentsExpanded: Bool = false,
+        isSubagentsDoneExpanded: Bool = false,
+        onToggleSubagents: (() -> Void)? = nil,
+        onToggleSubagentsDone: (() -> Void)? = nil,
+        onCollapseSubagents: (() -> Void)? = nil
     ) {
         self.session = session
         self.scope = .workspace(project: project, workspace: workspace, semanticScope: semanticScope)
@@ -1245,57 +1521,50 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         self.onTogglePin = onTogglePin
         self.onEnd = onEnd
         self.onSplitDrop = onSplitDrop
-    }
-
-    init(
-        session: WarrenDesktopSession,
-        terminalGroup: TerminalGroup,
-        isSelected: Bool = false,
-        isInteractionDisabled: Bool,
-        onOpen: @escaping () -> Void,
-        onRename: (() -> Void)? = nil,
-        onTogglePin: (() -> Void)? = nil,
-        onEnd: (() -> Void)? = nil,
-        onSplitDrop: ((String, String, SplitDropTarget) -> Void)? = nil
-    ) {
-        self.session = session
-        self.scope = .terminalGroup(terminalGroup)
-        self.isSelected = isSelected
-        self.isInteractionDisabled = isInteractionDisabled
-        self.onOpen = onOpen
-        self.onRename = onRename
-        self.onTogglePin = onTogglePin
-        self.onEnd = onEnd
-        self.onSplitDrop = onSplitDrop
+        self.isSubagentsExpanded = isSubagentsExpanded
+        self.isSubagentsDoneExpanded = isSubagentsDoneExpanded
+        self.onToggleSubagents = onToggleSubagents
+        self.onToggleSubagentsDone = onToggleSubagentsDone
+        self.onCollapseSubagents = onCollapseSubagents
     }
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.warrenShellAttention) private var shellAttention
+    @Environment(\.warrenPointerInsideSidebar) private var pointerInsideSidebar
     @FocusState private var isFocused: Bool
+    @State private var isHovered = false
+    /// The shell row's hover card, which trails the pointer by a beat so a row
+    /// it only passes over never makes one.
+    @State private var showsShellDetails = false
+    @State private var shellDetailTask: Task<Void, Never>?
+    /// The collapse the row draws, which follows `isCollapsed(now:)` inside an
+    /// animation. The pointer entering the rail and the ten-minute tick both
+    /// change the height, and only a transaction set where the state changes
+    /// moves the rows below with it; an `.animation` on the row animates the
+    /// row alone and leaves its neighbours to jump.
+    @State private var shownCollapsed: Bool?
 
     private var providerName: String {
         session.presentedKind.displayName
     }
 
     private var title: String {
-        Self.displayTitle(for: session)
+        Self.rowTitle(for: session, worktreeRoot: scope.worktreePath)
     }
 
-    /// The row label: a user-set name wins, otherwise the running command and
-    /// the directory, so an unnamed shell never reads as the generic "Shell".
-    static func displayTitle(for session: WarrenDesktopSession) -> String {
-        let providerName = session.presentedKind.displayName
-        let fallback = session.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolved = TerminalSessionPresentation.tabTitle(
-            customTitle: session.customTitle,
-            title: session.title,
-            kind: session.presentedKind,
-            process: session.runtimeProcess,
-            commandLine: session.runtimeCommandLine,
-            directory: session.workingDirectory,
-            fallbackTitle: fallback.isEmpty ? providerName : fallback
-        )
-        return resolved.isEmpty ? providerName : resolved
+    /// The row's title is the Session's one name, the same one the top bar,
+    /// the tab, and the pane header use. See `SessionTitle`.
+    static func rowTitle(for session: WarrenDesktopSession, worktreeRoot: String) -> String {
+        WarrenDesktopTabTitle.sessionTitle(for: session, worktreeRoot: worktreeRoot).title
+    }
+
+    /// Whether this row's title is a location. A plain shell reads its title
+    /// from where it is, and that title fades at its start so the tail of a
+    /// path survives.
+    static func usesLocationTitle(for session: WarrenDesktopSession) -> Bool {
+        session.presentedKind == .shell && !session.isAgentSession
     }
 
     private var attention: AgentAttention? {
@@ -1335,6 +1604,9 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         case .working, .ready:
             return nil
         case .none:
+            // A shell with OSC 133 state reports its command on the second
+            // line; naming the foreground process here too would say it twice.
+            if session.shellState != nil { return nil }
             let detail = session.runtimeCommandLine.trimmingCharacters(in: .whitespacesAndNewlines)
             let process = session.runtimeProcess.trimmingCharacters(in: .whitespacesAndNewlines)
             let value = detail.isEmpty ? process : detail
@@ -1346,8 +1618,6 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         switch scope {
         case let .workspace(_, workspace, semanticScope):
             return "workspace-session.\(semanticScope).\(workspace.id.description).\(session.id.description)"
-        case let .terminalGroup(group):
-            return "terminal-group-session.\(group.id.description).\(session.id.description)"
         }
     }
 
@@ -1365,6 +1635,11 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         if let detailLabel, detailLabel != statusLabel {
             values.append(detailLabel)
         }
+        if let second = Self.secondLine(for: session).announcement,
+           second != detailLabel,
+           second != statusLabel {
+            values.append(second)
+        }
         if session.pinned {
             values.append("Pinned")
         }
@@ -1372,8 +1647,6 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         case let .workspace(project, workspace, _):
             values.append(project.name)
             values.append(workspace.name)
-        case let .terminalGroup(group):
-            values.append(group.name.isEmpty ? "Terminal Group" : group.name)
         }
         if isSelected {
             values.append("Selected")
@@ -1382,42 +1655,41 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     }
 
     var body: some View {
+        // The row's own clock: the idle collapse and the elapsed labels all
+        // resolve against one instant, so a height and its text agree.
+        TimelineView(.periodic(from: .now, by: 10)) { context in
+            row(now: context.date)
+        }
+    }
+
+    private func row(now: Date) -> some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let rowWash: Color? = isSelected
+            ? tokens.treeRowSelected
+            : (isHovered ? tokens.treeRowHover : nil)
+        let restingCollapsed = isCollapsed(now: now)
+        let collapsed = shownCollapsed ?? restingCollapsed
+        return VStack(alignment: .leading, spacing: 0) {
         Button(action: onOpen) {
-            // The leaf indent is nudged right so its icon clears the rail, and
-            // the glyph-to-title gap gives that width back. The title's origin
-            // therefore does not move, so the extra rail gap costs the readable
-            // column nothing.
-            HStack(spacing: WarrenSpacing.compact - WarrenDesktopSidebarIndent.sessionGuideGap) {
-                sessionIcon
-                    .frame(width: WarrenLayoutMetrics.sidebarLeafIconSlotSize,
-                           height: WarrenLayoutMetrics.sidebarLeafIconSlotSize)
-                Text(title)
-                    .font(WarrenTypography.navigationItem)
-                    .foregroundStyle(
-                        isSelected
-                            ? tokens.sidebarLeafSelectedText
-                            : tokens.sidebarLeafText
-                    )
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                if session.pinned {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(tokens.sidebarMetaText)
-                        .accessibilityHidden(true)
-                }
-
-                Spacer(minLength: WarrenSpacing.xs)
-
-                if let mark = session.activityMark {
-                    WarrenDesktopActivityIndicator(mark: mark)
+            // A resting shell collapses to one line; every other row draws the
+            // badge, the title, and the second line. The dot is the only place
+            // the status appears either way. The two cross-fade inside a frame
+            // that carries the height, so the change is one smooth resize
+            // rather than the two layouts stacking for the length of the fade.
+            ZStack(alignment: .topLeading) {
+                if collapsed {
+                    collapsedRow(tokens: tokens, rowWash: rowWash, now: now)
+                        .transition(.opacity)
+                } else {
+                    expandedRow(tokens: tokens, rowWash: rowWash, now: now)
+                        .transition(.opacity)
                 }
             }
-            .padding(.leading, WarrenDesktopSidebarIndent.session)
-            .padding(.trailing, WarrenSpacing.compact)
-            .frame(maxWidth: .infinity, minHeight: rowHeight)
+            .frame(
+                height: collapsed ? Self.collapsedRowHeight : WarrenDesktopSidebarMetrics.sessionRowHeight,
+                alignment: .topLeading
+            )
+            .clipped()
             .contentShape(.rect)
             // The drag source is native for the same reason a Tab's is: a drop
             // over the AppKit terminal has to be resolved by the drag source.
@@ -1432,15 +1704,27 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                             isFocused = true
                             onOpen()
                         },
-                        onSplitDrop: onSplitDrop
+                        onSplitDrop: onSplitDrop,
+                        excludesTopTrailingControl: showsSubagentCapsule
                     )
                 }
             }
         }
-        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, isFocused: isFocused))
+        .buttonStyle(.plain)
         .disabled(isInteractionDisabled)
         .focused($isFocused)
+        .background(
+            rowWash ?? .clear,
+            in: RoundedRectangle(
+                cornerRadius: WarrenDesktopSidebarMetrics.sessionRadius,
+                style: .continuous
+            )
+        )
         .opacity(isInteractionDisabled ? 0.62 : 1)
+        .onHover { inside in
+            isHovered = inside
+            shellHover(inside)
+        }
         .accessibilityLabel(semanticLabel)
         .accessibilityValue(semanticValue)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -1453,21 +1737,474 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             isSelected: isSelected,
             action: { if !isInteractionDisabled { onOpen() } }
         )
-        .help(helpText)
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
-        .contextMenu {
-            if !isInteractionDisabled, !contextMenuActions.isEmpty {
-                WarrenDesktopContextMenu(contextMenuActions)
+        // The title truncates to one line; the whole of it is on hover. A shell
+        // row moves that detail to its own card.
+        .modifier(WarrenDesktopRowHelp(
+            text: Self.usesLocationTitle(for: session) ? nil : helpText
+        ))
+        .warrenMenuPanel(
+            isPresented: $showsShellDetails,
+            width: WarrenDesktopDetailCard.width,
+            isPassive: true
+        ) {
+            WarrenDesktopDetailCard(rows: shellDetailRows())
+        }
+        .warrenContextMenu(isInteractionDisabled ? [] : contextMenuActions)
+        .onChange(of: session.activity) { activity in
+            // The design closes an open, all-done group when the parent's turn
+            // ends. Clearing the stored expansion keeps it from reopening on
+            // the next turn as if the user had asked for it again.
+            if isSubagentsExpanded, activity != .working {
+                onCollapseSubagents?()
             }
         }
-        // A leaf's selection fill is inset like every other row's. Without this
-        // it started at the rail's edge, so the deepest row in the tree drew the
-        // widest highlight and read as the outermost one.
-        .padding(.horizontal, WarrenSpacing.compact)
+        .onChange(of: isSelected) { selected in
+            // Looking at a failed Session is what starts its rest: an unseen
+            // failure stays two lines until then.
+            guard selected, let key = Self.failureKey(for: session) else { return }
+            shellAttention?.markSeen(key, at: Date())
+        }
+        .onAppear { shownCollapsed = restingCollapsed }
+        .onChange(of: restingCollapsed) { resting in
+            withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+                shownCollapsed = resting
+            }
+        }
+            if showsSubagentRows {
+                subagentRows(tokens: tokens)
+            }
+        }
     }
 
-    private var rowHeight: CGFloat {
-        WarrenDesktopWorkspaceDisplayMode.rich.rowHeight
+    static let statusDotSize: CGFloat = WarrenDesktopSidebarMetrics.sessionDotSize
+    /// Pushes the dot past the icon's corner so it reads as attached to the
+    /// icon rather than drawn on top of it.
+    static let statusDotOffset: CGFloat = WarrenDesktopSidebarMetrics.sessionDotOffset
+    static let lineSpacing: CGFloat = WarrenDesktopSidebarMetrics.sessionLineSpacing
+    static let verticalInset: CGFloat = WarrenDesktopSidebarMetrics.sessionVerticalPadding
+    /// How long a shell rests before its row collapses to one line.
+    static let shellRestInterval: TimeInterval = 600
+    /// The collapsed row's height, the same as a project row's.
+    static let collapsedRowHeight: CGFloat = 30
+
+    private func badge(tokens: WarrenColorTokens, rowWash: Color?) -> some View {
+        WarrenDesktopSessionKindBadge(
+            session: session,
+            size: WarrenDesktopSidebarMetrics.sessionIconSize
+        )
+        .overlay(alignment: .bottomTrailing) {
+            WarrenDesktopStatusDot(
+                mark: session.rowStatusMark,
+                size: Self.statusDotSize,
+                ring: tokens.workbenchCardFill,
+                tokens: tokens,
+                ringTint: rowWash
+            )
+            .offset(x: Self.statusDotOffset, y: Self.statusDotOffset)
+        }
+    }
+
+    private func expandedRow(tokens: WarrenColorTokens, rowWash: Color?, now: Date) -> some View {
+        HStack(alignment: .top, spacing: WarrenDesktopSidebarMetrics.sessionIconSpacing) {
+            badge(tokens: tokens, rowWash: rowWash)
+            VStack(alignment: .leading, spacing: Self.lineSpacing) {
+                titleLine(tokens: tokens)
+                    .frame(height: WarrenDesktopSidebarMetrics.sessionIconSize)
+                secondLine(tokens: tokens, now: now)
+                    .frame(height: WarrenDesktopSidebarMetrics.sessionActivityLineHeight)
+            }
+        }
+        .padding(.vertical, Self.verticalInset)
+        .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A resting shell, drawn as one 30pt line: where it is, and how long since
+    /// it last did anything. What it last ran moved to the hover card.
+    private func collapsedRow(tokens: WarrenColorTokens, rowWash: Color?, now: Date) -> some View {
+        HStack(spacing: WarrenDesktopSidebarMetrics.sessionIconSpacing) {
+            badge(tokens: tokens, rowWash: rowWash)
+            titleLine(tokens: tokens, titleColor: collapsedTitleColor(tokens: tokens))
+            Spacer(minLength: 8)
+            if let age = collapsedAge(now: now) {
+                Text(age)
+                    .font(.system(size: WarrenDesktopSessionSecondLineLayout.metaFontSize))
+                    .monospacedDigit()
+                    .foregroundStyle(tokens.sessionMetaIdleText)
+                    .fixedSize()
+            }
+        }
+        .frame(height: Self.collapsedRowHeight)
+        .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func collapsedTitleColor(tokens: WarrenColorTokens) -> Color {
+        isSelected ? tokens.treeSessionSelectedText : tokens.sessionCollapsedTitleText
+    }
+
+    private func collapsedAge(now: Date) -> String? {
+        guard let shell = session.shellState else { return nil }
+        let reference = shell.lastExitAt ?? session.createdAt
+        guard let reference else { return nil }
+        return WarrenDesktopSessionSecondLineLayout.elapsed(now.timeIntervalSince(reference))
+    }
+
+    /// Whether this shell has rested long enough to lose its second line.
+    ///
+    /// A command that failed stays two lines until the Session has been looked
+    /// at once; only then does the ten-minute rest begin. The pointer's presence
+    /// over the rail postpones the collapse rather than letting a row shrink
+    /// under the pointer that is reading it.
+    static func isCollapsedShell(
+        for session: WarrenDesktopSession,
+        seenAt: Date?,
+        pointerInsideSidebar: Bool,
+        now: Date
+    ) -> Bool {
+        guard session.presentedKind == .shell,
+              !session.isAgentSession,
+              session.state.isActive,
+              let shell = session.shellState,
+              !shell.isRunningCommand,
+              !pointerInsideSidebar else { return false }
+        guard let endedAt = shell.lastExitAt else { return true }
+        if shell.displayedExitCode != nil {
+            guard let seenAt else { return false }
+            return now.timeIntervalSince(seenAt) >= shellRestInterval
+        }
+        return now.timeIntervalSince(endedAt) >= shellRestInterval
+    }
+
+    /// The identity of a shell's current failure: the Session, and when the
+    /// command ended. A new failure is a new key, so it is unseen again.
+    static func failureKey(for session: WarrenDesktopSession) -> String? {
+        guard let shell = session.shellState,
+              shell.displayedExitCode != nil,
+              let endedAt = shell.lastExitAt else { return nil }
+        return "\(session.id.description)|\(endedAt.timeIntervalSince1970)"
+    }
+
+    private func isCollapsed(now: Date) -> Bool {
+        let seenAt = Self.failureKey(for: session).flatMap { shellAttention?.seen($0) }
+        return Self.isCollapsedShell(
+            for: session,
+            seenAt: seenAt,
+            pointerInsideSidebar: pointerInsideSidebar,
+            now: now
+        )
+    }
+
+    /// The title, with its subagent count chip and pin.
+    ///
+    /// The chip sits at the title's tail and the pin after it: the title runs
+    /// into the fade and whichever control follows it keeps its own place and
+    /// stays legible, which is what the specification asks for between a title
+    /// and its chip.
+    @ViewBuilder
+    private func titleLine(tokens: WarrenColorTokens, titleColor: Color? = nil) -> some View {
+        HStack(spacing: 6) {
+            WarrenDesktopFadingLine(edge: Self.usesLocationTitle(for: session) ? .leading : .trailing) {
+                Text(title)
+                    .font(.system(size: 13))
+                    .foregroundStyle(
+                        titleColor
+                            ?? (isSelected ? tokens.treeSessionSelectedText : tokens.treeSessionText)
+                    )
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            subagentCapsule(tokens: tokens)
+            pin(tokens: tokens)
+        }
+    }
+
+    @ViewBuilder
+    private func pin(tokens: WarrenColorTokens) -> some View {
+        if session.pinned {
+            Image(systemName: "pin.fill")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(tokens.treeQuietText)
+                .accessibilityHidden(true)
+        }
+    }
+
+    // MARK: - Subagents
+
+    private var runningSubagents: [WarrenDesktopSubagent] {
+        session.subagents.filter(\.isRunning)
+    }
+
+    private var completedSubagents: [WarrenDesktopSubagent] {
+        session.subagents.filter { !$0.isRunning }
+    }
+
+    /// The children waiting on a person. The Host lifts one of these to the
+    /// parent's attention; the row names the child and reveals just that row.
+    ///
+    /// Empty until a provider reports a child's request; see
+    /// `WarrenDesktopSubagent.isWaiting` for why that does not happen yet.
+    private var waitingSubagents: [WarrenDesktopSubagent] {
+        session.subagents.filter(\.isWaiting)
+    }
+
+    /// The chip names how many children are running, or, once an open group is
+    /// all done, that they finished. A group that was never opened and has no
+    /// running child draws nothing.
+    static func showsSubagentCapsule(session: WarrenDesktopSession, isExpanded: Bool) -> Bool {
+        guard !session.subagents.isEmpty else { return false }
+        if session.subagents.contains(where: \.isRunning) { return true }
+        return isExpanded && session.activity == .working
+    }
+
+    /// Whether the whole group is open. The user opened it and its turn is
+    /// still running, so an all-done group keeps its dim chip until the turn
+    /// ends and the parent clears the expansion.
+    static func isSubagentGroupOpen(session: WarrenDesktopSession, isExpanded: Bool) -> Bool {
+        isExpanded && session.activity == .working
+    }
+
+    /// The children to draw. An open group shows every child; a closed one
+    /// shows only the child that needs a person, so its question is visible
+    /// without the user opening anything.
+    static func visibleSubagents(session: WarrenDesktopSession, isExpanded: Bool) -> [WarrenDesktopSubagent] {
+        isSubagentGroupOpen(session: session, isExpanded: isExpanded)
+            ? session.subagents
+            : session.subagents.filter(\.isWaiting)
+    }
+
+    private var showsSubagentCapsule: Bool {
+        Self.showsSubagentCapsule(session: session, isExpanded: isSubagentsExpanded)
+    }
+
+    private var isSubagentGroupOpen: Bool {
+        Self.isSubagentGroupOpen(session: session, isExpanded: isSubagentsExpanded)
+    }
+
+    private var visibleSubagents: [WarrenDesktopSubagent] {
+        Self.visibleSubagents(session: session, isExpanded: isSubagentsExpanded)
+    }
+
+    private var showsSubagentRows: Bool {
+        !visibleSubagents.isEmpty
+    }
+
+    private var visibleSubagentRowCount: Int {
+        guard isSubagentGroupOpen else { return waitingSubagents.count }
+        return runningSubagents.count + (showsCompletedChildren ? completedSubagents.count : 0)
+    }
+
+    /// One `N done` row stands in for two or more completed children until the
+    /// user opens it.
+    private var showsCompletedChildren: Bool {
+        completedSubagents.count <= 1 || isSubagentsDoneExpanded
+    }
+
+    /// TODO: the design also opens the group with the right arrow on the
+    /// selected Session. The sidebar has no keyboard focus model of its own
+    /// yet, so the chip is the only door for now.
+    @ViewBuilder
+    private func subagentCapsule(tokens: WarrenColorTokens) -> some View {
+        if showsSubagentCapsule, let onToggleSubagents {
+            let allDone = runningSubagents.isEmpty
+            Button(action: onToggleSubagents) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 10))
+                    Text(allDone ? "✓\(completedSubagents.count)" : "\(runningSubagents.count)")
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .monospacedDigit()
+                }
+                .foregroundStyle(allDone ? tokens.treeQuietText : tokens.sessionExtraRunningText)
+                .padding(.horizontal, 5)
+                .frame(height: 16)
+                .background(
+                    isSubagentsExpanded || isHovered ? tokens.treeRowSelected : .clear,
+                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                )
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .disabled(isInteractionDisabled)
+            .accessibilityLabel(allDone
+                ? "\(completedSubagents.count) subagents done"
+                : "\(runningSubagents.count) subagents running")
+            .accessibilityValue(isSubagentsExpanded ? "Expanded" : "Collapsed")
+            .warrenTooltip(isSubagentsExpanded ? "Hide subagents" : "Show subagents")
+        }
+    }
+
+    /// The child rows: under the parent row, aligned to its title column, hung
+    /// off one hairline from the parent's icon. They replace nothing and add no
+    /// navigation of their own, because a subagent is not a Session.
+    @ViewBuilder
+    private func subagentRows(tokens: WarrenColorTokens) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            if isSubagentGroupOpen {
+                ForEach(runningSubagents) { agent in
+                    subagentRow(agent, tokens: tokens)
+                }
+                if !showsCompletedChildren {
+                    subagentDoneRow(tokens: tokens)
+                } else {
+                    ForEach(completedSubagents) { agent in
+                        subagentRow(agent, tokens: tokens)
+                    }
+                }
+            } else {
+                ForEach(waitingSubagents) { agent in
+                    subagentRow(agent, tokens: tokens)
+                }
+            }
+        }
+        .padding(.leading, Self.subagentRowIndent)
+        .padding(.bottom, 2)
+        .overlay(alignment: .topLeading) {
+            subagentConnector(tokens: tokens, rowCount: visibleSubagentRowCount)
+        }
+    }
+
+    @ViewBuilder
+    private func subagentRow(
+        _ agent: WarrenDesktopSubagent,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        HStack(spacing: 7) {
+            subagentDot(agent, tokens: tokens)
+            Text(agent.title)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(tokens.treeQuietText)
+                .lineLimit(1)
+                .fixedSize()
+            subagentDescription(agent, tokens: tokens)
+        }
+        .frame(height: Self.subagentRowHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
+    }
+
+    @ViewBuilder
+    private func subagentDot(
+        _ agent: WarrenDesktopSubagent,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        if agent.isWaiting {
+            Circle()
+                .fill(tokens.warning)
+                .frame(width: Self.subagentDotSize, height: Self.subagentDotSize)
+        } else if agent.isRunning {
+            Circle()
+                .fill(tokens.success)
+                .frame(width: Self.subagentDotSize, height: Self.subagentDotSize)
+        } else {
+            Circle()
+                .strokeBorder(tokens.treeFaintText, lineWidth: 1)
+                .frame(width: Self.subagentDotSize, height: Self.subagentDotSize)
+        }
+    }
+
+    /// What a child is doing while it runs, and what it was asked to do once it
+    /// is done. The activity is the most recent call from its own transcript;
+    /// the summary stands in until the first one arrives.
+    @ViewBuilder
+    private func subagentDescription(
+        _ agent: WarrenDesktopSubagent,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        let text = agent.isRunning
+            ? (agent.lastActivity ?? agent.summary)
+            : (agent.summary.isEmpty ? (agent.lastActivity ?? "") : agent.summary)
+        if agent.isWaiting {
+            // Waiting on a person is not running: it is the one row the user
+            // has to act on, so it stays bright and still while the others
+            // shimmer or dim.
+            Text(WarrenDesktopActivityText.shortened(text))
+                .font(.system(size: 12))
+                .foregroundStyle(tokens.treeSessionText)
+                .lineLimit(1)
+        } else if agent.isRunning {
+            Text(WarrenDesktopActivityText.shortened(text))
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .modifier(WarrenDesktopActivityShimmer(
+                    base: tokens.treeSecondaryText,
+                    peak: tokens.treeActivityHighlightText,
+                    isActive: true
+                ))
+        } else {
+            Text(WarrenDesktopActivityText.shortened(text))
+                .font(.system(size: 12))
+                .foregroundStyle(tokens.treeQuietText)
+                .lineLimit(1)
+        }
+    }
+
+    private func subagentDoneRow(tokens: WarrenColorTokens) -> some View {
+        Button {
+            onToggleSubagentsDone?()
+        } label: {
+            Text("\(completedSubagents.count) done")
+                .font(.system(size: 11.5))
+                .foregroundStyle(tokens.treeQuietText)
+                .frame(height: Self.subagentRowHeight)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(isInteractionDisabled)
+        .accessibilityLabel("\(completedSubagents.count) subagents done")
+    }
+
+    /// The hairline that hangs the child rows off the parent's icon: one
+    /// vertical drop, and a short tick into each row.
+    private func subagentConnector(
+        tokens: WarrenColorTokens,
+        rowCount: Int
+    ) -> some View {
+        let x = WarrenDesktopSidebarMetrics.rowHorizontalPadding
+            + WarrenDesktopSidebarMetrics.sessionIconSize / 2
+        let step = Self.subagentRowHeight + 1
+        return ZStack(alignment: .topLeading) {
+            Path { path in
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: max(0, CGFloat(rowCount) * step - step / 2)))
+            }
+            .stroke(tokens.cardBorder, lineWidth: 1)
+            ForEach(0..<rowCount, id: \.self) { index in
+                Rectangle()
+                    .fill(tokens.cardBorder)
+                    .frame(width: 9, height: 1)
+                    .offset(x: x, y: CGFloat(index) * step + step / 2)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    static let subagentRowIndent: CGFloat = 36
+    static let subagentRowHeight: CGFloat = 22
+    static let subagentDotSize: CGFloat = 6
+
+    /// The second line. Every Session row has one: what the Session is doing,
+    /// what this turn did, or that it has not done anything yet.
+    ///
+    /// A working Session's line ticks on a ten-second clock: its trailing
+    /// duration is read at a glance, and a per-second update would make the rail
+    /// twitch. Only the working rows are driven by the clock; a resting age
+    /// changes slowly enough to read once.
+    @ViewBuilder
+    private func secondLine(tokens: WarrenColorTokens, now: Date) -> some View {
+        if session.activity == .working || session.shellState?.isRunningCommand == true {
+            TimelineView(.periodic(from: Date(), by: 10)) { context in
+                WarrenDesktopSecondLineView(
+                    line: Self.secondLine(for: session, now: context.date),
+                    tokens: tokens
+                )
+            }
+        } else {
+            WarrenDesktopSecondLineView(
+                line: Self.secondLine(for: session, now: now),
+                tokens: tokens
+            )
+        }
     }
 
     private var contextMenuActions: [WarrenDesktopContextMenuAction] {
@@ -1509,25 +2246,224 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         return actions
     }
 
+    /// The whole of both lines on hover. The row draws one line each, so the
+    /// untruncated title and the untruncated activity have to be reachable
+    /// somewhere, and the tooltip is where. The row shortens a command for its
+    /// own width; this is the command as the Session reported it.
     private var helpText: String {
-        guard let detailLabel else {
-            return "Open \(providerName) session \(title)"
+        var lines = ["\(providerName) · \(title)"]
+        if let activity = Self.secondLine(for: session).announcement, activity != title {
+            lines.append(activity)
         }
-        return "\(providerName) · \(detailLabel)"
+        return lines.joined(separator: "\n")
     }
 
-    @ViewBuilder
-    private var sessionIcon: some View {
-        if let preset = WarrenDesktopSessionPreset.builtIns.first(where: {
-            $0.request.kind == session.presentedKind
-        }) {
-            WarrenDesktopPresetIcon(preset: preset)
-        } else {
-            Image(systemName: session.presentedKind.symbolName)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground)
-                .accessibilityHidden(true)
+    /// The shell row's card: what it last ran, how it exited, where it is, and
+    /// the branch it is on. The second line drops these once the row rests.
+    private func shellDetailRows() -> [WarrenDesktopDetailCard.Row] {
+        var rows: [WarrenDesktopDetailCard.Row] = []
+        let last = (session.shellState?.lastCommand ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !last.isEmpty {
+            rows.append(.init(label: "Last command", value: last))
         }
+        if let code = session.shellState?.displayedExitCode {
+            rows.append(.init(label: "Exit code", value: "\(code)"))
+        }
+        let directory = session.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !directory.isEmpty {
+            rows.append(.init(label: "Directory", value: directory))
+        }
+        let branch = (scope.workspace.branch ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !branch.isEmpty {
+            rows.append(.init(label: "Branch", value: branch))
+        }
+        return rows
+    }
+
+    private func shellHover(_ isInside: Bool) {
+        shellDetailTask?.cancel()
+        shellDetailTask = nil
+        guard isInside, Self.usesLocationTitle(for: session) else {
+            showsShellDetails = false
+            return
+        }
+        shellDetailTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
+            showsShellDetails = true
+        }
+    }
+}
+
+/// Applies the native tooltip only when a row still needs one. A shell row
+/// replaced it with the detail card.
+private struct WarrenDesktopRowHelp: ViewModifier {
+    let text: String?
+
+    func body(content: Content) -> some View {
+        if let text {
+            content.help(text)
+        } else {
+            content
+        }
+    }
+}
+
+/// One line that ends by fading out rather than with an ellipsis.
+///
+/// The text is laid out at its own width inside a measured frame and then
+/// clipped, so the line simply stops instead of drawing the truncation glyph a
+/// row would otherwise end with; a mask fades its last few points into the row.
+/// A line short enough to fit is unaffected, because the fade falls past its
+/// last glyph.
+///
+/// The width comes from a `GeometryReader` rather than a frame of the line's
+/// own. A line that overflows has by definition a wider content than its frame,
+/// and both `mask` and the enclosing layout measure that content: without a
+/// measured width the fade lands past the row and the sidebar lays its rows out
+/// around a text it cannot show.
+struct WarrenDesktopFadingLine<Content: View>: View {
+    /// Which end of an overflowing line fades. A name keeps its start and
+    /// fades its end; a location keeps its tail and fades its start.
+    enum FadeEdge {
+        case trailing
+        case leading
+    }
+
+    private let content: Content
+    private let edge: FadeEdge
+    /// The content's natural width, measured so a line that fits is not faded
+    /// or pushed to one end just because it *could* overflow.
+    @State private var contentWidth: CGFloat = 0
+
+    init(edge: FadeEdge = .trailing, @ViewBuilder content: () -> Content) {
+        self.content = content()
+        self.edge = edge
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let overflows = contentWidth > width
+            let alignment: Alignment = edge == .leading && overflows ? .trailing : .leading
+            content
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .background(
+                    GeometryReader { measured in
+                        Color.clear.preference(
+                            key: WarrenDesktopFadingLineWidthKey.self,
+                            value: measured.size.width
+                        )
+                    }
+                )
+                .frame(width: width, alignment: alignment)
+                .clipped()
+                .mask(alignment: alignment) {
+                    if overflows {
+                        LinearGradient(
+                            stops: stops(in: width),
+                            startPoint: edge == .leading ? .trailing : .leading,
+                            endPoint: edge == .leading ? .leading : .trailing
+                        )
+                        .frame(width: width)
+                    } else {
+                        Color.black
+                    }
+                }
+                .onPreferenceChange(WarrenDesktopFadingLineWidthKey.self) { contentWidth = $0 }
+        }
+    }
+
+    private func stops(in width: CGFloat) -> [Gradient.Stop] {
+        [
+            .init(color: .black, location: 0),
+            .init(color: .black, location: Self.fadeStart(in: width)),
+            .init(color: .clear, location: 1),
+        ]
+    }
+
+    /// Where the fade begins, as a share of the line's width.
+    static func fadeStart(in width: CGFloat) -> CGFloat {
+        let fade = WarrenDesktopSidebarMetrics.sessionLineFadeWidth
+        guard width > fade else { return 0 }
+        return (width - fade) / width
+    }
+}
+
+/// The measured width of a `WarrenDesktopFadingLine`'s content, so the line
+/// knows whether it is actually overflowing.
+private struct WarrenDesktopFadingLineWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// The slow drift that tells a working row from a resting one.
+///
+/// A highlight crosses the activity line about once every six seconds and then
+/// rests for the last third of the cycle, so the motion never settles into a
+/// loop the eye can watch. The colours stay between the activity line's own tier
+/// and one step above it: this is here to say "working" to a glance that is
+/// already moving past, not to hold it.
+struct WarrenDesktopActivityShimmer: ViewModifier {
+    let base: Color
+    let peak: Color
+    let isActive: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// One sweep and its rest.
+    static let period: TimeInterval = 6
+    /// The share of the period the highlight spends crossing the line.
+    static let sweepShare: Double = 0.7
+    /// How wide the moving band is, as a share of the line's width.
+    static let bandWidth: Double = 0.6
+
+    func body(content: Content) -> some View {
+        if isActive, !reduceMotion {
+            TimelineView(.animation(minimumInterval: 1.0 / 15, paused: false)) { context in
+                content.foregroundStyle(gradient(at: context.date))
+            }
+        } else {
+            content.foregroundStyle(base)
+        }
+    }
+
+    private func gradient(at date: Date) -> LinearGradient {
+        let center = Self.center(at: date)
+        let half = Self.bandWidth / 2
+        return LinearGradient(
+            stops: [
+                .init(color: base, location: 0),
+                .init(color: peak, location: 0.5),
+                .init(color: base, location: 1),
+            ],
+            startPoint: UnitPoint(x: center - half, y: 0.5),
+            endPoint: UnitPoint(x: center + half, y: 0.5)
+        )
+    }
+
+    /// Where the highlight's centre sits in the line, from just past its right
+    /// edge to just past its left, so the band enters and leaves the text.
+    static func center(at date: Date) -> Double {
+        let elapsed = date.timeIntervalSinceReferenceDate
+            .truncatingRemainder(dividingBy: period)
+        let progress = (elapsed < 0 ? elapsed + period : elapsed) / period
+        guard progress < sweepShare else { return -bandWidth / 2 }
+        // The specification's cubic-bezier(.45, 0, .55, 1) is the standard
+        // ease-in-out curve; smoothstep is the same shape and needs no solver.
+        let eased = smoothstep(progress / sweepShare)
+        return (1 + bandWidth / 2) - (1 + bandWidth) * eased
+    }
+
+    /// Ease in and out: slow at both ends, fastest in the middle.
+    static func smoothstep(_ value: Double) -> Double {
+        let clamped = min(max(value, 0), 1)
+        return clamped * clamped * (3 - 2 * clamped)
     }
 }
 
@@ -1549,93 +2485,108 @@ struct WarrenDesktopSidebarSectionHeader: View {
     var onToggle: (() -> Void)?
     var onAction: (() -> Void)?
     var additionalActions: [WarrenDesktopSidebarSectionAction]
+    /// One mark per Session in the section, drawn as dots while it is folded.
+    var foldMarks: [WarrenActivityMark?] = []
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.warrenForceHover) private var forceHover
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     @FocusState private var isActionFocused: Bool
     @FocusState private var isToggleFocused: Bool
     @FocusState private var focusedAdditionalActionID: String?
 
+    private var isFolded: Bool { disclosureExpanded == false }
+
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        HStack(spacing: WarrenSpacing.small) {
-            if let onToggle {
-                Button(action: onToggle) {
-                    titleLabel
+        let revealsActions = isHovered || forceHover || isActionFocused
+            || focusedAdditionalActionID != nil
+        HStack(spacing: 2) {
+            Group {
+                if let onToggle {
+                    Button(action: onToggle) {
+                        titleLabel(tokens: tokens)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!actionEnabled)
+                    .focused($isToggleFocused)
+                    .accessibilityLabel(title)
+                    .accessibilityValue(isFolded ? "Collapsed" : "Expanded")
+                } else {
+                    titleLabel(tokens: tokens)
                 }
-                .buttonStyle(WarrenChromeButtonStyle(isFocused: isToggleFocused))
-                .disabled(!actionEnabled)
-                .focused($isToggleFocused)
-            } else {
-                // Sections without a disclosure control keep the same label
-                // styling as collapsible sections instead of rendering a
-                // disabled, dimmed button.
-                titleLabel
             }
 
             ForEach(additionalActions) { action in
                 Button(action: action.action) {
                     Image(systemName: action.image)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 10, weight: .medium))
+                        .frame(width: 18, height: 18)
+                        .contentShape(.rect)
                         .accessibilityHidden(true)
                 }
                 .buttonStyle(WarrenChromeButtonStyle(
                     isFocused: focusedAdditionalActionID == action.id
                 ))
                 .disabled(!action.isEnabled)
-                .frame(width: WarrenLayoutMetrics.sidebarActionButtonSize,
-                       height: WarrenLayoutMetrics.sidebarActionButtonSize)
-                .contentShape(.rect)
                 .focused($focusedAdditionalActionID, equals: action.id)
+                .opacity(revealsActions ? 1 : 0)
+                .animation(
+                    WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
+                    value: revealsActions
+                )
                 .accessibilityLabel(action.label)
+                .warrenTooltip(action.label)
             }
 
             if actionVisible, let actionImage, let onAction {
                 Button(action: onAction) {
                     Image(systemName: actionImage)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 20, height: 20)
+                        .contentShape(.rect)
                         .accessibilityHidden(true)
                 }
                 .buttonStyle(WarrenChromeButtonStyle(isFocused: isActionFocused))
                 .disabled(!actionEnabled)
-                .frame(width: WarrenLayoutMetrics.sidebarActionButtonSize,
-                       height: WarrenLayoutMetrics.sidebarActionButtonSize)
-                .contentShape(.rect)
                 .focused($isActionFocused)
                 .accessibilityLabel(actionLabel)
+                .warrenTooltip(actionLabel)
+            }
+
+            if isFolded, WarrenDesktopTreeFoldDots.drawsAny(foldMarks) {
+                WarrenDesktopTreeFoldDots(marks: foldMarks)
+            }
+
+            if let disclosureExpanded, let onToggle {
+                Button(action: onToggle) {
+                    WarrenDesktopTreeChevron(isExpanded: disclosureExpanded)
+                        .frame(width: 14, height: WarrenDesktopSidebarMetrics.sectionHeaderHeight)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(!actionEnabled)
+                .accessibilityHidden(true)
             }
         }
-        // A heading names its region; it does not compete with the resources
-        // under it. Its controls rise to the readable tier on hover.
-        .foregroundStyle(isHovered ? tokens.mutedForeground : tokens.sidebarSectionText)
-        .frame(height: WarrenLayoutMetrics.sidebarSectionLabelHeight)
-        .padding(.leading, WarrenDesktopSidebarIndent.section)
-        .padding(.trailing, WarrenSpacing.compact)
+        .foregroundStyle(tokens.treeQuietText)
+        .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
+        .frame(height: WarrenDesktopSidebarMetrics.sectionHeaderHeight)
+        .contentShape(.rect)
         .onHover { isHovered = $0 }
     }
 
-    private var titleLabel: some View {
-        HStack(spacing: WarrenSpacing.small) {
-            Text(title.uppercased())
-                .font(WarrenTypography.sectionLabel)
-                .tracking(1.0)
-            if let disclosureExpanded {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .rotationEffect(.degrees(disclosureExpanded ? 90 : 0))
-                    .opacity(isHovered || isToggleFocused ? 1 : 0)
-                    .animation(
-                        WarrenMotion.animation(
-                            .stateChange,
-                            reduceMotion: reduceMotion
-                        ),
-                        value: disclosureExpanded
-                    )
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private func titleLabel(tokens: WarrenColorTokens) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 10.5, weight: .semibold))
+            .tracking(1.1)
+            .foregroundStyle(tokens.treeQuietText)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: WarrenDesktopSidebarMetrics.sectionHeaderHeight)
+            .contentShape(.rect)
     }
 }
 
@@ -1651,41 +2602,26 @@ struct WarrenDesktopDeleteTaskConfirmation: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
-            Text("Delete task?")
-                .font(WarrenTypography.dialogTitle)
-                .foregroundStyle(tokens.foreground)
-
-            Text("\u{201C}\(task.name)\u{201D} will be removed from Warren.")
-                .font(WarrenTypography.dialogBody)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("Linked workspaces and their terminal sessions will be kept and detached from this task.")
-                .font(WarrenTypography.dialogBody)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-
+        WarrenDialog(
+            "Delete task?",
+            message: "\u{201C}\(task.name)\u{201D} will be removed from Warren.\n"
+                + "Linked workspaces and their terminal sessions will be kept and detached from this task."
+        ) {
             if let validationMessage {
                 Text(validationMessage)
                     .font(WarrenTypography.dialogBody)
                     .foregroundStyle(tokens.destructive)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                    .keyboardShortcut(.cancelAction)
-                Button("Delete", action: onConfirm)
-                    .buttonStyle(WarrenDestructiveButtonStyle(font: WarrenTypography.dialogCriticalAction))
-                    .disabled(!isConfirmEnabled)
-                    .keyboardShortcut(.defaultAction)
-            }
+        } footer: {
+            WarrenDesktopDialogFooter(
+                confirmLabel: "Delete",
+                isDestructive: true,
+                isConfirmEnabled: isConfirmEnabled,
+                onCancel: onCancel,
+                onConfirm: onConfirm
+            )
         }
-        .padding(WarrenSpacing.large)
-        .frame(width: 390)
         .onExitCommand(perform: onCancel)
     }
 }
@@ -1712,55 +2648,45 @@ struct WarrenDesktopDeleteWorkspaceConfirmation: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
-            Text("Delete workspace?")
-                .font(WarrenTypography.dialogTitle)
-                .foregroundStyle(tokens.foreground)
-
-            Text("“\(workspace.name)” and every session it owns will be removed from Warren.")
-                .font(WarrenTypography.dialogBody)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if canRemoveWorktree {
-                Toggle("Also delete the local worktree directory", isOn: $removeWorktree)
-                    .toggleStyle(.checkbox)
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.foreground)
-                    .tint(tokens.highlight)
-                    .help("Leave unchecked to keep the Git worktree and branch on disk.")
-                    .disabled(!isConfirmEnabled)
-            } else if isWorktree && workspace.worktreeLocked {
-                Text("This Git worktree is locked and will be kept on disk.")
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if isWorktree && project != nil {
-                Text("This checkout is managed outside Warren and will be kept on disk.")
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.mutedForeground)
+        WarrenDialog(
+            "Delete workspace?",
+            message: "\u{201C}\(workspace.name)\u{201D} and every session it owns will be removed from Warren."
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                if canRemoveWorktree {
+                    Toggle("Also delete the local worktree directory", isOn: $removeWorktree)
+                        .toggleStyle(.checkbox)
+                        .font(WarrenTypography.dialogBody)
+                        .foregroundStyle(tokens.foreground)
+                        .tint(tokens.highlight)
+                        .help("Leave unchecked to keep the Git worktree and branch on disk.")
+                        .disabled(!isConfirmEnabled)
+                } else if isWorktree && workspace.worktreeLocked {
+                    Text("This Git worktree is locked and will be kept on disk.")
+                        .font(WarrenTypography.dialogBody)
+                        .foregroundStyle(tokens.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if isWorktree && project != nil {
+                    Text("This checkout is managed outside Warren and will be kept on disk.")
+                        .font(WarrenTypography.dialogBody)
+                        .foregroundStyle(tokens.mutedForeground)
+                }
+                if let validationMessage {
+                    Text(validationMessage)
+                        .font(WarrenTypography.dialogBody)
+                        .foregroundStyle(tokens.destructive)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-
-            if let validationMessage {
-                Text(validationMessage)
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.destructive)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                    .keyboardShortcut(.cancelAction)
-                Button("Delete", action: onConfirm)
-                    .buttonStyle(WarrenDestructiveButtonStyle(font: WarrenTypography.dialogCriticalAction))
-                    .disabled(!isConfirmEnabled)
-                    .keyboardShortcut(.defaultAction)
-            }
+        } footer: {
+            WarrenDesktopDialogFooter(
+                confirmLabel: "Delete",
+                isDestructive: true,
+                isConfirmEnabled: isConfirmEnabled,
+                onCancel: onCancel,
+                onConfirm: onConfirm
+            )
         }
-        .padding(WarrenSpacing.large)
-        .frame(width: 380)
         .onExitCommand(perform: onCancel)
     }
 }
@@ -1786,91 +2712,64 @@ struct WarrenDesktopDeleteProjectConfirmation: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
-            Text("Delete project?")
-                .font(WarrenTypography.dialogTitle)
-                .foregroundStyle(tokens.foreground)
-
-            Text("“\(project.name)” and its \(workspaceCount) workspace(s) will be removed from Warren.")
-                .font(WarrenTypography.dialogBody)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("Local Git worktree directories are kept on disk.")
-                .font(WarrenTypography.dialogBody)
-                .foregroundStyle(tokens.mutedForeground)
-
+        WarrenDialog(
+            "Delete project?",
+            message: "\u{201C}\(project.name)\u{201D} and its \(workspaceCount) workspaces will be removed from Warren.\n"
+                + "Local Git worktree directories are kept on disk."
+        ) {
             if let validationMessage {
                 Text(validationMessage)
                     .font(WarrenTypography.dialogBody)
                     .foregroundStyle(tokens.destructive)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                    .keyboardShortcut(.cancelAction)
-                Button("Delete", action: onConfirm)
-                    .buttonStyle(WarrenDestructiveButtonStyle(font: WarrenTypography.dialogCriticalAction))
-                    .disabled(!isConfirmEnabled)
-                    .keyboardShortcut(.defaultAction)
-            }
+        } footer: {
+            WarrenDesktopDialogFooter(
+                confirmLabel: "Delete",
+                isDestructive: true,
+                isConfirmEnabled: isConfirmEnabled,
+                onCancel: onCancel,
+                onConfirm: onConfirm
+            )
         }
-        .padding(WarrenSpacing.large)
-        .frame(width: 380)
         .onExitCommand(perform: onCancel)
     }
 }
 
-struct WarrenDesktopDeleteTerminalGroupConfirmation: View {
-    let group: TerminalGroup
-    let sessionCount: Int
+/// The shared Cancel / primary footer for a destructive confirmation.
+/// Primary is rightmost and carries its shortcut as a keycap.
+struct WarrenDesktopDialogFooter: View {
+    let confirmLabel: String
+    var isDestructive = false
+    var isConfirmEnabled = true
     let onCancel: () -> Void
     let onConfirm: () -> Void
-    let isConfirmEnabled: Bool
-    let validationMessage: String?
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        VStack(alignment: .leading, spacing: WarrenSpacing.medium) {
-            Text("Delete terminal group?")
-                .font(WarrenTypography.dialogTitle)
-                .foregroundStyle(tokens.foreground)
-
-            Text("\"\(group.name)\" and its \(sessionCount) session(s) will be removed from Warren.")
-                .font(WarrenTypography.dialogBody)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("Running sessions will be terminated.")
-                .font(WarrenTypography.dialogBody)
-                .foregroundStyle(tokens.warning)
-
-            if let validationMessage {
-                Text(validationMessage)
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.destructive)
-                    .fixedSize(horizontal: false, vertical: true)
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
+            Button(action: onCancel) {
+                HStack(spacing: 6) {
+                    Text("Cancel")
+                    WarrenDialogKeycap("esc")
+                }
             }
-
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                    .keyboardShortcut(.cancelAction)
-                Button("Delete", action: onConfirm)
-                    .buttonStyle(WarrenDestructiveButtonStyle(font: WarrenTypography.dialogCriticalAction))
-                    .disabled(!isConfirmEnabled)
-                    .keyboardShortcut(.defaultAction)
+            .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
+            .keyboardShortcut(.cancelAction)
+            Button(action: onConfirm) {
+                HStack(spacing: 6) {
+                    Text(confirmLabel)
+                    WarrenDialogKeycap(
+                        "\u{2318}\u{23CE}",
+                        isOnPrimary: !isDestructive
+                    )
+                }
             }
+            .modifier(WarrenDialogConfirmButtonStyle(
+                isDestructive: isDestructive,
+                isEnabled: isConfirmEnabled
+            ))
         }
-        .padding(WarrenSpacing.large)
-        .frame(width: 390)
-        .onExitCommand(perform: onCancel)
     }
 }
+

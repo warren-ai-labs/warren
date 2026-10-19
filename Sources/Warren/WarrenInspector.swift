@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WarrenDesktop
 import WarrenDesignSystem
 import WarrenDomain
 import WarrenTransport
@@ -116,6 +117,32 @@ final class WarrenInspectorModel: ObservableObject {
         }
     }
 
+    /// Opens one path's diff on the Changes page, loading the Git panel first
+    /// if it has not arrived yet. This is the Conversation pane's changed-file
+    /// card landing here instead of unfolding a diff in the transcript.
+    func reveal(path: String) {
+        Task { @MainActor in
+            if panel == nil { await refresh() }
+            if expandRevealed(path) { return }
+            // A change the conversation just saw may not be in a panel that
+            // was fetched before it landed, so revalidate once before giving up.
+            await refresh(force: true)
+            _ = expandRevealed(path)
+        }
+    }
+
+    @discardableResult
+    private func expandRevealed(_ path: String) -> Bool {
+        guard let panel,
+              let change = panel.changes.first(where: { $0.path == path }) else { return false }
+        let key = Self.changeKey(change)
+        if !expanded.contains(key) {
+            let signature = "\(change.added):\(change.deleted):\(change.status)"
+            toggleDiff(key: key, path: change.path, staged: change.staged, commit: nil, signature: signature)
+        }
+        return true
+    }
+
     // MARK: Commands
 
     func commit() {
@@ -171,96 +198,43 @@ final class WarrenInspectorModel: ObservableObject {
 struct WarrenInspectorSurface: View {
     @ObservedObject var inspector: WarrenInspectorModel
     let readsLocalFiles: Bool
+    /// The page the right sidebar's tab row selected. The Inspector no longer
+    /// draws its own tab header; the sidebar owns that row.
+    let tab: WarrenDesktopInspectorTab
+    /// The bridge the sidebar's tsb row reads the Changes count from.
+    let activity: WarrenDesktopInspectorActivity
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        VStack(spacing: 0) {
-            header(tokens: tokens)
-            Rectangle().fill(tokens.chromeDivider).frame(height: WarrenSpacing.hairline)
-            Group {
-                switch inspector.tab {
-                case .changes: WarrenInspectorChanges(inspector: inspector)
-                case .history: WarrenInspectorHistory(inspector: inspector)
-                case .files:
-                    if readsLocalFiles {
-                        WarrenInspectorFiles(inspector: inspector)
-                    } else {
-                        WarrenInspectorEmpty(
-                            symbol: "externaldrive.badge.icloud",
-                            title: "Files are read from this Mac",
-                            detail: "Open the Workspace on a local Host to browse and edit its files."
-                        )
-                    }
+        Group {
+            switch tab {
+            case .changes: WarrenInspectorChanges(inspector: inspector)
+            case .history: WarrenInspectorHistory(inspector: inspector)
+            case .files:
+                if readsLocalFiles {
+                    WarrenInspectorFiles(inspector: inspector)
+                } else {
+                    WarrenInspectorEmpty(
+                        symbol: "externaldrive.badge.icloud",
+                        title: "Files are read from this Mac",
+                        detail: "Open the Workspace on a local Host to browse and edit its files."
+                    )
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(tokens.canvas)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: inspector.workspaceID) {
             // The Host caches the panel and revalidates it behind a cached
             // answer, so a steady poll costs one small message.
             while !Task.isCancelled {
                 await inspector.refresh()
+                activity.changeCount = inspector.changeCount
                 try? await Task.sleep(for: .seconds(3))
             }
         }
-    }
-
-    private func header(tokens: WarrenColorTokens) -> some View {
-        HStack(spacing: 2) {
-            ForEach(WarrenInspectorModel.Tab.allCases) { tab in
-                let selected = inspector.tab == tab
-                Button {
-                    inspector.tab = tab
-                } label: {
-                    HStack(spacing: 5) {
-                        Text(tab.title)
-                        if tab == .changes, inspector.changeCount > 0 {
-                            Text("\(inspector.changeCount)")
-                                .font(.system(size: 10.5, weight: .medium).monospacedDigit())
-                                .foregroundStyle(tokens.mutedForeground)
-                                .padding(.horizontal, 5)
-                                .frame(minWidth: 16, minHeight: 16)
-                                .background(tokens.tertiaryWash, in: Capsule())
-                        }
-                    }
-                    .font(.system(size: 12, weight: selected ? .medium : .regular))
-                    .foregroundStyle(selected ? tokens.foreground : tokens.mutedForeground)
-                    .padding(.horizontal, 10)
-                    .frame(height: 26)
-                    .background(selected ? tokens.tertiaryWash : Color.clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer(minLength: WarrenSpacing.compact)
-            if let panel = inspector.panel {
-                HStack(spacing: 4) {
-                    WarrenBranchGlyph(size: 11)
-                    Text(panel.branch.isEmpty ? "detached" : panel.branch)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .font(.system(size: 11.5))
-                .foregroundStyle(tokens.mutedForeground)
-                .help(panel.upstream.map { "Tracks \($0)" } ?? "No upstream")
-            }
-            Button {
-                Task { await inspector.refresh(force: true) }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(tokens.mutedForeground)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Refresh")
-        }
-        .padding(.horizontal, WarrenSpacing.compact)
-        .frame(height: WarrenLayoutMetrics.tabBarHeight)
+        .onAppear { activity.changeCount = inspector.changeCount }
+        .onChange(of: inspector.changeCount) { activity.changeCount = $0 }
     }
 }
 
@@ -276,7 +250,12 @@ private struct WarrenInspectorChanges: View {
         if let panel = inspector.panel {
             let staged = panel.changes.filter(\.staged)
             let unstaged = panel.changes.filter { !$0.staged }
-            ScrollView {
+            VStack(spacing: 0) {
+                branchStrip(panel, tokens: tokens)
+                Rectangle()
+                    .fill(tokens.chromeDivider)
+                    .frame(height: WarrenSpacing.hairline)
+                ScrollView {
                 VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
                     WarrenInspectorBranchCard(inspector: inspector, panel: panel)
                     if !panel.changes.isEmpty {
@@ -302,11 +281,45 @@ private struct WarrenInspectorChanges: View {
                 }
                 .padding(WarrenSpacing.medium)
             }
+            }
         } else if let error = inspector.loadError {
             WarrenInspectorEmpty(symbol: "exclamationmark.triangle", title: "Git is unavailable here", detail: error)
         } else {
-            ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+            WarrenSkeletonRows(count: 6, shape: .change)
+                .padding(.top, WarrenSpacing.compact)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+    }
+
+    /// The branch and refresh controls that used to sit in the Inspector's own
+    /// header: they are the Changes page's top row now.
+    private func branchStrip(
+        _ panel: WarrenRemoteGitPanel,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        HStack(spacing: WarrenSpacing.compact) {
+            WarrenBranchGlyph(size: 11)
+            Text(panel.branch.isEmpty ? "detached" : panel.branch)
+                .font(.system(size: 11.5))
+                .foregroundStyle(tokens.foreground.opacity(0.85))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(panel.upstream.map { "Tracks \($0)" } ?? "No upstream")
+            Spacer(minLength: 0)
+            Button {
+                Task { await inspector.refresh(force: true) }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(tokens.mutedForeground)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .warrenTooltip("Refresh")
+        }
+        .padding(.horizontal, WarrenSpacing.medium)
+        .frame(height: 30)
     }
 
     private func changeSection(_ title: String, changes: [WarrenRemoteGitChange], tokens: WarrenColorTokens) -> some View {
@@ -315,7 +328,7 @@ private struct WarrenInspectorChanges: View {
         return VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
             HStack(spacing: WarrenSpacing.small) {
                 Text(title).font(.system(size: 11.5, weight: .medium)).foregroundStyle(tokens.mutedForeground)
-                Text("\(changes.count)").font(.system(size: 11.5).monospacedDigit()).foregroundStyle(tokens.mutedForeground.opacity(0.7))
+                Text("\(changes.count)").font(.system(size: 11.5).monospacedDigit()).warrenNumericTransition(value: changes.count).foregroundStyle(tokens.mutedForeground.opacity(0.7))
                 Spacer(minLength: 0)
                 WarrenInspectorCounts(additions: additions, deletions: deletions)
             }
@@ -431,7 +444,7 @@ private struct WarrenInspectorBranchCard: View {
                     } label: {
                         HStack(spacing: WarrenSpacing.small) {
                             if inspector.action == "pr" {
-                                ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+                                WarrenBrailleSpinner(size: 10, accessibilityLabel: "Creating pull request")
                             } else {
                                 Image(systemName: "arrow.triangle.pull").font(.system(size: 10.5))
                             }
@@ -511,7 +524,7 @@ private struct WarrenInspectorBranchCard: View {
         Button(action: perform) {
             HStack(spacing: 3) {
                 if inspector.action == name {
-                    ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+                    WarrenBrailleSpinner(size: 10, accessibilityLabel: title)
                 } else {
                     Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
                 }
@@ -527,7 +540,7 @@ private struct WarrenInspectorBranchCard: View {
         }
         .buttonStyle(.plain)
         .disabled(inspector.action != nil)
-        .help(title)
+        .warrenTooltip(title)
         .accessibilityLabel(title)
     }
 }
@@ -596,7 +609,7 @@ private struct WarrenInspectorCommitBox: View {
                 } label: {
                     HStack(spacing: 4) {
                         if inspector.action == "commit" {
-                            ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+                            WarrenBrailleSpinner(size: 10, accessibilityLabel: "Committing")
                         }
                         Text("Commit")
                     }
@@ -609,7 +622,7 @@ private struct WarrenInspectorCommitBox: View {
                 .buttonStyle(.plain)
                 .disabled(!canCommit)
                 .keyboardShortcut(.return, modifiers: .command)
-                .help("Commit (⌘Return)")
+                .warrenTooltip("Commit", shortcut: "⌘Return")
             }
             .padding(.horizontal, WarrenSpacing.medium)
             .padding(.bottom, WarrenSpacing.compact)
@@ -657,7 +670,9 @@ private struct WarrenInspectorHistory: View {
         } else if let error = inspector.loadError {
             WarrenInspectorEmpty(symbol: "exclamationmark.triangle", title: "Git is unavailable here", detail: error)
         } else {
-            ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+            WarrenSkeletonRows(count: 7, shape: .commit)
+                .padding(.top, WarrenSpacing.compact)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 
@@ -665,7 +680,7 @@ private struct WarrenInspectorHistory: View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
             HStack(spacing: WarrenSpacing.small) {
                 Text(title).font(.system(size: 11.5, weight: .medium)).foregroundStyle(tokens.mutedForeground)
-                Text("\(commits.count)").font(.system(size: 11.5).monospacedDigit()).foregroundStyle(tokens.mutedForeground.opacity(0.7))
+                Text("\(commits.count)").font(.system(size: 11.5).monospacedDigit()).warrenNumericTransition(value: commits.count).foregroundStyle(tokens.mutedForeground.opacity(0.7))
             }
             .padding(.horizontal, WarrenSpacing.xs)
             VStack(spacing: 0) {
@@ -723,12 +738,11 @@ private struct WarrenInspectorHistory: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(WarrenInspectorRowStyle())
-        .contextMenu {
-            Button("Copy Commit Hash") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(commit.hash, forType: .string)
+        .warrenContextMenu([
+            .button(title: "Copy Commit Hash") {
+                WarrenCopyFeedback.shared.copy(commit.hash, announcing: "Copied commit hash")
             }
-        }
+        ])
         if open {
             VStack(spacing: 0) {
                 ForEach(commit.files, id: \.self) { file in
@@ -804,18 +818,17 @@ private struct WarrenInspectorFileRow: View {
         }
         .buttonStyle(WarrenInspectorRowStyle())
         .help(path)
-        .contextMenu {
-            Button("Copy Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(path, forType: .string)
+        .warrenContextMenu([
+            .button(title: "Copy Path") {
+                WarrenCopyFeedback.shared.copy(path, announcing: "Copied path")
             }
-        }
+        ])
     }
 }
 
 /// The porcelain status as one letter in its colour: Added, Modified,
 /// Deleted, Renamed, Untracked.
-private struct WarrenInspectorStatus: View {
+struct WarrenInspectorStatus: View {
     let status: String
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
@@ -823,16 +836,21 @@ private struct WarrenInspectorStatus: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let letter = status == "?" || status == "??" ? "U" : String(status.prefix(1))
-        let tint: Color = switch letter {
-        case "A", "U": tokens.success
+        Text(letter.isEmpty ? "M" : letter)
+            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+            .foregroundStyle(Self.tint(for: status, tokens: tokens))
+            .frame(width: 12)
+    }
+
+    /// One colour per status, shared with the Files tree so a file reads the
+    /// same in both tabs.
+    static func tint(for status: String, tokens: WarrenColorTokens) -> Color {
+        switch status.prefix(1) {
+        case "A", "?", "U": tokens.success
         case "D": tokens.destructive
         case "R", "C": tokens.info
         default: tokens.warning
         }
-        Text(letter.isEmpty ? "M" : letter)
-            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-            .foregroundStyle(tint)
-            .frame(width: 12)
     }
 }
 
@@ -854,15 +872,34 @@ private struct WarrenInspectorCounts: View {
     }
 }
 
-private struct WarrenInspectorRowStyle: ButtonStyle {
+/// The Inspector's list row, in every tab: a soft wash under the pointer and
+/// a firmer one while pressed. The Files tree rounds and insets it.
+struct WarrenInspectorRowStyle: ButtonStyle {
+    var cornerRadius: CGFloat = 0
+    var inset: CGFloat = 0
+
+    func makeBody(configuration: Configuration) -> some View {
+        WarrenInspectorRowBody(configuration: configuration, cornerRadius: cornerRadius, inset: inset)
+    }
+}
+
+private struct WarrenInspectorRowBody: View {
+    let configuration: ButtonStyle.Configuration
+    let cornerRadius: CGFloat
+    let inset: CGFloat
+
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var hovering = false
 
-    func makeBody(configuration: Configuration) -> some View {
+    var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         configuration.label
-            .background(configuration.isPressed ? tokens.fillHover : (hovering ? tokens.fillHover.opacity(0.6) : Color.clear))
+            .background(
+                configuration.isPressed ? tokens.fillHover : (hovering ? tokens.fillHover.opacity(0.6) : Color.clear),
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+            .padding(.horizontal, inset)
             .onHover { hovering = $0 }
     }
 }
@@ -950,7 +987,8 @@ private struct WarrenInspectorDiffState: View {
                     .padding(WarrenSpacing.medium)
                     .frame(maxWidth: .infinity, alignment: .leading)
             case .loading, nil:
-                ProgressView().controlSize(.small).padding(WarrenSpacing.medium).frame(maxWidth: .infinity)
+                WarrenSkeletonRows(count: 4, shape: .init(showsDot: false, showsMeta: false, rowHeight: 18))
+                    .padding(.vertical, WarrenSpacing.compact)
             }
         }
         .background(tokens.background.opacity(0.55))

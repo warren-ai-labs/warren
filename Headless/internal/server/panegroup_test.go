@@ -12,9 +12,8 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/store"
 )
 
-// paneGroupFixture seeds one workspace with three running sessions and one
-// standalone terminal group with two, which is enough for every ownership and
-// isolation rule.
+// paneGroupFixture seeds one workspace with three running sessions and a second
+// workspace with two, which is enough for every ownership and isolation rule.
 func paneGroupFixture(t *testing.T) (*Service, string, []string) {
 	t.Helper()
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test")
@@ -22,19 +21,21 @@ func paneGroupFixture(t *testing.T) (*Service, string, []string) {
 		t.Fatal(err)
 	}
 	workspaceID := "workspace-1"
-	terminalGroupID := "group-1"
+	otherWorkspaceID := "workspace-2"
 	sessions := []string{"session-1", "session-2", "session-3", "session-4", "session-5"}
 	if err := state.Update(func(value *api.State) error {
-		value.Workspaces = []api.Workspace{{ID: workspaceID, ProjectID: "project-1", Name: "main", Kind: "main"}}
-		value.TerminalGroups = []api.TerminalGroup{{ID: terminalGroupID, Name: "Inbox"}}
+		value.Workspaces = []api.Workspace{
+			{ID: workspaceID, ProjectID: "project-1", Name: "main", Kind: "main"},
+			{ID: otherWorkspaceID, ProjectID: "project-1", Name: "feature", Kind: "worktree"},
+		}
 		for _, id := range sessions[:3] {
 			value.Sessions = append(value.Sessions, api.Session{
-				ID: id, WorkspaceID: workspaceID, Scope: api.SessionScopeWorkspace, Lifecycle: "running",
+				ID: id, WorkspaceID: workspaceID, Lifecycle: "running",
 			})
 		}
 		for _, id := range sessions[3:] {
 			value.Sessions = append(value.Sessions, api.Session{
-				ID: id, TerminalGroupID: terminalGroupID, Scope: api.SessionScopeTerminalGroup, Lifecycle: "running",
+				ID: id, WorkspaceID: otherWorkspaceID, Lifecycle: "running",
 			})
 		}
 		return nil
@@ -47,11 +48,11 @@ func paneGroupFixture(t *testing.T) (*Service, string, []string) {
 func TestCreatePaneGroupRequiresAnOwnedRunningSession(t *testing.T) {
 	service, workspaceID, sessions := paneGroupFixture(t)
 
-	group, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessions[0], "  left  ", "")
+	group, err := service.CreatePaneGroup(workspaceID, sessions[0], "  left  ", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if group.Name != "left" || group.Revision != 1 || group.Scope != api.SessionScopeWorkspace {
+	if group.Name != "left" || group.Revision != 1 || group.WorkspaceID != workspaceID {
 		t.Fatalf("unexpected group: %#v", group)
 	}
 	if group.OwnerID() != workspaceID || group.WorkspaceID != workspaceID {
@@ -66,19 +67,19 @@ func TestCreatePaneGroupRequiresAnOwnedRunningSession(t *testing.T) {
 
 	// The same Session cannot be shown twice, and a Session from another owner
 	// cannot be placed here.
-	if _, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessions[0], "", ""); err == nil ||
+	if _, err := service.CreatePaneGroup(workspaceID, sessions[0], "", ""); err == nil ||
 		!strings.HasPrefix(err.Error(), errPaneGroupSessionInUse) {
 		t.Fatalf("second placement error = %v, want %s", err, errPaneGroupSessionInUse)
 	}
-	if _, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessions[3], "", ""); err == nil ||
+	if _, err := service.CreatePaneGroup(workspaceID, sessions[3], "", ""); err == nil ||
 		!strings.Contains(err.Error(), "does not belong") {
 		t.Fatalf("foreign session error = %v", err)
 	}
-	if _, err := service.CreatePaneGroup(api.SessionScopeWorkspace, "missing", sessions[1], "", ""); err == nil ||
+	if _, err := service.CreatePaneGroup("missing", sessions[1], "", ""); err == nil ||
 		!strings.Contains(err.Error(), "workspace not found") {
 		t.Fatalf("missing owner error = %v", err)
 	}
-	if _, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, "missing", "", ""); err == nil ||
+	if _, err := service.CreatePaneGroup(workspaceID, "missing", "", ""); err == nil ||
 		!strings.HasPrefix(err.Error(), errPaneGroupSessionGone) {
 		t.Fatalf("missing session error = %v", err)
 	}
@@ -86,7 +87,7 @@ func TestCreatePaneGroupRequiresAnOwnedRunningSession(t *testing.T) {
 
 func TestUpdatePaneGroupGuardsTheRevision(t *testing.T) {
 	service, workspaceID, sessions := paneGroupFixture(t)
-	group, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessions[0], "", "")
+	group, err := service.CreatePaneGroup(workspaceID, sessions[0], "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +139,7 @@ func TestUpdatePaneGroupGuardsTheRevision(t *testing.T) {
 
 func TestUpdatePaneGroupRejectsMalformedAndOverfullTrees(t *testing.T) {
 	service, workspaceID, sessions := paneGroupFixture(t)
-	group, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessions[0], "", "")
+	group, err := service.CreatePaneGroup(workspaceID, sessions[0], "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +176,7 @@ func TestUpdatePaneGroupRejectsMalformedAndOverfullTrees(t *testing.T) {
 	}
 
 	// A Session already shown by another group cannot be stolen silently.
-	other, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessions[1], "", "")
+	other, err := service.CreatePaneGroup(workspaceID, sessions[1], "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,17 +197,17 @@ func TestUpdatePaneGroupRejectsMalformedAndOverfullTrees(t *testing.T) {
 
 func TestPaneGroupOrderingAndIsolation(t *testing.T) {
 	service, workspaceID, sessions := paneGroupFixture(t)
-	terminalGroupID := "group-1"
+	otherWorkspaceID := "workspace-2"
 
-	first, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessions[0], "a", "")
+	first, err := service.CreatePaneGroup(workspaceID, sessions[0], "a", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessions[1], "b", "")
+	second, err := service.CreatePaneGroup(workspaceID, sessions[1], "b", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign, err := service.CreatePaneGroup(api.SessionScopeTerminalGroup, terminalGroupID, sessions[3], "x", "")
+	foreign, err := service.CreatePaneGroup(otherWorkspaceID, sessions[3], "x", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,17 +245,17 @@ func TestPaneGroupOrderingAndIsolation(t *testing.T) {
 
 func TestSessionLifecycleReconcilesOnlyItsOwnGroup(t *testing.T) {
 	service, workspaceID, sessions := paneGroupFixture(t)
-	terminalGroupID := "group-1"
+	otherWorkspaceID := "workspace-2"
 
-	first, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessions[0], "", "")
+	first, err := service.CreatePaneGroup(workspaceID, sessions[0], "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessions[1], "", "")
+	second, err := service.CreatePaneGroup(workspaceID, sessions[1], "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign, err := service.CreatePaneGroup(api.SessionScopeTerminalGroup, terminalGroupID, sessions[3], "", "")
+	foreign, err := service.CreatePaneGroup(otherWorkspaceID, sessions[3], "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +284,7 @@ func TestSessionLifecycleReconcilesOnlyItsOwnGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := service.MoveSessionWithExpectations(
-		t.Context(), sessions[2], "", terminalGroupID, SessionMoveExpectations{},
+		t.Context(), sessions[2], otherWorkspaceID, SessionMoveExpectations{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -309,19 +310,19 @@ func TestSessionLifecycleReconcilesOnlyItsOwnGroup(t *testing.T) {
 
 func TestReconcileDropsGroupsOfRemovedOwners(t *testing.T) {
 	service, workspaceID, sessions := paneGroupFixture(t)
-	if _, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessions[0], "", ""); err != nil {
+	if _, err := service.CreatePaneGroup(workspaceID, sessions[0], "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.CreatePaneGroup(api.SessionScopeTerminalGroup, "group-1", sessions[3], "", ""); err != nil {
+	if _, err := service.CreatePaneGroup("workspace-2", sessions[3], "", ""); err != nil {
 		t.Fatal(err)
 	}
 
 	state := service.Store.Snapshot()
-	state.Workspaces = nil
+	state.Workspaces = state.Workspaces[1:]
 	if !reconcilePaneGroups(&state) {
 		t.Fatal("expected the removed owner's groups to be reconciled away")
 	}
-	if len(state.PaneGroups) != 1 || state.PaneGroups[0].OwnerID() != "group-1" {
+	if len(state.PaneGroups) != 1 || state.PaneGroups[0].OwnerID() != "workspace-2" {
 		t.Fatalf("unexpected groups: %#v", state.PaneGroups)
 	}
 }
@@ -336,14 +337,14 @@ func TestPaneGroupLimitIsEnforcedPerOwner(t *testing.T) {
 			sessionID = fmt.Sprintf("session-extra-%d", index)
 			if err := service.Store.Update(func(value *api.State) error {
 				value.Sessions = append(value.Sessions, api.Session{
-					ID: sessionID, WorkspaceID: workspaceID, Scope: api.SessionScopeWorkspace, Lifecycle: "running",
+					ID: sessionID, WorkspaceID: workspaceID, Lifecycle: "running",
 				})
 				return nil
 			}); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if _, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, sessionID, "", ""); err != nil {
+		if _, err := service.CreatePaneGroup(workspaceID, sessionID, "", ""); err != nil {
 			t.Fatalf("create %d: %v", index, err)
 		}
 	}
@@ -351,13 +352,13 @@ func TestPaneGroupLimitIsEnforcedPerOwner(t *testing.T) {
 	// before the Session is considered: the limit is about the owner.
 	if err := service.Store.Update(func(value *api.State) error {
 		value.Sessions = append(value.Sessions, api.Session{
-			ID: "session-overflow", WorkspaceID: workspaceID, Scope: api.SessionScopeWorkspace, Lifecycle: "running",
+			ID: "session-overflow", WorkspaceID: workspaceID, Lifecycle: "running",
 		})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.CreatePaneGroup(api.SessionScopeWorkspace, workspaceID, "session-overflow", "", ""); err == nil ||
+	if _, err := service.CreatePaneGroup(workspaceID, "session-overflow", "", ""); err == nil ||
 		!strings.HasPrefix(err.Error(), errPaneGroupLimit) {
 		t.Fatalf("limit error = %v, want %s", err, errPaneGroupLimit)
 	}
@@ -391,7 +392,7 @@ func TestRosterDeltaCarriesOnlyTheChangedPaneGroup(t *testing.T) {
 	if len(delta.PaneGroups.Remove) != 0 {
 		t.Fatalf("unexpected removals: %#v", delta.PaneGroups.Remove)
 	}
-	if delta.Sessions != nil || delta.Workspaces != nil || delta.Groups != nil {
+	if delta.Sessions != nil || delta.Workspaces != nil {
 		t.Fatalf("unrelated entities travelled: %#v", delta)
 	}
 
@@ -421,12 +422,12 @@ func TestPaneGroupsSurviveAStoreRestart(t *testing.T) {
 	service := &Service{Store: state}
 	if err := state.Update(func(value *api.State) error {
 		value.Workspaces = []api.Workspace{{ID: "workspace-1", ProjectID: "project-1", Name: "main", Kind: "main"}}
-		value.Sessions = []api.Session{{ID: "session-1", WorkspaceID: "workspace-1", Scope: api.SessionScopeWorkspace, Lifecycle: "running"}}
+		value.Sessions = []api.Session{{ID: "session-1", WorkspaceID: "workspace-1", Lifecycle: "running"}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	created, err := service.CreatePaneGroup(api.SessionScopeWorkspace, "workspace-1", "session-1", "left", "")
+	created, err := service.CreatePaneGroup("workspace-1", "session-1", "left", "")
 	if err != nil {
 		t.Fatal(err)
 	}

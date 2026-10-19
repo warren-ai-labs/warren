@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import XCTest
 import WarrenDesignSystem
+import WarrenObservation
 @testable import WarrenDesktop
 
 /// Mounts the panel in a real hosting view to prove it lays out rather than
@@ -104,6 +105,40 @@ final class WarrenDesktopUsageRenderTests: XCTestCase {
         )
     }
 
+    /// Writes the overview to a PNG when asked, so the data colours and the
+    /// calendar shades can be looked at as they are drawn.
+    @MainActor
+    func testWritesTheOverviewWhenAnArtifactDirectoryIsGiven() throws {
+        guard let directory = ProcessInfo.processInfo.environment["WARREN_USAGE_IMAGES"] else {
+            throw XCTSkip("Set WARREN_USAGE_IMAGES to write usage PNGs")
+        }
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        var range = WarrenUsageRange.month
+        var selected: String?
+        let hosting = mount(
+            WarrenDesktopUsagePanel(
+                stats: sampleStats(days: 30, peak: 5_000_000),
+                state: .loaded,
+                tokens: .dark,
+                range: Binding(get: { range }, set: { range = $0 }),
+                selectedDay: Binding(get: { selected }, set: { selected = $0 }),
+                onLoad: { _, _, _ in },
+                onOpenDetail: { selected = $0 },
+                mode: .overview
+            )
+            .environment(\.colorScheme, .dark),
+            height: 1_200
+        )
+        hosting.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
+            return XCTFail("No bitmap for the usage overview")
+        }
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let url = URL(fileURLWithPath: directory).appendingPathComponent("usage-overview.png")
+        try bitmap.representation(using: .png, properties: [:])?.write(to: url)
+    }
+
     @MainActor
     func testOverviewPanelLaysOutSummaryHeatmapAndBreakdowns() {
         var range = WarrenUsageRange.month
@@ -194,33 +229,33 @@ final class WarrenDesktopUsageRenderTests: XCTestCase {
         var range = WarrenUsageRange.month
         var selected: String? = stats.days.first?.day
 
-        func mountPanel(_ mode: WarrenUsagePanelMode) -> NSHostingView<AnyView> {
-            mount(
-                WarrenDesktopUsagePanel(
-                    stats: stats,
-                    state: .loaded,
-                    tokens: .dark,
-                    range: Binding(get: { range }, set: { range = $0 }),
-                    selectedDay: Binding(get: { selected }, set: { selected = $0 }),
-                    onLoad: { _, _, _ in },
-                    mode: mode
-                )
+        func rangePickerPresent(_ mode: WarrenUsagePanelMode) -> Bool {
+            let recorder = WarrenSemanticRecorder()
+            let view = WarrenDesktopUsagePanel(
+                stats: stats,
+                state: .loaded,
+                tokens: .dark,
+                range: Binding(get: { range }, set: { range = $0 }),
+                selectedDay: Binding(get: { selected }, set: { selected = $0 }),
+                onLoad: { _, _, _ in },
+                mode: mode
             )
+            .warrenSemanticObservationRoot(recorder: recorder)
+            .environment(\.warrenSemanticRecorder, recorder)
+            let hosting = mount(view)
+            hosting.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            return recorder.snapshot().node(id: "usage.range") != nil
         }
-        let overview = segmentLabels(in: mountPanel(.overview))
+
         XCTAssertTrue(
-            overview.contains(WarrenUsageRange.quarter.label),
-            "the overview is the range, so it must offer every range: \(overview)"
+            rangePickerPresent(.overview),
+            "the overview is the range, so it must offer the range control"
         )
-        let detail = segmentLabels(in: mountPanel(.detail))
-        for option in WarrenUsageRange.allCases {
-            XCTAssertFalse(
-                detail.contains(option.label),
-                "\(option.label) does nothing on a single day's surface: \(detail)"
-            )
-        }
-        // The curve's own controls do act on what the detail surface shows.
-        XCTAssertTrue(detail.contains(WarrenUsageCurveMetric.cost.label), "\(detail)")
+        XCTAssertFalse(
+            rangePickerPresent(.detail),
+            "a single day's surface must not offer a range that changes nothing"
+        )
     }
 
     @MainActor

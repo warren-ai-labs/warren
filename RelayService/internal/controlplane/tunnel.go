@@ -12,15 +12,22 @@ const (
 	tunnelControlQueueCapacity = 256
 	tunnelDataQueueCapacity    = 32
 	tunnelControlFairness      = 32
-	// A public route's body traffic is already bounded by the per-stream credit
-	// window, so a shallow queue is enough. Control routes carry terminal output
-	// that is not charged against that window, and a burst of build or log output
-	// easily exceeds a few dozen frames while a phone's socket drains; give them a
-	// deeper queue bounded by bytes so a slow client is not disconnected for a
-	// transient burst.
-	publicRouteQueueCapacity  = 64
-	controlRouteQueueCapacity = 1024
-	controlRouteQueueBytes    = 8 << 20
+	// routeHandoffFrames is the frame buffer between a route's byte-bounded
+	// queue and the goroutine that consumes it. It only smooths scheduling; what
+	// bounds a route's buffering is the queue behind it.
+	routeHandoffFrames = 16
+	// routeBufferBytes bounds how many bytes one route may accumulate for a
+	// consumer that has not caught up. It is the whole window the Host may have
+	// unacknowledged, so a peer that respects flow control can never be refused:
+	// a refusal is a peer that exceeded its window.
+	//
+	// The bound is in bytes because flow control is in bytes. Counting frames
+	// cannot express it: the Host sends whatever size its handler writes, and a
+	// gzip writer emits a few hundred bytes at a time, so an 82 KB asset arrives
+	// as hundreds of frames and filled a 64-frame queue long before the window
+	// was anywhere near full. Filling the queue tore the route down mid-body and
+	// truncated the response.
+	routeBufferBytes = initialStreamWindow
 	// relayReadDeadline bounds silence on a tunnel, not activity. Every inbound
 	// frame refreshes it alongside the pong handler: a tunnel carrying a build's
 	// output is demonstrably alive, and tying liveness to pongs alone dropped
@@ -190,37 +197,37 @@ type clientRoute struct {
 	window       uint64
 	windowChange chan struct{}
 	public       bool
-	queueMu      sync.Mutex
+	// pendingMu guards pending, the in-order queue of frames admitted for a
+	// consumer that has not taken them yet, together with the byte reservation
+	// accounting for exactly those frames.
+	pendingMu    sync.Mutex
+	pending      []relayFrame
 	queuedBytes  int64
 	maxQueued    int64
+	pendingReady chan struct{}
 }
 
 func newClientRoute() *clientRoute { return newRoute(false) }
 
 func newRoute(public bool) *clientRoute {
-	capacity, maxQueued := controlRouteQueueCapacity, int64(controlRouteQueueBytes)
-	if public {
-		capacity, maxQueued = publicRouteQueueCapacity, 0
-	}
 	return &clientRoute{
-		frames:       make(chan relayFrame, capacity),
+		frames:       make(chan relayFrame, routeHandoffFrames),
 		done:         make(chan struct{}),
 		window:       initialStreamWindow,
 		windowChange: make(chan struct{}),
 		public:       public,
-		maxQueued:    maxQueued,
+		maxQueued:    routeBufferBytes,
+		pendingReady: make(chan struct{}, 1),
 	}
 }
 
-// reserve accounts for a frame that is about to enter the route queue. A route
-// without a byte bound relies on its credit window and frame count instead.
+// reserve accounts for a frame that is about to enter the route's queue. It
+// reports false only when the peer has already sent more than one flow-control
+// window, which a peer that respects the protocol cannot do.
 func (route *clientRoute) reserve(frame relayFrame) bool {
-	if route.maxQueued <= 0 {
-		return true
-	}
 	size := int64(len(frame.Payload))
-	route.queueMu.Lock()
-	defer route.queueMu.Unlock()
+	route.pendingMu.Lock()
+	defer route.pendingMu.Unlock()
 	if route.queuedBytes+size > route.maxQueued {
 		return false
 	}
@@ -228,18 +235,65 @@ func (route *clientRoute) reserve(frame relayFrame) bool {
 	return true
 }
 
-// release returns the reservation once the consumer has taken the frame off the
-// queue, or when the frame never reached it.
-func (route *clientRoute) release(frame relayFrame) {
-	if route.maxQueued <= 0 {
-		return
+// enqueue appends a reserved frame to the route in arrival order and wakes the
+// delivery goroutine. It never blocks: a frame the peer was allowed to send
+// must not stall the tunnel read loop, which carries every other stream on the
+// same connection.
+func (route *clientRoute) enqueue(frame relayFrame) {
+	route.pendingMu.Lock()
+	route.pending = append(route.pending, frame)
+	route.pendingMu.Unlock()
+	select {
+	case route.pendingReady <- struct{}{}:
+	default:
 	}
-	route.queueMu.Lock()
-	defer route.queueMu.Unlock()
-	route.queuedBytes -= int64(len(frame.Payload))
-	if route.queuedBytes < 0 {
-		route.queuedBytes = 0
+}
+
+// drain hands queued frames to the consumer in order until the route closes.
+// It is the only producer of frames, so a consumer keeps reading one channel
+// and the ordering of a response body is preserved. The reservation is dropped
+// as each frame leaves the queue: what the bound measures is what is still
+// waiting, which is also what flow control counts as unacknowledged.
+func (route *clientRoute) drain() {
+	defer route.discardPending()
+	for {
+		route.pendingMu.Lock()
+		if len(route.pending) == 0 {
+			route.pendingMu.Unlock()
+			select {
+			case <-route.pendingReady:
+				continue
+			case <-route.done:
+				return
+			}
+		}
+		frame := route.pending[0]
+		route.pending[0] = relayFrame{}
+		route.pending = route.pending[1:]
+		if len(route.pending) == 0 {
+			// Drop the backing array once the queue is empty: a long response
+			// must not pin a window's worth of buffers for the route's lifetime.
+			route.pending = nil
+		}
+		route.queuedBytes -= int64(len(frame.Payload))
+		if route.queuedBytes < 0 {
+			route.queuedBytes = 0
+		}
+		route.pendingMu.Unlock()
+		select {
+		case route.frames <- frame:
+		case <-route.done:
+			return
+		}
 	}
+}
+
+// discardPending releases everything a closed route never delivered.
+func (route *clientRoute) discardPending() {
+	route.pendingMu.Lock()
+	route.pending = nil
+	route.queuedBytes = 0
+	route.pendingMu.Unlock()
 }
 
 func (route *clientRoute) close() { route.once.Do(func() { close(route.done) }) }
@@ -321,6 +375,8 @@ func (tunnel *hostTunnel) openStream(metadata *streamOpen) (connectionID, *clien
 		tunnel.clients[id] = route
 	}
 	tunnel.clientsMu.Unlock()
+	// One delivery goroutine per route moves queued frames to the consumer.
+	go route.drain()
 	var payload []byte
 	if metadata != nil {
 		payload, err = metadata.encode()
@@ -515,15 +571,10 @@ func (tunnel *hostTunnel) readLoop(touch func()) error {
 			_ = tunnel.send(relayFrame{Kind: frameClose, ConnectionID: frame.ConnectionID})
 			continue
 		}
-		select {
-		case route.frames <- frame:
-		case <-route.done:
-			route.release(frame)
-		default:
-			route.release(frame)
-			tunnel.removeClient(frame.ConnectionID)
-			_ = tunnel.send(relayFrame{Kind: frameClose, ConnectionID: frame.ConnectionID})
-		}
+		// The queue never refuses a frame the peer's window allowed, and handing
+		// it over never blocks: losing a frame here silently truncated a response
+		// body, and blocking here would stall every other stream on the tunnel.
+		route.enqueue(frame)
 	}
 }
 

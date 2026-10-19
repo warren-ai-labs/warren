@@ -3,9 +3,178 @@ import XCTest
 @testable import WarrenDesktop
 import WarrenDomain
 import WarrenClientCore
+import WarrenTransport
 @testable import Warren
 
 final class WarrenRemoteModelTests: XCTestCase {
+    /// The sidebar's step line reads as verb and target, relative to the
+    /// Session's directory, and is absent rather than blank.
+    func testStepLineReadsAsVerbAndRelativeTarget() {
+        func tool(_ sequence: UInt64, _ type: String) -> WarrenRemoteAgentEvent {
+            WarrenRemoteAgentEvent(sequence: sequence, type: type, payload: [
+                "callId": .string("c1"),
+                "toolKind": .string("read"),
+                "toolDetail": .string("/repo/Sources/a.swift"),
+            ])
+        }
+        let running = WarrenConversation.currentStep(after: nil, applying: [tool(1, "tool.started")])
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.stepLine(running, root: "/repo"),
+            "Reading Sources/a.swift"
+        )
+        let settled = WarrenConversation.currentStep(after: running, applying: [tool(2, "tool.completed")])
+        XCTAssertEqual(WarrenRemoteApplicationModel.stepLine(settled, root: "/repo"), "Read Sources/a.swift")
+        XCTAssertNil(WarrenRemoteApplicationModel.stepLine(nil, root: "/repo"))
+    }
+
+    /// The resting second line: what the Session last did.
+    ///
+    /// A settled call is the answer, and a finished answer does not replace it —
+    /// every finished turn has an answer, so saying so describes nothing. A turn
+    /// that settled no call is described by how long it ran.
+    func testLastActivityKeepsTheLastSettledAction() {
+        func tool(_ sequence: UInt64, _ type: String) -> WarrenRemoteAgentEvent {
+            WarrenRemoteAgentEvent(sequence: sequence, type: type, payload: [
+                "callId": .string("c1"),
+                "toolKind": .string("ran"),
+                "toolDetail": .string("swift test"),
+            ])
+        }
+        func answer(_ sequence: UInt64) -> WarrenRemoteAgentEvent {
+            WarrenRemoteAgentEvent(
+                sequence: sequence,
+                type: "message.completed",
+                role: "assistant",
+                content: "Done."
+            )
+        }
+        func fold(
+            _ events: [WarrenRemoteAgentEvent],
+            after line: String?,
+            turn: WarrenAgentTurnFold = WarrenAgentTurnFold()
+        ) -> (line: String?, turn: WarrenAgentTurnFold) {
+            var fold = turn
+            let result = WarrenRemoteApplicationModel.lastActivity(
+                after: line,
+                applying: events,
+                from: nil,
+                root: nil,
+                turn: &fold
+            )
+            return (result, fold)
+        }
+        XCTAssertNil(
+            fold([tool(1, "tool.started")], after: nil).line,
+            "A call still in flight is not something the Session has done"
+        )
+        XCTAssertEqual(
+            fold([tool(1, "tool.started"), tool(2, "tool.completed")], after: nil).line,
+            "Ran swift test"
+        )
+        XCTAssertEqual(
+            fold([answer(3)], after: "Ran swift test").line,
+            "Ran swift test",
+            "An answer says nothing a resting row does not already know"
+        )
+        XCTAssertEqual(
+            fold([WarrenRemoteAgentEvent(sequence: 6, type: "turn.completed")], after: "Ran swift test").line,
+            "Ran swift test",
+            "Ending a turn does not erase what it did"
+        )
+    }
+
+    /// A turn that ran no tool at all — a question answered from chat — is
+    /// described by how long it took, which is a fact about it rather than a
+    /// restatement that it ended.
+    func testLastActivityDescribesAnActionlessTurnByItsDuration() {
+        func stamped(_ sequence: UInt64, _ type: String, at seconds: TimeInterval) -> WarrenRemoteAgentEvent {
+            WarrenRemoteAgentEvent(
+                sequence: sequence,
+                type: type,
+                occurredAt: Self.stamp(seconds)
+            )
+        }
+        var turn = WarrenAgentTurnFold()
+        var line = WarrenRemoteApplicationModel.lastActivity(
+            after: nil,
+            applying: [stamped(1, "turn.started", at: 0)],
+            from: nil,
+            root: nil,
+            turn: &turn
+        )
+        XCTAssertNil(line)
+        line = WarrenRemoteApplicationModel.lastActivity(
+            after: line,
+            applying: [stamped(2, "turn.completed", at: 72)],
+            from: nil,
+            root: nil,
+            turn: &turn
+        )
+        XCTAssertEqual(line, "Worked 1m 12s")
+
+        // A turn that did work keeps its work as its answer.
+        var worked = WarrenAgentTurnFold()
+        _ = WarrenRemoteApplicationModel.lastActivity(
+            after: nil,
+            applying: [stamped(7, "turn.started", at: 0)],
+            from: nil,
+            root: nil,
+            turn: &worked
+        )
+        worked.settledCalls = 2
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.lastActivity(
+                after: "Ran swift test",
+                applying: [stamped(8, "turn.completed", at: 72)],
+                from: nil,
+                root: nil,
+                turn: &worked
+            ),
+            "Ran swift test"
+        )
+
+        // A turn whose beginning the client never saw cannot report a duration.
+        var partial = WarrenAgentTurnFold()
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.lastActivity(
+                after: "Ran swift test",
+                applying: [stamped(9, "turn.completed", at: 72)],
+                from: nil,
+                root: nil,
+                turn: &partial
+            ),
+            "Ran swift test"
+        )
+    }
+
+    /// A resting row's age comes from when its last turn ended, which the
+    /// replayed history carries, so a Session idle before this client connected
+    /// still has one.
+    func testLastSettledDateIsTheLatestTurnEnd() {
+        func stamped(_ sequence: UInt64, _ type: String, at seconds: TimeInterval) -> WarrenRemoteAgentEvent {
+            WarrenRemoteAgentEvent(sequence: sequence, type: type, occurredAt: Self.stamp(seconds))
+        }
+        XCTAssertNil(WarrenRemoteApplicationModel.lastSettledDate(in: [
+            stamped(1, "turn.started", at: 0),
+            stamped(2, "tool.completed", at: 10),
+        ]))
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.lastSettledDate(in: [
+                stamped(1, "turn.started", at: 0),
+                stamped(2, "turn.completed", at: 72),
+                stamped(3, "turn.started", at: 100),
+                stamped(4, "turn.interrupted", at: 130),
+            ]),
+            Date(timeIntervalSince1970: 1_700_000_000 + 130)
+        )
+    }
+
+    private static func stamp(_ seconds: TimeInterval) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: Date(timeIntervalSince1970: 1_700_000_000 + seconds))
+    }
+
     @MainActor
     func testRemoteModelStartsInConnectingState() {
         let model = WarrenRemoteApplicationModel()
@@ -614,7 +783,6 @@ final class WarrenRemoteModelTests: XCTestCase {
                   "mergeState": "future-state"
                 }
               ],
-              "terminalGroups": [],
               "sessions": []
             }
             """.utf8
@@ -651,7 +819,6 @@ final class WarrenRemoteModelTests: XCTestCase {
                   "workspaces": [
                     {"id": "workspace-old", "project": "project-a", "name": "Old", "path": "/a"}
                   ],
-                  "terminalGroups": [],
                   "sessions": []
                 }
                 """.utf8
@@ -736,7 +903,11 @@ final class WarrenRemoteModelTests: XCTestCase {
                       "id": "session-a",
                       "process": "npm",
                       "commandLine": "npm run dev",
-                      "directory": "/work/new"
+                      "directory": "/work/new",
+                      "shell": {
+                        "atPrompt": false,
+                        "runningCommand": "npm run dev"
+                      }
                     }]
                   }
                 }
@@ -749,6 +920,71 @@ final class WarrenRemoteModelTests: XCTestCase {
         XCTAssertEqual(session.process, "npm")
         XCTAssertEqual(session.commandLine, "npm run dev")
         XCTAssertEqual(session.directory, "/work/new")
+        let shell = try XCTUnwrap(session.shell)
+        XCTAssertFalse(shell.atPrompt)
+        XCTAssertEqual(shell.runningCommand, "npm run dev")
+    }
+
+    /// The client records what the Host cannot report: how long the running
+    /// command has run, and the shell's own name. Both survive the 750ms
+    /// metadata refreshes, because the Host sends a foreground process rather
+    /// than a command start time.
+    func testShellStateCarriesTheShellNameAndCommandStartForward() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let previous = WarrenDesktopShellState(
+            atPrompt: false,
+            runningCommand: "npm run dev",
+            shellName: "zsh",
+            commandStartedAt: now.addingTimeInterval(-180)
+        )
+        let running = WarrenRemoteApplicationModel.shellState(
+            from: RemoteRoster.ShellMetadata(
+                atPrompt: false,
+                runningCommand: "npm run dev"
+            ),
+            previous: previous,
+            foregroundProcess: "npm",
+            now: now
+        )
+        XCTAssertEqual(running?.shellName, "zsh")
+        XCTAssertEqual(running?.commandStartedAt, now.addingTimeInterval(-180))
+    }
+
+    func testShellStateUsesTheLastCommandEndForAFreshlySeenRunningCommand() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let ended = now.addingTimeInterval(-45)
+        let running = WarrenRemoteApplicationModel.shellState(
+            from: RemoteRoster.ShellMetadata(
+                atPrompt: false,
+                runningCommand: "swift build",
+                lastExitAt: ISO8601DateFormatter().string(from: ended)
+            ),
+            previous: nil,
+            foregroundProcess: "swift",
+            now: now
+        )
+        XCTAssertEqual(running?.commandStartedAt, ended)
+    }
+
+    func testShellStateRecordsTheCommandStartOnThePromptTransition() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let atPrompt = WarrenDesktopShellState(atPrompt: true, shellName: "zsh")
+        let started = WarrenRemoteApplicationModel.shellState(
+            from: RemoteRoster.ShellMetadata(atPrompt: false, runningCommand: "swift build"),
+            previous: atPrompt,
+            foregroundProcess: "swift",
+            now: now
+        )
+        XCTAssertEqual(started?.commandStartedAt, now)
+        XCTAssertEqual(started?.shellName, "zsh")
+
+        let back = WarrenRemoteApplicationModel.shellState(
+            from: RemoteRoster.ShellMetadata(atPrompt: true, lastCommand: "swift build"),
+            previous: started,
+            foregroundProcess: "zsh",
+            now: now
+        )
+        XCTAssertNil(back?.commandStartedAt)
     }
 
     func testReorderingTabsPreservesTasksInProjection() {
@@ -876,7 +1112,6 @@ final class WarrenRemoteModelTests: XCTestCase {
               "host": {"id": "11111111-1111-4111-8111-111111111111", "name": "Mac"},
               "projects": [],
               "workspaces": [],
-              "terminalGroups": [],
               "sessions": [
                 {
                   "id": "22222222-2222-4222-8222-222222222222",
@@ -1058,7 +1293,6 @@ final class WarrenRemoteModelTests: XCTestCase {
               "host": {"id": "11111111-1111-4111-8111-111111111111", "name": "Mac"},
               "projects": [],
               "workspaces": [],
-              "terminalGroups": [],
               "sessions": []
             }
             """.utf8)
@@ -1396,24 +1630,24 @@ final class WarrenRemoteModelTests: XCTestCase {
     @MainActor
     func testBrowserLaunchUsesTheBrowserCreateCall() {
         let workspaceCall = WarrenRemoteApplicationModel.createSessionCall(
-            scope: ("workspace", "workspace-1"),
+            workspaceID: "workspace-1",
             request: TerminalSessionLaunchRequest(kind: .browser)
         )
         XCTAssertEqual(workspaceCall.method, "browser.session.create")
         XCTAssertEqual(workspaceCall.params, ["workspace": "workspace-1"])
 
-        let groupCall = WarrenRemoteApplicationModel.createSessionCall(
-            scope: ("group", "group-1"),
+        let titledCall = WarrenRemoteApplicationModel.createSessionCall(
+            workspaceID: "workspace-2",
             request: TerminalSessionLaunchRequest(kind: .browser, title: "Docs")
         )
-        XCTAssertEqual(groupCall.method, "browser.session.create")
-        XCTAssertEqual(groupCall.params, ["group": "group-1", "title": "Docs"])
+        XCTAssertEqual(titledCall.method, "browser.session.create")
+        XCTAssertEqual(titledCall.params, ["workspace": "workspace-2", "title": "Docs"])
     }
 
     @MainActor
     func testTerminalLaunchKeepsTheSessionCreateCall() {
         let call = WarrenRemoteApplicationModel.createSessionCall(
-            scope: ("workspace", "workspace-1"),
+            workspaceID: "workspace-1",
             request: .claude
         )
         XCTAssertEqual(call.method, "session.create")
@@ -1424,15 +1658,103 @@ final class WarrenRemoteModelTests: XCTestCase {
         ])
 
         let shell = WarrenRemoteApplicationModel.createSessionCall(
-            scope: ("group", "group-1"),
+            workspaceID: "workspace-2",
             request: .shell
         )
         XCTAssertEqual(shell.method, "session.create")
         XCTAssertEqual(shell.params, [
-            "group": "group-1",
+            "workspace": "workspace-2",
             "kind": "shell",
             "command": "",
         ])
+    }
+
+    /// The sidebar re-ranks a turn's counts by its own priority, which is not
+    /// `summarize`'s stable order: an edit outranks a command.
+    func testTurnCountsRankTheSidebarPriority() {
+        func step(_ sequence: UInt64, _ kind: String, _ detail: String) -> WarrenConversation.Step {
+            WarrenConversation.Step(
+                id: "c\(sequence)",
+                kind: .tool,
+                toolKind: kind,
+                detail: detail,
+                status: .completed,
+                order: sequence
+            )
+        }
+        let steps = [
+            step(1, "read", "/repo/a.swift"),
+            step(2, "ran", "swift test"),
+            step(3, "edit", "/repo/b.swift"),
+            step(4, "fetch", "https://example.com"),
+        ]
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.turnCounts(steps),
+            ["Edited 1 file", "Ran 1 command", "Fetched 1 page", "Read 1 file"]
+        )
+    }
+
+    /// A `plan.updated` payload becomes the sidebar's progress and its current
+    /// entry.
+    func testPlanProgressReadsTheCurrentEntry() {
+        let payload: [String: WarrenRemoteJSONValue] = [
+            "items": .array([
+                .object(["title": .string("Read the spec"), "state": .string("completed")]),
+                .object(["title": .string("Wire the sidebar"), "state": .string("in_progress")]),
+                .object(["title": .string("Ship it"), "state": .string("pending")]),
+            ]),
+        ]
+        let plan = WarrenRemoteApplicationModel.planProgress(from: payload)
+        XCTAssertEqual(plan?.done, 1)
+        XCTAssertEqual(plan?.total, 3)
+        XCTAssertEqual(plan?.currentStep, "Wire the sidebar")
+        XCTAssertNil(WarrenRemoteApplicationModel.planProgress(from: [:]))
+    }
+
+    /// A child's tool call becomes a line with the same vocabulary the parent's
+    /// activity line uses.
+    func testSubagentActivityLineUsesTheStepVocabulary() {
+        let payload: [String: WarrenRemoteJSONValue] = [
+            "toolKind": .string("ran"),
+            "toolName": .string("Bash"),
+            "toolDetail": .string("git status"),
+            "toolStatus": .string("in_progress"),
+        ]
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.subagentActivityLine(type: "tool.started", payload: payload),
+            "Running git status"
+        )
+        var completed = payload
+        completed["toolStatus"] = .string("success")
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.subagentActivityLine(type: "tool.completed", payload: completed),
+            "Ran git status"
+        )
+    }
+
+    /// A sidechain interaction marks the child waiting until it is answered.
+    func testSubagentWaitingTracksPendingInteractions() {
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.subagentWaiting(type: "interaction.requested", state: "pending"),
+            true
+        )
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.subagentWaiting(type: "interaction.requested", state: ""),
+            true,
+            "An interaction request with no explicit state is pending"
+        )
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.subagentWaiting(type: "interaction.resolved", state: "resolved"),
+            false
+        )
+        XCTAssertEqual(
+            WarrenRemoteApplicationModel.subagentWaiting(type: "interaction.expired", state: "expired"),
+            false
+        )
+        XCTAssertNil(
+            WarrenRemoteApplicationModel.subagentWaiting(type: "tool.started", state: "pending"),
+            "A tool event leaves the child's waiting state alone"
+        )
     }
 }
 

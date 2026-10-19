@@ -182,29 +182,29 @@ struct WarrenEmbeddedEditorPalette {
     /// Base hex for the scrollbar slider, which VS Code wants with alpha.
     let scrollbar: String
 
-    /// Ember. Matches `WarrenColorTokens.dark`.
+    /// Neutral dark. Matches `WarrenColorTokens.dark`.
     static let dark = Self(
-        background: "#151110",
-        chrome: "#1c1918",
-        raised: "#201e1c",
-        input: "#181615",
-        muted: "#2a2827",
-        border: "#2a2827",
-        ring: "#3a3837",
-        foreground: "#eae8e6",
-        mutedForeground: "#a8a5a3",
+        background: "#0b0b0b",
+        chrome: "#121212",
+        raised: "#1a1a1a",
+        input: "#111111",
+        muted: "#1c1c1c",
+        border: "#1f1f1f",
+        ring: "#3a3a3a",
+        foreground: "#ededed",
+        mutedForeground: "#a3a3a3",
         accent: "#e07850",
-        onAccent: "#151110",
+        onAccent: "#0b0b0b",
         accentWash: "#e0785040",
-        primaryButton: "#eae8e6",
-        primaryButtonHover: "#d1cfcd",
-        onPrimaryButton: "#151110",
+        primaryButton: "#ededed",
+        primaryButtonHover: "#d4d4d4",
+        onPrimaryButton: "#0b0b0b",
         destructive: "#cc4444",
         warning: "#e5c07b",
         info: "#61afef",
-        listSelected: "#302e2c",
-        listHover: "#24201f",
-        scrollbar: "#a8a5a3"
+        listSelected: "#262626",
+        listHover: "#171717",
+        scrollbar: "#a3a3a3"
     )
 
     /// Ember Paper. Matches `WarrenColorTokens.light`.
@@ -2770,8 +2770,7 @@ struct WarrenEmbeddedEditorSurface: View {
                 .frame(maxWidth: 460)
             HStack(spacing: WarrenSpacing.compact) {
                 Button("Copy install command") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString("brew install code-server", forType: .string)
+                    WarrenCopyFeedback.shared.copy("brew install code-server", announcing: "Copied command")
                 }
                 .buttonStyle(WarrenSecondaryButtonStyle())
                 Button("Retry") {

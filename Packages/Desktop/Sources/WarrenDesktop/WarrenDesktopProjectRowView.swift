@@ -25,7 +25,6 @@ struct WarrenDesktopProjectRow: View {
     /// single-host rows keep their historical semantic IDs when this is nil.
     let semanticScope: String?
     let workspaceCount: Int
-    let isCollapsed: Bool
     let isSelected: Bool
     let isExpanded: Bool
     let isPinned: Bool
@@ -43,12 +42,20 @@ struct WarrenDesktopProjectRow: View {
     let onRename: () -> Void
     let onTogglePin: () -> Void
     let onDelete: () -> Void
+    /// One mark per Session under the project, drawn as dots while folded.
+    let foldMarks: [WarrenActivityMark?]
+    /// The branch of the project's only Workspace, when the project lists
+    /// that Workspace's Sessions directly instead of drawing a row for it.
+    let branchName: String?
+    /// That Workspace's menu, which has no row of its own to hang on.
+    let workspaceMenu: [WarrenDesktopContextMenuAction]
+    /// Double-click on such a project does what it does on a Workspace row.
+    let onDoubleClick: (() -> Void)?
 
     init(
         project: Project,
         semanticScope: String? = nil,
         workspaceCount: Int,
-        isCollapsed: Bool,
         isSelected: Bool,
         isExpanded: Bool,
         isPinned: Bool,
@@ -63,12 +70,19 @@ struct WarrenDesktopProjectRow: View {
         onToggleAutoImportWorktrees: @escaping () -> Void,
         onRename: @escaping () -> Void,
         onTogglePin: @escaping () -> Void,
-        onDelete: @escaping () -> Void
+        onDelete: @escaping () -> Void,
+        foldMarks: [WarrenActivityMark?] = [],
+        branchName: String? = nil,
+        workspaceMenu: [WarrenDesktopContextMenuAction] = [],
+        onDoubleClick: (() -> Void)? = nil
     ) {
+        self.foldMarks = foldMarks
+        self.branchName = branchName
+        self.workspaceMenu = workspaceMenu
+        self.onDoubleClick = onDoubleClick
         self.project = project
         self.semanticScope = semanticScope
         self.workspaceCount = workspaceCount
-        self.isCollapsed = isCollapsed
         self.isSelected = isSelected
         self.isExpanded = isExpanded
         self.isPinned = isPinned
@@ -96,125 +110,66 @@ struct WarrenDesktopProjectRow: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.warrenForceHover) private var forceHover
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     @FocusState private var isFocused: Bool
     @FocusState private var isAddFocused: Bool
     @FocusState private var isToggleFocused: Bool
 
     var body: some View {
-        if isCollapsed {
-            collapsedRow
-        } else {
-            expandedRow
-        }
-    }
-
-    private var collapsedRow: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        return Button(action: onSelect) {
-            ZStack(alignment: .bottomTrailing) {
-                projectAvatar(tokens: tokens)
-                    .frame(width: 24, height: 24)
-                if let deletionKind {
-                    WarrenBrailleSpinner(size: 12, accessibilityLabel: deletionKind.accessibilityLabel)
-                        .background(tokens.cardSurface, in: Circle())
-                        .offset(x: 5, y: 5)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, isFocused: isFocused))
-        .disabled(isInteractionDisabled)
-        .frame(width: 32, height: 32)
-        .contentShape(.rect)
-        .foregroundStyle(tokens.mutedForeground)
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
-        .accessibilityLabel("Project \(project.name)")
-        .accessibilityValue(projectAccessibilityValue())
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .warrenSemanticElement(
-            id: semanticID,
-            role: .button,
-            label: "Project \(project.name)",
-            value: projectAccessibilityValue(),
-            isEnabled: !isInteractionDisabled,
-            isSelected: isSelected,
-            action: { if !isInteractionDisabled { onSelect() } }
-        )
-        .focused($isFocused)
-        .contextMenu {
-            if !isInteractionDisabled && !isMutationDisabled {
-                WarrenDesktopContextMenu([
-                    .button(title: isPinned ? "Unpin Project" : "Pin Project", action: onTogglePin),
-                    .button(title: "Rename Project", action: onRename),
-                    .button(title: "Import Existing Worktrees…", action: onImportWorktrees),
-                    .button(title: "Configure Setup Script…", action: onConfigureSetupScript),
-                    .button(
-                        title: project.autoImportGitWorktrees
-                            ? "Disable Automatic Worktree Import"
-                            : "Enable Automatic Worktree Import (No Confirmation)",
-                        action: onToggleAutoImportWorktrees
-                    ),
-                    .divider,
-                    .button(title: "Delete Project…", destructive: true, action: onDelete),
-                ])
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.horizontal, WarrenSpacing.compact)
+        expandedRow
     }
 
     private var expandedRow: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let actionSlot = WarrenLayoutMetrics.sidebarActionButtonSize + WarrenSpacing.compact
-        let compactActionSize = WarrenLayoutMetrics.sidebarActionButtonSize - WarrenSpacing.xs
-        return ZStack(alignment: .trailing) {
+        return HStack(spacing: WarrenDesktopSidebarMetrics.groupIconSpacing) {
             Button(action: onToggleExpansion) {
-                HStack(spacing: WarrenSpacing.compact) {
-                    projectAvatar(tokens: tokens)
-                        .frame(width: WarrenLayoutMetrics.sidebarRowIconSlotSize,
-                               height: WarrenLayoutMetrics.sidebarRowIconSlotSize)
-                        .opacity(isHovered || isToggleFocused ? 0 : 1)
+                HStack(spacing: WarrenDesktopSidebarMetrics.groupIconSpacing) {
+                    WarrenDesktopProjectAvatar(
+                        name: project.name,
+                        identity: project.id.description
+                    )
 
-                    Text(project.name)
-                        // Weight is what separates a project from the
-                        // workspaces inside it, now that they share depth 0.
-                        .font(WarrenTypography.sidebarContainerRow)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    // The name gives way first; the branch stays readable.
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        Text(project.name)
+                            .font(WarrenDesktopTreeTypography.groupName)
+                            .foregroundStyle(tokens.treeGroupText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if let branchName {
+                            Text(branchName)
+                                .font(WarrenDesktopTreeTypography.branchName)
+                                .foregroundStyle(tokens.treeQuietText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .layoutPriority(-1)
+                        }
+                    }
 
                     if let deletionKind {
                         deletionStatus(tokens: tokens, kind: deletionKind)
                     }
 
-                    Text("(\(workspaceCount))")
-                        .font(WarrenTypography.navigationMeta)
-                        .foregroundStyle(tokens.mutedForeground)
-                        .lineLimit(1)
-                        .opacity(isHovered || isToggleFocused || forceHover ? 1 : 0)
-                        .accessibilityHidden(true)
-
                     if isPinned {
                         Image(systemName: "pin.fill")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(tokens.mutedForeground)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(tokens.treeQuietText)
                             .accessibilityHidden(true)
                     }
 
                     Spacer(minLength: 0)
                 }
-                // The row's own background inset is 8pt, so the content
-                // carries the remainder of its depth-1 indent.
-                .padding(.leading, WarrenDesktopSidebarIndent.project)
-                .padding(.trailing, actionSlot)
-                .frame(minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight)
+                .frame(height: WarrenDesktopSidebarMetrics.groupRowHeight)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
             }
-            .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, isFocused: isFocused))
+            .buttonStyle(.plain)
             .disabled(isInteractionDisabled)
             .focused($isFocused)
-            .foregroundStyle(tokens.projectText)
+            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                if !isInteractionDisabled { onDoubleClick?() }
+            })
             .accessibilityLabel("Project \(project.name)")
             .accessibilityValue(projectAccessibilityValue(isExpanded: isExpanded))
             .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -228,53 +183,48 @@ struct WarrenDesktopProjectRow: View {
                 action: { if !isInteractionDisabled { onToggleExpansion() } }
             )
 
-            HStack(spacing: WarrenSpacing.xxs) {
-                Button(action: onAddWorkspace) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(tokens.mutedForeground.opacity(0.86))
-                        .accessibilityHidden(true)
-                }
-                .buttonStyle(WarrenChromeButtonStyle(isFocused: isAddFocused))
-                .disabled(isInteractionDisabled || isMutationDisabled)
-                .frame(width: compactActionSize, height: compactActionSize)
-                .contentShape(.rect)
-                .opacity(isHovered || isAddFocused ? 1 : 0)
-                .focused($isAddFocused)
-                .accessibilityLabel("New workspace in \(project.name)")
-                .help("New workspace")
-                .warrenSemanticElement(
-                    id: "\(semanticID).new-workspace",
-                    role: .button,
-                    label: "New workspace in \(project.name)",
-                    isEnabled: !isInteractionDisabled && !isMutationDisabled,
-                    action: {
-                        if !isInteractionDisabled && !isMutationDisabled {
-                            onAddWorkspace()
-                        }
-                    }
-                )
-            }
-            .padding(.trailing, WarrenSpacing.xs)
-        }
-        .overlay(alignment: .leading) {
-            Button(action: onToggleExpansion) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(tokens.mutedForeground.opacity(0.86))
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            Button(action: onAddWorkspace) {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(tokens.treeQuietText)
+                    .frame(width: 18, height: 18)
+                    .contentShape(.rect)
                     .accessibilityHidden(true)
             }
-            .buttonStyle(WarrenChromeButtonStyle(isFocused: isToggleFocused))
+            .buttonStyle(WarrenChromeButtonStyle(isFocused: isAddFocused))
+            .disabled(isInteractionDisabled || isMutationDisabled)
+            .opacity(isHovered || isAddFocused || forceHover ? 1 : 0)
+            .animation(
+                WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
+                value: isHovered || isAddFocused || forceHover
+            )
+            .focused($isAddFocused)
+            .accessibilityLabel("New workspace in \(project.name)")
+            .warrenTooltip("New workspace")
+            .warrenSemanticElement(
+                id: "\(semanticID).new-workspace",
+                role: .button,
+                label: "New workspace in \(project.name)",
+                isEnabled: !isInteractionDisabled && !isMutationDisabled,
+                action: {
+                    if !isInteractionDisabled && !isMutationDisabled {
+                        onAddWorkspace()
+                    }
+                }
+            )
+
+            if !isExpanded, WarrenDesktopTreeFoldDots.drawsAny(foldMarks) {
+                WarrenDesktopTreeFoldDots(marks: foldMarks)
+            }
+
+            Button(action: onToggleExpansion) {
+                WarrenDesktopTreeChevron(isExpanded: isExpanded)
+                    .frame(width: 14, height: WarrenDesktopSidebarMetrics.groupRowHeight)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
             .disabled(isInteractionDisabled)
-            .frame(width: WarrenLayoutMetrics.sidebarRowIconSlotSize,
-                   height: WarrenLayoutMetrics.sidebarRowIconSlotSize)
-            .contentShape(.rect)
-            .opacity(isHovered || isToggleFocused ? 1 : 0)
             .focused($isToggleFocused)
-            // The chevron replaces the avatar in place, so it tracks the same
-            // indent as the row content.
-            .padding(.leading, WarrenDesktopSidebarIndent.project)
             .accessibilityLabel(isExpanded ? "Collapse project \(project.name)" : "Expand project \(project.name)")
             .warrenSemanticElement(
                 id: "\(semanticID).toggle",
@@ -284,54 +234,72 @@ struct WarrenDesktopProjectRow: View {
                 action: { if !isInteractionDisabled { onToggleExpansion() } }
             )
         }
-        .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarProjectRowHeight)
-        .background(tokens.interactionBackground(for: .resolve(
-            disabled: isInteractionDisabled,
-            pressed: false,
-            selected: isSelected,
-            focused: isFocused,
-            hovered: isHovered || isAddFocused || isToggleFocused
-        )))
-        .clipShape(.rect(cornerRadius: WarrenRadius.row))
+        .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
+        .frame(maxWidth: .infinity, minHeight: WarrenDesktopSidebarMetrics.groupRowHeight)
+        .background(
+            isSelected
+                ? tokens.treeRowSelected
+                : (isHovered || isFocused ? tokens.treeRowHover : .clear),
+            in: RoundedRectangle(cornerRadius: WarrenDesktopSidebarMetrics.rowRadius, style: .continuous)
+        )
         .contentShape(.rect)
         .onHover { isHovered = $0 }
-        .contextMenu {
-            if !isInteractionDisabled && !isMutationDisabled {
-                WarrenDesktopContextMenu([
-                    .button(title: isPinned ? "Unpin Project" : "Pin Project", action: onTogglePin),
-                    .button(title: "Rename Project", action: onRename),
-                    .button(title: "Import Existing Worktrees…", action: onImportWorktrees),
-                    .button(title: "Configure Setup Script…", action: onConfigureSetupScript),
-                    .button(
-                        title: project.autoImportGitWorktrees
-                            ? "Disable Automatic Worktree Import"
-                            : "Enable Automatic Worktree Import (No Confirmation)",
-                        action: onToggleAutoImportWorktrees
-                    ),
-                    .divider,
-                    .button(title: "Delete Project…", destructive: true, action: onDelete),
-                ])
-            }
-        }
-        .padding(.horizontal, WarrenSpacing.compact)
+        // A long name truncates to one line; the whole name is on hover.
+        .help(branchName.map { "\(project.name) · \($0)" } ?? project.name)
+        .warrenContextMenu(
+            !isInteractionDisabled && !isMutationDisabled ? contextMenuActions : []
+        )
         .accessibilityElement(children: .contain)
     }
 
-    /// Superset's project rows render a first-letter avatar (or the project's
-    /// icon); Warren uses the same slot for its first-letter avatar.
-    private func projectAvatar(tokens: WarrenColorTokens) -> some View {
-        Text(String(project.name.prefix(1)).uppercased())
-            .font(WarrenTypography.compactCode)
-            .foregroundStyle(tokens.foreground.opacity(0.92))
-            .frame(width: WarrenLayoutMetrics.sidebarRowIconSlotSize,
-                   height: WarrenLayoutMetrics.sidebarRowIconSlotSize)
-            .background(tokens.muted.opacity(0.55))
-            .clipShape(.rect(cornerRadius: WarrenRadius.xs))
-            .overlay {
-                RoundedRectangle(cornerRadius: WarrenRadius.xs)
-                    .stroke(tokens.border.opacity(0.55), lineWidth: WarrenSpacing.hairline)
-            }
-            .accessibilityHidden(true)
+    private var contextMenuActions: [WarrenDesktopContextMenuAction] {
+        Self.contextMenuActions(
+            project: project,
+            isPinned: isPinned,
+            workspaceMenu: workspaceMenu,
+            onImportWorktrees: onImportWorktrees,
+            onConfigureSetupScript: onConfigureSetupScript,
+            onToggleAutoImportWorktrees: onToggleAutoImportWorktrees,
+            onRename: onRename,
+            onTogglePin: onTogglePin,
+            onDelete: onDelete
+        )
+    }
+
+    /// The Project's menu. Shared with the compact row an inactive Project
+    /// gets in the folded list at the end of the section.
+    static func contextMenuActions(
+        project: Project,
+        isPinned: Bool,
+        workspaceMenu: [WarrenDesktopContextMenuAction] = [],
+        onImportWorktrees: @escaping () -> Void,
+        onConfigureSetupScript: @escaping () -> Void,
+        onToggleAutoImportWorktrees: @escaping () -> Void,
+        onRename: @escaping () -> Void,
+        onTogglePin: @escaping () -> Void,
+        onDelete: @escaping () -> Void
+    ) -> [WarrenDesktopContextMenuAction] {
+        var actions: [WarrenDesktopContextMenuAction] = [
+            .button(title: isPinned ? "Unpin Project" : "Pin Project", action: onTogglePin),
+            .button(title: "Rename Project", action: onRename),
+            .button(title: "Import Existing Worktrees…", action: onImportWorktrees),
+            .button(title: "Configure Setup Script…", action: onConfigureSetupScript),
+            .button(
+                title: project.autoImportGitWorktrees
+                    ? "Disable Automatic Worktree Import"
+                    : "Enable Automatic Worktree Import (No Confirmation)",
+                action: onToggleAutoImportWorktrees
+            ),
+        ]
+        if !workspaceMenu.isEmpty {
+            actions.append(.divider)
+            actions.append(.menu(title: "Workspace", actions: workspaceMenu))
+        }
+        actions.append(contentsOf: [
+            .divider,
+            .button(title: "Delete Project…", destructive: true, action: onDelete),
+        ])
+        return actions
     }
 
     private func deletionStatus(

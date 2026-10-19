@@ -3,6 +3,7 @@ import { webAssetURL } from "./runtime.js";
 import { terminalSearchSummary } from "./terminal.js";
 import { terminalTabTitle } from "./title.js";
 import { shouldDismissOnBackdrop } from "./presentation.js";
+import { rovingIndex, rovingTabIndex } from "./roving.js";
 import { connectionSettling } from "./connection.js";
 import { createSearch, fieldRole, highlightSegments } from "./search.js";
 import { acpProviders } from "./conversation.js";
@@ -133,6 +134,79 @@ function useBuildVariant() {
   }, []);
 
   return isBuild;
+}
+
+// Roving focus for a composite list (the sidebar tree). Only the current item
+// keeps `tabIndex = 0`, so Tab leaves the group in one stop while the arrows
+// walk it. The item set is read from the DOM at event time, which means a
+// collapsed project or a closed session can never leave a stale element pinned
+// as the tab stop.
+function useRovingFocus(containerRef, selector, { orientation = "vertical" } = {}) {
+  const activeRef = useRef(0);
+
+  const items = useCallback(() => {
+    const root = containerRef.current;
+    if (!root) return [];
+    return [...root.querySelectorAll(selector)].filter(node => !node.disabled);
+  }, [containerRef, selector]);
+
+  const syncTabStops = useCallback(() => {
+    const list = items();
+    const active = rovingTabIndex(activeRef.current, list.length);
+    activeRef.current = active;
+    list.forEach((node, index) => {
+      node.tabIndex = index === active ? 0 : -1;
+    });
+  }, [items]);
+
+  // Re-apply after every render so a list that grew or shrank keeps exactly one
+  // tab stop without threading an index through the tree renderer.
+  useEffect(() => {
+    syncTabStops();
+  });
+
+  const onFocus = useCallback(event => {
+    const list = items();
+    const index = list.indexOf(event.target);
+    if (index < 0) return;
+    activeRef.current = index;
+    syncTabStops();
+  }, [items, syncTabStops]);
+
+  const onKeyDown = useCallback(event => {
+    const list = items();
+    const index = list.indexOf(event.target);
+    if (index < 0) return;
+    const next = rovingIndex(event.key, index, list.length, { orientation });
+    if (next < 0) return;
+    event.preventDefault();
+    activeRef.current = next;
+    syncTabStops();
+    list[next]?.focus();
+  }, [items, orientation, syncTabStops]);
+
+  return { onFocus, onKeyDown };
+}
+
+// True while a scroll container has content past its viewport. Drives the
+// sidebar's edge fade; re-checked whenever the caller's content dependencies
+// change or the container resizes.
+function useOverflowFlag(containerRef, deps) {
+  const [overflowing, setOverflowing] = useState(false);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return undefined;
+    const update = () => setOverflowing(node.scrollHeight - node.clientHeight > 1);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+    // The caller owns the extra dependencies; they are spread so React sees a
+    // stable list length as long as the call site stays fixed.
+  }, [containerRef, ...deps]);
+
+  return overflowing;
 }
 
 // App-owned overlays move focus into their first meaningful control. Keep the
@@ -307,6 +381,9 @@ export function Sidebar({
   creatingSession = false,
 }) {
   const isBuild = useBuildVariant();
+  const scrollRef = useRef(null);
+  const scrollOverflows = useOverflowFlag(scrollRef, [catalog, expandedProjects]);
+  const roving = useRovingFocus(scrollRef, ".sidebar-scroll button:not(:disabled)");
   const [dragState, setDragState] = useState(null);
   const [dragOverID, setDragOverID] = useState(null);
   const [dragOverPosition, setDragOverPosition] = useState(null);
@@ -382,7 +459,13 @@ export function Sidebar({
           <span>{connection.message}</span>
         </span>
       </div>
-      <div className="sidebar-scroll">
+      <div
+        className="sidebar-scroll"
+        ref={scrollRef}
+        data-overflow={scrollOverflows ? "true" : undefined}
+        onFocus={roving.onFocus}
+        onKeyDown={roving.onKeyDown}
+      >
         <div className="section-label">Projects</div>
         {catalog.projects.length ? catalog.projects.map(project => {
           const workspaces = catalog.workspacesByProject.get(project.id) || [];
@@ -580,15 +663,11 @@ export function TopBar({
   }, []);
 
   const handleTabListKeyDown = event => {
-    const keys = ["ArrowRight", "ArrowLeft", "Home", "End"];
-    if (!keys.includes(event.key)) return;
     if (!tabs.length) return;
-    const current = Math.max(0, tabs.findIndex(session => session.id === activeSession));
-    let next = current;
-    if (event.key === "ArrowRight") next = (current + 1) % tabs.length;
-    else if (event.key === "ArrowLeft") next = (current - 1 + tabs.length) % tabs.length;
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = tabs.length - 1;
+    const focused = tabs.findIndex(session => tabRefs.current.get(session.id) === event.target);
+    const current = focused >= 0 ? focused : Math.max(0, tabs.findIndex(session => session.id === activeSession));
+    const next = rovingIndex(event.key, current, tabs.length, { orientation: "horizontal" });
+    if (next < 0) return;
     event.preventDefault();
     const session = tabs[next];
     if (!session) return;
@@ -626,6 +705,7 @@ export function TopBar({
                 type="button"
                 role="tab"
                 aria-selected={active}
+                tabIndex={active ? 0 : -1}
                 className={`tab${active ? " active" : ""}${pending ? " pending" : ""}`}
                 disabled={Boolean(pendingSessionID) || creatingSession}
                 aria-busy={pending || undefined}
@@ -696,14 +776,11 @@ export function MobileShell({
   creatingSession = false,
 }) {
   const handleTabListKeyDown = event => {
-    const keys = ["ArrowRight", "ArrowLeft", "Home", "End"];
-    if (!keys.includes(event.key) || !tabs.length) return;
-    const current = Math.max(0, tabs.findIndex(session => session.id === activeSession));
-    let next = current;
-    if (event.key === "ArrowRight") next = (current + 1) % tabs.length;
-    else if (event.key === "ArrowLeft") next = (current - 1 + tabs.length) % tabs.length;
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = tabs.length - 1;
+    if (!tabs.length) return;
+    const focused = tabs.findIndex(session => session.id === event.target?.dataset?.session);
+    const current = focused >= 0 ? focused : Math.max(0, tabs.findIndex(session => session.id === activeSession));
+    const next = rovingIndex(event.key, current, tabs.length, { orientation: "horizontal" });
+    if (next < 0) return;
     event.preventDefault();
     const session = tabs[next];
     if (!session) return;
@@ -794,6 +871,7 @@ export function MobileShell({
               role="tab"
               data-session={session.id}
               aria-selected={active}
+              tabIndex={active ? 0 : -1}
               className={`mobile-tab${active ? " active" : ""}${pending ? " pending" : ""}`}
               disabled={Boolean(pendingSessionID) || creatingSession}
               aria-busy={pending || undefined}
@@ -1742,7 +1820,7 @@ export function SettingsPage({
     {
       id: "openai",
       label: "AI titles",
-      description: "Generate session titles with an OpenAI-compatible endpoint.",
+      description: "Generate fallback session titles with an OpenAI-compatible endpoint.",
       keywords: ["openai", "ai", "title", "model", "base", "key", "summary"],
     },
   ], []);
@@ -1997,7 +2075,7 @@ export function SettingsPage({
               <section className="settings-section">
                 <header className="settings-page-heading">
                   <h2>AI session titles</h2>
-                  <p>Use an OpenAI-compatible API to suggest a concise title from the opening exchange.</p>
+                  <p>Codex, Claude Code, OpenCode, and Qoder name their own conversations and Warren keeps those names. Everything below is the fallback used whenever an agent has not named the conversation.</p>
                 </header>
                 <div className="settings-fields">
                   <label>API base URL<input value={openaiBaseURL} onChange={event => onOpenAISettingChange("openaiBaseURL", event.target.value)} placeholder="https://api.openai.com/v1" autoComplete="off" /></label>
@@ -2006,7 +2084,7 @@ export function SettingsPage({
                 </div>
                 <label className="settings-toggle">
                   <input type="checkbox" checked={openaiTitleEnabled} onChange={event => onOpenAISettingChange("openaiTitleEnabled", event.target.checked)} />
-                  <span><strong>Generate titles automatically</strong><small>Disabled by default. The key is stored only by the Warren host and is never sent back to clients.</small></span>
+                  <span><strong>Generate titles automatically</strong><small>Adds a concise title from the opening exchange only when the agent has not named the conversation. Disabled by default. The key is stored only by the Warren host and is never sent back to clients.</small></span>
                 </label>
               </section>
             ) : (
@@ -2209,7 +2287,6 @@ function SearchResultRow({ row, active, onHover, onChoose, registerRef }) {
     : ({
       workspace: <BranchIcon />,
       project: folderIcon,
-      terminalGroup: terminalIcon,
     }[row.scope] || folderIcon);
 
   return (

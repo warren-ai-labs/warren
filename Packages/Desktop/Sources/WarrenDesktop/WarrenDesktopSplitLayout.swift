@@ -631,8 +631,26 @@ public indirect enum SplitLayoutTree: Codable, Hashable, Sendable {
 public struct SplitLayoutPlacement: Equatable {
     public struct Pane: Equatable, Identifiable {
         public let item: SplitPaneItem
+        /// Where the pane is drawn: its card, or its rail while folded.
         public let frame: CGRect
+        /// Where a folded pane's terminal waits, hidden: the frame the pane
+        /// would have unfolded. Nil for a pane on screen.
+        public var parkedFrame: CGRect? = nil
+        /// True while the pane is drawn as a rail.
+        public var isFolded: Bool { parkedFrame != nil }
+        /// The arrangement slot's identity. Focus, close, maximize, and the drop
+        /// overlay all address a pane by this, because the Host owns pane
+        /// identity.
         public var id: String { item.id }
+        /// The identity a renderer keys the pane's view by.
+        ///
+        /// It follows the Session, not the Host-assigned pane id: the Host may
+        /// replace a client's fallback identity with its own when the first
+        /// arrangement of a scope is adopted, and keying the view by the slot
+        /// would then tear the terminal down and re-attach it, which reads as a
+        /// flash and a replay. A Session appears at most once in an arrangement,
+        /// so this stays unique within a placement.
+        public var renderID: String { item.tabID }
     }
 
     public struct Divider: Equatable, Identifiable {
@@ -648,16 +666,103 @@ public struct SplitLayoutPlacement: Equatable {
         public let totalLength: CGFloat
         public let minimumRatio: Double
         public let maximumRatio: Double
+        /// The pane on each side when that side is a single leaf. Only a leaf
+        /// can fold, so these say which sides a pull may fold.
+        public var firstLeafID: String? = nil
+        public var secondLeafID: String? = nil
+        /// The side drawn as a rail, when one of this divider's panes is
+        /// folded. The divider has nothing to move then; the rail restores.
+        public var foldedSide: SplitPaneSide? = nil
         public var id: [Bool] { path }
+
+        /// The sides a pull past the minimum may fold.
+        public var foldableSides: Set<SplitPaneSide> {
+            var sides: Set<SplitPaneSide> = []
+            if firstLeafID != nil { sides.insert(.first) }
+            if secondLeafID != nil { sides.insert(.second) }
+            return sides
+        }
+
+        /// The pane on `side`, when it is a single leaf.
+        public func leafID(on side: SplitPaneSide) -> String? {
+            side == .first ? firstLeafID : secondLeafID
+        }
     }
 
     public let panes: [Pane]
     public let dividers: [Divider]
 }
 
+/// Which side of a divider a pane sits on: the leading column or top row is
+/// `first`, as in `SplitLayoutTree.split(first:second:)`.
+public enum SplitPaneSide: String, Hashable, Sendable {
+    case first
+    case second
+}
+
+/// A divider drag that has run past the minimum of the pane on one side.
+///
+/// The divider itself holds at the minimum, so the overshoot is what the
+/// pointer is doing beyond it: it sizes the pull indicator and decides whether
+/// letting go folds the pane.
+public struct SplitDividerPull: Equatable, Sendable {
+    /// The side whose pane is held at its minimum.
+    public let side: SplitPaneSide
+    /// How far past the minimum the pointer is, in points.
+    public let overshoot: CGFloat
+
+    public init(side: SplitPaneSide, overshoot: CGFloat) {
+        self.side = side
+        self.overshoot = overshoot
+    }
+
+    /// True once letting go would fold the held pane.
+    public var reachesFold: Bool { overshoot > SplitLayoutTree.foldOvershoot }
+}
+
 public extension SplitLayoutTree {
     /// The width a divider occupies, hit padding included.
     static let dividerThickness: CGFloat = 5
+
+    /// How far past a pane's minimum the pointer has to travel before letting
+    /// go folds the pane. Far enough that a drag which merely overshoots the
+    /// stop never folds anything; the hold in between is the warning.
+    static let foldOvershoot: CGFloat = 72
+
+    /// A folded pane's rail is as thick as a pane header, so a row rail reads
+    /// as the header that is left of the pane.
+    static let foldedRailThickness: CGFloat = WarrenLayoutMetrics.paneHeaderHeight
+
+    /// The pull a divider drag exerts at `ratio`, or nil while the divider
+    /// can follow the pointer. Ratios are converted with `totalLength`, so the
+    /// overshoot is in points like the fold threshold.
+    static func dividerPull(
+        for ratio: Double,
+        totalLength: CGFloat,
+        minimum: Double,
+        maximum: Double
+    ) -> SplitDividerPull? {
+        guard ratio.isFinite, totalLength > 0, minimum <= maximum else { return nil }
+        if ratio < minimum {
+            return SplitDividerPull(side: .first, overshoot: CGFloat(minimum - ratio) * totalLength)
+        }
+        if ratio > maximum {
+            return SplitDividerPull(side: .second, overshoot: CGFloat(ratio - maximum) * totalLength)
+        }
+        return nil
+    }
+
+    /// The pane a divider folds when the drag ends with `pull`, or nil when
+    /// the divider simply stays at the minimum. Only a single pane folds: a
+    /// subtree on the held side has dividers of its own that a rail could not
+    /// show, so `foldable` names the sides that hold a leaf.
+    static func foldSide(
+        releasing pull: SplitDividerPull?,
+        foldable: Set<SplitPaneSide>
+    ) -> SplitPaneSide? {
+        guard let pull, pull.reachesFold, foldable.contains(pull.side) else { return nil }
+        return pull.side
+    }
 
     /// Flattens the layout for a container of `size`, in preorder.
     ///
@@ -669,9 +774,17 @@ public extension SplitLayoutTree {
     /// layout a fixed point of its own rounding, and the panes plus their
     /// dividers still cover the container exactly because each one is measured
     /// from the edges it shares with its neighbours.
+    ///
+    /// `foldedPaneID` names a leaf drawn as a rail. Folding is device-local
+    /// view state like zoom, so the ratio is left alone: the rail takes
+    /// `foldedRailThickness`, its sibling takes the rest, and the folded pane
+    /// keeps the frame it would have had as its `parkedFrame`. The renderer
+    /// parks the pane's terminal there, hidden, so it is never squeezed to the
+    /// rail and nothing is resized when the pane comes back.
     func placement(
         in size: CGSize,
-        dividerThickness: CGFloat = SplitLayoutTree.dividerThickness
+        dividerThickness: CGFloat = SplitLayoutTree.dividerThickness,
+        foldedPaneID: String? = nil
     ) -> SplitLayoutPlacement {
         var panes: [SplitLayoutPlacement.Pane] = []
         var dividers: [SplitLayoutPlacement.Divider] = []
@@ -682,10 +795,20 @@ public extension SplitLayoutTree {
             ),
             path: [],
             dividerThickness: dividerThickness,
+            foldedPaneID: foldedPaneID,
             panes: &panes,
             dividers: &dividers
         )
         return SplitLayoutPlacement(panes: panes, dividers: dividers)
+    }
+
+    /// Whether `paneID` is a leaf that sits directly beside a divider, which
+    /// is the only kind of pane that can fold.
+    func canFold(paneID: String) -> Bool {
+        guard case .split(_, _, let first, let second) = self else { return false }
+        if case .leaf(let item) = first, item.id == paneID { return true }
+        if case .leaf(let item) = second, item.id == paneID { return true }
+        return first.canFold(paneID: paneID) || second.canFold(paneID: paneID)
     }
 
     /// How far a divider may travel, given the minimum size of the subtree on
@@ -707,10 +830,65 @@ public extension SplitLayoutTree {
         return lower...upper
     }
 
+    /// The two pane rects and the divider band between them, for a divider
+    /// whose leading edge sits at `leading`.
+    private static func splitRects(
+        _ rect: CGRect,
+        axis: SplitAxis,
+        leading: CGFloat,
+        dividerThickness: CGFloat
+    ) -> (first: CGRect, divider: CGRect, second: CGRect) {
+        switch axis {
+        case .horizontal:
+            return (
+                CGRect(
+                    x: rect.minX,
+                    y: rect.minY,
+                    width: max(0, leading - rect.minX),
+                    height: rect.height
+                ),
+                CGRect(
+                    x: leading,
+                    y: rect.minY,
+                    width: dividerThickness,
+                    height: rect.height
+                ),
+                CGRect(
+                    x: leading + dividerThickness,
+                    y: rect.minY,
+                    width: max(0, rect.maxX - leading - dividerThickness),
+                    height: rect.height
+                )
+            )
+        case .vertical:
+            return (
+                CGRect(
+                    x: rect.minX,
+                    y: rect.minY,
+                    width: rect.width,
+                    height: max(0, leading - rect.minY)
+                ),
+                CGRect(
+                    x: rect.minX,
+                    y: leading,
+                    width: rect.width,
+                    height: dividerThickness
+                ),
+                CGRect(
+                    x: rect.minX,
+                    y: leading + dividerThickness,
+                    width: rect.width,
+                    height: max(0, rect.maxY - leading - dividerThickness)
+                )
+            )
+        }
+    }
+
     private func appendPlacement(
         in rect: CGRect,
         path: [Bool],
         dividerThickness: CGFloat,
+        foldedPaneID: String?,
         panes: inout [SplitLayoutPlacement.Pane],
         dividers: inout [SplitLayoutPlacement.Divider]
     ) {
@@ -722,90 +900,104 @@ public extension SplitLayoutTree {
             // The renderer clamps rather than rejects: a ratio outside the
             // interactive range is still drawn at the edge of it.
             let ratio = rawRatio.isFinite ? min(max(rawRatio, 0.05), 0.95) : 0.5
-            let total = max(0, (axis == .horizontal ? rect.width : rect.height) - dividerThickness)
+            let start = axis == .horizontal ? rect.minX : rect.minY
+            let end = axis == .horizontal ? rect.maxX : rect.maxY
+            let total = max(0, (end - start) - dividerThickness)
             // The divider's leading edge is the one number the split is built
             // from, so rounding it once keeps both panes whole and adjacent.
             let leading = min(
-                max(
-                    ((axis == .horizontal ? rect.minX : rect.minY) + total * CGFloat(ratio)).rounded(),
-                    axis == .horizontal ? rect.minX : rect.minY
-                ),
-                (axis == .horizontal ? rect.maxX : rect.maxY) - dividerThickness
+                max((start + total * CGFloat(ratio)).rounded(), start),
+                end - dividerThickness
             )
-            let firstRect: CGRect
-            let dividerRect: CGRect
-            let secondRect: CGRect
-            switch axis {
-            case .horizontal:
-                firstRect = CGRect(
-                    x: rect.minX,
-                    y: rect.minY,
-                    width: max(0, leading - rect.minX),
-                    height: rect.height
-                )
-                dividerRect = CGRect(
-                    x: leading,
-                    y: rect.minY,
-                    width: dividerThickness,
-                    height: rect.height
-                )
-                secondRect = CGRect(
-                    x: leading + dividerThickness,
-                    y: rect.minY,
-                    width: max(0, rect.maxX - leading - dividerThickness),
-                    height: rect.height
-                )
-            case .vertical:
-                firstRect = CGRect(
-                    x: rect.minX,
-                    y: rect.minY,
-                    width: rect.width,
-                    height: max(0, leading - rect.minY)
-                )
-                dividerRect = CGRect(
-                    x: rect.minX,
-                    y: leading,
-                    width: rect.width,
-                    height: dividerThickness
-                )
-                secondRect = CGRect(
-                    x: rect.minX,
-                    y: leading + dividerThickness,
-                    width: rect.width,
-                    height: max(0, rect.maxY - leading - dividerThickness)
-                )
-            }
+            let natural = Self.splitRects(
+                rect,
+                axis: axis,
+                leading: leading,
+                dividerThickness: dividerThickness
+            )
             let bounds = Self.interactiveRatioBounds(
                 first: first,
                 second: second,
                 total: total,
                 axis: axis
             )
+            let firstLeafID: String?
+            if case .leaf(let item) = first { firstLeafID = item.id } else { firstLeafID = nil }
+            let secondLeafID: String?
+            if case .leaf(let item) = second { secondLeafID = item.id } else { secondLeafID = nil }
+            // A rail needs room for itself and a sibling at least as thick; a
+            // container that cannot seat both draws the split as it is.
+            let rail = Self.foldedRailThickness
+            let hasRoomToFold = end - start >= rail * 2 + dividerThickness
+            let foldedSide: SplitPaneSide?
+            if let foldedPaneID, hasRoomToFold, firstLeafID == foldedPaneID {
+                foldedSide = .first
+            } else if let foldedPaneID, hasRoomToFold, secondLeafID == foldedPaneID {
+                foldedSide = .second
+            } else {
+                foldedSide = nil
+            }
+            let drawn: (first: CGRect, divider: CGRect, second: CGRect)
+            switch foldedSide {
+            case .first:
+                drawn = Self.splitRects(
+                    rect,
+                    axis: axis,
+                    leading: start + rail,
+                    dividerThickness: dividerThickness
+                )
+            case .second:
+                drawn = Self.splitRects(
+                    rect,
+                    axis: axis,
+                    leading: end - dividerThickness - rail,
+                    dividerThickness: dividerThickness
+                )
+            case nil:
+                drawn = natural
+            }
             dividers.append(
                 SplitLayoutPlacement.Divider(
                     path: path,
                     axis: axis,
                     ratio: ratio,
-                    frame: dividerRect,
+                    frame: drawn.divider,
                     totalLength: total,
                     minimumRatio: bounds.lowerBound,
-                    maximumRatio: bounds.upperBound
+                    maximumRatio: bounds.upperBound,
+                    firstLeafID: firstLeafID,
+                    secondLeafID: secondLeafID,
+                    foldedSide: foldedSide
                 )
             )
-            first.appendPlacement(
-                in: firstRect,
-                path: path + [false],
-                dividerThickness: dividerThickness,
-                panes: &panes,
-                dividers: &dividers
-            )
-            second.appendPlacement(
-                in: secondRect,
-                path: path + [true],
-                dividerThickness: dividerThickness,
-                panes: &panes,
-                dividers: &dividers
-            )
+            if foldedSide == .first, case .leaf(let item) = first {
+                panes.append(
+                    SplitLayoutPlacement.Pane(item: item, frame: drawn.first, parkedFrame: natural.first)
+                )
+            } else {
+                first.appendPlacement(
+                    in: drawn.first,
+                    path: path + [false],
+                    dividerThickness: dividerThickness,
+                    foldedPaneID: foldedPaneID,
+                    panes: &panes,
+                    dividers: &dividers
+                )
+            }
+            if foldedSide == .second, case .leaf(let item) = second {
+                panes.append(
+                    SplitLayoutPlacement.Pane(item: item, frame: drawn.second, parkedFrame: natural.second)
+                )
+            } else {
+                second.appendPlacement(
+                    in: drawn.second,
+                    path: path + [true],
+                    dividerThickness: dividerThickness,
+                    foldedPaneID: foldedPaneID,
+                    panes: &panes,
+                    dividers: &dividers
+                )
+            }
         }
     }
 }
@@ -860,21 +1052,27 @@ public enum WarrenDesktopPaneBar {
 
 
 /// Which scope owns an arrangement. A Pane Group belongs to exactly one
-/// Workspace or Terminal Group, so the owner is the addressing key a client uses
-/// to turn a scope into the Host's group.
+/// Workspace, so the owner is the addressing key a client uses to turn a scope
+/// into the Host's group.
 public enum WarrenDesktopPaneOwner: Hashable, Sendable {
     case workspace(WorkspaceID)
-    case terminalGroup(TerminalGroupID)
-
-    public var terminalGroupID: TerminalGroupID? {
-        if case .terminalGroup(let id) = self { return id }
-        return nil
-    }
 
     public var workspaceID: WorkspaceID? {
         if case .workspace(let id) = self { return id }
         return nil
     }
+}
+
+/// Where a local arrangement write goes.
+///
+/// A Workspace or Terminal Group can hold several arrangements, so an update
+/// has to name the one it replaces. `newGroup` opens a new arrangement around
+/// the tree's first Session instead, which is how a Session the current
+/// arrangement does not hold gets one of its own rather than joining a layout
+/// the user is not looking at.
+public enum WarrenDesktopPaneGroupTarget: Hashable, Sendable {
+    case group(PaneGroupID)
+    case newGroup
 }
 
 /// Translates between the Host's arrangement and the renderer's local tree.

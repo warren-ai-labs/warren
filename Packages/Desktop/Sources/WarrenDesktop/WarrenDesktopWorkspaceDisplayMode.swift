@@ -54,15 +54,6 @@ public enum WarrenDesktopWorkspaceDisplayMode: String, CaseIterable, Hashable, S
         isRich ? WarrenSpacing.medium : WarrenSpacing.compact
     }
 
-    /// Separation between a workspace row and the Session rows it owns.
-    ///
-    /// The leaves belong to the workspace above them, so they stay tighter to
-    /// it than one project group is to the next. Without this the workspace and
-    /// its first Session read as two unrelated siblings.
-    public var sessionGroupSpacing: CGFloat {
-        isRich ? WarrenSpacing.xs : WarrenSpacing.xxs
-    }
-
     /// Row height for the tree's resource rows.
     ///
     /// Rich mode carries one more tier and a status marker per leaf, so its

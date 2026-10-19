@@ -76,6 +76,30 @@ public enum WarrenUsageFormatting {
 
     /// Long-form day for tooltips, from a `yyyy-MM-dd` key.
     public static func dayLabel(_ day: String, calendar: Calendar = .current) -> String {
+        format(day, template: "EEE MMM d, yyyy", calendar: calendar)
+    }
+
+    /// Month and day only, for chart axes where the year is the same on every
+    /// label and would only crowd them.
+    public static func shortDayLabel(_ day: String, calendar: Calendar = .current) -> String {
+        format(day, template: "MMM d", calendar: calendar)
+    }
+
+    /// The days one week bar covers, marked when the chart's edge cut the week
+    /// short so its smaller bar is not read as a quieter week.
+    public static func dayRangeLabel(
+        from first: String,
+        to last: String,
+        isPartial: Bool = false,
+        calendar: Calendar = .current
+    ) -> String {
+        let text = first == last
+            ? format(first, template: "EEE MMM d", calendar: calendar)
+            : "\(shortDayLabel(first, calendar: calendar)) – \(shortDayLabel(last, calendar: calendar))"
+        return isPartial ? text + " (partial)" : text
+    }
+
+    private static func format(_ day: String, template: String, calendar: Calendar) -> String {
         let parser = DateFormatter()
         parser.calendar = calendar
         parser.locale = Locale(identifier: "en_US_POSIX")
@@ -86,7 +110,7 @@ public enum WarrenUsageFormatting {
         display.calendar = calendar
         display.locale = .autoupdatingCurrent
         display.timeZone = calendar.timeZone
-        display.setLocalizedDateFormatFromTemplate("EEE MMM d, yyyy")
+        display.setLocalizedDateFormatFromTemplate(template)
         return display.string(from: date)
     }
 
