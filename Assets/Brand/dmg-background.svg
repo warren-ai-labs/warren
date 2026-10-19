@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 420" width="660" height="420">
+  <!-- Finder draws the app icon at (165, 175) and the Applications link at
+       (495, 175), 128 pt each, with their names below. scripts/build-dmg.sh
+       places them; keep both files in sync. -->
+  <rect width="660" height="420" fill="#f6f2ee"/>
+  <g font-family="PingFang SC, -apple-system, Helvetica Neue, sans-serif" text-anchor="middle" fill="#1c1917">
+    <text x="330" y="48" font-size="19" font-weight="600">Drag Warren to Applications</text>
+    <text x="330" y="74" font-size="14" fill="#57534e">将 Warren 拖到“应用程序”文件夹</text>
+  </g>
+  <g fill="none" stroke="#d0653d" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M268 175 H382"/>
+    <path d="M366 159 L384 175 L366 191"/>
+  </g>
+  <rect x="40" y="290" width="580" height="106" rx="14" fill="#ffffff" stroke="#e9e3dd"/>
+  <g font-family="PingFang SC, -apple-system, Helvetica Neue, sans-serif" fill="#1c1917">
+    <text x="62" y="318" font-size="13" font-weight="600">First launch blocked by macOS?</text>
+    <text x="62" y="338" font-size="12" fill="#57534e">Open System Settings → Privacy &amp; Security, scroll down, click Open Anyway.</text>
+    <text x="62" y="364" font-size="12" font-weight="600">首次打开被系统拦截？</text>
+    <text x="62" y="384" font-size="12" fill="#57534e">打开 系统设置 → 隐私与安全性，滚动到底部，点击“仍要打开”。</text>
+  </g>
+</svg>

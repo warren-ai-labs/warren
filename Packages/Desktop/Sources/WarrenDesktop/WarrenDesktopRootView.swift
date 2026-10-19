@@ -48,6 +48,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let onSelectEndpoint: (String) -> Void
     private let onSetEndpointSidebarVisibility: (String, Bool) -> Void
     private let onSetEndpointDisplayName: (String, String?) -> Void
+    private let onDeleteEndpoint: (String) -> Void
     private let sidebarHostProjections: [WarrenDesktopSidebarHostProjection]?
     private let usesSidebarHostSections: Bool
     /// The endpoint-scoped counterpart to the active navigation selection.
@@ -142,9 +143,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     @State private var settingsRelayPrefill: WarrenDesktopRelayPrefill?
     @State private var navigationBeforeSettings: WarrenDesktopNavigationState?
     @State private var chromePopover: WarrenDesktopChromePopover?
-    /// Opening the Host picker from the sidebar's "Add host…" starts it on
-    /// the Add SSH Host page instead of the list.
-    @State private var hostPickerStartsAddingHost = false
+    /// The Host a right-click asked to delete, awaiting confirmation.
+    @State private var pendingHostDeletion: WarrenDesktopEndpointOption?
     @State private var pendingRename: WarrenDesktopRenameRequest?
     /// Resource dialogs capture the Endpoint that owned their row. A dialog
     /// opened on one Host must never submit its bare ID after the user
@@ -318,6 +318,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onSelectEndpoint: @escaping (String) -> Void = { _ in },
         onSetEndpointSidebarVisibility: @escaping (String, Bool) -> Void = { _, _ in },
         onSetEndpointDisplayName: @escaping (String, String?) -> Void = { _, _ in },
+        onDeleteEndpoint: @escaping (String) -> Void = { _ in },
         sidebarHostProjections: [WarrenDesktopSidebarHostProjection]? = nil,
         usesSidebarHostSections: Bool = false,
         sidebarResourceSelection: WarrenDesktopSidebarResourceSelection? = nil,
@@ -400,6 +401,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onSelectEndpoint = onSelectEndpoint
         self.onSetEndpointSidebarVisibility = onSetEndpointSidebarVisibility
         self.onSetEndpointDisplayName = onSetEndpointDisplayName
+        self.onDeleteEndpoint = onDeleteEndpoint
         self.sidebarHostProjections = sidebarHostProjections
         self.usesSidebarHostSections = usesSidebarHostSections
         self.sidebarResourceSelection = sidebarResourceSelection
@@ -872,6 +874,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             deletionDialog
         }
         .overlay {
+            hostDeletionDialog
+        }
+        .overlay {
             if commandPalettePresented {
                 GeometryReader { proxy in
                     let panelWidth = min(
@@ -1036,9 +1041,25 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     isLocal: option.isLocal,
                     address: WarrenDesktopSidebarOtherHost.address(fromDetail: option.detail),
                     isOnline: host?.connectionState.isConnected ?? !option.probeFailed,
-                    marks: marks
+                    marks: marks,
+                    isDisplayedInSidebar: option.isDisplayedInSidebar
                 )
             }
+    }
+
+    /// The window's own Host, for the selected first row of the foot's panel.
+    private var sidebarCurrentHost: WarrenDesktopSidebarOtherHost? {
+        guard let option = endpointOptions.first(where: { $0.id == selectedEndpointID }) else {
+            return nil
+        }
+        return WarrenDesktopSidebarOtherHost(
+            id: option.id,
+            name: sidebarHostSummary.name,
+            isLocal: option.isLocal,
+            address: WarrenDesktopSidebarOtherHost.address(fromDetail: option.detail),
+            isOnline: projection.connectionState.isConnected,
+            isDisplayedInSidebar: true
+        )
     }
 
     /// The dot the collapsed sidebar button carries.
@@ -1160,8 +1181,19 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
+                ZStack(alignment: .bottomLeading) {
+                    if active == .addHost {
+                        addHostPopover
+                            .environment(\.warrenMenuMaxHeight, geo.size.height - addHostBottom - Self.chromePopoverBottomMargin)
+                            .padding(.bottom, addHostBottom)
+                            .padding(.leading, WarrenLayoutMetrics.windowInset + WarrenDesktopSidebarHostStackMetrics.panelInset)
+                            .transition(WarrenDesktopPopMotion.transition(edge: .bottom, reduceMotion: reduceMotion))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+
                 ZStack(alignment: .topTrailing) {
-                    if let active, active != .hostPicker {
+                    if let active, active != .hostPicker, active != .addHost {
                         trailingChromePopover(
                             active,
                             presentation: presentation,
@@ -1205,34 +1237,89 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             + 2
     }
 
+    /// The Add SSH Host page rises from the sidebar's foot, where Hosts are
+    /// managed; with the rail collapsed there is no foot, so it hangs from
+    /// the window's bottom edge at the same place.
+    private var addHostBottom: CGFloat {
+        WarrenLayoutMetrics.windowInset
+            + (sidebarState.isCollapsed ? 0 : WarrenDesktopSidebarHostStackMetrics.height)
+            + WarrenDesktopSidebarHostStackMetrics.panelGap
+    }
+
+    private var hostPanelWidth: CGFloat {
+        max(sidebarState.renderedWidth - 2 * WarrenDesktopSidebarHostStackMetrics.panelInset, 200)
+    }
+
     private var hostPickerPopover: some View {
-        WarrenDesktopMenuSurface(
-            width: max(
-                sidebarState.renderedWidth - 2 * WarrenDesktopSidebarHostStackMetrics.panelInset,
-                200
-            )
-        ) {
-            WarrenDesktopEndpointPopoverContent(
+        WarrenDesktopMenuSurface(width: hostPanelWidth) {
+            WarrenDesktopCurrentHostPanel(
                 connectionState: projection.connectionState,
-                endpoints: endpointOptions,
-                selectedID: selectedEndpointID,
-                onSelect: onSelectEndpoint,
-                onSetSidebarVisibility: onSetEndpointSidebarVisibility,
-                onCustomizeDisplayName: { endpoint in
-                    setChromePopover(nil)
-                    onCustomizeEndpointDisplayName(endpoint)
-                },
-                onAddSSHHost: onAddSSHHost,
                 onRetry: onRetryConnection,
                 onStop: onStopConnection,
                 onDismiss: { setChromePopover(nil) },
-                sshHostPage: sshHostPage,
                 publicAccess: hostPanelPublicAccess,
-                onSettings: { openSettings() },
-                initialShowsAddHost: hostPickerStartsAddingHost
+                onSettings: { openSettings() }
             )
         }
         .onExitCommand { setChromePopover(nil) }
+    }
+
+    @ViewBuilder
+    private var addHostPopover: some View {
+        if let sshHostPage {
+            WarrenDesktopMenuSurface(width: hostPanelWidth) {
+                WarrenDesktopSSHHostListView(model: WarrenDesktopSSHHostPageModel(
+                    load: sshHostPage.load,
+                    onAdd: { option in
+                        sshHostPage.onAdd(option)
+                        setChromePopover(nil)
+                    },
+                    onCopyFallback: sshHostPage.onCopyFallback,
+                    onOpenConfig: sshHostPage.onOpenConfig
+                ))
+            }
+            .onExitCommand { setChromePopover(nil) }
+        }
+    }
+
+    private func presentAddHost() {
+        guard sshHostPage != nil else {
+            setChromePopover(nil)
+            onAddSSHHost()
+            return
+        }
+        setChromePopover(.addHost)
+    }
+
+    private func requestHostDeletion(_ endpointID: String) {
+        guard endpointID != "local",
+              let endpoint = endpointOptions.first(where: { $0.id == endpointID }) else { return }
+        setChromePopover(nil)
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            pendingHostDeletion = endpoint
+        }
+    }
+
+    private func dismissHostDeletion() {
+        withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
+            pendingHostDeletion = nil
+        }
+    }
+
+    @ViewBuilder
+    private var hostDeletionDialog: some View {
+        if let endpoint = pendingHostDeletion {
+            WarrenDesktopDeleteHostConfirmation(
+                hostName: endpoint.label,
+                isWindowHost: endpoint.id == selectedEndpointID,
+                onCancel: dismissHostDeletion,
+                onConfirm: {
+                    onDeleteEndpoint(endpoint.id)
+                    dismissHostDeletion()
+                }
+            )
+            .zIndex(WarrenPresentationLayer.modal)
+        }
     }
 
     /// Public Access as the Host panel shows it: the row's state and address,
@@ -1268,7 +1355,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         externalIDEOptions: [WarrenDesktopExternalIDEOption]?
     ) -> some View {
         switch chromePopover {
-        case .hostPicker:
+        case .hostPicker, .addHost:
             EmptyView()
         case .externalIDE:
             if let options = externalIDEOptions {
@@ -1534,10 +1621,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             },
             otherHosts: sidebarOtherHosts,
             onSelectHost: onSelectEndpoint,
-            onAddHost: {
-                hostPickerStartsAddingHost = true
-                setChromePopover(.hostPicker)
+            currentHost: sidebarCurrentHost,
+            onAddHost: presentAddHost,
+            onSetHostSidebarVisibility: onSetEndpointSidebarVisibility,
+            onRenameHost: { id in
+                guard let endpoint = endpointOptions.first(where: { $0.id == id }) else { return }
+                onCustomizeEndpointDisplayName(endpoint)
             },
+            onDeleteHost: requestHostDeletion,
+            isCheckingHosts: endpointOptions.contains { $0.probeState == .checking },
             // The peek floats over a collapsed sidebar, when the top bar
             // already carries the bell.
             noticeBell: sidebarPresentation == .docked ? noticeBell(panelEdge: .above) : nil
@@ -3545,9 +3637,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private func setChromePopover(_ popover: WarrenDesktopChromePopover?) {
         withAnimation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)) {
             chromePopover = popover
-        }
-        if popover != .hostPicker {
-            hostPickerStartsAddingHost = false
         }
     }
 

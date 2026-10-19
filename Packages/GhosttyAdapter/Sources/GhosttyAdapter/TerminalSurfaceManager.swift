@@ -193,6 +193,9 @@ public final class TerminalSurfaceManager {
         /// loop; a successful present resets it.
         var presentWatchdogStreak = 0
         var recoveryPhase: RecoveryPresentationPhase = .ready
+        /// The grid this pane's host fits, last reported through
+        /// `onViewportGridChanged`.
+        var reportedViewportGrid: TerminalSize?
         var displayVisible = false
         /// Set when a displayed surface is parked and needs the bounded
         /// post-reveal draw after its next warm promotion.
@@ -247,6 +250,8 @@ public final class TerminalSurfaceManager {
     }
 
     private var entries: [TerminalSessionID: Entry] = [:]
+    /// Host grids announced for Sessions whose surface is not inserted yet.
+    private var pendingHostGrids: [TerminalSessionID: TerminalSize?] = [:]
     private var policy: TerminalSurfaceRetentionPolicy
     private weak var host: TerminalHostContainerView?
     private var activeHostBoxes: [TerminalSessionID: WeakHostBox] = [:]
@@ -335,6 +340,12 @@ public final class TerminalSurfaceManager {
     /// answers by selecting that Session, which routes input and the control
     /// lease to the pane the user actually clicked.
     public var onFocusRequested: ((TerminalSessionID) -> Void)?
+
+    /// Reports the grid a pane's host fits while the Host decides the
+    /// surface's grid. The terminal view is then laid out at the Host's grid,
+    /// so Ghostty's own grid reports describe the PTY, not the pane, and only
+    /// this callback says what size the pane wants.
+    public var onViewportGridChanged: ((TerminalSessionID, TerminalSize) -> Void)?
 
     /// Reports an active Session whose promotion could not draw within its
     /// bound. The pane is black with nothing in flight: the presentation task
@@ -455,6 +466,7 @@ public final class TerminalSurfaceManager {
     ) -> Bool {
         guard isActive(sessionID),
               let entry = entries[sessionID],
+              entry.surface.outputWriter.reportedGrid == nil,
               let host = activeHost(sessionID),
               entry.view.superview === host,
               entry.view.window != nil,
@@ -601,6 +613,12 @@ public final class TerminalSurfaceManager {
         view.setFocusLossReportingSuppressed(true)
         view.isHidden = true
         surface.mountedTerminalView = view
+        surface.outputWriter.setGridApplier { [weak self] grid in
+            await MainActor.run { self?.applyHostGrid(grid, for: sessionID) ?? false }
+        }
+        if let grid = pendingHostGrids.removeValue(forKey: sessionID) {
+            surface.outputWriter.setAnchorGrid(grid)
+        }
         let entry = Entry(surface: surface, view: view)
         setDisplayVisible(false, for: entry)
         entry.recoveryPhase = recoveryGated ? .recovering : .ready
@@ -610,6 +628,7 @@ public final class TerminalSurfaceManager {
     }
 
     public func remove(_ sessionID: TerminalSessionID) {
+        pendingHostGrids.removeValue(forKey: sessionID)
         policy.remove(sessionID)
         dispose(sessionID)
     }
@@ -774,11 +793,13 @@ public final class TerminalSurfaceManager {
            !requestedActiveSessionIDs.contains(sessionID) {
             return
         }
-        if entry.view.superview === host && entry.view.frame.size != size {
-            entry.view.setFrameSize(size)
+        let frameSize = terminalFrameSize(for: entry, hostSize: size)
+        if entry.view.superview === host && entry.view.frame.size != frameSize {
+            entry.view.setFrameSize(frameSize)
             entry.view.fitToSize()
             entry.surface.resyncIfNeeded()
         }
+        reportViewportGrid(for: entry, sessionID: sessionID, hostSize: size)
         let intent = latestIntents[sessionID] ?? latestIntent
         guard intent.viewportSize != size || intent.activeSessionID != sessionID else {
             guard entry.presentationTask == nil else { return }
@@ -1389,13 +1410,17 @@ public final class TerminalSurfaceManager {
             entry.view.alphaValue = 0
             entry.view.isHidden = true
         }
+        let frameSize = terminalFrameSize(for: entry, hostSize: viewport)
         if entry.view.superview !== host {
             entry.view.removeFromSuperview()
-            entry.view.frame = CGRect(origin: .zero, size: viewport)
+            entry.view.frame = CGRect(origin: .zero, size: frameSize)
+            // A view laid out at the Host's grid can be larger than its pane.
+            host.clipsToBounds = true
             host.addSubview(entry.view)
-        } else if entry.view.frame.size != viewport {
-            entry.view.setFrameSize(viewport)
+        } else if entry.view.frame.size != frameSize {
+            entry.view.setFrameSize(frameSize)
         }
+        reportViewportGrid(for: entry, sessionID: sessionID, hostSize: viewport)
         entry.isDemoted = false
 
         installWindowObservers(for: host.window)
@@ -1593,7 +1618,7 @@ public final class TerminalSurfaceManager {
         entry.view.setFocusLossReportingSuppressed(false)
         if forceReport || !wasFirstResponder || !entry.focusReported {
             entry.focusReported = true
-            (focusCallbacks[sessionID] ?? onFocused)(sessionID, entry.surface.terminalSize)
+            (focusCallbacks[sessionID] ?? onFocused)(sessionID, viewportGrid(for: entry))
         }
     }
 
@@ -2150,6 +2175,100 @@ public final class TerminalSurfaceManager {
             && entry.view.superview === host
             && entry.view.window != nil
         return transitionIsCurrent && (!requiresVisibleView || !entry.view.isHidden)
+    }
+
+    // MARK: - Host-reported grid
+
+    /// Lays the terminal out at the grid the Host reported for the output at
+    /// this Session's anchor, or returns the grid to its pane when `grid` is
+    /// nil. Call before the anchor's snapshot installs.
+    public func setHostGrid(_ grid: TerminalSize?, for sessionID: TerminalSessionID) {
+        guard let entry = entries[sessionID] else {
+            // The attachment can be announced before its surface exists; the
+            // surface starts from this grid when it is inserted.
+            pendingHostGrids[sessionID] = grid
+            return
+        }
+        pendingHostGrids.removeValue(forKey: sessionID)
+        entry.surface.outputWriter.setAnchorGrid(grid)
+        entry.reportedViewportGrid = nil
+        relayoutTerminalView(entry, sessionID: sessionID)
+    }
+
+    /// Queues a Host-reported grid change at an exact output position.
+    public func enqueueGridChange(
+        _ grid: TerminalSize,
+        for sessionID: TerminalSessionID,
+        epoch: UInt64,
+        sequence: UInt64
+    ) {
+        entries[sessionID]?.surface.outputWriter.enqueueGridChange(
+            epoch: epoch,
+            sequence: sequence,
+            grid: grid
+        )
+    }
+
+    /// The grid this Session's pane fits, which is the size to ask the Host
+    /// for. It equals the surface's grid unless the Host decides the grid.
+    public func viewportGrid(for sessionID: TerminalSessionID) -> TerminalSize? {
+        entries[sessionID].flatMap(viewportGrid(for:))
+    }
+
+    private func viewportGrid(for entry: Entry) -> TerminalSize? {
+        guard entry.surface.outputWriter.reportedGrid != nil else {
+            return entry.surface.terminalSize
+        }
+        guard let host = entry.view.superview,
+              let grid = entry.view.grid(fitting: host.bounds.size) else {
+            return entry.surface.terminalSize
+        }
+        return TerminalSize(columns: grid.columns, rows: grid.rows)
+    }
+
+    /// Called by the output writer when the drain reaches a grid change.
+    /// Returns whether Ghostty will reach the grid, so the writer knows
+    /// whether to wait for it.
+    private func applyHostGrid(_ grid: TerminalSize, for sessionID: TerminalSessionID) -> Bool {
+        guard let entry = entries[sessionID] else { return false }
+        relayoutTerminalView(entry, sessionID: sessionID)
+        guard entry.surface.terminalSurfaceIsReady,
+              let size = entry.surface.terminalSize else { return false }
+        // A grid Ghostty could not lay out exactly (no cell metrics yet) is
+        // not waited for.
+        return entry.view.frameSize(columns: grid.columns, rows: grid.rows) != nil
+            || (size.columns == grid.columns && size.rows == grid.rows)
+    }
+
+    /// Re-derives the terminal view's frame from the current grid source and
+    /// pushes it to Ghostty now rather than on the next layout pass.
+    private func relayoutTerminalView(_ entry: Entry, sessionID: TerminalSessionID) {
+        let hostSize = entry.view.superview?.bounds.size ?? entry.view.frame.size
+        let frameSize = terminalFrameSize(for: entry, hostSize: hostSize)
+        if entry.view.frame.size != frameSize {
+            entry.view.setFrameSize(frameSize)
+        }
+        entry.view.fitToSize()
+    }
+
+    /// The terminal view's size inside a host. With a Host-reported grid the
+    /// view is exactly that grid, pinned to the host's top-left corner and
+    /// clipped by it, so Ghostty's grid changes only where the output stream
+    /// says the PTY's did. Otherwise the view fills the host.
+    private func terminalFrameSize(for entry: Entry, hostSize: CGSize) -> CGSize {
+        guard let grid = entry.surface.outputWriter.reportedGrid,
+              let size = entry.view.frameSize(columns: grid.columns, rows: grid.rows)
+        else { return hostSize }
+        return size
+    }
+
+    private func reportViewportGrid(for entry: Entry, sessionID: TerminalSessionID, hostSize: CGSize) {
+        guard entry.surface.outputWriter.reportedGrid != nil,
+              let grid = entry.view.grid(fitting: hostSize) else { return }
+        guard let size = TerminalSize(columns: grid.columns, rows: grid.rows),
+              size != entry.reportedViewportGrid else { return }
+        entry.reportedViewportGrid = size
+        onViewportGridChanged?(sessionID, size)
     }
 
     private func sanitizedViewport(_ requested: CGSize, fallback: CGSize) -> CGSize {

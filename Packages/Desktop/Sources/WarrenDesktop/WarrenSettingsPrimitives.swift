@@ -109,9 +109,11 @@ struct WarrenSettingsPalette {
             warning: tokens.warning,
             info: tokens.info,
             focusRing: tokens.ring,
-            switchOffTrack: tokens.border,
-            switchOffBorder: tokens.ring,
-            switchOffKnob: tokens.mutedForeground,
+            // Off has to read as a control, not as a hole in the card: a
+            // visible track and a knob nearly as bright as the on state's.
+            switchOffTrack: ink.opacity(isLight ? 0.14 : 0.16),
+            switchOffBorder: ink.opacity(isLight ? 0.20 : 0.22),
+            switchOffKnob: isLight ? tokens.background : ink.opacity(0.78),
             switchOnTrack: ink,
             switchOnKnob: tokens.background
         )
@@ -445,9 +447,19 @@ struct WarrenSettingsSwitchStyle: ToggleStyle {
             )
         }
         .buttonStyle(.plain)
+        .modifier(WarrenSettingsSwitchEnabledLook())
         .accessibilityRepresentation {
             Toggle(isOn: configuration.$isOn) { configuration.label }
         }
+    }
+}
+
+/// A locked switch fades as a whole, so it still shows which way it is set.
+private struct WarrenSettingsSwitchEnabledLook: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func body(content: Content) -> some View {
+        content.opacity(isEnabled ? 1 : 0.45)
     }
 }
 
@@ -801,11 +813,18 @@ struct WarrenSettingsButtonStyle: ButtonStyle {
         @Environment(\.isEnabled) private var isEnabled
         @State private var hovering = false
 
+        /// A disabled primary steps down to the secondary's outline, so it reads
+        /// as unavailable rather than as a grey slab beside a live button.
+        private var effectiveKind: WarrenSettingsButtonKind {
+            kind == .primary && !isEnabled ? .secondary : kind
+        }
+
         var body: some View {
             let palette = WarrenSettingsPalette.resolved(for: colorScheme)
+            let kind = effectiveKind
             configuration.label
                 .font(font)
-                .foregroundStyle(foreground(palette))
+                .foregroundStyle(isEnabled ? foreground(palette) : palette.inkFaint)
                 .padding(.horizontal, kind == .plain ? 8 : 12)
                 .frame(minHeight: 28)
                 .background {
@@ -826,12 +845,12 @@ struct WarrenSettingsButtonStyle: ButtonStyle {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .contentShape(Rectangle())
-                .opacity(isEnabled ? 1 : 0.42)
-                .onHover { hovering = $0 }
+                .opacity(isEnabled ? 1 : 0.7)
+                .onHover { hovering = $0 && isEnabled }
         }
 
         private func foreground(_ palette: WarrenSettingsPalette) -> Color {
-            switch kind {
+            switch effectiveKind {
             case .primary: palette.primaryText
             case .secondary: hovering ? palette.ink : palette.secondaryText
             case .plain: hovering ? palette.ink : palette.plainText
@@ -840,7 +859,7 @@ struct WarrenSettingsButtonStyle: ButtonStyle {
         }
 
         private func background(_ palette: WarrenSettingsPalette) -> Color {
-            switch kind {
+            switch effectiveKind {
             case .primary: hovering ? palette.primaryFill.opacity(0.88) : palette.primaryFill
             case .secondary: hovering ? palette.controlSelected : palette.secondaryFill
             case .plain: .clear
@@ -897,70 +916,6 @@ extension View {
                     .onChange(of: proxy.size.width) { width.wrappedValue = $0 }
             }
         }
-    }
-}
-
-// MARK: - Choice card
-
-/// A radio card used only where an option must be previewed to be chosen.
-///
-/// Cards in one row share its width and always reserve the sublabel line, so
-/// a row of them lines up on every edge whether or not each one has a
-/// sublabel. They used to be fixed 120pt cards centred in an `HStack`, and the
-/// one card with a sublabel pushed its neighbours' previews half a line down.
-struct WarrenSettingsChoiceCard<Preview: View>: View {
-    let label: String
-    let sublabel: String?
-    let isSelected: Bool
-    let preview: Preview
-    let action: () -> Void
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        let palette = WarrenSettingsPalette.resolved(for: colorScheme)
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 8) {
-                preview
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 84)
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .strokeBorder(palette.boxBorder, lineWidth: 1)
-                    }
-                    .padding(2)
-                    .overlay {
-                        if isSelected {
-                            // The same white ring a focused field uses, so a
-                            // chosen card and a focused input read as one state.
-                            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .strokeBorder(palette.ink.opacity(0.10), lineWidth: 3)
-                        }
-                    }
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(label)
-                        .font(.system(size: 12))
-                        .foregroundStyle(isSelected ? palette.ink : palette.inkQuiet)
-                    // Always laid out, so a card without one is not a line
-                    // shorter than its neighbours.
-                    Text(sublabel ?? " ")
-                        .font(.system(size: 11))
-                        .foregroundStyle(palette.inkFaint)
-                        .lineLimit(1)
-                        .accessibilityHidden(sublabel == nil)
-                }
-                .padding(.leading, 2)
-            }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-        .animation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion), value: isSelected)
     }
 }
 

@@ -213,3 +213,105 @@ struct WarrenDesktopBuildBadge: View {
             .joined(separator: " ")
     }
 }
+
+/// The update state as one glyph at the sidebar's foot, beside the notice
+/// bell. It is absent while there is nothing to say; otherwise its colour
+/// and motion carry the state without a word:
+///
+/// - ready to install: an accent arrow that breathes, and a click installs;
+/// - installing: an amber arrow inside a ring that turns;
+/// - failed: a red retry arrow, and a click retries.
+struct WarrenDesktopUpdateIcon: View {
+    let status: WarrenDesktopUpdateStatus
+    let onAction: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isAnimating = false
+
+    static let size: CGFloat = 28
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let tint = color(tokens: tokens)
+        // Installing is not a button state, but it keeps the button so the
+        // glyph is not dimmed the way a disabled control would be.
+        Button(action: { if status.isActionable { onAction() } }) {
+            glyph(tint: tint)
+                .frame(width: Self.size, height: WarrenLayoutMetrics.tabPillHeight)
+                .contentShape(.rect)
+                .accessibilityHidden(true)
+        }
+        .buttonStyle(WarrenChromeButtonStyle())
+        .frame(width: Self.size, height: WarrenLayoutMetrics.tabPillHeight)
+        .warrenTooltip(status.helpText ?? "")
+        .accessibilityLabel(status.accessibilityLabel ?? "")
+        .accessibilityHint(status.isActionable ? "Install or retry the Warren update" : "")
+        .warrenSemanticElement(
+            id: "sidebar.update",
+            role: .button,
+            label: status.accessibilityLabel ?? "",
+            isEnabled: status.isActionable,
+            action: onAction
+        )
+        // Restart the motion whenever the state changes, so a ready arrow
+        // never inherits the installing ring's phase.
+        .onAppear { isAnimating = !reduceMotion }
+        .onChange(of: status) { _ in
+            isAnimating = false
+            DispatchQueue.main.async { isAnimating = !reduceMotion }
+        }
+    }
+
+    @ViewBuilder
+    private func glyph(tint: Color) -> some View {
+        switch status {
+        case .none:
+            EmptyView()
+        case .available:
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(tint)
+                .opacity(isAnimating ? 0.55 : 1)
+                .animation(
+                    isAnimating
+                        ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true)
+                        : .default,
+                    value: isAnimating
+                )
+        case .updating:
+            ZStack {
+                Circle()
+                    .stroke(tint.opacity(0.22), lineWidth: 1.5)
+                Circle()
+                    .trim(from: 0, to: 0.28)
+                    .stroke(tint, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    .rotationEffect(.degrees(isAnimating ? 360 : 0))
+                    .animation(
+                        isAnimating
+                            ? .linear(duration: 0.9).repeatForever(autoreverses: false)
+                            : .default,
+                        value: isAnimating
+                    )
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .foregroundStyle(tint)
+            }
+            .frame(width: 14, height: 14)
+        case .failed:
+            Image(systemName: "arrow.clockwise.circle.fill")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(tint)
+        }
+    }
+
+    private func color(tokens: WarrenColorTokens) -> Color {
+        switch status {
+        case .none: tokens.mutedForeground
+        case .available: tokens.info
+        case .updating: tokens.amber
+        case .failed: tokens.destructive
+        }
+    }
+}

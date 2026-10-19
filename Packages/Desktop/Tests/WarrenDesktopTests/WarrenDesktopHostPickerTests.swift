@@ -2,16 +2,6 @@ import XCTest
 @testable import WarrenDesktop
 
 final class WarrenDesktopHostPickerTests: XCTestCase {
-    func testWindowHostLeadsAndTheRestKeepCatalogOrder() {
-        let endpoints: [WarrenDesktopEndpointOption] = [
-            .init(id: "local", label: "Local", isLocal: true),
-            .init(id: "beelink", label: "beelink"),
-            .init(id: "mba", label: "mba"),
-        ]
-        let ordered = WarrenDesktopEndpointPopoverContent.ordered(endpoints, selectedID: "mba")
-        XCTAssertEqual(ordered.map(\.id), ["mba", "local", "beelink"])
-    }
-
     func testLocalEndpointIsNamedForTheMachine() {
         let local = WarrenDesktopEndpointOption(id: "local", label: "Local", isLocal: true, detail: "127.0.0.1:8789")
         XCTAssertEqual(

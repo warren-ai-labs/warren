@@ -325,13 +325,11 @@ final class WarrenDesktopShellRowTests: XCTestCase {
 
     private func collapsed(
         _ session: WarrenDesktopSession,
-        seenAt: Date? = nil,
-        pointerInside: Bool = false
+        seenAt: Date? = nil
     ) -> Bool {
         WarrenDesktopWorkspaceSessionRow.isCollapsedShell(
             for: session,
             seenAt: seenAt,
-            pointerInsideSidebar: pointerInside,
             now: now
         )
     }
@@ -379,13 +377,37 @@ final class WarrenDesktopShellRowTests: XCTestCase {
         XCTAssertTrue(collapsed(session, seenAt: now.addingTimeInterval(-601)))
     }
 
-    func testAPointerOnTheRailPostponesTheCollapse() {
-        let session = shell(
-            state: WarrenDesktopShellState(atPrompt: true, shellName: "zsh"),
-            createdAt: now.addingTimeInterval(-3600)
+    private func shown(
+        current: Bool,
+        resting: Bool = true,
+        pointerInside: Bool = false,
+        dwelling: Bool = false
+    ) -> Bool {
+        WarrenDesktopWorkspaceSessionRow.shownCollapse(
+            current: current,
+            resting: resting,
+            pointerInsideSidebar: pointerInside,
+            isDwelling: dwelling
         )
-        XCTAssertTrue(collapsed(session))
-        XCTAssertFalse(collapsed(session, pointerInside: true))
+    }
+
+    /// Entering the rail to reach another Session leaves a collapsed shell
+    /// collapsed; only dwelling on the row itself opens it.
+    func testOnlyDwellingOnTheRowOpensACollapsedShell() {
+        XCTAssertTrue(shown(current: true, pointerInside: true))
+        XCTAssertFalse(shown(current: true, pointerInside: true, dwelling: true))
+    }
+
+    /// An open row does not shrink under the pointer reading it, and folds
+    /// once the pointer leaves the rail.
+    func testAPointerOnTheRailPostponesTheCollapse() {
+        XCTAssertFalse(shown(current: false, pointerInside: true))
+        XCTAssertTrue(shown(current: false, pointerInside: false))
+    }
+
+    func testARowThatIsNotRestingIsAlwaysOpen() {
+        XCTAssertFalse(shown(current: true, resting: false))
+        XCTAssertFalse(shown(current: true, resting: false, pointerInside: true))
     }
 
     func testAnAgentInsideAShellNeverCollapses() {

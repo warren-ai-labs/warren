@@ -293,6 +293,41 @@
             core.fitToSize()
         }
 
+        /// The cell size Ghostty lays its grid out with, in points, or nil
+        /// before the surface has reported metrics.
+        private func cellSizeInPoints() -> (width: Double, height: Double, scale: Double)? {
+            guard let size = core.surface?.size(),
+                  size.cellWidthPixels > 0, size.cellHeightPixels > 0
+            else { return nil }
+            let scale = core.sanitizedScaleFactor()
+            return (Double(size.cellWidthPixels), Double(size.cellHeightPixels), scale)
+        }
+
+        /// The view size whose pixel size Ghostty lays out as exactly this grid.
+        ///
+        /// Ghostty floors the pixel size, and the pixel size is floored from the
+        /// view's points, so half a pixel of slack keeps a rounding error from
+        /// losing the last column or row.
+        public func frameSize(columns: Int, rows: Int) -> CGSize? {
+            guard columns > 0, rows > 0, let cell = cellSizeInPoints() else { return nil }
+            return CGSize(
+                width: (Double(columns) * cell.width + 0.5) / cell.scale,
+                height: (Double(rows) * cell.height + 0.5) / cell.scale
+            )
+        }
+
+        /// The grid Ghostty would lay out for a view of this size, using the
+        /// same flooring as the surface itself.
+        public func grid(fitting size: CGSize) -> (columns: Int, rows: Int)? {
+            guard size.width > 0, size.height > 0, let cell = cellSizeInPoints() else { return nil }
+            let pixelWidth = (Double(size.width) * cell.scale).rounded(.down)
+            let pixelHeight = (Double(size.height) * cell.scale).rounded(.down)
+            let columns = Int((pixelWidth / cell.width).rounded(.down))
+            let rows = Int((pixelHeight / cell.height).rounded(.down))
+            guard columns > 0, rows > 0 else { return nil }
+            return (columns, rows)
+        }
+
         func updateMetalLayerMetrics() {
             guard bounds.width > 0, bounds.height > 0 else { return }
             let scale = core.sanitizedScaleFactor()

@@ -80,6 +80,7 @@ private enum WarrenRemoteSocketEvent: Sendable {
     case atomicState(WarrenRemoteAtomicState)
     case browserFrame(WarrenRemoteBrowserFrame)
     case anchor(WarrenRemoteOutputAnchor)
+    case terminalResized(WarrenRemoteTerminalResize)
     case agentEvents(streamID: String, executionID: String, events: [WarrenRemoteAgentEvent])
     case maintenance(message: String?)
     case disconnected(reason: String)
@@ -882,7 +883,19 @@ private actor WarrenRemoteSocket {
                 epoch: epoch,
                 sequence: sequence,
                 reanchor: type == "synced" ? false : reanchor,
-                synced: type == "synced"
+                synced: type == "synced",
+                grid: type == "attached" ? Self.grid(object) : nil
+            )))
+        case "resized":
+            guard let sessionID = object["session"] as? String,
+                  let epoch = Self.uint64(object["epoch"]),
+                  let sequence = Self.uint64(object["sequence"]),
+                  let grid = Self.grid(object) else { return }
+            _ = continuation?.yield(.terminalResized(WarrenRemoteTerminalResize(
+                sessionID: sessionID,
+                epoch: epoch,
+                sequence: sequence,
+                grid: grid
             )))
         case "agent.events":
             guard let streamID = object["streamId"] as? String,
@@ -943,6 +956,12 @@ private actor WarrenRemoteSocket {
         default:
             break
         }
+    }
+
+    private static func grid(_ object: [String: Any]) -> WarrenRemoteTerminalGrid? {
+        guard let columns = uint64(object["cols"]), let rows = uint64(object["rows"]),
+              columns <= UInt64(UInt16.max), rows <= UInt64(UInt16.max) else { return nil }
+        return WarrenRemoteTerminalGrid(columns: Int(columns), rows: Int(rows))
     }
 
     private static func uint64(_ value: Any?) -> UInt64? {
@@ -2422,6 +2441,8 @@ public actor WarrenRemoteClient {
         case .anchor(let anchor):
             updateAnchor(sessionID: anchor.sessionID, epoch: anchor.epoch, sequence: anchor.sequence)
             emit(.anchor(anchor))
+        case .terminalResized(let resize):
+            emit(.terminalResized(resize))
         case .agentEvents(let streamID, let executionID, let events):
             emit(.agentEvents(streamID: streamID, executionID: executionID, events: events))
         case .maintenance(let message): emit(.maintenance(message: message))

@@ -220,6 +220,11 @@ type Service struct {
 	resizeActive  map[string]bool
 	resizeWorkers sync.WaitGroup
 	agentsMu      sync.Mutex
+	// conversationTitles is what pollAgentTitles last observed of each
+	// Session's provider conversation and title. It decides when a stored title
+	// is restored and when a changed one is recorded.
+	conversationTitlesMu sync.Mutex
+	conversationTitles   map[string]conversationTitleObservation
 	// OpenCode session discovery and metadata persistence must be one critical
 	// section. A concurrent reconcile can otherwise observe the same provider
 	// row before either Warren session has persisted its binding.

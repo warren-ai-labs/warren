@@ -72,9 +72,15 @@ struct WarrenDesktopSidebar: View {
     /// The Hosts listed at the foot of the card, and what picking one does.
     var otherHosts: [WarrenDesktopSidebarOtherHost] = []
     var onSelectHost: (String) -> Void = { _ in }
-    /// Opens the flow that adds a Host; offered at the foot of the other
-    /// Hosts' panel.
+    /// The window's own Host, selected first in the foot's panel.
+    var currentHost: WarrenDesktopSidebarOtherHost? = nil
+    /// Opens the flow that adds a Host; offered at the foot of the Hosts'
+    /// panel, and as the foot itself while there is no other Host.
     var onAddHost: (() -> Void)? = nil
+    var onSetHostSidebarVisibility: ((String, Bool) -> Void)? = nil
+    var onRenameHost: ((String) -> Void)? = nil
+    var onDeleteHost: ((String) -> Void)? = nil
+    var isCheckingHosts: Bool = false
     /// The notice center's bell, at the card's bottom-left corner.
     var noticeBell: AnyView? = nil
 
@@ -507,52 +513,37 @@ struct WarrenDesktopSidebar: View {
     /// tree is no longer offered.
     private var workspaceDisplayMode: WarrenDesktopWorkspaceDisplayMode { .rich }
 
-    /// The foot of the card: the other Hosts this window can switch to,
-    /// stacked, with a dot while one of their Sessions needs someone (see
-    /// `WarrenDesktopSidebarHostStack`) and the notice bell at the row's end,
-    /// then the bottom row with the update badge. Without other Hosts the
-    /// bell takes the bottom row's corner.
-    @ViewBuilder
+    /// The foot of the card, one row: the Hosts (see
+    /// `WarrenDesktopSidebarHostStack`), then the update glyph and the notice
+    /// bell at the row's end. The update glyph is there only while an update
+    /// is ready, installing or failed.
     private func sidebarFooter(tokens: WarrenColorTokens) -> some View {
-        // With other Hosts listed, the bell shares their row; the bottom row
-        // is left to the update badge.
-        let bellInBottomRow = otherHosts.isEmpty ? noticeBell : nil
-        let showsBottomRow = bellInBottomRow != nil || updateStatus != .none
-        VStack(spacing: 0) {
-            if !otherHosts.isEmpty {
-                WarrenDesktopSidebarHostStack(
-                    hosts: otherHosts,
-                    onSelectHost: onSelectHost,
-                    onAddHost: onAddHost,
-                    trailingAccessory: noticeBell
-                )
-            } else if showsBottomRow {
-                Rectangle()
-                    .fill(tokens.cardBorder)
-                    .frame(height: 1)
-                    .accessibilityHidden(true)
-            }
-            if showsBottomRow {
-                HStack(spacing: 6) {
-                    if let bellInBottomRow {
-                        bellInBottomRow
-                    }
-                    if updateStatus != .none {
-                        WarrenDesktopBuildBadge(
-                            updateStatus: updateStatus,
-                            showsBuildMarker: false,
-                            onUpdateAction: onUpdateAction
-                        )
-                    }
-                    Spacer(minLength: 0)
-                }
-                // The bell's pill brings its own room; the badge alone keeps
-                // the inset it always had.
-                .padding(.horizontal, bellInBottomRow == nil ? 12 : 8)
-                .frame(height: WarrenDesktopSidebarMetrics.footerHeight)
-            }
-        }
+        WarrenDesktopSidebarHostStack(
+            hosts: otherHosts,
+            currentHost: currentHost,
+            onSelectHost: onSelectHost,
+            onAddHost: onAddHost,
+            onSetSidebarVisibility: onSetHostSidebarVisibility,
+            onRenameHost: onRenameHost,
+            onDeleteHost: onDeleteHost,
+            isCheckingHosts: isCheckingHosts,
+            trailingAccessory: footerAccessory
+        )
         .frame(maxWidth: .infinity)
+    }
+
+    private var footerAccessory: AnyView? {
+        let showsUpdate = updateStatus != .none
+        guard showsUpdate || noticeBell != nil else { return nil }
+        return AnyView(HStack(spacing: 2) {
+            if showsUpdate {
+                WarrenDesktopUpdateIcon(status: updateStatus, onAction: onUpdateAction)
+                    .transition(.opacity)
+            }
+            if let noticeBell {
+                noticeBell
+            }
+        })
     }
 }
 

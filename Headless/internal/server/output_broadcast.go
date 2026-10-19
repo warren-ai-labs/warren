@@ -360,6 +360,7 @@ func (s *Service) reanchorAtomicOutput(
 		format  string
 		payload []byte
 		cursor  ghostline.Cursor
+		size    ghostline.Size
 		err     error
 	)
 	captureStarted := time.Now()
@@ -377,7 +378,7 @@ func (s *Service) reanchorAtomicOutput(
 		}
 		var state ghostline.AtomicState
 		state, err = runtime.AtomicState(stateContext, session.Runtime)
-		format, payload, cursor = state.Format, state.Payload, state.Cursor
+		format, payload, cursor, size = state.Format, state.Payload, state.Cursor, state.Size
 	case terminalStateFormatANSI:
 		runtime := s.cursorOutputRuntimeFor(session)
 		if runtime == nil {
@@ -422,7 +423,13 @@ func (s *Service) reanchorAtomicOutput(
 		upper,
 	)
 
-	if err := peer.enqueueAttached(session.ID, epoch, upper, true); err != nil {
+	// The size is only meaningful to a peer that negotiated it, and only when
+	// Ghostline reported one; an unknown size leaves the client sizing its grid
+	// from its own viewport.
+	if !peer.supportsCapability(api.CapabilityTerminalSize) {
+		size = ghostline.Size{}
+	}
+	if err := peer.enqueueAttachedSized(session.ID, epoch, upper, true, size); err != nil {
 		return err
 	}
 	enqueueStarted := time.Now()
@@ -437,7 +444,7 @@ func (s *Service) reanchorAtomicOutput(
 	}
 	enqueueMS := time.Since(enqueueStarted).Milliseconds()
 	readerStarted := time.Now()
-	if err := s.startPeerCursorOutput(peer, session, cursor, epoch, upper); err != nil {
+	if err := s.startPeerCursorOutput(peer, session, cursor, epoch, upper, size); err != nil {
 		return err
 	}
 	readerMS := time.Since(readerStarted).Milliseconds()

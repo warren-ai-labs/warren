@@ -46,6 +46,12 @@ type agentSession struct {
 	titleAssistantProvider string
 	titleAssistantID       string
 	titleAssistantComplete bool
+	// titleUserAt is when the first real user text was observed. If the agent
+	// has not replied within earlyTitleDelay, the title is written from that
+	// text and any thinking so far, then refreshed once the reply arrives.
+	titleUserAt time.Time
+	// earlyTitleStarted bounds that early request to one per conversation.
+	earlyTitleStarted bool
 	// turnAssistant is the latest assistant text of the turn in progress. The
 	// result sentence is written from it when the turn completes, so it has to
 	// follow the text rather than keep the turn's first message.
@@ -461,6 +467,8 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		existing.titleAssistantProvider = ""
 		existing.titleAssistantID = ""
 		existing.titleAssistantComplete = false
+		existing.titleUserAt = time.Time{}
+		existing.earlyTitleStarted = false
 		existing.turnAssistant = ""
 		existing.resultGenerationStarted = false
 		existing.titleGenerationStarted = false

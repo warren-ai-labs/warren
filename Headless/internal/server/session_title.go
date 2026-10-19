@@ -23,6 +23,15 @@ const cliTitleGracePeriod = 30 * time.Second
 // names the conversation must not be re-read for the life of the Session.
 const cliTitleUpgradeWindow = 60 * time.Second
 
+// earlyTitleDelay is how long the first user message may go without an agent
+// reply before the title is written from that message alone. The usual title
+// replaces it once the reply arrives.
+const earlyTitleDelay = 10 * time.Second
+
+// earlyTitleReasoningLimit bounds the thinking gathered for an early title;
+// the prompt clips it further.
+const earlyTitleReasoningLimit = 4_000
+
 // providerSuppliesTitle reports whether an agent CLI generates a name for its
 // own conversation. Those names are preferred over the Host's title request;
 // every other provider keeps the Host's request as its only source.
@@ -74,6 +83,7 @@ func (s *Service) tryStartSessionTitle(sessionID string) {
 	}
 	state := s.Store.Snapshot()
 	provider := ""
+	customTitle := ""
 	found := false
 	for index := range state.Sessions {
 		session := state.Sessions[index]
@@ -81,11 +91,10 @@ func (s *Service) tryStartSessionTitle(sessionID string) {
 			continue
 		}
 		found = true
-		// Do not spend a request for a session that already has a manual or
-		// previously generated title, or whose runtime has already ended.
-		if strings.TrimSpace(session.CustomTitle) != "" || session.Lifecycle != "running" {
+		if session.Lifecycle != "running" {
 			return
 		}
+		customTitle = strings.TrimSpace(session.CustomTitle)
 		provider = agentProviderForKind(session.AgentProvider)
 		if provider == "" {
 			provider = agentProviderForKind(session.Kind)
@@ -112,6 +121,13 @@ func (s *Service) tryStartSessionTitle(sessionID string) {
 		return
 	}
 	entry.mu.Lock()
+	// Do not spend a request for a session that already has a manual, restored,
+	// or agent-supplied title. Only the Host's own early title may be replaced.
+	if customTitle != "" && customTitle != entry.aiTitleValue {
+		entry.mu.Unlock()
+		s.agentsMu.Unlock()
+		return
+	}
 	if entry.titleGenerationStarted || !entry.titleAssistantComplete ||
 		strings.TrimSpace(entry.titleUser) == "" || strings.TrimSpace(entry.titleAssistant) == "" {
 		entry.mu.Unlock()
@@ -135,7 +151,7 @@ func (s *Service) tryStartSessionTitle(sessionID string) {
 	if waitForCLI {
 		return
 	}
-	go s.generateSessionTitle(sessionID, generation, s.titleConfig(), input)
+	go s.generateSessionTitle(sessionID, generation, s.titleConfig(), input, false)
 }
 
 // pollAgentTitles resolves every conversation whose agent CLI was given the
@@ -144,6 +160,8 @@ func (s *Service) tryStartSessionTitle(sessionID string) {
 // Session happens to produce.
 func (s *Service) pollAgentTitles() {
 	s.lazyInit()
+	s.syncConversationTitles()
+	s.startEarlySessionTitles()
 	type titleWait struct {
 		sessionID string
 		watcher   *agent.Watcher
@@ -279,7 +297,7 @@ func (s *Service) finishAgentTitleFallback(sessionID string) {
 		// name is still applied.
 		return
 	}
-	go s.generateSessionTitle(sessionID, generation, s.titleConfig(), input)
+	go s.generateSessionTitle(sessionID, generation, s.titleConfig(), input, false)
 }
 
 // TestOpenAITitle makes one best-effort title request without changing
@@ -341,7 +359,10 @@ func appendTitleMessage(value, provider, messageID *string, event api.AgentEvent
 	return true
 }
 
-func (s *Service) generateSessionTitle(sessionID, generation string, config sessiontitle.Config, input sessiontitle.Input) {
+// generateSessionTitle requests one title and applies it. early marks the
+// request made before the agent's first reply: it is dropped if the usual
+// request has already been claimed, so it can never overwrite that result.
+func (s *Service) generateSessionTitle(sessionID, generation string, config sessiontitle.Config, input sessiontitle.Input, early bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	titleValue, err := (sessiontitle.Generator{Config: config}).Generate(ctx, input)
@@ -349,6 +370,20 @@ func (s *Service) generateSessionTitle(sessionID, generation string, config sess
 		s.logWarn("generate session title", "session", sessionID, "error", err)
 		return
 	}
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	s.agentsMu.Unlock()
+	previous := ""
+	if entry != nil {
+		entry.mu.Lock()
+		superseded := early && (entry.titleGenerationStarted || entry.cliTitleCaptured)
+		previous = entry.aiTitleValue
+		entry.mu.Unlock()
+		if superseded {
+			return
+		}
+	}
+	applied := false
 	err = s.Store.Update(func(state *api.State) error {
 		for index := range state.Sessions {
 			session := &state.Sessions[index]
@@ -356,8 +391,10 @@ func (s *Service) generateSessionTitle(sessionID, generation string, config sess
 				continue
 			}
 			// CustomTitle is also the durable automatic display override. A
-			// manual rename that wins the race must never be overwritten.
-			if strings.TrimSpace(session.CustomTitle) != "" || session.Lifecycle != "running" {
+			// manual rename that wins the race must never be overwritten; only
+			// the Host's own earlier title may be.
+			current := strings.TrimSpace(session.CustomTitle)
+			if (current != "" && current != previous) || session.Lifecycle != "running" {
 				return nil
 			}
 			// A request captured for a replaced provider conversation must never
@@ -366,6 +403,7 @@ func (s *Service) generateSessionTitle(sessionID, generation string, config sess
 				return nil
 			}
 			session.CustomTitle = titleValue
+			applied = true
 			return nil
 		}
 		return fmt.Errorf("session not found: %s", sessionID)
@@ -374,11 +412,11 @@ func (s *Service) generateSessionTitle(sessionID, generation string, config sess
 		s.logWarn("persist session title", "session", sessionID, "error", err)
 		return
 	}
+	if !applied {
+		return
+	}
 	// Remember the Host's own title so a provider name that arrives inside the
 	// upgrade window can replace it, while a title the user set can not.
-	s.agentsMu.Lock()
-	entry := s.agents[sessionID]
-	s.agentsMu.Unlock()
 	if entry != nil {
 		entry.mu.Lock()
 		entry.aiTitleValue = titleValue
@@ -451,4 +489,85 @@ func (s *Service) generateResultSentence(sessionID, generation string, config se
 		return
 	}
 	s.wakeLiveActivity()
+}
+
+// startEarlySessionTitles writes a first title for every conversation whose
+// agent has not replied within earlyTitleDelay of the user's first message.
+// It uses that message and any thinking the agent has shown so far; the usual
+// title request replaces the result once the reply arrives.
+func (s *Service) startEarlySessionTitles() {
+	if s.Store == nil || !s.titleGenerationConfigured() {
+		return
+	}
+	type earlyRequest struct {
+		sessionID  string
+		generation string
+		input      sessiontitle.Input
+	}
+	var requests []earlyRequest
+	now := time.Now()
+	s.agentsMu.Lock()
+	for sessionID, entry := range s.agents {
+		if entry == nil {
+			continue
+		}
+		entry.mu.Lock()
+		due := !entry.earlyTitleStarted && !entry.titleGenerationStarted && !entry.cliTitleCaptured &&
+			strings.TrimSpace(entry.titleUser) != "" && strings.TrimSpace(entry.titleAssistant) == "" &&
+			!entry.titleUserAt.IsZero() && now.Sub(entry.titleUserAt) >= earlyTitleDelay
+		if due {
+			entry.earlyTitleStarted = true
+			requests = append(requests, earlyRequest{
+				sessionID:  sessionID,
+				generation: strings.TrimSpace(entry.executionID),
+				input: sessiontitle.Input{
+					User:      entry.titleUser,
+					Reasoning: earlyTitleReasoning(entry.events),
+				},
+			})
+		}
+		entry.mu.Unlock()
+	}
+	s.agentsMu.Unlock()
+	if len(requests) == 0 {
+		return
+	}
+	state := s.Store.Snapshot()
+	for _, request := range requests {
+		for _, session := range state.Sessions {
+			if session.ID != request.sessionID {
+				continue
+			}
+			// A session that already shows a title, including one restored for a
+			// resumed conversation, does not need a provisional one.
+			if strings.TrimSpace(session.CustomTitle) == "" && session.Lifecycle == "running" {
+				go s.generateSessionTitle(request.sessionID, request.generation, s.titleConfig(), request.input, true)
+			}
+			break
+		}
+	}
+}
+
+// earlyTitleReasoning joins the agent's visible thinking in transcript order.
+// Providers that hide or encrypt their thinking contribute nothing, and the
+// early title is then written from the user's message alone.
+func earlyTitleReasoning(events []api.AgentEvent) string {
+	var builder strings.Builder
+	for _, event := range events {
+		if event.Sidechain || event.Type != "reasoning" || strings.TrimSpace(event.Content) == "" {
+			continue
+		}
+		if event.ContentDelta {
+			builder.WriteString(event.Content)
+		} else {
+			if builder.Len() > 0 {
+				builder.WriteString("\n")
+			}
+			builder.WriteString(event.Content)
+		}
+		if builder.Len() >= earlyTitleReasoningLimit {
+			break
+		}
+	}
+	return strings.TrimSpace(builder.String())
 }

@@ -664,6 +664,11 @@ final class WarrenDesktopTests: XCTestCase {
         )
         XCTAssertEqual(offline.panelSubtitle, "Offline · tenc")
         XCTAssertEqual(offline.pickDetail, "offline")
+
+        // An SSH alias named for its machine does not say its name twice.
+        let alias = WarrenDesktopSidebarOtherHost(id: "beelink", name: "beelink", address: "beelink")
+        XCTAssertNil(alias.pickDetail)
+        XCTAssertEqual(alias.panelSubtitle, "Server")
     }
 
     /// The Host row says where the Host is, then what it is; while it is not

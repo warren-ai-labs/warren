@@ -55,6 +55,12 @@ struct WarrenDesktopSidebarHostRows: View {
     @State private var expandedIdleWorkspaceKeys: Set<String> = []
     /// Hosts whose inactive-projects row the user opened.
     @State private var inactiveProjectsExpandedHostIDs: Set<String> = []
+    /// Projects held in the active band, keyed per Host; see the current-Host
+    /// tree and `WarrenDesktopProjectHold`.
+    @State private var projectHold = WarrenDesktopProjectHold()
+    @State private var projectActivity = WarrenDesktopProjectHold.Snapshot()
+    @Namespace private var projectRowNamespace
+    @Environment(\.warrenPointerInsideSidebar) private var pointerInsideSidebar
     @StateObject private var tintAllocator = WarrenDesktopHostTintAllocator()
 
     init(
@@ -134,11 +140,28 @@ struct WarrenDesktopSidebarHostRows: View {
             updateTintAssignments()
         }
         .onAppear {
+            projectActivity = currentProjectActivity
             revealSelection(selection, in: hosts)
             updateTintAssignments()
         }
         .onChange(of: selection) { nextSelection in
             revealSelection(nextSelection, in: hosts)
+            liftSelectedProject(nextSelection, in: hosts)
+        }
+        .onChange(of: currentProjectActivity) { activity in
+            let previous = projectActivity
+            projectActivity = activity
+            withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+                projectHold.update(from: previous, to: activity, now: Date())
+            }
+        }
+        .task(id: projectHoldClock) {
+            await projectHoldClock.run { now, kept in
+                // The same travel as the lift, so a row is seen going back.
+                withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
+                    _ = projectHold.expire(now: now, keeping: kept)
+                }
+            }
         }
     }
 
@@ -315,8 +338,15 @@ struct WarrenDesktopSidebarHostRows: View {
             let bands = WarrenDesktopProjectBands(
                 groups,
                 project: \.group.project,
-                isActive: { isProjectActive($0.group, in: host) },
-                lastActiveAt: { WarrenDesktopActivityAge.lastActiveAt(of: $0.group.workspaces) }
+                isActive: {
+                    isProjectActive($0.group, in: host)
+                        || projectHold.contains(projectKey(host, $0.group.project.id))
+                },
+                lastActiveAt: { WarrenDesktopActivityAge.lastActiveAt(of: $0.group.workspaces) },
+                activeSince: {
+                    projectHold.activeSince(projectKey(host, $0.group.project.id))
+                        ?? $0.group.project.activeSince
+                }
             )
             let listed = bands.listed
             let showsInactiveRow = !bands.inactive.isEmpty
@@ -326,6 +356,10 @@ struct WarrenDesktopSidebarHostRows: View {
                 let split = WarrenDesktopWorkspaceSplit(group.workspaces) { isWorkspaceLive($0, in: host) }
                 VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.groupContentSpacing) {
                     hostProjectRow(group, host: host, soloWorkspace: soloWorkspace)
+                        .matchedGeometryEffect(
+                            id: projectKey(host, group.project.id),
+                            in: projectRowNamespace
+                        )
                     if isProjectExpanded(group.project.id, in: host) {
                         if let soloWorkspace {
                             // One worktree is no choice, so the project holds
@@ -519,6 +553,10 @@ struct WarrenDesktopSidebarHostRows: View {
                             isMutationDisabled: !canMutate(host),
                             contextMenuActions: projectContextMenuActions(group, host: host),
                             onSelect: { onSelect(.project(host.projectReference(group.project.id))) }
+                        )
+                        .matchedGeometryEffect(
+                            id: projectKey(host, group.project.id),
+                            in: projectRowNamespace
                         )
                         .id(projectKey(host, group.project.id))
                     }
@@ -927,6 +965,65 @@ struct WarrenDesktopSidebarHostRows: View {
                 in: reference.endpointID
             )
         }
+    }
+
+    /// The selected resource's project, keyed per Host.
+    private func selectedProjectKey(
+        _ selection: WarrenDesktopSidebarResourceSelection?,
+        in visibleHosts: [WarrenDesktopSidebarHostProjection]
+    ) -> (key: String, group: WarrenDesktopProjectGroup, host: WarrenDesktopSidebarHostProjection)? {
+        let endpointID: String
+        let match: (WarrenDesktopProjectGroup) -> Bool
+        switch selection {
+        case .project(let reference)?:
+            endpointID = reference.endpointID
+            match = { $0.project.id == reference.id }
+        case .workspace(let reference)?:
+            endpointID = reference.endpointID
+            match = { $0.workspaces.contains { $0.id == reference.id } }
+        case nil:
+            return nil
+        }
+        guard let host = visibleHosts.first(where: { $0.endpointID == endpointID }),
+              let group = host.projectGroups.first(where: match) else { return nil }
+        return (projectKey(host, group.project.id), group, host)
+    }
+
+    /// Lifts a selected project out of the folded row; see the current-Host
+    /// tree's `revealFoldedRows`.
+    private func liftSelectedProject(
+        _ selection: WarrenDesktopSidebarResourceSelection?,
+        in visibleHosts: [WarrenDesktopSidebarHostProjection]
+    ) {
+        guard let selected = selectedProjectKey(selection, in: visibleHosts),
+              !selected.group.project.pinned,
+              !isProjectActive(selected.group, in: selected.host),
+              !projectHold.contains(selected.key) else { return }
+        withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
+            projectHold.lift(selected.key, now: Date())
+        }
+    }
+
+    private var currentProjectActivity: WarrenDesktopProjectHold.Snapshot {
+        var snapshot = WarrenDesktopProjectHold.Snapshot()
+        for host in hosts {
+            for group in host.projectGroups {
+                let key = projectKey(host, group.project.id)
+                snapshot.existing.insert(key)
+                if isProjectActive(group, in: host) {
+                    snapshot.active[key] = group.project.activeSince
+                }
+            }
+        }
+        return snapshot
+    }
+
+    private var projectHoldClock: WarrenDesktopProjectHoldClock {
+        WarrenDesktopProjectHoldClock(
+            nextExpiry: projectHold.nextExpiry,
+            pointerInsideSidebar: pointerInsideSidebar,
+            kept: Set([selectedProjectKey(selection, in: hosts)?.key].compactMap { $0 })
+        )
     }
 
     private func reveal(_ projectKey: String, in endpointID: String) {

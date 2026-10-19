@@ -33,14 +33,22 @@ archive="$repository_root/Warren-$version.zip"
 rm -f "$archive"
 ditto -c -k --keepParent "$repository_root/Warren.app" "$archive"
 
-checksum="$archive.sha256"
-archive_name="$(basename "$archive")"
-checksum_name="$(basename "$checksum")"
-if command -v shasum >/dev/null 2>&1; then
-    (cd "$repository_root" && shasum -a 256 "$archive_name" > "$checksum_name")
-else
-    (cd "$repository_root" && sha256sum "$archive_name" > "$checksum_name")
-fi
+# The website downloads the disk image; the in-app updater installs the zip.
+disk_image="$repository_root/Warren-$version.dmg"
+bash "$repository_root/scripts/build-dmg.sh" "$repository_root/Warren.app" "$disk_image"
+
+write_checksum() {
+    local artifact_name
+    artifact_name="$(basename "$1")"
+    if command -v shasum >/dev/null 2>&1; then
+        (cd "$repository_root" && shasum -a 256 "$artifact_name" > "$artifact_name.sha256")
+    else
+        (cd "$repository_root" && sha256sum "$artifact_name" > "$artifact_name.sha256")
+    fi
+}
+write_checksum "$archive"
+write_checksum "$disk_image"
 
 echo "Packaged $archive"
-echo "Checksum $checksum"
+echo "Packaged $disk_image"
+echo "Checksums $archive.sha256 $disk_image.sha256"

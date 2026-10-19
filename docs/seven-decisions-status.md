@@ -8,7 +8,7 @@ Temporary tracker for `seven-decisions`. Delete this file when the work lands.
 |---|---|---|
 | 1 | Top-bar title | `SessionTitle.resolve` for the top bar, sidebar row, pane header and tab; running command beside the title; 345pt cap with a 28pt tail fade; click menu (rename, copy command, copy path, open in editor); 450ms detail card |
 | 2 | Second-line verbs | Shell rows name the command in the monospaced face with no verb, shortened by `CommandSummary`; a resting Agent row leads with the Host's result sentence and keeps its counts as the fallback |
-| 3 | Idle shell collapse | 600s rest → one 30pt line; a failed command waits until the Session is looked at; the pointer over the rail postpones it; hover card carries the last command, code, directory, branch |
+| 3 | Idle shell collapse | 600s rest → one 30pt line; a failed command waits until the Session is looked at; the pointer over the rail postpones it, and only dwelling on a collapsed row opens it; hover card carries the last command, code, directory, branch |
 | 4 | `WarrenDialog` | One container with S/M/L widths, keycap buttons, top-anchored position; rename, message, three delete confirmations, Usage rebuild, New Task, New workspace, worktree import, Superset import and the setup-script editor all draw inside it |
 | 5 | Permanent `+` | Projects and Tasks always show it left of the fold arrow |
 | 6 | Selection motion | Plate slides on `WarrenMotion.selection` (tabs, settings nav, segmented); no outer tab capsule; 200/96 tab widths; `⌄ N` overflow list; tab titles fade; a tab more than a viewport away gets the plate without travel |

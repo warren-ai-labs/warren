@@ -112,7 +112,7 @@ const messages = {
     "footer.line": "The work belongs to the Host.",
     "footer.servedBy": "Served by a Cloudflare Worker",
     "footer.source": "Source",
-    "footer.license": "Apache-2.0",
+    "footer.license": "FSL-1.1-ALv2",
     "footer.domain": "warrenai.xyz",
     "changelog.kicker": "Release notes",
     "changelog.title": "A living record.",

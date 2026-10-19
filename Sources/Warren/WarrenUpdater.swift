@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Security
 
 struct WarrenReleaseAsset: Codable, Equatable, Sendable {
     let name: String
@@ -124,6 +125,7 @@ enum WarrenUpdaterError: LocalizedError, Equatable, Sendable {
     case invalidApplication
     case destinationNotWritable
     case unableToLaunchInstaller(String)
+    case untrustedSignature(String)
 
     var errorDescription: String? {
         switch self {
@@ -143,8 +145,20 @@ enum WarrenUpdaterError: LocalizedError, Equatable, Sendable {
             "Warren cannot write to its current application folder. Move Warren to a writable location and try again."
         case .unableToLaunchInstaller(let message):
             "Could not start the Warren installer: \(message)"
+        case .untrustedSignature(let message):
+            "The Warren on this disk image is not signed by the same developer as this Warren: \(message)"
         }
     }
+}
+
+/// A newer Warren.app at the root of a mounted volume, typically the disk
+/// image the user just downloaded and opened.
+struct WarrenDiskImageUpdate: Equatable, Sendable {
+    let volumeURL: URL
+    let applicationURL: URL
+    let version: WarrenVersion
+
+    var displayVersion: String { "v\(version)" }
 }
 
 /// Notifications used by the desktop banner and the application delegate.
@@ -174,6 +188,7 @@ final class WarrenUpdater {
     private let now: () -> Date
     private let currentVersion: WarrenVersion?
     private let cacheDirectory: URL
+    private let signingTeamIdentifier: String?
 
     init(
         currentVersion: WarrenVersion? = WarrenUpdater.installedVersion,
@@ -181,9 +196,11 @@ final class WarrenUpdater {
         fileManager: FileManager = .default,
         userDefaults: UserDefaults = .standard,
         now: @escaping () -> Date = Date.init,
-        cacheDirectory: URL? = nil
+        cacheDirectory: URL? = nil,
+        signingTeamIdentifier: String? = WarrenCodeSignature.currentTeamIdentifier
     ) {
         self.currentVersion = currentVersion
+        self.signingTeamIdentifier = signingTeamIdentifier
         self.session = session
         self.fileManager = fileManager
         self.userDefaults = userDefaults
@@ -297,6 +314,59 @@ final class WarrenUpdater {
         return applicationURL
     }
 
+    /// Returns the Warren.app at the root of a mounted volume when it is newer
+    /// than the running app. The Info.plist is read directly because Bundle
+    /// caches by path, and every Warren disk image mounts at /Volumes/Warren.
+    func diskImageUpdate(onVolume volumeURL: URL) -> WarrenDiskImageUpdate? {
+        let applicationURL = volumeURL.appendingPathComponent("Warren.app", isDirectory: true)
+        guard let currentVersion,
+              let info = NSDictionary(
+                  contentsOf: applicationURL.appendingPathComponent("Contents/Info.plist")
+              ),
+              info["CFBundleIdentifier"] as? String == "com.abcdlsj.warren",
+              let rawVersion = info["CFBundleShortVersionString"] as? String,
+              let version = WarrenVersion(rawVersion),
+              version > currentVersion else {
+            return nil
+        }
+        return WarrenDiskImageUpdate(volumeURL: volumeURL, applicationURL: applicationURL, version: version)
+    }
+
+    /// Copies a disk image's Warren.app into the update cache, requires the
+    /// running app's signing team, and clears the download quarantine. The
+    /// user approved this developer when installing Warren the first time, so
+    /// the restarted app must not ask Gatekeeper again.
+    func prepareDiskImageUpdate(
+        _ update: WarrenDiskImageUpdate,
+        replacing destinationURL: URL = Bundle.main.bundleURL
+    ) async throws -> URL {
+        guard destinationURL.pathExtension.lowercased() == "app" else {
+            throw WarrenUpdaterError.invalidApplication
+        }
+        try fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        let stagingDirectory = cacheDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        let stagedApplicationURL = stagingDirectory.appendingPathComponent("Warren.app", isDirectory: true)
+        let teamIdentifier = signingTeamIdentifier
+
+        try await Task.detached(priority: .userInitiated) {
+            try WarrenUpdateArchive.copy(update.applicationURL, to: stagedApplicationURL)
+            try WarrenCodeSignature.verify(stagedApplicationURL, teamIdentifier: teamIdentifier)
+            try WarrenUpdateArchive.removeQuarantine(from: stagedApplicationURL)
+        }.value
+
+        guard WarrenUpdateArchive.isValidWarrenApplication(
+            at: stagedApplicationURL,
+            expectedVersion: update.version
+        ) else {
+            throw WarrenUpdaterError.invalidApplication
+        }
+        guard fileManager.isWritableFile(atPath: destinationURL.deletingLastPathComponent().path) else {
+            throw WarrenUpdaterError.destinationNotWritable
+        }
+        return stagedApplicationURL
+    }
+
     /// Starts a helper process that waits for Warren to quit, replaces the app
     /// bundle, restarts Warren, and leaves the detached ghostline owner alive.
     func launchInstaller(
@@ -350,7 +420,7 @@ final class WarrenUpdater {
     }
 }
 
-private enum WarrenUpdateArchive {
+enum WarrenUpdateArchive {
     static func extract(archiveURL: URL, to extractionDirectory: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -365,6 +435,41 @@ private enum WarrenUpdateArchive {
                 encoding: .utf8
             )?.trimmingCharacters(in: .whitespacesAndNewlines)
             throw WarrenUpdaterError.extractionFailed(message ?? "ditto exited with status \(process.terminationStatus)")
+        }
+    }
+
+    static func copy(_ sourceURL: URL, to destinationURL: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = [sourceURL.path, destinationURL.path]
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(
+                data: errorPipe.fileHandleForReading.readDataToEndOfFile(),
+                encoding: .utf8
+            )?.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw WarrenUpdaterError.extractionFailed(message ?? "ditto exited with status \(process.terminationStatus)")
+        }
+    }
+
+    /// Files copied off a downloaded disk image inherit its quarantine flag,
+    /// which makes Gatekeeper assess the installed app again on launch.
+    static func removeQuarantine(from applicationURL: URL) throws {
+        var paths = [applicationURL.path]
+        if let enumerator = FileManager.default.enumerator(atPath: applicationURL.path) {
+            for case let relativePath as String in enumerator {
+                paths.append(applicationURL.appendingPathComponent(relativePath).path)
+            }
+        }
+        for path in paths where removexattr(path, "com.apple.quarantine", XATTR_NOFOLLOW) != 0 {
+            guard errno == ENOATTR else {
+                throw WarrenUpdaterError.extractionFailed(
+                    "could not clear the quarantine flag on \(path): \(String(cString: strerror(errno)))"
+                )
+            }
         }
     }
 
@@ -404,6 +509,59 @@ private enum WarrenUpdateArchive {
             return false
         }
         return true
+    }
+}
+
+enum WarrenCodeSignature {
+    /// The signing team of the running Warren, or nil for an ad-hoc build.
+    static var currentTeamIdentifier: String? {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else {
+            return nil
+        }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &information
+        ) == errSecSuccess,
+            let information = information as? [String: Any] else {
+            return nil
+        }
+        return information[kSecCodeInfoTeamIdentifier as String] as? String
+    }
+
+    /// Requires a valid Apple-issued signature for Warren's bundle identifier
+    /// from the given team, including every nested binary.
+    static func verify(_ applicationURL: URL, teamIdentifier: String?) throws {
+        guard let teamIdentifier, !teamIdentifier.isEmpty,
+              teamIdentifier.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else {
+            throw WarrenUpdaterError.untrustedSignature("this Warren has no signing team")
+        }
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(applicationURL as CFURL, [], &staticCode) == errSecSuccess,
+              let staticCode else {
+            throw WarrenUpdaterError.untrustedSignature("the application has no readable signature")
+        }
+        let requirementText = """
+        anchor apple generic and identifier "com.abcdlsj.warren" \
+        and certificate leaf[subject.OU] = "\(teamIdentifier)"
+        """
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(requirementText as CFString, [], &requirement) == errSecSuccess,
+              let requirement else {
+            throw WarrenUpdaterError.untrustedSignature("could not build the signing requirement")
+        }
+        let flags = SecCSFlags(
+            rawValue: kSecCSCheckAllArchitectures | kSecCSCheckNestedCode | kSecCSStrictValidate
+        )
+        let status = SecStaticCodeCheckValidity(staticCode, flags, requirement)
+        guard status == errSecSuccess else {
+            let message = SecCopyErrorMessageString(status, nil) as String? ?? "status \(status)"
+            throw WarrenUpdaterError.untrustedSignature(message)
+        }
     }
 }
 

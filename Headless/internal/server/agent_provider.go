@@ -1306,6 +1306,8 @@ func resetAgentProjectionLocked(entry *agentSession) {
 	entry.titleAssistantProvider = ""
 	entry.titleAssistantID = ""
 	entry.titleAssistantComplete = false
+	entry.titleUserAt = time.Time{}
+	entry.earlyTitleStarted = false
 	entry.titleGenerationStarted = false
 	entry.cliTitleDeadline = time.Time{}
 	entry.cliTitleCaptured = false

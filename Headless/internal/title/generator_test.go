@@ -49,43 +49,12 @@ func TestGenerateUsesCompatibleChatCompletionsEndpoint(t *testing.T) {
 	}
 }
 
-func TestNormalizeBoundsAndStripsWrappers(t *testing.T) {
-	got := Normalize("```标题：" + strings.Repeat("长", 70) + "。```")
-	if !strings.HasSuffix(got, "…") {
-		t.Fatalf("normalized title = %q, want ellipsis", got)
-	}
-	if width := displayWidth(got); width > maxTitleWidth {
-		t.Fatalf("normalized width = %d, want at most %d", width, maxTitleWidth)
-	}
-	if width := displayWidth(got); width < maxTitleWidth-1 {
-		t.Fatalf("normalized width = %d, want the budget used", width)
-	}
-}
-
-/// A CJK title and a latin one are held to the same row, so the budget counts
-/// width rather than runes.
-func TestNormalizeCountsWideCharactersAsTwoCells(t *testing.T) {
-	if got := Normalize(strings.Repeat("a", 30)); got != strings.Repeat("a", 30) {
-		t.Fatalf("latin title = %q, want it kept whole", got)
-	}
-	latin := Normalize(strings.Repeat("ab ", 20))
-	if width := displayWidth(latin); width > maxTitleWidth {
-		t.Fatalf("latin width = %d, want at most %d (%q)", width, maxTitleWidth, latin)
-	}
-	if strings.HasSuffix(latin, "b…") && !strings.HasSuffix(strings.TrimSuffix(latin, "…"), "ab") {
-		t.Fatalf("latin title = %q, want the cut on a word boundary", latin)
-	}
-	for _, word := range strings.Fields(strings.TrimSuffix(latin, "…")) {
-		if word != "ab" {
-			t.Fatalf("latin title = %q, want whole words", latin)
-		}
-	}
-	cjk := Normalize(strings.Repeat("长", 40))
-	if width := displayWidth(cjk); width > maxTitleWidth {
-		t.Fatalf("cjk width = %d, want at most %d", width, maxTitleWidth)
-	}
-	if runes := len([]rune(cjk)); runes > maxTitleWidth/2+1 {
-		t.Fatalf("cjk title = %q (%d runes), want about half the latin budget", cjk, runes)
+// Clients truncate a title to the width they have, so the Host keeps the
+// whole line rather than writing an ellipsis into the title itself.
+func TestNormalizeStripsWrappersAndKeepsTheWholeLine(t *testing.T) {
+	long := "inspect 当前分支 merge main 后的 program status 显示"
+	if got := Normalize("```标题：" + long + "。```"); got != long {
+		t.Fatalf("normalized title = %q, want %q", got, long)
 	}
 }
 

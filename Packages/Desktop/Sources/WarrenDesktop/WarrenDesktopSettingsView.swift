@@ -80,7 +80,7 @@ private extension WarrenDesktopSettingsSection {
         case .usage: "Token consumption and its equivalent API cost."
         case .relay: "Enroll this Host and share it with iPhone."
         case .lanPairing: "A temporary PIN window for a trusted iPhone."
-        case .publicAccess: "Publish this Host's Web UI through the enrolled Relay."
+        case .publicAccess: "Share this Host's Web UI at a public address."
         }
     }
 
@@ -88,7 +88,8 @@ private extension WarrenDesktopSettingsSection {
     var contentMaxWidth: CGFloat {
         switch self {
         case .usage: 1160
-        default: 760
+        // A row reads label to control in one glance at this width.
+        default: 640
         }
     }
 
@@ -599,13 +600,16 @@ struct WarrenDesktopSettingsView: View {
 
     private func hostRow(palette: WarrenSettingsPalette) -> some View {
         let hasChoices = hostOptions.count > 1 && onSelectHost != nil
-        let row = HStack(spacing: 13) {
-            hostTile(palette: palette)
-            Text(currentHostLabel)
-                .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
-                .foregroundStyle(palette.inkQuiet)
+        // The same heading as THIS MAC above it, so the two groups read as
+        // one list; the dot says how the Host's connection is doing.
+        let row = HStack(spacing: 6) {
+            Text(currentHostLabel.uppercased())
+                .font(.system(size: 10.5, weight: .semibold))
+                .tracking(1.1)
+                .foregroundStyle(palette.inkFaint)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            connectionDot(hostOptions.first { $0.id == selectedHostID }?.probeState, palette: palette)
             Spacer(minLength: 6)
             if hasChoices {
                 Image(systemName: "chevron.up.chevron.down")
@@ -613,8 +617,8 @@ struct WarrenDesktopSettingsView: View {
                     .foregroundStyle(palette.inkFaint)
             }
         }
-        .padding(.horizontal, 9)
-        .frame(height: 30)
+        .padding(.horizontal, 10)
+        .frame(height: 18)
         .contentShape(Rectangle())
 
         return Group {
@@ -627,21 +631,6 @@ struct WarrenDesktopSettingsView: View {
                 row
             }
         }
-    }
-
-    private func hostTile(palette: WarrenSettingsPalette) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
-        let option = hostOptions.first { $0.id == selectedHostID }
-        return Text(String(currentHostLabel.prefix(1)).lowercased())
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(palette.inkBody)
-            .frame(width: 20, height: 20)
-            .background(shape.fill(palette.controlFill))
-            .overlay { shape.strokeBorder(palette.controlSelectedBorder, lineWidth: 1) }
-            .overlay(alignment: .bottomTrailing) {
-                connectionDot(option?.probeState, palette: palette)
-            }
-            .accessibilityHidden(true)
     }
 
     private func hostPickerPanel(palette: WarrenSettingsPalette) -> some View {
@@ -713,7 +702,6 @@ struct WarrenDesktopSettingsView: View {
             .fill(color)
             .frame(width: 6, height: 6)
             .overlay { Circle().strokeBorder(ring, lineWidth: 1.5) }
-            .offset(x: 2, y: 2)
             .accessibilityHidden(true)
     }
 
@@ -782,24 +770,15 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
+    /// The Host a page applies to, named the way "This Mac" is, with the
+    /// connection dot after it.
     private func hostScopeChip(palette: WarrenSettingsPalette) -> some View {
         HStack(spacing: 6) {
-            Text(String(currentHostLabel.prefix(1)).lowercased())
-                .font(.system(size: 9.5, design: .monospaced))
-                .foregroundStyle(palette.inkBody)
-                .frame(width: 16, height: 16)
-                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(palette.controlFill))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .strokeBorder(palette.controlSelectedBorder, lineWidth: 1)
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    connectionDot(hostOptions.first { $0.id == selectedHostID }?.probeState, palette: palette)
-                }
             Text(currentHostLabel)
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(.system(size: 12))
                 .foregroundStyle(palette.inkBody)
                 .lineLimit(1)
+            connectionDot(hostOptions.first { $0.id == selectedHostID }?.probeState, palette: palette)
         }
     }
 
@@ -860,23 +839,18 @@ struct WarrenDesktopSettingsView: View {
 
     private func appearanceSection(palette: WarrenSettingsPalette) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            WarrenSettingsGroup("Color scheme", footnote: "Light uses Ember Paper for both the window and the terminal, with an ANSI palette tuned for light backgrounds.") {
-                HStack(alignment: .top, spacing: 14) {
-                    ForEach(WarrenAppearanceMode.allCases, id: \.self) { mode in
-                        WarrenSettingsChoiceCard(
-                            label: mode.displayName,
-                            sublabel: Self.appearanceSublabel(mode),
-                            isSelected: appearanceSelection.wrappedValue == mode,
-                            preview: AppearanceChoicePreview(mode: mode)
-                        ) {
-                            appearanceSelection.wrappedValue = mode
-                        }
-                        .accessibilityIdentifier("settings.appearance.\(mode.rawValue)")
-                    }
+            WarrenSettingsGroup("Window", footnote: "System follows macOS. Light uses Ember Paper for the window and the terminal, with an ANSI palette tuned for light backgrounds.") {
+                WarrenSettingsRow("Color scheme") {
+                    WarrenSettingsPicker(
+                        label: "Color scheme",
+                        value: appearanceSelection.wrappedValue.displayName,
+                        options: WarrenAppearanceMode.allCases.map {
+                            ($0, $0.displayName, Self.appearanceSublabel($0))
+                        },
+                        selection: appearanceSelection,
+                        accessibilityID: "settings.appearance.mode"
+                    )
                 }
-                .padding(.horizontal, 14)
-                .padding(.top, 14)
-                .padding(.bottom, 14)
 
                 WarrenSettingsRowDivider()
 
@@ -1497,8 +1471,11 @@ struct WarrenDesktopSettingsView: View {
 
     private func environmentRow(code: String, description: String, palette: WarrenSettingsPalette) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
+            // Wide enough for the longest name, WARREN_WORKSPACE_BRANCH, so
+            // no variable is cut short.
             WarrenDesktopCodeChip(text: code)
-                .frame(width: 120, alignment: .leading)
+                .fixedSize()
+                .frame(width: 196, alignment: .leading)
             Text(description)
                 .font(.system(size: 11.5))
                 .foregroundStyle(palette.meta)
@@ -2249,13 +2226,16 @@ struct WarrenDesktopSettingsView: View {
                 Text(webStatus.tunnelRunning
                     ? (webStatus.secureURL?.absoluteString ?? webStatus.publicHostname ?? "")
                     : "Not published")
-                    .font(.system(size: 12.5, design: .monospaced))
+                    // An address is code; the state is a sentence.
+                    .font(webStatus.tunnelRunning
+                        ? .system(size: 12.5, design: .monospaced)
+                        : .system(size: 13))
                     .foregroundStyle(palette.inkBody)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(webStatus.tunnelRunning
                     ? "Anyone with the link can open this Host's Web UI."
-                    : "Publish this Host's Web UI through the enrolled Relay.")
+                    : "Turn on to publish at the route below.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(palette.meta)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2821,47 +2801,6 @@ private struct AppIconChoice: View {
 }
 
 // MARK: - Appearance preview
-
-private struct AppearanceChoicePreview: View {
-    let mode: WarrenAppearanceMode
-
-    var body: some View {
-        switch mode {
-        case .system:
-            HStack(spacing: 0) {
-                mini(light: true)
-                mini(light: false)
-            }
-        case .light:
-            mini(light: true)
-        case .dark:
-            mini(light: false)
-        }
-    }
-
-    private func mini(light: Bool) -> some View {
-        let ground = light ? Color(red: 0.949, green: 0.937, blue: 0.925) : Color.black
-        let card = light ? Color.white : Color(red: 0.043, green: 0.043, blue: 0.043)
-        let line = light ? Color(red: 0.878, green: 0.859, blue: 0.839) : Color(red: 0.122, green: 0.122, blue: 0.122)
-        return ZStack(alignment: .topLeading) {
-            ground
-            HStack(spacing: 4) {
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(card)
-                    .frame(width: 26)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 3, style: .continuous).strokeBorder(line, lineWidth: 1)
-                    }
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(card)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 3, style: .continuous).strokeBorder(line, lineWidth: 1)
-                    }
-            }
-            .padding(8)
-        }
-    }
-}
 
 // MARK: - Terminal preview
 

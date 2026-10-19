@@ -96,6 +96,10 @@ func (s *Service) AgentViewCapabilities() []string {
 		api.CapabilityAgentCausation,
 		// Output flow control lives on the terminal path every Host has.
 		api.CapabilityOutputAck,
+		// Size attribution comes from the Ghostline output reader. A runtime
+		// that cannot attribute a size simply reports none, which the client
+		// treats as unknown, so the capability does not depend on it.
+		api.CapabilityTerminalSize,
 	}
 	if s == nil {
 		return capabilities

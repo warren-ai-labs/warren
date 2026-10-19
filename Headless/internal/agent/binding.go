@@ -717,31 +717,47 @@ AGENT_NAMES=' claude codex pi opencode qoder antigravity agy '
 SHELL_NAMES=' sh bash zsh fish dash ksh '
 INTERPRETER_NAMES=' node bun deno python python3 '
 
-# process_info prints "<parent> <program> <is-shell>" for one pid. The script
-# runs on every tool call, so it stays at one process (ps) per level: the parent,
-# the program, and the interpreter unwrapping below use only shell builtins.
-# A process started through an interpreter or a shell script is unwrapped to the
-# program it runs, which is how 'node /opt/homebrew/bin/codex exec' is Codex.
+# process_info prints "<parent> <program> <is-shell> <is-interpreter-unwrapped>"
+# for one pid. The script runs on every tool call, so it stays at one process
+# (ps) per level: the parent, the program, and the interpreter unwrapping below
+# use only shell builtins. A process started through an interpreter or a shell
+# script is unwrapped to the program it runs, which is how
+# 'node /opt/homebrew/bin/codex exec' is Codex. The last field separates the two:
+# an interpreter launcher is reported, a shell script is not.
 process_info() {
   # shellcheck disable=SC2046
   set -- $(ps -o ppid=,command= -p "$1" 2>/dev/null)
   parent=${1:-}
-  program=${2:-}
-  program=${program##*/}
+  raw=${2:-}
+  raw=${raw##*/}
+  program=$raw
   shell_state=no
+  interpolated_state=no
   case " $SHELL_NAMES " in *" $program "*) shell_state=yes ;; esac
   case " $SHELL_NAMES $INTERPRETER_NAMES " in
-    *" $program "*) [ -n "${3:-}" ] && program=${3##*/} ;;
+    *" $raw "*)
+      if [ -n "${3:-}" ]; then
+        program=${3##*/}
+        case " $INTERPRETER_NAMES " in *" $raw "*) interpolated_state=yes ;; esac
+      fi
+      ;;
   esac
   [ -n "$program" ] || program=unknown
-  printf '%s %s %s' "$parent" "$program" "$shell_state"
+  printf '%s %s %s %s' "$parent" "$program" "$shell_state" "$interpolated_state"
 }
 
 nested_in_another_agent() {
   # The hook is a child of the CLI that fired it, so the first agent above it is
   # that CLI; a second one is the agent that started it.
+  #
+  # A CLI installed with an interpreter launcher passes through the same name
+  # twice: npm's codex is 'node /opt/homebrew/bin/codex' spawning the native
+  # binary, and both hops unwrap to 'codex'. That is one CLI reaching itself, not
+  # a CLI started by another, so an interpreter hop that unwraps to the program
+  # below it belongs to the caller instead of ending the walk.
   current=$PPID
   caller_seen=no
+  last_program=
   hops=0
   while [ -n "$current" ] && [ "$current" != 0 ] && [ "$current" != 1 ] && [ "$hops" -lt 32 ]; do
     set -- $(process_info "$current")
@@ -749,13 +765,17 @@ nested_in_another_agent() {
     program=${2:-}
     case " $AGENT_NAMES " in
       *" $program "*)
-        [ "$caller_seen" = yes ] && return 0
+        if [ "$caller_seen" = yes ] \
+          && { [ "${4:-}" != yes ] || [ "$program" != "$last_program" ]; }; then
+          return 0
+        fi
         caller_seen=yes
         ;;
       *)
         [ "${3:-}" = yes ] || return 1
         ;;
     esac
+    last_program=$program
     hops=$((hops + 1))
   done
   return 1

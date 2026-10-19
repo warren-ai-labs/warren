@@ -215,7 +215,8 @@
           "agent-config-v1",
           "agent-streams-v1",
           "browser-v1",
-          "output-ack-v1"
+          "output-ack-v1",
+          "terminal-size-v1"
         ]
       },
       "uniqueItems": true
@@ -349,6 +350,7 @@
           "roster.delta",
           "attached",
           "synced",
+          "resized",
           "exited",
           "agent.events",
           "pong"
@@ -381,12 +383,16 @@
           "notes": "Requires capability 'roster-delta'. Each present collection contains upsert/remove/order arrays; absent collections mean no change. Clients must apply the delta only when baseRevision matches their latest full or delta roster revision. Migration metadata is intentionally absent after the v4 clean break."
         },
         "attached": {
-          "fields": { "t": "attached", "session": "string", "epoch": "uint64", "sequence": "uint64", "reanchor": "bool", "attachmentId": "string" },
-          "notes": "Host acknowledges session.subscribe and publishes the attachment identity used by DENB input frames."
+          "fields": { "t": "attached", "session": "string", "epoch": "uint64", "sequence": "uint64", "reanchor": "bool", "attachmentId": "string", "cols": "int?", "rows": "int?" },
+          "notes": "Host acknowledges session.subscribe and publishes the attachment identity used by DENB input frames. With capability 'terminal-size-v1', cols/rows give the PTY grid size at (epoch, sequence) when the Host knows it; absent means unknown and no resized events follow for this attachment."
         },
         "synced": {
           "fields": { "t": "synced", "session": "string", "epoch": "uint64", "sequence": "uint64" },
           "notes": "Replay catch-up is complete; the next binary frame will be the live stream at (epoch, sequence)."
+        },
+        "resized": {
+          "fields": { "t": "resized", "session": "string", "epoch": "uint64", "sequence": "uint64", "cols": "int", "rows": "int" },
+          "notes": "Requires capability 'terminal-size-v1' and a sized attached event. Output from (epoch, sequence) on is produced for cols x rows. The event travels ahead of queued output, so clients apply it when their output position reaches sequence, never on arrival."
         },
         "exited": {
           "fields": { "t": "exited", "session": "string" },

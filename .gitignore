@@ -12,6 +12,8 @@ Web/node_modules/
 Warren.app/
 Warren-*.zip
 Warren-*.zip.sha256
+Warren-*.dmg
+Warren-*.dmg.sha256
 Frameworks/
 # Local-only release tooling and runbooks
 .local/

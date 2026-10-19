@@ -577,7 +577,9 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 			if content == "" || isTitleSystemContext(content) {
 				continue
 			}
-			appendTitleMessage(&entry.titleUser, &entry.titleUserProvider, &entry.titleUserID, event)
+			if appendTitleMessage(&entry.titleUser, &entry.titleUserProvider, &entry.titleUserID, event) && entry.titleUserAt.IsZero() {
+				entry.titleUserAt = time.Now()
+			}
 		case "assistant":
 			if content := strings.TrimSpace(event.Content); content != "" && !event.Sidechain {
 				entry.turnAssistant = content

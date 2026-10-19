@@ -24,13 +24,23 @@ the desktop updater:
       "name": "Warren-0.5.1.zip",
       "browser_download_url": "https://github.com/warren-ai-labs/warren/releases/download/v0.5.1/Warren-0.5.1.zip",
       "size": 20847018
+    },
+    {
+      "name": "Warren-0.5.1.dmg",
+      "browser_download_url": "https://github.com/warren-ai-labs/warren/releases/download/v0.5.1/Warren-0.5.1.dmg",
+      "size": 21004321
     }
   ],
-  "name": "Warren-0.5.1.zip",
-  "size": 20847018,
-  "url": "https://github.com/warren-ai-labs/warren/releases/download/v0.5.1/Warren-0.5.1.zip"
+  "name": "Warren-0.5.1.dmg",
+  "size": 21004321,
+  "url": "https://github.com/warren-ai-labs/warren/releases/download/v0.5.1/Warren-0.5.1.dmg"
 }
 ```
+
+`assets` lists every `Warren-*.dmg`, `.pkg`, and `.zip` archive. The desktop
+updater picks the zip from that list. The top-level `name`, `size`, and `url`
+are the website download, which prefers the disk image, then a package, then
+the zip.
 
 The existing `/api/latest-release` onboarding endpoint uses the same response,
 so the site and desktop client share one release snapshot without breaking the
@@ -83,3 +93,14 @@ the archive size and release notes.
 still applies the existing three-hour automatic-check cadence and always allows
 the menu's manual check. Release builds display the `Update` or `Failed`
 status beside the traffic-light row; preview builds retain the `BUILD` marker.
+
+Opening a downloaded Warren disk image while Warren runs installs it in place.
+The app watches volume mounts; when a volume's root holds a newer
+`com.abcdlsj.warren`, Warren copies it into the update cache, requires an
+Apple-issued signature from the running app's team for the bundle and every
+nested binary, clears the download quarantine, and hands it to the same
+installer as the zip update. The disk image is ejected and Warren restarts.
+Clearing the quarantine is what keeps the restarted app from asking Gatekeeper
+again: the user approved this developer on first install, and an app signed by
+any other team is rejected. Without a running Warren, the disk image falls back
+to the drag-to-install window.
