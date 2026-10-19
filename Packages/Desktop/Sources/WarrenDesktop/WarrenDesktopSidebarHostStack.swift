@@ -2,7 +2,7 @@ import SwiftUI
 import WarrenDesignSystem
 import WarrenObservation
 
-/// A Host the sidebar's foot offers to switch to.
+/// A Host the sidebar's foot lists: one to switch to, or the window's own.
 struct WarrenDesktopSidebarOtherHost: Identifiable, Equatable {
     /// The endpoint ID.
     let id: String
@@ -15,6 +15,8 @@ struct WarrenDesktopSidebarOtherHost: Identifiable, Equatable {
     /// The states of its Sessions that have one, most urgent first. Only a
     /// Host whose sections this window loads can report them.
     let marks: [WarrenActivityMark]
+    /// Whether its tree is listed in the sidebar beside the window's Host.
+    let isDisplayedInSidebar: Bool
 
     init(
         id: String,
@@ -22,7 +24,8 @@ struct WarrenDesktopSidebarOtherHost: Identifiable, Equatable {
         isLocal: Bool = false,
         address: String? = nil,
         isOnline: Bool = true,
-        marks: [WarrenActivityMark] = []
+        marks: [WarrenActivityMark] = [],
+        isDisplayedInSidebar: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -30,6 +33,12 @@ struct WarrenDesktopSidebarOtherHost: Identifiable, Equatable {
         self.address = address
         self.isOnline = isOnline
         self.marks = marks
+        self.isDisplayedInSidebar = isDisplayedInSidebar
+    }
+
+    /// This Mac is not an entry in the Host catalog, so it cannot be deleted.
+    var canDelete: Bool {
+        id != "local"
     }
 
     /// The address an endpoint's detail names, without the route it is
@@ -58,14 +67,22 @@ struct WarrenDesktopSidebarOtherHost: Identifiable, Equatable {
     /// that it is offline.
     var panelSubtitle: String {
         let place = isOnline ? (isLocal ? "Local" : "Server") : "Offline"
-        guard let address, !address.isEmpty else { return place }
+        guard let address = distinctAddress else { return place }
         return "\(place) · \(address)"
     }
 
     /// What the foot's label says beside the name while this Host is under
     /// the pointer.
     var pickDetail: String? {
-        isOnline ? address : "offline"
+        isOnline ? distinctAddress : "offline"
+    }
+
+    /// The address, unless it only repeats the name: an SSH alias is often
+    /// both.
+    private var distinctAddress: String? {
+        guard let address, !address.isEmpty,
+              address.caseInsensitiveCompare(name) != .orderedSame else { return nil }
+        return address
     }
 }
 
@@ -125,18 +142,30 @@ enum WarrenDesktopSidebarHostStackMetrics {
     }
 }
 
-/// The sidebar's foot when other Hosts exist: their tiles stacked, "Other
-/// hosts" and the count, and a dot while a Session on one of them needs
-/// someone.
+/// The sidebar's foot, where Hosts are switched and managed: the other
+/// Hosts' tiles stacked, "Other hosts" and the count, and a dot while a
+/// Session on one of them needs someone.
 ///
 /// The same gesture as the top bar's split group. Hovering lifts and fans the
-/// tiles, and the label names the Host under the pointer; clicking switches
-/// to it. Resting a moment, or moving the pointer up, raises a panel with one
-/// row per Host.
+/// tiles, and the label names the Host under the pointer. Clicking, resting
+/// a moment, or moving the pointer up raises a panel with one row per Host,
+/// and only a row there switches: the window's own first and selected. A row's "+" lists that
+/// Host's tree in the sidebar too, and its context menu renames or deletes
+/// it.
+///
+/// With no other Host the foot is an Add host entry instead, so the corner
+/// is never empty.
 struct WarrenDesktopSidebarHostStack: View {
     let hosts: [WarrenDesktopSidebarOtherHost]
+    /// The window's own Host, the panel's selected first row.
+    var currentHost: WarrenDesktopSidebarOtherHost? = nil
     let onSelectHost: (String) -> Void
     let onAddHost: (() -> Void)?
+    var onSetSidebarVisibility: ((String, Bool) -> Void)? = nil
+    var onRenameHost: ((String) -> Void)? = nil
+    var onDeleteHost: ((String) -> Void)? = nil
+    /// Whether a Host probe is in flight, for the panel's refresh button.
+    var isCheckingHosts: Bool = false
     /// A control that shares the foot's row at its trailing end, outside the
     /// hover that lifts the tiles: the notice bell.
     let trailingAccessory: AnyView?
@@ -159,16 +188,26 @@ struct WarrenDesktopSidebarHostStack: View {
 
     init(
         hosts: [WarrenDesktopSidebarOtherHost],
+        currentHost: WarrenDesktopSidebarOtherHost? = nil,
         onSelectHost: @escaping (String) -> Void,
         onAddHost: (() -> Void)? = nil,
+        onSetSidebarVisibility: ((String, Bool) -> Void)? = nil,
+        onRenameHost: ((String) -> Void)? = nil,
+        onDeleteHost: ((String) -> Void)? = nil,
+        isCheckingHosts: Bool = false,
         trailingAccessory: AnyView? = nil,
         initiallyLifted: Bool = false,
         initiallyPulled: Bool = false,
         initialHotIndex: Int? = nil
     ) {
         self.hosts = hosts
+        self.currentHost = currentHost
         self.onSelectHost = onSelectHost
         self.onAddHost = onAddHost
+        self.onSetSidebarVisibility = onSetSidebarVisibility
+        self.onRenameHost = onRenameHost
+        self.onDeleteHost = onDeleteHost
+        self.isCheckingHosts = isCheckingHosts
         self.trailingAccessory = trailingAccessory
         _isLifted = State(initialValue: initiallyLifted || initiallyPulled)
         _isPulled = State(initialValue: initiallyPulled)
@@ -186,7 +225,11 @@ struct WarrenDesktopSidebarHostStack: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: 0) {
-            foot(tokens: tokens)
+            if hosts.isEmpty {
+                addHostFoot(tokens: tokens)
+            } else {
+                foot(tokens: tokens)
+            }
             if let trailingAccessory {
                 trailingAccessory
                     .padding(.trailing, 8)
@@ -226,6 +269,51 @@ struct WarrenDesktopSidebarHostStack: View {
     }
 
     // MARK: Foot
+
+    /// The foot with no other Host: a "+" tile where the stack would be.
+    @ViewBuilder
+    private func addHostFoot(tokens: WarrenColorTokens) -> some View {
+        if let onAddHost {
+            Button(action: onAddHost) {
+                HStack(spacing: Metrics.spacing) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(isAddHovered ? tokens.treeGroupText : tokens.treeSecondaryText)
+                        .frame(width: Metrics.tileSize, height: Metrics.tileSize)
+                        .background {
+                            RoundedRectangle(cornerRadius: Metrics.tileRadius, style: .continuous)
+                                .strokeBorder(
+                                    isAddHovered ? tokens.cardBorderFocused : tokens.cardBorder,
+                                    style: StrokeStyle(lineWidth: 1, dash: [2.5, 2])
+                                )
+                        }
+                    Text("Add host")
+                        .font(.system(size: 13))
+                        .foregroundStyle(isAddHovered ? tokens.treeGroupText : tokens.treeSecondaryText)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, Metrics.leadingInset)
+                .padding(.trailing, Metrics.trailingInset)
+                .frame(height: Metrics.height)
+                .frame(maxWidth: .infinity)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .onHover { isAddHovered = $0 }
+            .accessibilityLabel("Add host")
+            .warrenSemanticElement(
+                id: "sidebar.add-host",
+                role: .button,
+                label: "Add host",
+                action: onAddHost
+            )
+        } else {
+            Spacer(minLength: 0)
+                .frame(height: Metrics.height)
+                .frame(maxWidth: .infinity)
+        }
+    }
 
     private func foot(tokens: WarrenColorTokens) -> some View {
         HStack(spacing: Metrics.spacing) {
@@ -306,12 +394,14 @@ struct WarrenDesktopSidebarHostStack: View {
                 scheduleDrop()
             }
         }
-        .onTapGesture { selectHost(at: hotIndex ?? 0) }
+        // The tiles only preview: a click opens the list, and only a row in
+        // it switches, so a stray click on the foot never moves the window.
+        .onTapGesture { pull() }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Other hosts")
         .accessibilityValue(accessibilityValue)
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction { selectHost(at: hotIndex ?? 0) }
+        .accessibilityAction { pull() }
         .warrenSemanticElement(
             id: "sidebar.other-hosts",
             role: .button,
@@ -359,8 +449,13 @@ struct WarrenDesktopSidebarHostStack: View {
     private func panel(tokens: WarrenColorTokens) -> some View {
         let menuPalette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
         return VStack(alignment: .leading, spacing: 0) {
-            WarrenDesktopMenuGroupHeader(title: "OTHER HOSTS")
+            WarrenDesktopMenuGroupHeader(title: "HOSTS") {
+                WarrenDesktopHostRefreshButton(isChecking: isCheckingHosts)
+            }
 
+            if let currentHost {
+                currentRow(currentHost, tokens: tokens)
+            }
             ForEach(Array(hosts.enumerated()), id: \.element.id) { index, host in
                 panelRow(host, index: index, tokens: tokens)
             }
@@ -435,6 +530,10 @@ struct WarrenDesktopSidebarHostStack: View {
                 if !host.marks.isEmpty {
                     WarrenDesktopTreeFoldDots(marks: host.marks)
                 }
+                if onSetSidebarVisibility != nil {
+                    // Room for the membership button the row overlays.
+                    Color.clear.frame(width: WarrenDesktopSidebarMembershipButton.size)
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -445,6 +544,13 @@ struct WarrenDesktopSidebarHostStack: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .warrenContextMenu(contextActions(for: host))
+        .overlay(alignment: .trailing) {
+            if let onSetSidebarVisibility {
+                membershipButton(host, isRowHot: isHot, onSet: onSetSidebarVisibility)
+                    .padding(.trailing, 8)
+            }
+        }
         .onHover { if $0 { setHot(index) } }
         .warrenTooltip("Switch to \(host.name)")
         .accessibilityLabel("Switch to \(host.name)")
@@ -455,6 +561,110 @@ struct WarrenDesktopSidebarHostStack: View {
             label: "Switch to \(host.name)",
             value: host.needsAttention ? "A session needs you" : nil,
             action: { selectHost(at: index) }
+        )
+    }
+
+    /// The window's own Host: selected, and already where a click would go.
+    private func currentRow(
+        _ host: WarrenDesktopSidebarOtherHost,
+        tokens: WarrenColorTokens
+    ) -> some View {
+        HStack(spacing: 10) {
+            WarrenDesktopHostTile(
+                host: host,
+                showsStatus: true,
+                outline: nil,
+                isRaised: false,
+                statusRingTint: tokens.treeRowHover
+            )
+            VStack(alignment: .leading, spacing: 1) {
+                Text(host.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(tokens.treeSessionSelectedText)
+                Text(host.panelSubtitle)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(tokens.treeSecondaryText)
+            }
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        // Selected the way a tree row is: a filled row with a bar on its
+        // leading edge, drawn over the padding so every row keeps one inset.
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(tokens.treeRowSelected)
+        )
+        .overlay(alignment: .leading) {
+            Capsule()
+                .fill(tokens.foreground.opacity(0.7))
+                .frame(width: 2.5, height: 16)
+                .padding(.leading, 2)
+                .accessibilityHidden(true)
+        }
+        .contentShape(.rect)
+        .warrenContextMenu(contextActions(for: host))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(host.name)
+        .accessibilityValue("Selected. \(host.panelSubtitle)")
+        .warrenSemanticElement(
+            id: "sidebar.other-host.\(host.id)",
+            role: .button,
+            label: host.name,
+            value: host.panelSubtitle,
+            isSelected: true,
+            action: { drop() }
+        )
+    }
+
+    private func contextActions(
+        for host: WarrenDesktopSidebarOtherHost
+    ) -> [WarrenDesktopContextMenuAction] {
+        var actions: [WarrenDesktopContextMenuAction] = []
+        if let onRenameHost {
+            actions.append(.button(title: "Rename Host…") {
+                drop()
+                onRenameHost(host.id)
+            })
+        }
+        if let onDeleteHost, host.canDelete {
+            if !actions.isEmpty { actions.append(.divider) }
+            actions.append(.button(title: "Delete Host…", destructive: true) {
+                drop()
+                onDeleteHost(host.id)
+            })
+        }
+        return actions
+    }
+
+    /// Whether the Host's tree is in the sidebar too.
+    private func membershipButton(
+        _ host: WarrenDesktopSidebarOtherHost,
+        isRowHot: Bool,
+        onSet: @escaping (String, Bool) -> Void
+    ) -> some View {
+        let isDisplayed = host.isDisplayedInSidebar
+        let label = isDisplayed
+            ? "Remove \(host.name) from Sidebar"
+            : "Add \(host.name) to Sidebar"
+        let toggle: () -> Void = { onSet(host.id, !isDisplayed) }
+        return WarrenDesktopSidebarMembershipButton(
+            isDisplayed: isDisplayed,
+            isRowHot: isRowHot,
+            action: toggle
+        )
+        .warrenTooltip(label)
+        .accessibilityLabel(label)
+        .accessibilityValue(isDisplayed ? "In sidebar" : "Not in sidebar")
+        .accessibilityHint("This does not change the active Host")
+        .warrenSemanticElement(
+            id: "sidebar.other-host.\(host.id).sidebar",
+            role: .button,
+            label: label,
+            isSelected: isDisplayed,
+            action: toggle
         )
     }
 
@@ -478,6 +688,11 @@ struct WarrenDesktopSidebarHostStack: View {
 
     private func pull() {
         timer?.cancel()
+        if !isPulled {
+            // Opening the list checks the Hosts again unless the last
+            // results are still fresh; the refresh button always does.
+            WarrenDesktopEndpointOption.requestProbe(force: false)
+        }
         animate {
             isLifted = true
             isPulled = true
@@ -579,5 +794,74 @@ struct WarrenDesktopHostTile: View {
                     .opacity(showsStatus ? 1 : 0)
             }
             .accessibilityHidden(true)
+    }
+}
+
+/// The Host row's "in the sidebar" switch, reduced to its glyph.
+///
+/// Off, it is a "+" that shows on the row's hover. On, it is a check that
+/// stays put, and under the pointer turns into a minus so the click's effect
+/// is visible before it happens.
+struct WarrenDesktopSidebarMembershipButton: View {
+    let isDisplayed: Bool
+    let isRowHot: Bool
+    let action: () -> Void
+
+    static let size: CGFloat = 20
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovered = false
+
+    var body: some View {
+        let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
+        Button(action: action) {
+            Image(systemName: glyph)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(isHovered || isDisplayed ? palette.rowHoverText : palette.secondaryGlyph)
+                .frame(width: Self.size, height: Self.size)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isHovered ? palette.hoverFill : .clear)
+                )
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .opacity(isDisplayed || isRowHot || isHovered ? 1 : 0)
+        .onHover { isHovered = $0 }
+    }
+
+    private var glyph: String {
+        if isDisplayed {
+            return isHovered ? "minus" : "checkmark"
+        }
+        return "plus"
+    }
+}
+
+/// Confirms forgetting a Host from its context menu at the sidebar's foot.
+struct WarrenDesktopDeleteHostConfirmation: View {
+    let hostName: String
+    /// Deleting the window's own Host hands the window to this Mac.
+    let isWindowHost: Bool
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    var body: some View {
+        WarrenDialog(
+            "Delete host?",
+            message: "\u{201C}\(hostName)\u{201D} will be removed from Warren's hosts. "
+                + "Its sessions keep running on that machine."
+                + (isWindowHost ? "\nThis window switches to this Mac." : "")
+        ) {
+            EmptyView()
+        } footer: {
+            WarrenDesktopDialogFooter(
+                confirmLabel: "Delete",
+                isDestructive: true,
+                onCancel: onCancel,
+                onConfirm: onConfirm
+            )
+        }
+        .onExitCommand(perform: onCancel)
     }
 }

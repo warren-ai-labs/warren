@@ -30,6 +30,10 @@ last stroke flicks out into an ember dot, on a caramel-brown rounded tile.
   generator places them on the macOS icon grid (an 824 px tile inside a
   1024 px canvas, margins rounded to whole pixels at 16 and 32 px) so the icon
   matches other apps in the Dock. Web icons keep the full-bleed tile.
+- `dmg-background.svg`: 660 × 420 disk image window background with the drag
+  hint and the first-launch approval steps. `scripts/build-dmg.sh` places the
+  icons on the slots it draws; keep the two in sync. The generator renders
+  `dmg-background.png` and `dmg-background@2x.png`.
 - `menubar-black.svg` / `menubar-white.svg`: source variants of the W on a
   transparent background. The macOS menu bar uses a single heavier template
   variant (stroke ×1.15, dot ×1.25, the same weight as the 32 px source) so the W stays visible at

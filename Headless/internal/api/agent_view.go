@@ -49,6 +49,13 @@ const (
 	// the PTY produces, so keystroke echo and Agent events do not wait behind
 	// seconds of backlog on a slow link.
 	CapabilityOutputAck = "output-ack-v1"
+	// CapabilityTerminalSize advertises that the Host reports the PTY grid size
+	// at exact output positions: `attached` carries the size at its anchor and a
+	// `resized` event names the sequence from which output is produced for a new
+	// size. A client that negotiated it changes its own grid only at those
+	// positions, so output the child wrote for the old size is never parsed
+	// against the new grid.
+	CapabilityTerminalSize = "terminal-size-v1"
 )
 
 var (
@@ -85,6 +92,7 @@ func HostCapabilities() []string {
 	result = append(result, AgentViewCapabilities...)
 	result = append(result, CapabilityAgentStreams)
 	result = append(result, CapabilityOutputAck)
+	result = append(result, CapabilityTerminalSize)
 	return result
 }
 

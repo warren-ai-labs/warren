@@ -7,8 +7,10 @@ import WarrenObservation
 /// control only reports which popover it wants; the window root owns
 /// presentation, dismissal and outside clicks.
 enum WarrenDesktopChromePopover: Hashable {
-    /// The Host list, hanging from the sidebar's Host row.
+    /// The window's Host panel, hanging from the sidebar's Host row.
     case hostPicker
+    /// The Add SSH Host page, rising from the sidebar's foot.
+    case addHost
     case externalIDE
     /// The "+" menu: the command presets.
     case newSession

@@ -7,9 +7,10 @@ import WarrenDomain
 //
 // Pinned projects come first, then every project with an open Session, then
 // one folded row for the rest. A project changes band only when it gains its
-// first Session or closes its last, never on a status change, and the active
-// band is ordered by when each project became active, so rows do not move
-// while someone reads them. Inside a project, worktrees with Sessions keep
+// first Session, a minute after it closes its last, or when it is selected
+// from the folded row (see `WarrenDesktopProjectHold`), never on a status
+// change, and the active band is ordered by when each project became active,
+// so rows do not move while someone reads them. Inside a project, worktrees with Sessions keep
 // their order and every other worktree folds into one row at the end.
 //
 // Both the current-Host tree and the multi-Host tree draw from these, so the
@@ -27,11 +28,14 @@ struct WarrenDesktopProjectBands<Item> {
     /// Every project, in band order, for a rail that draws them all.
     var all: [Item] { pinned + active + inactive }
 
+    /// `activeSince` orders the active band; it defaults to the Host's stamp,
+    /// and a held project supplies the one it is held with.
     init(
         _ items: [Item],
         project: (Item) -> Project,
         isActive: (Item) -> Bool,
-        lastActiveAt: (Item) -> Date?
+        lastActiveAt: (Item) -> Date?,
+        activeSince: ((Item) -> Date?)? = nil
     ) {
         var active: [(offset: Int, item: Item)] = []
         var inactive: [(offset: Int, item: Item, last: Date?)] = []
@@ -47,8 +51,8 @@ struct WarrenDesktopProjectBands<Item> {
         // A Host that predates the stamp leaves every project unstamped; they
         // then keep the Host's order behind the stamped ones.
         self.active = active.sorted { lhs, rhs in
-            let left = project(lhs.item).activeSince ?? .distantFuture
-            let right = project(rhs.item).activeSince ?? .distantFuture
+            let left = activeSince?(lhs.item) ?? project(lhs.item).activeSince ?? .distantFuture
+            let right = activeSince?(rhs.item) ?? project(rhs.item).activeSince ?? .distantFuture
             return left == right ? lhs.offset < rhs.offset : left < right
         }.map(\.item)
         self.inactive = inactive.sorted { lhs, rhs in
@@ -59,17 +63,111 @@ struct WarrenDesktopProjectBands<Item> {
     }
 }
 
+/// Projects held in the active band without an open Session.
+///
+/// A project that closes its last Session stays where it was for a minute, so
+/// closing one Session to open another does not send its row away and back.
+/// Selecting an inactive project lifts it into the band the same way, at the
+/// band's end, where its row has the actions that start work in it.
+///
+/// A hold outlasts its minute while its project holds the selection, so a row
+/// someone is looking at is never folded away, and while the pointer is over
+/// the rail, so no row moves under the pointer reading it. The hold is
+/// Desktop-local: the Host's `activeSince` still says only whether a Session
+/// runs. Keys are the tree's own project keys, so the multi-Host tree can scope
+/// them by Host.
+struct WarrenDesktopProjectHold: Equatable {
+    static let interval: TimeInterval = 60
+
+    struct Entry: Equatable {
+        /// Where the project sorts in the active band.
+        var activeSince: Date?
+        var expiresAt: Date
+    }
+
+    private(set) var entries: [String: Entry] = [:]
+
+    func contains(_ key: String) -> Bool { entries[key] != nil }
+
+    func activeSince(_ key: String) -> Date? { entries[key]?.activeSince }
+
+    /// The earliest moment a hold can end.
+    var nextExpiry: Date? { entries.values.map(\.expiresAt).min() }
+
+    /// Follows one change of which projects are active.
+    ///
+    /// A project that stopped being active is held with the stamp it had, so
+    /// it keeps its place; one that became active again needs no hold; one
+    /// that is gone is forgotten.
+    mutating func update(from previous: Snapshot, to current: Snapshot, now: Date) {
+        for (key, stamp) in previous.active
+        where current.active[key] == nil && current.existing.contains(key) {
+            entries[key] = Entry(activeSince: stamp, expiresAt: now.addingTimeInterval(Self.interval))
+        }
+        for key in entries.keys
+        where current.active[key] != nil || !current.existing.contains(key) {
+            entries[key] = nil
+        }
+    }
+
+    /// Which projects a tree lists, and the Host's stamp on each active one.
+    struct Snapshot: Equatable {
+        var active: [String: Date?] = [:]
+        var existing: Set<String> = []
+    }
+
+    /// Lifts a selected inactive project into the active band, behind every
+    /// project already there. A project already held keeps its place.
+    mutating func lift(_ key: String, now: Date) {
+        guard entries[key] == nil else { return }
+        entries[key] = Entry(activeSince: now, expiresAt: now.addingTimeInterval(Self.interval))
+    }
+
+    /// Ends the holds whose minute is up, except the ones in `kept`. Reports
+    /// whether any ended.
+    @discardableResult
+    mutating func expire(now: Date, keeping kept: Set<String>) -> Bool {
+        let ended = entries.filter { $0.value.expiresAt <= now && !kept.contains($0.key) }.keys
+        for key in ended { entries[key] = nil }
+        return !ended.isEmpty
+    }
+}
+
+/// What the hold's clock waits on: the next expiry, and the two things that
+/// postpone it. Any change restarts the wait.
+struct WarrenDesktopProjectHoldClock: Equatable {
+    var nextExpiry: Date?
+    var pointerInsideSidebar: Bool
+    var kept: Set<String>
+
+    /// Sleeps until the next hold can end, then ends what may. Returns without
+    /// ending anything while the pointer is over the rail.
+    @MainActor
+    func run(_ expire: @MainActor (Date, Set<String>) -> Void) async {
+        guard let nextExpiry, !pointerInsideSidebar else { return }
+        let delay = nextExpiry.timeIntervalSinceNow
+        if delay > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
+        guard !Task.isCancelled else { return }
+        expire(Date(), kept)
+    }
+}
+
 /// A project's worktrees split into the ones it lists and the ones folded
 /// into its idle row.
+///
+/// In each list a `main` or `master` worktree comes first, so the default
+/// branch is always found in the same place.
 struct WarrenDesktopWorkspaceSplit: Equatable {
-    /// In the Host's order.
+    /// The default branch, then the Host's order.
     var live: [Workspace]
-    /// Most recently active first.
+    /// The default branch, then most recently active first.
     var idle: [Workspace]
 
     init(_ workspaces: [Workspace], isLive: (Workspace) -> Bool) {
-        live = workspaces.filter(isLive)
-        idle = workspaces
+        live = Self.defaultBranchFirst(workspaces.filter(isLive))
+        idle = Self.defaultBranchFirst(workspaces
             .enumerated()
             .filter { !isLive($0.element) }
             .sorted { lhs, rhs in
@@ -77,7 +175,18 @@ struct WarrenDesktopWorkspaceSplit: Equatable {
                 let right = rhs.element.lastActiveAt ?? .distantPast
                 return left == right ? lhs.offset < rhs.offset : left > right
             }
-            .map(\.element)
+            .map(\.element))
+    }
+
+    static func isDefaultBranch(_ workspace: Workspace) -> Bool {
+        let branch = workspace.branch ?? workspace.name
+        return branch == "main" || branch == "master"
+    }
+
+    /// Moves the default-branch worktrees to the front, keeping every other
+    /// order as it was.
+    private static func defaultBranchFirst(_ workspaces: [Workspace]) -> [Workspace] {
+        workspaces.filter(isDefaultBranch) + workspaces.filter { !isDefaultBranch($0) }
     }
 
     /// Whether the idle row is drawn. A project with no Session and one

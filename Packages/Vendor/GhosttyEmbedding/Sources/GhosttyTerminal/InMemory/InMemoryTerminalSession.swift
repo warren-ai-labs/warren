@@ -297,6 +297,21 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         }
     }
 
+    /// The grid of the terminal state that output is parsed against.
+    ///
+    /// `ghostty_surface_set_size` reaches the terminal through Ghostty's IO
+    /// thread, while `receive` parses on the caller's thread, so for a moment
+    /// after a resize this differs from the surface's reported size. Returns
+    /// nil while no surface is attached.
+    public func terminalGrid() -> (columns: UInt16, rows: UInt16)? {
+        guard let lease = beginLease() else { return nil }
+        defer { lease.release() }
+        var columns: UInt16 = 0
+        var rows: UInt16 = 0
+        ghostty_surface_terminal_grid(lease.state.surface, &columns, &rows)
+        return (columns, rows)
+    }
+
     /// Atomically replaces the current terminal emulator state with a native
     /// Ghostty snapshot. Invalid snapshots leave the existing terminal
     /// untouched. Callers are responsible for validating the advertised wire

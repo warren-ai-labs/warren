@@ -218,7 +218,7 @@ Warren's implementation is organized around a few deliberately strict boundaries
 
 ## Current scope
 
-Warren is an early, open-source phase-one project. The desktop client targets macOS 13+ on arm64 Apple Silicon Macs, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex, Claude, and OpenCode; other interactive programs remain available through the generic terminal Session interface.
+Warren is an early, source-available phase-one project. The desktop client targets macOS 13+ on arm64 Apple Silicon Macs, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex, Claude, and OpenCode; other interactive programs remain available through the generic terminal Session interface.
 
 ### Client surface priority
 
@@ -229,7 +229,7 @@ Warren's product design and interactive capabilities follow a clear surface hier
 
 Public Access is an explicit way for the Host owner to reach an existing Web interface from outside the local network. It is not a multi-user Workspace sharing or collaboration feature. Read [SECURITY.md](SECURITY.md) before exposing any Host or Relay to a network.
 
-The open-source repository code is licensed under [Apache-2.0](LICENSE). This covers the macOS Desktop app, Headless daemon, CLI, Relay Service, Web client, and the in-development iOS sources. The iOS companion app itself will be distributed separately, and is not part of a Warren release yet.
+The repository code is source-available under the [Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (FSL-1.1-ALv2): you may use, copy, modify, and redistribute it for any purpose other than offering a competing product or service, and every version becomes available under Apache-2.0 two years after release. This covers the macOS Desktop app, Headless daemon, CLI, Relay Service, Web client, and the in-development iOS sources. The iOS companion app itself will be distributed separately, and is not part of a Warren release yet.
 
 ## Repository Layout
 
@@ -417,7 +417,7 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 - [REVIEW.md](REVIEW.md) — the five review dimensions a change is checked against
 - [RELEASE.md](RELEASE.md) — release process
 - [SECURITY.md](SECURITY.md) — vulnerability reporting and deployment boundaries
-- [LICENSE](LICENSE) — Apache-2.0 license terms
+- [LICENSE](LICENSE) — FSL-1.1-ALv2 license terms (Apache-2.0 after two years)
 
 ## Contributors
 

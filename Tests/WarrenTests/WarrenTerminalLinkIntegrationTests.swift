@@ -24,13 +24,28 @@ final class WarrenTerminalLinkIntegrationTests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    /// An editor model that cannot reach the user's real editor.
+    ///
+    /// The default model writes `settings.json` under the real Application
+    /// Support directory and launches the installed code-server. A test process
+    /// follows the system appearance, so it would overwrite the running app's
+    /// editor theme with whatever macOS is set to.
+    @MainActor
+    private func makeEditorModel() -> WarrenEmbeddedEditorModel {
+        WarrenEmbeddedEditorModel(
+            environment: [:],
+            supportDirectory: tempDirectory.appendingPathComponent("EmbeddedEditor", isDirectory: true),
+            executableResolver: { _ in nil }
+        )
+    }
+
     @MainActor
     func testLinkInterceptionHonorsDisabledPreference() throws {
         UserDefaults.standard.set(false, forKey: WarrenPreferenceKey.embeddedEditorOpenLinks)
 
         let surfaceManager = TerminalSurfaceManager()
         let remoteModel = WarrenRemoteApplicationModel(surfaceManager: surfaceManager)
-        let editorModel = WarrenEmbeddedEditorModel()
+        let editorModel = makeEditorModel()
 
         var openEditorNotificationFired = false
         NotificationCenter.default.publisher(for: WarrenDesktopCommand.openEmbeddedEditor)
@@ -112,7 +127,7 @@ final class WarrenTerminalLinkIntegrationTests: XCTestCase {
 
         let surfaceManager = TerminalSurfaceManager()
         let remoteModel = WarrenRemoteApplicationModel(surfaceManager: surfaceManager)
-        let editorModel = WarrenEmbeddedEditorModel()
+        let editorModel = makeEditorModel()
 
         let hostID = HostID()
         let projectID = ProjectID()
@@ -206,7 +221,7 @@ final class WarrenTerminalLinkIntegrationTests: XCTestCase {
 
         let surfaceManager = TerminalSurfaceManager()
         let remoteModel = WarrenRemoteApplicationModel(surfaceManager: surfaceManager)
-        let editorModel = WarrenEmbeddedEditorModel()
+        let editorModel = makeEditorModel()
 
         let hostID = HostID()
         let projectID = ProjectID()

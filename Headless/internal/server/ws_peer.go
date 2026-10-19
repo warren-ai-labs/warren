@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/output"
 	"github.com/abcdlsj/warren/Headless/internal/store"
@@ -563,14 +564,38 @@ func (p *wsPeer) enqueueAtomicState(
 }
 
 func (p *wsPeer) enqueueAttached(sessionID string, epoch, sequence uint64, reanchor bool) error {
+	return p.enqueueAttachedSized(sessionID, epoch, sequence, reanchor, ghostline.Size{})
+}
+
+// enqueueAttachedSized announces an attachment together with the PTY grid size
+// at its anchor. A zero size is omitted, which tells the client the size is
+// unknown.
+func (p *wsPeer) enqueueAttachedSized(sessionID string, epoch, sequence uint64, reanchor bool, size ghostline.Size) error {
 	attachmentID := p.attachmentID(sessionID)
 	if attachmentID == "" {
 		return fmt.Errorf("terminal attachment is not registered: %s", sessionID)
 	}
-	return p.writeJSON(map[string]any{
+	message := map[string]any{
 		"t": "attached", "session": sessionID,
 		"epoch": epoch, "sequence": sequence,
 		"reanchor": reanchor, "attachmentId": attachmentID,
+	}
+	if size.Columns > 0 && size.Rows > 0 {
+		message["cols"] = size.Columns
+		message["rows"] = size.Rows
+	}
+	return p.writeJSON(message)
+}
+
+// enqueueResized tells the client that output from sequence on is produced
+// for a new PTY grid size. It travels on the control queue, which can overtake
+// output already queued below sequence, so the client applies it by sequence,
+// not by arrival.
+func (p *wsPeer) enqueueResized(sessionID string, epoch, sequence uint64, size ghostline.Size) error {
+	return p.writeJSON(map[string]any{
+		"t": "resized", "session": sessionID,
+		"epoch": epoch, "sequence": sequence,
+		"cols": size.Columns, "rows": size.Rows,
 	})
 }
 

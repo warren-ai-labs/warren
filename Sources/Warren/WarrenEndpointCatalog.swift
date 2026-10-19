@@ -476,6 +476,64 @@ enum WarrenEndpointCatalog {
         }
     }
 
+    /// Removes one endpoint, its sidebar membership and its display name, the
+    /// way `warren endpoint remove` does. This Mac is not an entry in the
+    /// catalog, so it cannot be removed. Removing the current endpoint leaves
+    /// none selected, which means this Mac.
+    static func remove(
+        _ endpointID: String,
+        from configURL: URL = configurationURL()
+    ) throws {
+        try withLock(configURL) {
+            let existing = try loadUnlocked(from: configURL).catalog
+            guard endpointID != "local",
+                  existing.endpoints.contains(where: { $0.name == endpointID }) else {
+                throw NSError(
+                    domain: "WarrenEndpointCatalog",
+                    code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: "Host not found: \(endpointID)"]
+                )
+            }
+            let endpointNames = Set(existing.endpoints.map(\.name)).union(["local"])
+            // Resolve the set before the endpoint leaves it: once it is gone,
+            // its own alias would fail validation.
+            var aliases = try normalizedCatalogDisplay(
+                existing.display,
+                endpointNames: endpointNames,
+                current: existing.current
+            ).aliases
+            aliases.removeAll { $0 == endpointID }
+            var names = existing.display?.names ?? [:]
+            names.removeValue(forKey: endpointID)
+
+            var endpoints = endpointDictionary(existing.endpoints)
+            endpoints.removeValue(forKey: endpointID)
+            let remainingNames = Set(endpoints.keys).union(["local"])
+            let current = existing.current == endpointID ? nil : existing.current
+
+            let display: WarrenDisplayConfiguration?
+            if existing.display == nil || aliases.isEmpty {
+                display = nil
+            } else {
+                let normalized = try normalizedDisplay(
+                    aliases,
+                    knownEndpointNames: remainingNames,
+                    current: current,
+                    names: names
+                )
+                display = WarrenDisplayConfiguration(
+                    endpoints: normalized.aliases,
+                    names: normalized.names
+                )
+            }
+            try writeUnlocked(WarrenEndpointConfigurationFile(
+                current: try normalizedCurrent(current, endpointNames: remainingNames),
+                endpoints: endpoints,
+                display: display
+            ), to: configURL)
+        }
+    }
+
     static func resetDisplay(to configURL: URL = configurationURL()) throws {
         try withLock(configURL) {
             let existing = try loadUnlocked(from: configURL).catalog

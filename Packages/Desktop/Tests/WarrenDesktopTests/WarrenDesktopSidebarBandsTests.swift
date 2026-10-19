@@ -44,6 +44,172 @@ final class WarrenDesktopSidebarBandsTests: XCTestCase {
         XCTAssertEqual(bands.listed.map(\.name), ["pinned-idle", "early", "late", "unstamped"])
     }
 
+    func testHoldKeepsAProjectThatClosedItsLastSessionInPlaceForAMinute() {
+        let now = Date()
+        let early = project("early", activeSince: now.addingTimeInterval(-120))
+        let closed = project("closed", activeSince: now.addingTimeInterval(-60))
+        let late = project("late", activeSince: now.addingTimeInterval(-30))
+        let all = Set([early, closed, late].map(\.id.description))
+        var hold = WarrenDesktopProjectHold()
+        let before = WarrenDesktopProjectHold.Snapshot(
+            active: [
+                early.id.description: early.activeSince,
+                closed.id.description: closed.activeSince,
+                late.id.description: late.activeSince,
+            ],
+            existing: all
+        )
+        // The Host clears the stamp the moment the last Session goes away.
+        let after = WarrenDesktopProjectHold.Snapshot(
+            active: [
+                early.id.description: early.activeSince,
+                late.id.description: late.activeSince,
+            ],
+            existing: all
+        )
+        hold.update(from: before, to: after, now: now)
+        XCTAssertTrue(hold.contains(closed.id.description))
+        XCTAssertEqual(hold.nextExpiry, now.addingTimeInterval(WarrenDesktopProjectHold.interval))
+
+        let cleared = Project(id: closed.id, hostID: hostID, name: "closed", rootPath: "/tmp/closed")
+        let bands = WarrenDesktopProjectBands(
+            [early, cleared, late],
+            project: { $0 },
+            isActive: { $0.id != cleared.id || hold.contains($0.id.description) },
+            lastActiveAt: { _ in nil },
+            activeSince: { hold.activeSince($0.id.description) ?? $0.activeSince }
+        )
+        // Its row stays between the same neighbours.
+        XCTAssertEqual(bands.active.map(\.name), ["early", "closed", "late"])
+
+        XCTAssertFalse(hold.expire(now: now.addingTimeInterval(59), keeping: []))
+        XCTAssertTrue(hold.expire(now: now.addingTimeInterval(60), keeping: []))
+        XCTAssertFalse(hold.contains(closed.id.description))
+    }
+
+    func testHoldEndsWhenTheProjectIsActiveAgainOrGone() {
+        let now = Date()
+        var hold = WarrenDesktopProjectHold()
+        hold.lift("a", now: now)
+        hold.lift("b", now: now)
+        hold.update(
+            from: .init(active: [:], existing: ["a", "b"]),
+            to: .init(active: ["a": now], existing: ["a"]),
+            now: now
+        )
+        XCTAssertFalse(hold.contains("a"))
+        XCTAssertFalse(hold.contains("b"))
+        XCTAssertNil(hold.nextExpiry)
+    }
+
+    func testLiftPutsAProjectBehindTheActiveBandAndSparesItWhileSelected() {
+        let now = Date()
+        let busy = project("busy", activeSince: now.addingTimeInterval(-600))
+        let picked = project("picked")
+        let other = project("other")
+        var hold = WarrenDesktopProjectHold()
+        hold.lift(picked.id.description, now: now)
+        // Lifting again does not move it.
+        hold.lift(picked.id.description, now: now.addingTimeInterval(30))
+
+        let bands = WarrenDesktopProjectBands(
+            [picked, other, busy],
+            project: { $0 },
+            isActive: { $0.id == busy.id || hold.contains($0.id.description) },
+            lastActiveAt: { _ in nil },
+            activeSince: { hold.activeSince($0.id.description) ?? $0.activeSince }
+        )
+        XCTAssertEqual(bands.active.map(\.name), ["busy", "picked"])
+        XCTAssertEqual(bands.inactive.map(\.name), ["other"])
+
+        let late = now.addingTimeInterval(120)
+        XCTAssertFalse(hold.expire(now: late, keeping: [picked.id.description]))
+        XCTAssertTrue(hold.expire(now: late, keeping: []))
+    }
+
+    @MainActor
+    func testSelectingAnInactiveProjectLiftsItsFullRowIntoTheActiveBand() throws {
+        let busy = project("warren", activeSince: Date())
+        let busyMain = Workspace(projectID: busy.id, name: "main", path: "/tmp/warren", branch: "main")
+        let sumi = project("sumi")
+        let sumiMain = Workspace(projectID: sumi.id, name: "main", path: "/tmp/sumi", branch: "main")
+        let session = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: busyMain.id,
+            title: "Pull pr6",
+            kind: .claude,
+            activity: .working
+        )
+        let projection = WarrenDesktopProjection(
+            host: Host(id: hostID, name: "studio"),
+            projects: [busy, sumi],
+            workspaces: [busyMain, sumiMain],
+            sessions: [session]
+        )
+
+        struct Harness: View {
+            let projection: WarrenDesktopProjection
+            @State var selection: WarrenDesktopSidebarSelection?
+
+            var body: some View {
+                WarrenDesktopSidebarRows(
+                    taskGroups: [],
+                    groups: projection.groups,
+                    workspaceActivitySummaries: projection.workspaceActivitySummaries,
+                    activeWorkspaceIDs: projection.activeWorkspaceIDs,
+                    activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
+                    workspaceDisplayMode: .rich,
+                    tree: .constant(WarrenDesktopSidebarTreeState(inactiveProjectsExpanded: true)),
+                    selection: selection,
+                    deletingProjectIDs: [],
+                    deletingWorkspaceIDs: [],
+                    endpointCapabilities: .local,
+                    isInteractionDisabled: false,
+                    onAddProject: {},
+                    onRequestTaskCreate: {},
+                    onFocusTask: { _ in },
+                    onAction: { action in
+                        if case .selectProject(let id) = action { selection = .project(id) }
+                    },
+                    onRequestRename: { _ in },
+                    onRequestDeletion: { _ in }
+                )
+            }
+        }
+
+        let recorder = WarrenSemanticRecorder()
+        let root = Harness(projection: projection)
+            .frame(width: 300, height: 500)
+            .warrenSemanticObservationRoot(recorder: recorder)
+            .environment(\.warrenSemanticRecorder, recorder)
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 300, height: 500)
+        func settle() {
+            hostingView.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            hostingView.layoutSubtreeIfNeeded()
+        }
+        func nodes() -> [String: WarrenSemanticNode] {
+            Dictionary(
+                recorder.snapshot().nodes.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+        settle()
+        let rowID = "project.\(sumi.id.description)"
+        XCTAssertEqual(nodes()["projects-inactive"]?.label, "1 inactive project")
+        // The folded list's row has no actions of its own.
+        XCTAssertNil(nodes()["\(rowID).new-workspace"])
+
+        try recorder.perform(.press, on: rowID)
+        settle()
+        let lifted = nodes()
+        // The project left the folded list for a full row with its actions.
+        XCTAssertNil(lifted["projects-inactive"])
+        XCTAssertNotNil(lifted["\(rowID).new-workspace"])
+        XCTAssertEqual(lifted[rowID]?.isSelected, true)
+    }
+
     func testSplitKeepsLiveOrderAndListsIdleByRecency() {
         let projectID = ProjectID()
         let now = Date()
@@ -74,6 +240,35 @@ final class WarrenDesktopSidebarBandsTests: XCTestCase {
         // Several idle worktrees still fold into the row, so each stays
         // reachable.
         XCTAssertTrue(WarrenDesktopWorkspaceSplit([main, old]) { _ in false }.showsIdleRow)
+    }
+
+    func testSplitPutsTheDefaultBranchFirstInEachList() {
+        let projectID = ProjectID()
+        let now = Date()
+        func workspace(_ branch: String, last: TimeInterval) -> Workspace {
+            Workspace(
+                projectID: projectID,
+                name: branch,
+                path: "/tmp/\(branch)",
+                branch: branch,
+                lastActivityAt: now.addingTimeInterval(-last)
+            )
+        }
+        let feature = workspace("feat/a", last: 60)
+        let main = workspace("main", last: 600)
+        let fix = workspace("fix/b", last: 30)
+        let master = workspace("master", last: 9_000)
+        let recent = workspace("feat/recent", last: 10)
+        let live: Set<WorkspaceID> = [feature.id, main.id, fix.id]
+
+        let split = WarrenDesktopWorkspaceSplit(
+            [feature, main, fix, master, recent],
+            isLive: { live.contains($0.id) }
+        )
+
+        XCTAssertEqual(split.live.map(\.name), ["main", "feat/a", "fix/b"])
+        // An older default branch still leads the idle list.
+        XCTAssertEqual(split.idle.map(\.name), ["master", "feat/recent"])
     }
 
     func testBranchNamesDimTheirPrefixAndCutALongLeafInTheMiddle() {

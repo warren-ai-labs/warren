@@ -362,6 +362,37 @@ final class WarrenEndpointCatalogTests: XCTestCase {
         XCTAssertNil(catalog.display)
     }
 
+    func testRemoveDropsTheEndpointFromTheCatalogAndTheSidebar() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let dev = WarrenRemoteEndpointConfiguration(name: "dev", url: "https://dev.example", token: "a")
+        let prod = WarrenRemoteEndpointConfiguration(name: "prod", url: "https://prod.example", token: "b")
+        try WarrenEndpointCatalog.save(endpoints: [dev, prod], current: "dev", to: url)
+        try WarrenEndpointCatalog.setDisplayMembership("prod", isDisplayed: true, to: url)
+        try WarrenEndpointCatalog.setDisplayName("prod", name: "Production", to: url)
+
+        try WarrenEndpointCatalog.remove("prod", from: url)
+        var catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertEqual(catalog.endpoints.map(\.name), ["dev"])
+        XCTAssertEqual(catalog.current, "dev")
+        XCTAssertEqual(catalog.display?.endpoints, ["dev"])
+        XCTAssertNil(catalog.display?.names["prod"])
+
+        // The current endpoint falls back to this Mac, and the last explicit
+        // alias restores the legacy representation.
+        try WarrenEndpointCatalog.remove("dev", from: url)
+        catalog = try WarrenEndpointCatalog.loadThrowing(from: url)
+        XCTAssertTrue(catalog.endpoints.isEmpty)
+        XCTAssertNil(catalog.current)
+        XCTAssertNil(catalog.display)
+
+        XCTAssertThrowsError(try WarrenEndpointCatalog.remove("local", from: url))
+        XCTAssertThrowsError(try WarrenEndpointCatalog.remove("missing", from: url))
+    }
+
     func testUpsertPreservesDisplayAndResetRestoresLegacyRepresentation() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("warren-endpoint-catalog-\(UUID().uuidString)", isDirectory: true)

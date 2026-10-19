@@ -223,6 +223,10 @@ func OpenAgentEventStore(dbPath string) (*AgentEventStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("init canonical Agent schema: %w", err)
 	}
+	if _, err := db.Exec(conversationTitleSchema); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("init conversation title schema: %w", err)
+	}
 	return &AgentEventStore{db: db}, nil
 }
 

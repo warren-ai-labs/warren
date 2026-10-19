@@ -1,5 +1,5 @@
-github.com/abcdlsj/ghostline v1.5.0 h1:XKoff0X3qFN3nkfE0CKn+mTZT7U1Dqj1DhxLBnRMgfQ=
-github.com/abcdlsj/ghostline v1.5.0/go.mod h1:akYpGp2xSuvml6f0u3wzDIjQRJEcyiTMa3kgF4mV69c=
+github.com/abcdlsj/ghostline v1.6.0 h1:GYxPDyt0Nbifs4KKkHA9CqsgioQLGg/KcJrWLt0y8JI=
+github.com/abcdlsj/ghostline v1.6.0/go.mod h1:akYpGp2xSuvml6f0u3wzDIjQRJEcyiTMa3kgF4mV69c=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=

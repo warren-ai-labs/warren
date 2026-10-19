@@ -133,6 +133,55 @@ func TestBindHookRefusesToBindInsideAnotherAgent(t *testing.T) {
 	}
 }
 
+// TestBindHookBindsThroughAnInterpreterLauncher covers the launcher npm ships
+// for codex: `node /opt/homebrew/bin/codex` spawns the native binary, so the
+// same CLI name appears on two consecutive hops. That is one CLI reaching
+// itself, and refusing it left every such Session a plain shell -- which is
+// what took the Codex icon, activity, and title away.
+func TestBindHookBindsThroughAnInterpreterLauncher(t *testing.T) {
+	chain := newBindHookChain(t)
+	native := writeAgentWrapper(t, chain.chainDir, "codex",
+		"printf '%s' \"$"+hookHelperPayload+"\" | bash '"+chain.script+"' "+hookCommandMarker+" codex")
+	npmDirectory := filepath.Join(chain.chainDir, "npm")
+	if err := os.MkdirAll(npmDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shim := writeAgentWrapper(t, npmDirectory, "codex", "/bin/sh '"+native+"'")
+	// The launcher wears the interpreter's process name and takes the CLI it
+	// starts as its own first argument, so the walk sees `node .../codex` sitting
+	// directly above `.../codex` -- npm's shape, twice over.
+	launcher := writeAgentWrapper(t, chain.chainDir, "launch",
+		"exec bash -c 'exec -a node /bin/sh \"$1\"' _ '"+shim+"'")
+
+	chain.run(t, sessionStartPayload(), launcher)
+	if !chain.bindingWritten() {
+		t.Fatal("a CLI reached through its interpreter launcher must still bind")
+	}
+	if !strings.Contains(readFileOrEmpty(chain.bindPath), `"provider":"codex"`) {
+		t.Fatalf("binding = %s", readFileOrEmpty(chain.bindPath))
+	}
+}
+
+// TestBindHookRefusesACodexStartedByAnotherCodex keeps the launcher exception
+// narrow: the same name on two hops is one CLI only when the upper hop is an
+// interpreter. A codex that another codex started directly still loses.
+func TestBindHookRefusesACodexStartedByAnotherCodex(t *testing.T) {
+	chain := newBindHookChain(t)
+	inner := writeAgentWrapper(t, chain.chainDir, "codex",
+		"printf '%s' \"$"+hookHelperPayload+"\" | bash '"+chain.script+"' "+hookCommandMarker+" codex")
+	outerDirectory := filepath.Join(chain.chainDir, "outer")
+	if err := os.MkdirAll(outerDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outer := writeAgentWrapper(t, outerDirectory, "codex", "/bin/sh '"+inner+"'")
+
+	chain.run(t, sessionStartPayload(), outer)
+	if chain.bindingWritten() {
+		t.Fatalf("a codex started by another codex took the Session over: %s",
+			readFileOrEmpty(chain.bindPath))
+	}
+}
+
 // TestBindHookBindsWhenNoAgentIsAboveTheShellLayer keeps the guard from
 // refusing a Session that is legitimately its own: the test binary plays the
 // daemon that allocated the PTY, so the agent CLIs are separated from the hook

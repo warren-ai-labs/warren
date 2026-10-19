@@ -394,7 +394,7 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 client: client,
                 generation: generation
             )
-        case .welcome, .output, .atomicState, .browserFrame, .anchor, .agentEvents, .maintenance:
+        case .welcome, .output, .atomicState, .browserFrame, .anchor, .terminalResized, .agentEvents, .maintenance:
             break
         }
         rebuildProjection()

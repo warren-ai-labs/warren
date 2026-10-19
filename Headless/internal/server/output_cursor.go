@@ -256,6 +256,7 @@ func (s *Service) startPeerCursorOutput(
 	session api.Session,
 	cursor ghostline.Cursor,
 	epoch, sequence uint64,
+	size ghostline.Size,
 ) error {
 	runtime := s.cursorOutputRuntimeFor(session)
 	if runtime == nil {
@@ -287,8 +288,15 @@ func (s *Service) startPeerCursorOutput(
 	streams[session.ID] = stream
 	s.outputMu.Unlock()
 
-	go s.readPeerCursorOutput(peer, session.ID, reader, readerContext, stream, epoch, sequence)
+	go s.readPeerCursorOutput(peer, session.ID, reader, readerContext, stream, epoch, sequence, size)
 	return nil
+}
+
+// sizedCursorOutputReader is a reader that attributes each chunk to the PTY
+// grid size it was produced for. Ghostline's reader implements it; a runtime
+// that does not is read without size attribution.
+type sizedCursorOutputReader interface {
+	ReadSized([]byte) (int, ghostline.Size, error)
 }
 
 func (s *Service) readPeerCursorOutput(
@@ -298,10 +306,17 @@ func (s *Service) readPeerCursorOutput(
 	readerContext context.Context,
 	stream *peerOutputStream,
 	epoch, sequence uint64,
+	size ghostline.Size,
 ) {
 	defer close(stream.done)
 	buffer := make([]byte, 64*1024)
 	flow := stream.flow
+	// A peer that did not receive a size at attach has nothing to keep in step,
+	// so it is read exactly as before.
+	sized, _ := reader.(sizedCursorOutputReader)
+	if size == (ghostline.Size{}) {
+		sized = nil
+	}
 	for {
 		if flow != nil {
 			blocked, allowed, ok := flow.waitForRoom(readerContext)
@@ -315,7 +330,28 @@ func (s *Service) readPeerCursorOutput(
 				return
 			}
 		}
-		count, readErr := reader.Read(buffer)
+		var (
+			count     int
+			chunkSize ghostline.Size
+			readErr   error
+		)
+		if sized != nil {
+			count, chunkSize, readErr = sized.ReadSized(buffer)
+		} else {
+			count, readErr = reader.Read(buffer)
+		}
+		// Report a new size at the exact sequence it starts from, before any
+		// byte produced for it. An unknown size keeps the last known one.
+		if sized != nil && chunkSize != (ghostline.Size{}) && chunkSize != size {
+			size = chunkSize
+			if err := peer.enqueueResized(sessionID, epoch, sequence, size); err != nil {
+				return
+			}
+		}
+		if sized != nil && count == 0 && readErr == nil {
+			// A size report with no output yet.
+			continue
+		}
 		if count > 0 {
 			payload := append([]byte(nil), buffer[:count]...)
 			encoded, encodeErr := output.EncodeOutput(sessionID, epoch, sequence, payload)

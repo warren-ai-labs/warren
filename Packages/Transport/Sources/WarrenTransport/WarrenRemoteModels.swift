@@ -1645,6 +1645,11 @@ public enum WarrenRemoteCapability {
     /// the Host keeps a bounded amount in flight instead of queueing whatever
     /// the PTY produces behind a slow link.
     public static let outputAck = "output-ack-v1"
+    /// The Host reports the PTY grid at exact output positions: `attached`
+    /// carries the size at its anchor and `resized` names the sequence from
+    /// which output is produced for a new size. Only a client that lays its
+    /// grid out from these reports may advertise it.
+    public static let terminalSize = "terminal-size-v1"
 }
 
 public extension WarrenRemoteAgentEvent {
@@ -2260,13 +2265,51 @@ public struct WarrenRemoteOutputAnchor: Hashable, Sendable {
     public let sequence: UInt64
     public let reanchor: Bool
     public let synced: Bool
+    /// The PTY grid at an `attached` anchor, when the Host negotiated
+    /// `terminal-size-v1` and knows it. Nil means the size is unknown.
+    public let grid: WarrenRemoteTerminalGrid?
 
-    public init(sessionID: String, epoch: UInt64, sequence: UInt64, reanchor: Bool, synced: Bool) {
+    public init(
+        sessionID: String,
+        epoch: UInt64,
+        sequence: UInt64,
+        reanchor: Bool,
+        synced: Bool,
+        grid: WarrenRemoteTerminalGrid? = nil
+    ) {
         self.sessionID = sessionID
         self.epoch = epoch
         self.sequence = sequence
         self.reanchor = reanchor
         self.synced = synced
+        self.grid = grid
+    }
+}
+
+/// A PTY grid size reported by the Host.
+public struct WarrenRemoteTerminalGrid: Hashable, Sendable {
+    public let columns: Int
+    public let rows: Int
+
+    public init?(columns: Int, rows: Int) {
+        guard columns > 0, rows > 0 else { return nil }
+        self.columns = columns
+        self.rows = rows
+    }
+}
+
+/// Output from `(epoch, sequence)` on was produced for `grid`.
+public struct WarrenRemoteTerminalResize: Hashable, Sendable {
+    public let sessionID: String
+    public let epoch: UInt64
+    public let sequence: UInt64
+    public let grid: WarrenRemoteTerminalGrid
+
+    public init(sessionID: String, epoch: UInt64, sequence: UInt64, grid: WarrenRemoteTerminalGrid) {
+        self.sessionID = sessionID
+        self.epoch = epoch
+        self.sequence = sequence
+        self.grid = grid
     }
 }
 
@@ -2305,6 +2348,9 @@ public enum WarrenRemoteEvent: Sendable {
     case atomicState(WarrenRemoteAtomicState)
     case browserFrame(WarrenRemoteBrowserFrame)
     case anchor(WarrenRemoteOutputAnchor)
+    /// The PTY grid changes at an output position. It can arrive before the
+    /// output that precedes it; apply it by sequence, never on arrival.
+    case terminalResized(WarrenRemoteTerminalResize)
     case agentEvents(streamID: String, executionID: String, events: [WarrenRemoteAgentEvent])
     case maintenance(message: String?)
     case disconnected(reason: String)

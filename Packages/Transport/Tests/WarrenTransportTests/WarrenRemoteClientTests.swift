@@ -606,6 +606,46 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
+    func testTerminalSizeReportsAreDecodedFromAttachedAndResized() async throws {
+        let (client, task, consuming, recorder) = try await connectedClient()
+        let session = sessionUUID.uuidString.lowercased()
+        await task.enqueue(.text("{\"t\":\"attached\",\"session\":\"\(session)\",\"epoch\":8,\"sequence\":64,\"reanchor\":true,\"cols\":101,\"rows\":31}"))
+        await task.enqueue(.text("{\"t\":\"resized\",\"session\":\"\(session)\",\"epoch\":8,\"sequence\":90,\"cols\":72,\"rows\":50}"))
+        await task.enqueue(.text("{\"t\":\"attached\",\"session\":\"\(session)\",\"epoch\":9,\"sequence\":0,\"reanchor\":true}"))
+
+        let attachedGrid = WarrenRemoteTerminalGrid(columns: 101, rows: 31)
+        try await waitUntil {
+            await recorder.contains { event in
+                if case .anchor(let anchor) = event { return anchor.epoch == 8 && anchor.grid == attachedGrid }
+                return false
+            }
+        }
+        let expected = WarrenRemoteTerminalResize(
+            sessionID: session,
+            epoch: 8,
+            sequence: 90,
+            grid: try XCTUnwrap(WarrenRemoteTerminalGrid(columns: 72, rows: 50))
+        )
+        try await waitUntil {
+            await recorder.contains { event in
+                if case .terminalResized(let resize) = event { return resize == expected }
+                return false
+            }
+        }
+        // An attachment without a size reports it as unknown.
+        try await waitUntil {
+            await recorder.contains { event in
+                if case .anchor(let anchor) = event { return anchor.epoch == 9 && anchor.grid == nil }
+                return false
+            }
+        }
+        // A resize is not a recovery anchor.
+        let anchorAfterResize = await client.recoveryAnchor(for: session)
+        XCTAssertNotEqual(anchorAfterResize, WarrenRemoteRecoveryAnchor(epoch: 8, sequence: 90))
+        await client.stop()
+        consuming.cancel()
+    }
+
     /// A browser Session has no PTY, so its screencast still is its own binary
     /// kind and its own event rather than terminal output (RFC 0022 §7.3).
     func testBrowserFrameEmitsATypedEventRatherThanTerminalOutput() async throws {

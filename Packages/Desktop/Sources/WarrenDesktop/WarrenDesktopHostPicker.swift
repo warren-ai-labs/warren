@@ -207,103 +207,38 @@ struct WarrenDesktopHostPanelPublicAccess {
     }
 }
 
-/// The Host list: the window's Host first, then every other one in the order
-/// they were added. Each row is two lines, the Host's name and its route, and
-/// the probe's result is only a dot on the tile; the full text is in the
-/// row's tooltip. The order never follows status, so rows do not jump while
-/// probes land.
+/// The panel under the sidebar's Host row: what this window's Host offers,
+/// and nothing about other Hosts, which are switched and managed at the
+/// sidebar's foot.
 ///
-/// Shared by the sidebar's Host picker and the Execution Server page of the
-/// panels menu.
-struct WarrenDesktopEndpointPopoverContent: View {
+/// Retry or stop while the connection is failing or still trying, then
+/// Public Access, which drills into the Web panel, and Settings.
+struct WarrenDesktopCurrentHostPanel: View {
     let connectionState: WarrenDesktopConnectionState
-    let endpoints: [WarrenDesktopEndpointOption]
-    let selectedID: String
-    let onSelect: (String) -> Void
-    let onSetSidebarVisibility: (String, Bool) -> Void
-    let onCustomizeDisplayName: (WarrenDesktopEndpointOption) -> Void
-    let onAddSSHHost: () -> Void
     let onRetry: () -> Void
     let onStop: () -> Void
     let onDismiss: () -> Void
-    /// The Add SSH Host page, supplied by the app. Without it, the list's
-    /// add entry falls back to `onAddSSHHost`.
-    var sshHostPage: WarrenDesktopSSHHostPageModel? = nil
-    /// Public Access and Settings are Host-level entries in this panel, below
-    /// the list. The list itself is the execution-server selector.
     var publicAccess: WarrenDesktopHostPanelPublicAccess? = nil
     var onSettings: (() -> Void)? = nil
 
-    init(
-        connectionState: WarrenDesktopConnectionState,
-        endpoints: [WarrenDesktopEndpointOption],
-        selectedID: String,
-        onSelect: @escaping (String) -> Void,
-        onSetSidebarVisibility: @escaping (String, Bool) -> Void,
-        onCustomizeDisplayName: @escaping (WarrenDesktopEndpointOption) -> Void = { _ in },
-        onAddSSHHost: @escaping () -> Void,
-        onRetry: @escaping () -> Void,
-        onStop: @escaping () -> Void,
-        onDismiss: @escaping () -> Void,
-        sshHostPage: WarrenDesktopSSHHostPageModel? = nil,
-        publicAccess: WarrenDesktopHostPanelPublicAccess? = nil,
-        onSettings: (() -> Void)? = nil,
-        initialShowsAddHost: Bool = false
-    ) {
-        self.connectionState = connectionState
-        self.endpoints = endpoints
-        self.selectedID = selectedID
-        self.onSelect = onSelect
-        self.onSetSidebarVisibility = onSetSidebarVisibility
-        self.onCustomizeDisplayName = onCustomizeDisplayName
-        self.onAddSSHHost = onAddSSHHost
-        self.onRetry = onRetry
-        self.onStop = onStop
-        self.onDismiss = onDismiss
-        self.sshHostPage = sshHostPage
-        self.publicAccess = publicAccess
-        self.onSettings = onSettings
-        _showsAddHost = State(initialValue: initialShowsAddHost)
-    }
-
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
-    @Environment(\.warrenForceHover) private var forceHover
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hoveredID: String?
-    @State private var isAddHovered = false
-    @State private var showsAddHost: Bool
     @State private var showsPublicAccess = false
 
     private typealias Metrics = WarrenDesktopMenuMetrics
 
-    static func isChecking(_ endpoints: [WarrenDesktopEndpointOption]) -> Bool {
-        endpoints.contains { $0.probeState == .checking }
-    }
-
-    /// The window's Host leads; the rest keep the catalog's order.
-    static func ordered(
-        _ endpoints: [WarrenDesktopEndpointOption],
-        selectedID: String
-    ) -> [WarrenDesktopEndpointOption] {
-        endpoints.filter { $0.id == selectedID } + endpoints.filter { $0.id != selectedID }
-    }
-
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Group {
-            if showsAddHost, let sshHostPage {
+            if showsPublicAccess, let publicAccess {
                 VStack(alignment: .leading, spacing: 0) {
-                    returnRow(title: "Add SSH Host") { showsAddHost = false }
-                    WarrenDesktopMenuDivider()
-                    WarrenDesktopSSHHostListView(model: sshHostPage)
-                }
-                .transition(
-                    WarrenDesktopPopMotion.pageTransition(isForward: true, reduceMotion: reduceMotion)
-                )
-            } else if showsPublicAccess, let publicAccess {
-                VStack(alignment: .leading, spacing: 0) {
-                    returnRow(title: "Public Access") { showsPublicAccess = false }
+                    WarrenDesktopMenuBackRow(
+                        title: "Public Access",
+                        backLabel: "Back to host",
+                        onBack: { showsPublicAccess = false }
+                    )
                     WarrenDesktopMenuDivider()
                     publicAccess.content
                 }
@@ -311,62 +246,21 @@ struct WarrenDesktopEndpointPopoverContent: View {
                     WarrenDesktopPopMotion.pageTransition(isForward: true, reduceMotion: reduceMotion)
                 )
             } else {
-                hostList(tokens: tokens)
-                    .transition(
-                        WarrenDesktopPopMotion.pageTransition(isForward: false, reduceMotion: reduceMotion)
-                    )
+                VStack(alignment: .leading, spacing: 0) {
+                    connectionAction(tokens: tokens)
+                    if let publicAccess {
+                        publicAccessRow(publicAccess, tokens: tokens)
+                    }
+                    if let onSettings {
+                        settingsRow(onSettings, tokens: tokens)
+                    }
+                }
+                .padding(.vertical, 4)
+                .transition(
+                    WarrenDesktopPopMotion.pageTransition(isForward: false, reduceMotion: reduceMotion)
+                )
             }
         }
-        .onAppear {
-            // Opening the list checks the Hosts again unless the last
-            // results are still fresh; the refresh button always does.
-            WarrenDesktopEndpointOption.requestProbe(force: false)
-        }
-    }
-
-    private func hostList(tokens: WarrenColorTokens) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            WarrenDesktopMenuGroupHeader(title: "HOSTS") {
-                WarrenDesktopHostRefreshButton(isChecking: Self.isChecking(endpoints))
-            }
-
-            connectionAction(tokens: tokens)
-
-            ForEach(Self.ordered(endpoints, selectedID: selectedID)) { endpoint in
-                endpointRow(endpoint, tokens: tokens)
-            }
-
-            if publicAccess != nil || onSettings != nil {
-                WarrenDesktopMenuDivider()
-            }
-            if let publicAccess {
-                publicAccessRow(publicAccess, tokens: tokens)
-            }
-            if let onSettings {
-                settingsRow(onSettings, tokens: tokens)
-            }
-
-            WarrenDesktopMenuDivider()
-
-            addHostRow()
-        }
-    }
-
-    /// The return row a drilled-in page leads with.
-    private func returnRow(title: String, onBack: @escaping () -> Void) -> some View {
-        WarrenDesktopMenuBackRow(title: title, backLabel: "Back to hosts", onBack: onBack)
-    }
-
-    private func addSSHHost() {
-        if sshHostPage != nil {
-            withAnimation(WarrenDesktopPopMotion.animation(reduceMotion: reduceMotion)) {
-                showsAddHost = true
-                showsPublicAccess = false
-            }
-            return
-        }
-        onAddSSHHost()
-        onDismiss()
     }
 
     /// The Host-level Public Access entry. Two lines while it is on, so the
@@ -381,7 +275,6 @@ struct WarrenDesktopEndpointPopoverContent: View {
         let open: () -> Void = {
             withAnimation(WarrenDesktopPopMotion.animation(reduceMotion: reduceMotion)) {
                 showsPublicAccess = true
-                showsAddHost = false
             }
         }
         return Button(action: open) {
@@ -496,37 +389,6 @@ struct WarrenDesktopEndpointPopoverContent: View {
         )
     }
 
-    /// The list's one add entry. It follows Settings, so it keeps Settings'
-    /// leading edge rather than the Hosts' check column above.
-    private func addHostRow() -> some View {
-        let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
-        let isHot = isAddHovered
-        return Button(action: addSSHHost) {
-            HStack(spacing: Metrics.iconSpacing) {
-                Image(systemName: "plus")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(isHot ? palette.rowHoverText : palette.addText)
-                    .frame(width: Metrics.glyphSlot, height: Metrics.glyphSlot)
-                Text("Add SSH host…")
-                    .font(.system(size: 12))
-                    .foregroundStyle(isHot ? palette.rowHoverText : palette.addText)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Metrics.rowHorizontalPadding)
-            .frame(maxWidth: .infinity, minHeight: Metrics.rowHeight, alignment: .leading)
-            .contentShape(.rect)
-        }
-        .buttonStyle(WarrenDesktopMenuRowStyle())
-        .onHover { isAddHovered = $0 }
-        .accessibilityLabel("Add SSH host")
-        .warrenSemanticElement(
-            id: "endpoint.add-ssh-host",
-            role: .button,
-            label: "Add SSH host",
-            action: addSSHHost
-        )
-    }
-
     /// Retry or stop for the window's own connection, when it has failed or
     /// is still trying. Everything else about it is the first row's dot.
     @ViewBuilder
@@ -560,13 +422,10 @@ struct WarrenDesktopEndpointPopoverContent: View {
         let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
         return Button(action: action) {
             HStack(spacing: Metrics.iconSpacing) {
-                HStack(spacing: Metrics.checkSpacing) {
-                    WarrenDesktopMenuCheckColumn(isChecked: false)
-                    Image(systemName: systemImage)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(palette.icon)
-                        .frame(width: Metrics.glyphSlot, height: Metrics.glyphSlot)
-                }
+                Image(systemName: systemImage)
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(palette.icon)
+                    .frame(width: Metrics.glyphSlot, height: Metrics.glyphSlot)
                 Text(title)
                     .font(.system(size: 13))
                     .foregroundStyle(palette.rowText)
@@ -580,241 +439,6 @@ struct WarrenDesktopEndpointPopoverContent: View {
         .accessibilityHint(hint)
     }
 
-    private func endpointRow(
-        _ endpoint: WarrenDesktopEndpointOption,
-        tokens: WarrenColorTokens
-    ) -> some View {
-        let isSelected = endpoint.id == selectedID
-        let isHot = hoveredID == endpoint.id || forceHover
-        let presentation = WarrenDesktopHostPickerRow(endpoint: endpoint, isSelected: isSelected)
-        let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
-        let select: () -> Void = {
-            onSelect(endpoint.id)
-            onDismiss()
-        }
-
-        return Button(action: select) {
-            HStack(spacing: Metrics.iconSpacing) {
-                HStack(spacing: Metrics.checkSpacing) {
-                    WarrenDesktopMenuCheckColumn(isChecked: isSelected)
-                    WarrenDesktopMenuTile(
-                        initial: presentation.initial,
-                        isFailed: presentation.state == .failed,
-                        status: status(for: presentation.state, tokens: tokens),
-                        isHot: isHot
-                    )
-                }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(presentation.name)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(isHot ? palette.rowHoverText : palette.rowText)
-                    if let route = presentation.route {
-                        Text(route)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(palette.meta)
-                            .truncationMode(.middle)
-                    }
-                }
-                .lineLimit(1)
-                .truncationMode(.tail)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Metrics.rowHorizontalPadding)
-            // The membership pill overlays the row's end; keep the name and
-            // route clear of it so neither runs under the pill.
-            .padding(.trailing, WarrenDesktopSidebarMembershipPill.reservedWidth)
-            .frame(
-                maxWidth: .infinity,
-                minHeight: presentation.route == nil ? Metrics.rowHeight : Metrics.twoLineRowHeight,
-                alignment: .leading
-            )
-            .contentShape(.rect)
-        }
-        .buttonStyle(WarrenDesktopMenuRowStyle(forceHover: forceHover))
-        .help(presentation.tooltip)
-        .accessibilityLabel(presentation.name)
-        .accessibilityValue(
-            [isSelected ? "Selected" : nil, endpoint.probeStatus, endpoint.connectionError]
-                .compactMap { $0 }
-                .joined(separator: ". ")
-        )
-        .warrenSemanticElement(
-            id: "endpoint.\(endpoint.id)",
-            role: .button,
-            label: endpoint.label,
-            value: [endpoint.probeStatus, endpoint.connectionError].compactMap { $0 }.joined(separator: "\n"),
-            isSelected: isSelected,
-            action: select
-        )
-        .warrenContextMenu([
-            .button(title: "Rename Host…") {
-                onCustomizeDisplayName(endpoint)
-            }
-        ])
-        .overlay(alignment: .trailing) {
-            sidebarMembership(endpoint, isSelected: isSelected, isHot: isHot, tokens: tokens)
-                .padding(.trailing, Metrics.rowHorizontalPadding)
-        }
-        .onHover { inside in
-            if inside {
-                hoveredID = endpoint.id
-            } else if hoveredID == endpoint.id {
-                hoveredID = nil
-            }
-        }
-    }
-
-    /// The probe's result as a corner dot, or `nil` when there is none.
-    private func status(
-        for state: WarrenDesktopEndpointOption.ProbeState,
-        tokens: WarrenColorTokens
-    ) -> WarrenDesktopMenuStatus? {
-        switch state {
-        case .reachable: .ok(tokens.success)
-        case .failed: .failed(tokens.destructive)
-        case .checking: .checking
-        case .unknown: nil
-        }
-    }
-
-    /// Whether this Host's tree is shown in the sidebar too: a small switch
-    /// pill at the row's end. It stays on screen while the Host is in the
-    /// sidebar and appears on hover while it is not; the window's own Host
-    /// is always in the sidebar, so its pill is a quiet tag rather than a
-    /// button.
-    @ViewBuilder
-    private func sidebarMembership(
-        _ endpoint: WarrenDesktopEndpointOption,
-        isSelected: Bool,
-        isHot: Bool,
-        tokens: WarrenColorTokens
-    ) -> some View {
-        let isDisplayed = endpoint.isDisplayedInSidebar
-        if isSelected && !isDisplayed {
-            WarrenDesktopSidebarMembershipPill(state: .implied, isRowHot: isHot, action: nil)
-                .help("\(endpoint.label) is in the sidebar while it is the window's Host")
-                .accessibilityHidden(true)
-        } else {
-            let label = isDisplayed
-                ? "Remove \(endpoint.label) from Sidebar"
-                : "Add \(endpoint.label) to Sidebar"
-            let toggle: () -> Void = { onSetSidebarVisibility(endpoint.id, !isDisplayed) }
-            WarrenDesktopSidebarMembershipPill(
-                state: isDisplayed ? .on : .off,
-                isRowHot: isHot,
-                action: toggle
-            )
-            .warrenTooltip(label)
-            .accessibilityLabel(label)
-            .accessibilityValue(isDisplayed ? "In sidebar" : "Not in sidebar")
-            .accessibilityHint("This does not change the active Host")
-            .warrenSemanticElement(
-                id: "endpoint.\(endpoint.id).sidebar",
-                role: .button,
-                label: label,
-                isSelected: isDisplayed,
-                action: toggle
-            )
-        }
-    }
-}
-
-/// The Host row's "in the sidebar" switch: a capsule that reads as a state
-/// first and a button second.
-///
-/// Off, it is an outlined "+ Sidebar" that only shows on the row's hover. On,
-/// it is a filled "✓ Sidebar" that stays put, and under the pointer its check
-/// turns into a minus so the click's effect is visible before it happens.
-/// The label never changes, so the pill keeps one width in every state and
-/// the row text beside it never reflows.
-struct WarrenDesktopSidebarMembershipPill: View {
-    enum Membership: Equatable {
-        case off
-        case on
-        /// In the sidebar because it is the window's Host; not a button.
-        case implied
-    }
-
-    let state: Membership
-    let isRowHot: Bool
-    let action: (() -> Void)?
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isHovered = false
-
-    /// What the row keeps clear at its trailing edge for the pill.
-    static let reservedWidth: CGFloat = 70
-    static let height: CGFloat = 20
-
-    var body: some View {
-        let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
-        Group {
-            if let action {
-                Button(action: action) { pill(palette: palette) }
-                    .buttonStyle(.plain)
-                    .onHover { isHovered = $0 }
-            } else {
-                pill(palette: palette)
-            }
-        }
-        .opacity(state == .off && !isRowHot ? 0 : 1)
-        .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: state)
-        .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: isHovered)
-        .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: isRowHot)
-    }
-
-    private func pill(palette: WarrenDesktopMenuPalette) -> some View {
-        let shape = Capsule(style: .continuous)
-        return HStack(spacing: 4) {
-            Image(systemName: glyph)
-                .font(.system(size: 8.5, weight: .bold))
-                .frame(width: 9, height: 9)
-                .contentTransition(.opacity)
-            Text("Sidebar")
-                .font(.system(size: 11, weight: .medium))
-        }
-        .foregroundStyle(foreground(palette))
-        .padding(.leading, 7)
-        .padding(.trailing, 8)
-        .frame(height: Self.height)
-        .background(shape.fill(fill(palette)))
-        .overlay(shape.strokeBorder(border(palette), lineWidth: 1))
-        .contentShape(shape)
-        .fixedSize()
-    }
-
-    private var glyph: String {
-        switch state {
-        case .off: "plus"
-        case .on: isHovered ? "minus" : "checkmark"
-        case .implied: "checkmark"
-        }
-    }
-
-    private func foreground(_ palette: WarrenDesktopMenuPalette) -> Color {
-        switch state {
-        case .off: isHovered ? palette.rowHoverText : palette.secondaryGlyph
-        case .on: isHovered ? palette.rowHoverText : palette.rowText
-        case .implied: palette.meta
-        }
-    }
-
-    private func fill(_ palette: WarrenDesktopMenuPalette) -> Color {
-        switch state {
-        case .off: isHovered ? palette.hoverFill : .clear
-        case .on: isHovered ? palette.pressFill : palette.hoverFill
-        case .implied: .clear
-        }
-    }
-
-    private func border(_ palette: WarrenDesktopMenuPalette) -> Color {
-        switch state {
-        case .off: isHovered ? palette.pressBorder : palette.hoverBorder
-        case .on: isHovered ? palette.pressBorder : palette.hoverBorder
-        case .implied: palette.divider
-        }
-    }
 }
 
 /// What one Host row says, worked out from the endpoint: the name, the route

@@ -1,5 +1,6 @@
 import Foundation
 import GhosttyTerminal
+import WarrenDomain
 
 /// Outcome of a non-blocking native snapshot installation attempt.
 public enum TerminalSnapshotRestoreResult: Equatable, Sendable {
@@ -55,6 +56,14 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         let payload: Data
     }
 
+    /// A Host-reported grid change: output from `sequence` on was produced
+    /// for `grid`.
+    private struct GridMark: Sendable {
+        let epoch: UInt64
+        let sequence: UInt64
+        let grid: TerminalSize
+    }
+
     private struct Buffer {
         private(set) var generation: UInt64 = 0
         private(set) var epoch: UInt64?
@@ -62,8 +71,45 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         private var chunks: [Chunk] = []
         private var headIndex = 0
         private var headOffset = 0
+        /// Grid changes in sequence order. A mark can arrive before the bytes
+        /// that precede it, because the Host sends it ahead of queued output;
+        /// it waits here until the drain reaches its sequence.
+        private var marks: [GridMark] = []
 
         var isEmpty: Bool { headIndex >= chunks.count }
+
+        /// Whether the drain has bytes to write or a grid change to apply.
+        var hasWork: Bool { !isEmpty || dueMark != nil }
+
+        /// The sequence of the next byte the drain will take.
+        private var nextSequence: UInt64 {
+            guard !isEmpty else { return enqueuedSequence }
+            return chunks[headIndex].sequence + UInt64(headOffset)
+        }
+
+        /// The first grid change whose sequence the drain has reached.
+        private var dueMark: GridMark? {
+            guard epoch != nil, let mark = marks.first, mark.epoch == epoch,
+                  mark.sequence <= nextSequence else {
+                return nil
+            }
+            return mark
+        }
+
+        mutating func takeDueMark() -> GridMark? {
+            guard let mark = dueMark else { return nil }
+            marks.removeFirst()
+            return mark
+        }
+
+        mutating func appendMark(_ mark: GridMark) {
+            // A mark can belong to an epoch this buffer has not reset to yet:
+            // a deferred snapshot install leaves the old epoch in place while
+            // the new stream's marks arrive. Keep it; `reset` drops it if the
+            // anchor it waits for never comes.
+            marks.removeAll { $0.epoch != mark.epoch || $0.sequence >= mark.sequence }
+            marks.append(mark)
+        }
 
         mutating func reset(epoch: UInt64, sequence: UInt64) {
             generation &+= 1
@@ -72,6 +118,9 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             chunks.removeAll(keepingCapacity: true)
             headIndex = 0
             headOffset = 0
+            // The new anchor's own size is set by the caller. A mark the Host
+            // sent ahead of this anchor's bytes stays.
+            marks.removeAll { $0.epoch != epoch || $0.sequence < sequence }
         }
 
         /// Invalidates slices already handed to a drain without establishing a
@@ -84,6 +133,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             chunks.removeAll(keepingCapacity: true)
             headIndex = 0
             headOffset = 0
+            marks.removeAll()
         }
 
         mutating func append(epoch: UInt64, sequence: UInt64, payload: Data) {
@@ -108,9 +158,17 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
 
         mutating func take(maxBytes: Int) -> Slice? {
             precondition(maxBytes > 0)
-            guard !isEmpty else { return nil }
+            guard !isEmpty, dueMark == nil else { return nil }
             let chunk = chunks[headIndex]
-            let count = min(maxBytes, chunk.payload.count - headOffset)
+            var count = min(maxBytes, chunk.payload.count - headOffset)
+            // Never write bytes produced for the next grid before that grid
+            // is applied.
+            if let mark = marks.first, mark.epoch == epoch {
+                let start = chunk.sequence + UInt64(headOffset)
+                if mark.sequence > start, mark.sequence - start < UInt64(count) {
+                    count = Int(mark.sequence - start)
+                }
+            }
             let start = headOffset
             let end = start + count
             let payload = start == 0 && end == chunk.payload.count
@@ -174,6 +232,22 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     private var syncDepth: Int = 0
     private var syncEnteredAt: ContinuousClock.Instant?
     private var syncTail: [UInt8] = []
+    /// The grid the Host produced the output now being written for, when the
+    /// Host reports one. While it is set, Ghostty's grid follows the Host's
+    /// marks instead of the view.
+    private var hostGrid: TerminalSize?
+    /// When the current anchor grid was set. A snapshot waits for Ghostty to
+    /// reach that grid for at most `gridSettleTimeout`, so a grid Ghostty
+    /// cannot lay out never leaves the pane without its state.
+    private var anchorGridSetAt: ContinuousClock.Instant?
+    /// Asks the owner to lay Ghostty out at a grid on the main actor. Returns
+    /// whether the terminal will reach it; a surface that cannot be sized
+    /// right now (no native surface yet) is not waited for.
+    private var gridApplier: (@Sendable (TerminalSize) async -> Bool)?
+    /// Bounds the wait for Ghostty's IO thread to resize the terminal. It
+    /// normally takes well under a frame; the bound only keeps a surface that
+    /// stopped servicing its mailbox from stalling output forever.
+    var gridSettleTimeout: Duration = .seconds(1)
 
     init(
         inMemory: InMemoryTerminalSession,
@@ -264,6 +338,56 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         }
     }
 
+    /// The grid the Host reported for the output being written, or nil when
+    /// the Host does not report sizes and the view decides the grid.
+    public var reportedGrid: TerminalSize? {
+        lock.withLock { hostGrid }
+    }
+
+    public func setGridApplier(_ applier: (@Sendable (TerminalSize) async -> Bool)?) {
+        lock.withLock { gridApplier = applier }
+    }
+
+    /// Records the grid at a new output anchor, before its snapshot installs.
+    /// Passing nil returns the grid to the view.
+    public func setAnchorGrid(_ grid: TerminalSize?) {
+        lock.withLock {
+            hostGrid = grid
+            anchorGridSetAt = grid == nil ? nil : ContinuousClock.now
+        }
+    }
+
+    /// Records that output from `sequence` on was produced for `grid`. The
+    /// drain applies the change exactly between the bytes before and after
+    /// it, however early the mark arrives.
+    public func enqueueGridChange(epoch: UInt64, sequence: UInt64, grid: TerminalSize) {
+        let accepted = lock.withLock { () -> Bool in
+            guard !isShutdown, hostGrid != nil else { return false }
+            buffer.appendMark(GridMark(epoch: epoch, sequence: sequence, grid: grid))
+            return true
+        }
+        if accepted { startFeedIfNeeded() }
+    }
+
+    /// Whether Ghostty's terminal is not yet at the grid the Host reported.
+    /// A snapshot installed now would be reflowed to the wrong grid.
+    private var terminalLagsHostGrid: Bool {
+        let (grid, setAt, timeout) = lock.withLock { (hostGrid, anchorGridSetAt, gridSettleTimeout) }
+        guard let grid, let current = inMemory.terminalGrid() else { return false }
+        guard Int(current.columns) != grid.columns || Int(current.rows) != grid.rows else {
+            return false
+        }
+        if let setAt, ContinuousClock.now - setAt >= timeout {
+            TerminalDiagnostics.log("terminal_grid_settle_timeout", [
+                "want": "\(grid.columns)x\(grid.rows)",
+                "have": "\(current.columns)x\(current.rows)",
+                "phase": "snapshot",
+            ])
+            return false
+        }
+        return true
+    }
+
     /// Drops pending bytes and restarts the recovery anchor. Safe to call
     /// while a feed is in flight; the next enqueue starts a fresh drain.
     public func reset(epoch: UInt64, sequence: UInt64) {
@@ -301,6 +425,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         // Ghostty while that same run loop is needed to unblock it.
         guard terminalFeedLock.try() else { return .feedBusy }
         defer { terminalFeedLock.unlock() }
+        guard !terminalLagsHostGrid else { return .feedBusy }
         guard inMemory.restoreSnapshot(data) else { return .rejected }
         markSnapshotRestored(epoch: epoch, sequence: sequence)
         return .restored
@@ -324,6 +449,10 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         // result after the existing surface-ready delay.
         guard terminalFeedLock.try() else { return .feedBusy }
         defer { terminalFeedLock.unlock() }
+        // The snapshot was captured at the Host's grid; wait for Ghostty to
+        // reach it rather than reflow it through the old one. The caller
+        // retries `feedBusy`.
+        guard !terminalLagsHostGrid else { return .feedBusy }
         guard inMemory.restoreSnapshot(data) else { return .rejected }
         guard reapplyRuntimeConfig() else { return .configRejected }
         markSnapshotRestored(epoch: epoch, sequence: sequence)
@@ -467,7 +596,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
 
     private func startFeedIfNeeded() {
         lock.lock()
-        guard !isShutdown, feedTask == nil, !buffer.isEmpty else {
+        guard !isShutdown, feedTask == nil, buffer.hasWork else {
             lock.unlock()
             return
         }
@@ -487,6 +616,13 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
         var heldSlice: Slice?
         while !Task.isCancelled {
             if heldSlice == nil {
+                let mark = lock.withLock { () -> (GridMark, UInt64)? in
+                    buffer.takeDueMark().map { ($0, buffer.generation) }
+                }
+                if let (mark, markGeneration) = mark {
+                    await applyGrid(mark.grid, generation: markGeneration)
+                    continue
+                }
                 heldSlice = lock.withLock {
                     buffer.take(maxBytes: budgetBytes)
                 }
@@ -562,7 +698,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             }
             guard committed else { continue }
 
-            let hasMore = lock.withLock { !buffer.isEmpty }
+            let hasMore = lock.withLock { buffer.hasWork }
             if !hasMore, shouldExitDrain(generation: generation) {
                 return
             }
@@ -576,6 +712,34 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                     return
                 }
             }
+        }
+    }
+
+    /// Lays Ghostty out at `grid` and waits until its terminal has the grid,
+    /// so the next byte is parsed for the size it was produced for.
+    ///
+    /// The applier runs on the main actor while no feed lock is held: the
+    /// main actor takes the feed lock for a reset, and Ghostty's write path
+    /// may need the main run loop.
+    private func applyGrid(_ grid: TerminalSize, generation: UInt64) async {
+        let applier = lock.withLock { () -> (@Sendable (TerminalSize) async -> Bool)? in
+            hostGrid = grid
+            return gridApplier
+        }
+        guard let applier, await applier(grid) else { return }
+        let deadline = ContinuousClock.now.advanced(by: gridSettleTimeout)
+        while !Task.isCancelled {
+            guard lock.withLock({ buffer.generation == generation }) else { return }
+            guard let current = inMemory.terminalGrid() else { return }
+            if Int(current.columns) == grid.columns, Int(current.rows) == grid.rows { return }
+            if ContinuousClock.now >= deadline {
+                TerminalDiagnostics.log("terminal_grid_settle_timeout", [
+                    "want": "\(grid.columns)x\(grid.rows)",
+                    "have": "\(current.columns)x\(current.rows)",
+                ])
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(1))
         }
     }
 
@@ -623,7 +787,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     private func shouldExitDrain(generation: UInt64) -> Bool {
         lock.withLock {
             guard feedTaskGeneration == generation else { return true }
-            guard buffer.isEmpty else { return false }
+            guard !buffer.hasWork else { return false }
             feedTask = nil
             feedTaskGeneration = nil
             return true

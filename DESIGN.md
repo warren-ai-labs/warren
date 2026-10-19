@@ -170,7 +170,7 @@ Local IPC / Direct WebSocket / Relay Transport
 - **SSH Transport Boundary**: SSH bootstraps the remote daemon and forwards a loopback port. Git, Runtime, and resource semantics are never encoded into SSH; once reached, all clients speak the standard WebSocket API.
 - **Relay Service**: Provides Host registration, discovery, pairing, revocation, signaling, public routes, and outbound WSS forwarding. The Relay never stores Project, Workspace, or Session state, terminal output, or user input.
 - **Public Access**: Explicitly configured route providing credential-free public access URLs. Web authentication requires the daemon token at the WebSocket boundary.
-- **Dual-Repository Governance**: Open-source core (`warren`) contains the macOS Desktop, Web PWA, Relay, and Headless daemon. The native iOS client lives in the internal master (`warren-private`) and is maintained as a proprietary companion.
+- **Dual-Repository Governance**: Source-available core (`warren`) contains the macOS Desktop, Web PWA, Relay, and Headless daemon. The native iOS client lives in the internal master (`warren-private`) and is maintained as a proprietary companion.
 
 ### 6.2 Git Integration
 
@@ -282,11 +282,15 @@ Window (a dark backdrop; the sidebar, the tab row's capsules, and every pane are
 │   │   │         a hairline between projects; one worktree draws no row of its own;
 │   │   │         pinned first, then projects with an open Session in the order they
 │   │   │         became active, then one folded "N inactive projects" row listing the
-│   │   │         rest with their last activity; a project with no Session is its row alone)
+│   │   │         rest with their last activity; a project with no Session is its row alone;
+│   │   │         a project that closes its last Session is held in place for a minute, and
+│   │   │         selecting an inactive one lifts it to the end of the active band the same
+│   │   │         way; a hold outlasts its minute while selected or under the pointer)
 │   │   └── Workspaces (main checkout & worktrees, branch names in monospace with the
 │   │       │          type prefix dimmed and a long name cut in the middle; worktrees
 │   │       │          with Sessions keep their order, the rest fold into one
-│   │       │          "N idle worktrees" row with their last activity)
+│   │       │          "N idle worktrees" row with their last activity; in both lists
+│   │       │          a main or master worktree comes first)
 │   │       └── Sessions (title, plus an activity line while there is one)
 │   ├── Other Hosts (one row each, a dot while a Session there needs someone)
 │   └── Bottom row (the notification bell in the corner: unread dot, struck
@@ -410,7 +414,7 @@ Acceptance tests must not take screenshots, move the mouse, or steal keyboard fo
 
 ## 14. Scope and Out of Scope
 
-Out of scope for the open-source phase-one repository:
+Out of scope for the source-available phase-one repository:
 - Multi-user accounts, organizations, and billing.
 - Automatic unauthenticated public network exposures.
 - Native iOS client source code (developed separately as a proprietary companion app).

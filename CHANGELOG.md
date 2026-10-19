@@ -4,6 +4,23 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Download Warren as a disk image. Its window shows where to drag the app and
+  how to approve the first launch in Privacy & Security. The zip stays in each
+  release for the in-app updater.
+- Install a downloaded disk image without dragging or a second approval. When
+  Warren is running, opening a newer Warren disk image brings Warren forward,
+  checks that the app is signed by the same developer, installs it, ejects the
+  disk image, and restarts Warren.
+
+### Fixed
+
+- Keep terminal output aligned while a split pane resizes. The Desktop changes a
+  terminal's grid only at the output position where the Host reports the PTY
+  actually resized, so text written for the old width is never drawn on the new
+  grid and the pane no longer shows garbled rows.
+
 ## [0.31.0] - 2026-10-19
 
 > Minor release: removes fixed waits from the Agent path — the transcript

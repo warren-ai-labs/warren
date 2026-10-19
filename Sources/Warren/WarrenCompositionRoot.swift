@@ -241,6 +241,7 @@ struct WarrenCompositionRoot: View {
             onSelectEndpoint: { id in selectEndpoint(id) },
             onSetEndpointSidebarVisibility: setEndpointSidebarVisibility,
             onSetEndpointDisplayName: setEndpointDisplayName,
+            onDeleteEndpoint: deleteEndpoint,
             sidebarHostProjections: multiHostSidebar.projection.hosts,
             usesSidebarHostSections: displayConfiguration != nil,
             sidebarResourceSelection: activeSidebarResourceSelection,
@@ -589,10 +590,12 @@ struct WarrenCompositionRoot: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             // A bundled SSH helper is a child process of the Desktop. Stop it
             // before AppKit tears down the process so a tunnel cannot outlive
-            // the app that owns the endpoint.
+            // the app that owns the endpoint. The editor server is one too, and
+            // the model's deinit never runs at process exit.
             localEndpointWaitGeneration &+= 1
             remoteModel.disconnect()
             multiHostSidebar.stop()
+            embeddedEditorModel.stop()
         }
         .animation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion), value: windowMaterial)
         .environment(\.warrenWindowMaterial, windowMaterial)
@@ -983,6 +986,25 @@ struct WarrenCompositionRoot: View {
                 name: name,
                 to: configURL
             )
+            let catalog = try WarrenEndpointCatalog.loadThrowing(from: configURL)
+            endpointCatalog = catalog.endpoints
+            displayConfiguration = catalog.display
+        } catch {
+            remoteModel.report(error)
+        }
+    }
+
+    /// Forgets a Host. The window's own Host hands over to this Mac first,
+    /// so the connection is never left pointing at an endpoint that is gone.
+    private func deleteEndpoint(_ endpointID: String) {
+        guard endpointID != "local",
+              endpointOptions.contains(where: { $0.id == endpointID }) else { return }
+        if selectedEndpointID == endpointID {
+            selectEndpoint("local")
+        }
+        do {
+            let configURL = WarrenEndpointCatalog.configurationURL()
+            try WarrenEndpointCatalog.remove(endpointID, from: configURL)
             let catalog = try WarrenEndpointCatalog.loadThrowing(from: configURL)
             endpointCatalog = catalog.endpoints
             displayConfiguration = catalog.display

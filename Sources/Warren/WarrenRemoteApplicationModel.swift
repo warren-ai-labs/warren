@@ -588,6 +588,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         surfaceManager.onFocusRequested = { [weak self] sessionID in
             self?.selectTab(forSessionID: sessionID)
         }
+        // While the Host decides a surface's grid, the pane's own size only
+        // reaches the model through this callback; Ghostty's grid reports then
+        // describe the PTY and are ignored.
+        surfaceManager.onViewportGridChanged = { [weak self] sessionID, size in
+            self?.requestViewportSize(sessionID: sessionID, size: size)
+        }
         // A promotion that never drew leaves the pane black with no work in
         // flight. Recover it the only way that can rebuild a surface whose
         // native renderer is gone: re-subscribe and install a fresh snapshot.
@@ -899,7 +905,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 // The Desktop subscribes every roster stream at once. Without
                 // this each subscribe replaced the last, so only one Agent's
                 // events stayed live on the connection.
-                additionalCapabilities: [WarrenRemoteAgentCapability.streams],
+                // The Desktop lays each Ghostty grid out from the Host's size
+                // reports, so output written for one PTY size is never parsed
+                // against another.
+                additionalCapabilities: [
+                    WarrenRemoteAgentCapability.streams,
+                    WarrenRemoteCapability.terminalSize,
+                ],
                 tokenUpdateHandler: { accessToken, refreshToken in
                     guard !isSyntheticLocal else { return }
                     let updated = persistedConfiguration.withTokens(
@@ -3187,6 +3199,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             columns: columns,
             rows: rows
         ) else { return }
+        guard let size = TerminalSize(columns: columns, rows: rows) else { return }
+        requestViewportSize(sessionID: sessionID, size: size)
+    }
+
+    /// Asks the Host to size a Session's PTY for its pane.
+    private func requestViewportSize(sessionID: TerminalSessionID, size: TerminalSize) {
+        let columns = size.columns
+        let rows = size.rows
         // The selected pane's size belongs to its focus claim while that claim
         // is being established. Routing it through the viewport-only path
         // would race the attach and can queue a bare `session.resize` ahead of
@@ -3348,7 +3368,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     func focus(sessionID: TerminalSessionID, size: TerminalSize?) {
         guard selectedSessionID == sessionID else { return }
-        let measuredSize = size ?? surfaceManager.surface(for: sessionID)?.terminalSize
+        let measuredSize = size ?? surfaceManager.viewportGrid(for: sessionID)
         guard attachedSessionID == sessionID else {
             pendingFocusSessionID = sessionID
             pendingFocusSize = measuredSize
@@ -4346,12 +4366,31 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             )
         case .anchor(let anchor):
             guard let sessionID = TerminalSessionID(uuidString: anchor.sessionID) else { return }
+            if !anchor.synced {
+                // The size at a new anchor must be in place before its
+                // snapshot installs. An attachment without one returns the grid
+                // to the pane.
+                surfaceManager.setHostGrid(
+                    anchor.grid.flatMap { TerminalSize(columns: $0.columns, rows: $0.rows) },
+                    for: sessionID
+                )
+            }
             consumeAnchor(
                 sessionID: sessionID,
                 epoch: anchor.epoch,
                 sequence: anchor.sequence,
                 reanchor: anchor.reanchor,
                 synced: anchor.synced
+            )
+        case .terminalResized(let resize):
+            guard let sessionID = TerminalSessionID(uuidString: resize.sessionID),
+                  let grid = TerminalSize(columns: resize.grid.columns, rows: resize.grid.rows)
+            else { return }
+            surfaceManager.enqueueGridChange(
+                grid,
+                for: sessionID,
+                epoch: resize.epoch,
+                sequence: resize.sequence
             )
         case .maintenance(let message):
             consumeMaintenance(message)
@@ -6018,7 +6057,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         inputRouter.activate(for: sessionID) { [wire] data in
             try? await wire.sendInput(sessionID: sessionID.description, payload: data)
         }
-        let measuredSize = surfaceManager.surface(for: sessionID)?.terminalSize
+        let measuredSize = surfaceManager.viewportGrid(for: sessionID)
         // Focus ownership is claimed only when the surface actually gained
         // keyboard focus: either the manager parked a request here while the
         // promotion was in flight, or a split sibling is already the first
@@ -6258,7 +6297,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 }
                 continue
             }
-            if let size = surface.terminalSize {
+            if let size = surfaceManager.viewportGrid(for: sessionID) {
                 return size
             }
             do {

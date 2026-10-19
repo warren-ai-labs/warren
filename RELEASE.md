@@ -76,13 +76,16 @@ xcrun stapler validate Warren.app
 spctl --assess --type execute --verbose=4 Warren.app
 ```
 
-Staple before producing the final download archive. If the archive was
+Staple before producing the final download archives. If the archive was
 submitted for notarization before stapling, recreate `Warren-<version>.zip`
-from the stapled app and regenerate its `.sha256` file before publishing:
+and `Warren-<version>.dmg` from the stapled app and regenerate their `.sha256`
+files before publishing:
 
 ```sh
 ditto -c -k --keepParent Warren.app "Warren-<version>.zip"
+bash scripts/build-dmg.sh Warren.app "Warren-<version>.dmg"
 shasum -a 256 "Warren-<version>.zip" > "Warren-<version>.zip.sha256"
+shasum -a 256 "Warren-<version>.dmg" > "Warren-<version>.dmg.sha256"
 ```
 
 After switching from an old ad-hoc build, approve the newly signed app once;
@@ -127,8 +130,12 @@ tests, Swift package tests, and the non-visual UI probes covered by
 
    `scripts/package.sh` is a release-only entry point: it verifies the exact
    tag, clean checkout, and app version; invokes `scripts/build-app.sh release`;
-   stamps `build-variant.txt` as `release`; and writes a SHA-256 file beside
-   the archive. `mise run build` and `mise run dev` intentionally produce
+   stamps `build-variant.txt` as `release`; builds the zip and the
+   drag-to-install disk image; and writes a SHA-256 file beside each. The
+   disk image window is laid out by Finder, so the first run asks the
+   terminal for permission to control Finder; grant it rather than skipping
+   the layout. The website downloads the disk image, and the in-app updater
+   installs the zip, so both must be published. `mise run build` and `mise run dev` intentionally produce
    debug artifacts and stamp the marker as `build`; they are not release
    commands.
 
@@ -152,7 +159,9 @@ tests, Swift package tests, and the non-visual UI probes covered by
    Confirm that `Warren.app/Contents/Info.plist` contains the release version,
    `Warren.app/Contents/Resources/build-variant.txt` contains `release`,
    `Warren.app/Contents/MacOS/warren-headless --version` prints the release
-   tag, `Warren-<version>.zip` and `Warren-<version>.zip.sha256` exist, and the
+   tag, `Warren-<version>.zip`, `Warren-<version>.dmg`, and their `.sha256`
+   files exist, mounting the disk image shows the app, the Applications link,
+   and the install background, and the
    independently deployed Relay accepts the release protocol. Do not commit
    `Warren.app`, archives, or generated build output.
 4. Push the release commit and annotated tag to the private `origin` only, then
@@ -174,7 +183,8 @@ tests, Swift package tests, and the non-visual UI probes covered by
    The public tag intentionally points to a different mirror commit from the
    private tag. Do not push the private commit or tag directly to `public`.
 6. Publish the GitHub Release in `warren-ai-labs/warren` with both
-   `Warren-<version>.zip` and `Warren-<version>.zip.sha256` attached, plus the
+   `Warren-<version>.zip`, `Warren-<version>.dmg`, and both `.sha256` files
+   attached, plus the
    corresponding `CHANGELOG.md` notes and any signing caveat.
 7. Deploy the onboarding Worker from the same tagged release commit:
 
@@ -186,8 +196,9 @@ tests, Swift package tests, and the non-visual UI probes covered by
    English and Simplified Chinese fallbacks match `CHANGELOG.md`.
    Deploy after the public GitHub Release exists; the Worker resolves
    `releases/latest` and may serve a cached response for several minutes.
-   Confirm that the Worker serves the new release tag, archive URL, and release
-   notes after its cache refreshes; verify the checksum asset directly on the
+   Confirm that the Worker serves the new release tag, the disk image as the
+   download URL, both archives in `assets`, and the release notes after its
+   cache refreshes; verify the checksum asset directly on the
    GitHub Release page.
 
 ## Rollback

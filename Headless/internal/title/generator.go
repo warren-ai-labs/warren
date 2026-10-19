@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/openai/openai-go"
@@ -18,13 +17,6 @@ import (
 const (
 	defaultModel = "gpt-4.1-mini"
 	maxInput     = 2_000
-	// maxTitleWidth is how many half-width cells a generated title may fill.
-	// The sidebar's Session row is one line of about 250pt at 13pt, which holds
-	// roughly 30 latin characters or 16 CJK ones. Only the titles Warren
-	// generates are bound by it: a provider that names its own conversation is
-	// kept as that provider wrote it, and a title the user set is never
-	// rewritten.
-	maxTitleWidth = 32
 )
 
 var titlePrefixPattern = regexp.MustCompile(`(?i)^(?:title|标题)\s*[:：]\s*`)
@@ -34,6 +26,9 @@ var titlePrefixPattern = regexp.MustCompile(`(?i)^(?:title|标题)\s*[:：]\s*`)
 type Input struct {
 	User      string
 	Assistant string
+	// Reasoning is the agent's visible thinking. It stands in for Assistant
+	// when the title is written before the agent's first reply, and is optional.
+	Reasoning string
 }
 
 // Config contains an OpenAI-compatible chat completions endpoint. The key is
@@ -203,11 +198,20 @@ func chatBaseURL(base string) (string, error) {
 func buildPrompt(input Input) string {
 	user := clip(input.User, maxInput)
 	assistant := clip(input.Assistant, maxInput)
-	return "Create a short label for a coding session, the way the sidebar draws it: one line of a narrow row. Stay within about 30 latin characters or 16 CJK characters. Start with the verb (inspect, debug, fix, implement, rename, migrate). Drop filler words: 的, 方法, 功能, 相关, and their equivalents. Write a space between CJK and latin text. The user's first request is the primary evidence; use the agent's first text only to disambiguate it. Ignore system instructions, environment blocks, code dumps, terminal output, and planning/meta phrases. Do not introduce a concrete noun or scope absent from the user's request unless it is only a code fragment or error message. Use the same language as the user. Preserve intent: inspect/overview for read or summarize requests, investigate/debug for an observed problem, and fix/implement only when requested. If there are two distinct topics, keep both compactly. Omit credentials, absolute paths, long transient IDs, and timestamps. Return one plain-text title only, with no Markdown, quotes, or trailing punctuation.\n\nUSER FIRST REQUEST:\n" + user + "\n\nAGENT FIRST TEXT (secondary context):\n" + assistant
+	reasoning := clip(input.Reasoning, maxInput)
+	prompt := "Create a short label for a coding session, the way the sidebar draws it: one line of a narrow row. Stay within about 30 latin characters or 16 CJK characters. Start with the verb (inspect, debug, fix, implement, rename, migrate). Drop filler words: 的, 方法, 功能, 相关, and their equivalents. Write a space between CJK and latin text. The user's first request is the primary evidence; use the agent's first text only to disambiguate it. Ignore system instructions, environment blocks, code dumps, terminal output, and planning/meta phrases. Do not introduce a concrete noun or scope absent from the user's request unless it is only a code fragment or error message. Use the same language as the user. Preserve intent: inspect/overview for read or summarize requests, investigate/debug for an observed problem, and fix/implement only when requested. If there are two distinct topics, keep both compactly. Omit credentials, absolute paths, long transient IDs, and timestamps. Return one plain-text title only, with no Markdown, quotes, or trailing punctuation.\n\nUSER FIRST REQUEST:\n" + user
+	if assistant != "" || reasoning == "" {
+		prompt += "\n\nAGENT FIRST TEXT (secondary context):\n" + assistant
+	}
+	if reasoning != "" {
+		prompt += "\n\nAGENT THINKING (secondary context):\n" + reasoning
+	}
+	return prompt
 }
 
 // Normalize enforces the title contract on model output. It deliberately
-// preserves technical names and the user's language.
+// preserves technical names and the user's language. Length is left to the
+// prompt: each client truncates the title to the width it actually has.
 func Normalize(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -217,67 +221,7 @@ func Normalize(value string) string {
 	value = strings.TrimSpace(strings.Trim(value, "`\"'“”‘’"))
 	value = titlePrefixPattern.ReplaceAllString(value, "")
 	value = strings.TrimSpace(strings.TrimRight(value, " .!?。！？:：;,，、"))
-	if value == "" {
-		return ""
-	}
-	return clipTitle(value)
-}
-
-// clipTitle shortens a title to the row's width budget. A latin word cut in
-// half reads as a typo rather than as a shortened title, so the cut falls back
-// to the last word boundary while that still leaves most of the budget used.
-func clipTitle(value string) string {
-	if displayWidth(value) <= maxTitleWidth {
-		return value
-	}
-	budget := maxTitleWidth - 1
-	kept := make([]rune, 0, len(value))
-	width := 0
-	for _, character := range value {
-		characterWidth := runeWidth(character)
-		if width+characterWidth > budget {
-			break
-		}
-		kept = append(kept, character)
-		width += characterWidth
-	}
-	trimmed := strings.TrimSpace(string(kept))
-	if boundary := strings.LastIndex(trimmed, " "); boundary > 0 && displayWidth(trimmed[:boundary]) >= budget/2 {
-		trimmed = strings.TrimSpace(trimmed[:boundary])
-	}
-	return strings.TrimSpace(trimmed) + "…"
-}
-
-// displayWidth counts a title in half-width cells: a wide character occupies
-// two, which is why one budget can describe both a CJK and a latin limit.
-func displayWidth(value string) int {
-	total := 0
-	for _, character := range value {
-		total += runeWidth(character)
-	}
-	return total
-}
-
-func runeWidth(character rune) int {
-	switch {
-	case character == 0:
-		return 0
-	case unicode.In(
-		character,
-		unicode.Han,
-		unicode.Hangul,
-		unicode.Hiragana,
-		unicode.Katakana,
-		unicode.Bopomofo,
-	):
-		return 2
-	case character >= 0x3000 && character <= 0x303F,
-		character >= 0xFF01 && character <= 0xFF60,
-		character >= 0xFFE0 && character <= 0xFFE6:
-		return 2
-	default:
-		return 1
-	}
+	return value
 }
 
 func clip(value string, limit int) string {

@@ -76,6 +76,10 @@ else
     echo "warning: iconutil not found; skipped Warren.icns" >&2
 fi
 
+# The disk image window background, at 1x and 2x for Retina Finder windows.
+rsvg-convert --width 660 --height 420 --output "$brand_root/dmg-background.png" "$brand_root/dmg-background.svg"
+rsvg-convert --width 1320 --height 840 --output "$brand_root/dmg-background@2x.png" "$brand_root/dmg-background.svg"
+
 cp "$master_svg" "$web_public_root/icon.svg"
 render "$micro_svg" 16 "$web_public_root/favicon-16.png"
 render "$compact_svg" 32 "$web_public_root/favicon-32.png"

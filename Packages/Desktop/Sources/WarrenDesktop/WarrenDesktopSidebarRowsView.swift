@@ -109,7 +109,14 @@ struct WarrenDesktopSidebarRows: View {
     @State private var isDragMeasurementEnabled = false
     @State private var previousGroups: [WarrenDesktopProjectGroup] = []
     @State private var previousTaskGroups: [WarrenDesktopTaskGroup] = []
+    /// Projects held in the active band; see `WarrenDesktopProjectHold`.
+    @State private var projectHold = WarrenDesktopProjectHold()
+    @State private var projectActivity = WarrenDesktopProjectHold.Snapshot()
+    /// Carries a project's row between the folded list and the active band, so
+    /// a lifted project is seen rising into its place rather than reappearing.
+    @Namespace private var projectRowNamespace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.warrenPointerInsideSidebar) private var pointerInsideSidebar
 
     var body: some View {
         // This list is bounded by the sidebar scroll view and also hosts
@@ -149,6 +156,10 @@ struct WarrenDesktopSidebarRows: View {
                                 let split = workspaceSplit(of: group)
                                 VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.groupContentSpacing) {
                                     projectRow(for: group, soloWorkspace: soloWorkspace)
+                                        .matchedGeometryEffect(
+                                            id: group.project.id,
+                                            in: projectRowNamespace
+                                        )
                                     if let soloWorkspace, isProjectExpanded(group.project.id) {
                                         // One worktree is no choice, so the
                                         // project holds its Sessions directly.
@@ -257,6 +268,22 @@ struct WarrenDesktopSidebarRows: View {
         .onAppear {
             previousGroups = groups
             previousTaskGroups = taskGroups
+            projectActivity = currentProjectActivity
+        }
+        .onChange(of: currentProjectActivity) { activity in
+            let previous = projectActivity
+            projectActivity = activity
+            withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+                projectHold.update(from: previous, to: activity, now: Date())
+            }
+        }
+        .task(id: projectHoldClock) {
+            await projectHoldClock.run { now, kept in
+                // The same travel as the lift, so a row is seen going back.
+                withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
+                    _ = projectHold.expire(now: now, keeping: kept)
+                }
+            }
         }
         .onChange(of: groups) { newGroups in
             let oldGroups = previousGroups
@@ -357,16 +384,24 @@ struct WarrenDesktopSidebarRows: View {
         guard let projectID,
               let group = groups.first(where: { $0.project.id == projectID })
         else { return }
-        let opensInactive = !group.project.pinned && !isProjectActive(group)
-            && !tree.inactiveProjectsExpanded
+        // A project in the folded row is lifted into the active band instead
+        // of the row being opened around it.
+        let lifts = !group.project.pinned && !isProjectActive(group)
+            && !projectHold.contains(projectID.description)
         let opensIdle = idleWorkspace.map { workspace in
             !tree.expandedIdleWorkspaceProjectIDs.contains(projectID)
                 && projectListWorkspaces(of: group).contains { $0.id == workspace.id }
         } ?? false
-        guard opensInactive || opensIdle else { return }
+        if lifts {
+            // Slow enough to read as travel: the row rises out of the folded
+            // list into its place rather than blinking there.
+            withAnimation(WarrenMotion.selection(reduceMotion: reduceMotion)) {
+                projectHold.lift(projectID.description, now: Date())
+            }
+        }
+        guard opensIdle else { return }
         withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
-            if opensInactive { tree.inactiveProjectsExpanded = true }
-            if opensIdle { tree.expandedIdleWorkspaceProjectIDs.insert(projectID) }
+            tree.expandedIdleWorkspaceProjectIDs.insert(projectID)
         }
     }
 
@@ -547,8 +582,31 @@ struct WarrenDesktopSidebarRows: View {
         WarrenDesktopProjectBands(
             visibleProjectGroups,
             project: \.project,
-            isActive: isProjectActive,
-            lastActiveAt: { WarrenDesktopActivityAge.lastActiveAt(of: $0.workspaces) }
+            isActive: { isProjectActive($0) || projectHold.contains($0.project.id.description) },
+            lastActiveAt: { WarrenDesktopActivityAge.lastActiveAt(of: $0.workspaces) },
+            activeSince: {
+                projectHold.activeSince($0.project.id.description) ?? $0.project.activeSince
+            }
+        )
+    }
+
+    private var currentProjectActivity: WarrenDesktopProjectHold.Snapshot {
+        var snapshot = WarrenDesktopProjectHold.Snapshot()
+        for group in groups {
+            let key = group.project.id.description
+            snapshot.existing.insert(key)
+            if isProjectActive(group) {
+                snapshot.active[key] = group.project.activeSince
+            }
+        }
+        return snapshot
+    }
+
+    private var projectHoldClock: WarrenDesktopProjectHoldClock {
+        WarrenDesktopProjectHoldClock(
+            nextExpiry: projectHold.nextExpiry,
+            pointerInsideSidebar: pointerInsideSidebar,
+            kept: Set([selectedProjectID?.description].compactMap { $0 })
         )
     }
 
@@ -620,6 +678,7 @@ struct WarrenDesktopSidebarRows: View {
                             contextMenuActions: projectContextMenuActions(group),
                             onSelect: { select(.project(group.project.id)) }
                         )
+                        .matchedGeometryEffect(id: group.project.id, in: projectRowNamespace)
                         .id("project.\(group.project.id.description)")
                     }
                 }
@@ -1539,12 +1598,17 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     /// it only passes over never makes one.
     @State private var showsShellDetails = false
     @State private var shellDetailTask: Task<Void, Never>?
-    /// The collapse the row draws, which follows `isCollapsed(now:)` inside an
-    /// animation. The pointer entering the rail and the ten-minute tick both
-    /// change the height, and only a transaction set where the state changes
-    /// moves the rows below with it; an `.animation` on the row animates the
-    /// row alone and leaves its neighbours to jump.
+    /// The collapse the row draws, which follows `isCollapsed(now:)` through
+    /// `shownCollapse(...)` inside an animation. The pointer dwelling on the
+    /// row, leaving the rail, and the ten-minute tick all change the height,
+    /// and only a transaction set where the state changes moves the rows below
+    /// with it; an `.animation` on the row animates the row alone and leaves
+    /// its neighbours to jump.
     @State private var shownCollapsed: Bool?
+    /// Whether the pointer has dwelt on this row long enough to open it. Set
+    /// a beat before the shell card, so a pointer passing over the row on its
+    /// way to another never opens it.
+    @State private var isDwelling = false
 
     private var providerName: String {
         session.presentedKind.displayName
@@ -1765,11 +1829,9 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             shellAttention?.markSeen(key, at: Date())
         }
         .onAppear { shownCollapsed = restingCollapsed }
-        .onChange(of: restingCollapsed) { resting in
-            withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
-                shownCollapsed = resting
-            }
-        }
+        .onChange(of: restingCollapsed) { _ in settleCollapse() }
+        .onChange(of: pointerInsideSidebar) { _ in settleCollapse() }
+        .onChange(of: isDwelling) { _ in settleCollapse() }
             if showsSubagentRows {
                 subagentRows(tokens: tokens)
             }
@@ -1824,7 +1886,11 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     private func collapsedRow(tokens: WarrenColorTokens, rowWash: Color?, now: Date) -> some View {
         HStack(spacing: WarrenDesktopSidebarMetrics.sessionIconSpacing) {
             badge(tokens: tokens, rowWash: rowWash)
+            // The fading line is a GeometryReader, which fills the row's height
+            // and pins its text to the top; the badge's height keeps the two
+            // on one line, as in the expanded row.
             titleLine(tokens: tokens, titleColor: collapsedTitleColor(tokens: tokens))
+                .frame(height: WarrenDesktopSidebarMetrics.sessionIconSize)
             Spacer(minLength: 8)
             if let age = collapsedAge(now: now) {
                 Text(age)
@@ -1853,21 +1919,18 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     /// Whether this shell has rested long enough to lose its second line.
     ///
     /// A command that failed stays two lines until the Session has been looked
-    /// at once; only then does the ten-minute rest begin. The pointer's presence
-    /// over the rail postpones the collapse rather than letting a row shrink
-    /// under the pointer that is reading it.
+    /// at once; only then does the ten-minute rest begin. What the pointer does
+    /// to that is `shownCollapse(...)`'s business.
     static func isCollapsedShell(
         for session: WarrenDesktopSession,
         seenAt: Date?,
-        pointerInsideSidebar: Bool,
         now: Date
     ) -> Bool {
         guard session.presentedKind == .shell,
               !session.isAgentSession,
               session.state.isActive,
               let shell = session.shellState,
-              !shell.isRunningCommand,
-              !pointerInsideSidebar else { return false }
+              !shell.isRunningCommand else { return false }
         guard let endedAt = shell.lastExitAt else { return true }
         if shell.displayedExitCode != nil {
             guard let seenAt else { return false }
@@ -1890,9 +1953,39 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         return Self.isCollapsedShell(
             for: session,
             seenAt: seenAt,
-            pointerInsideSidebar: pointerInsideSidebar,
             now: now
         )
+    }
+
+    /// The collapse a row draws next, given the one it draws now.
+    ///
+    /// Only the row the pointer dwells on opens: the pointer merely entering
+    /// the rail leaves every collapsed row as it is, so reaching for another
+    /// Session does not reflow the tree. A row that is open stays open while
+    /// the pointer is over the rail rather than shrinking under the pointer
+    /// that is reading it; it folds once the pointer leaves.
+    static func shownCollapse(
+        current: Bool,
+        resting: Bool,
+        pointerInsideSidebar: Bool,
+        isDwelling: Bool
+    ) -> Bool {
+        guard resting, !isDwelling else { return false }
+        if current { return true }
+        return !pointerInsideSidebar
+    }
+
+    private func settleCollapse() {
+        let next = Self.shownCollapse(
+            current: shownCollapsed ?? false,
+            resting: isCollapsed(now: Date()),
+            pointerInsideSidebar: pointerInsideSidebar,
+            isDwelling: isDwelling
+        )
+        guard next != shownCollapsed else { return }
+        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+            shownCollapsed = next
+        }
     }
 
     /// The title, with its subagent count chip and pin.
@@ -2287,10 +2380,14 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         shellDetailTask = nil
         guard isInside, Self.usesLocationTitle(for: session) else {
             showsShellDetails = false
+            isDwelling = false
             return
         }
         shellDetailTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 450_000_000)
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled else { return }
+            isDwelling = true
+            try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled else { return }
             showsShellDetails = true
         }

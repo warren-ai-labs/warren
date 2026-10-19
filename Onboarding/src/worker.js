@@ -34,37 +34,51 @@ const PRICING_CACHE_KEY = new Request("https://warrenai.xyz/__cache/model-pricin
 const PRICING_TTL_MS = 12 * 60 * 60 * 1000;
 const PRICING_CACHE_CONTROL = "public, max-age=43200, stale-while-revalidate=86400";
 
-export function releaseAssetFromHtml(html) {
+const APP_ASSET_PATTERN = /^Warren-.*\.(dmg|pkg|zip)$/i;
+// The website download prefers the disk image. The desktop updater reads
+// `assets` and picks the zip itself, so every app asset stays in that list.
+const DOWNLOAD_PREFERENCE = ["dmg", "pkg", "zip"];
+
+function assetExtension(name) {
+  return name.split(".").pop().toLowerCase();
+}
+
+export function releaseAssetsFromHtml(html) {
   const matches = html.matchAll(
     /href="(\/(?:abcdlsj|warren-ai-labs)\/warren\/releases\/download\/[^"]+?)"/g,
   );
+  const assets = [];
   for (const match of matches) {
     const name = decodeURIComponent(match[1].split("/").pop() ?? "");
-    if (/^Warren-.*\.(dmg|pkg|zip)$/i.test(name)) {
-      return { name, path: match[1] };
+    if (APP_ASSET_PATTERN.test(name) && !assets.some((asset) => asset.name === name)) {
+      assets.push({ name, path: match[1] });
     }
   }
-  return null;
+  return assets;
 }
 
-export function normalizeRelease(release, selectedAsset = null) {
+export function normalizeRelease(release, selectedAssets = null) {
   const tag = release.tag_name ?? release.tag;
-  const sourceAsset =
-    selectedAsset ??
-    release.assets?.find((item) => /^Warren-.*\.(dmg|pkg|zip)$/i.test(item.name)) ??
-    release.assets?.[0];
-  const downloadURL = sourceAsset?.browser_download_url ?? sourceAsset?.url;
+  const sourceAssets = selectedAssets ?? release.assets ?? [];
+  const appAssets = sourceAssets.filter((item) => APP_ASSET_PATTERN.test(item.name ?? ""));
+  const candidates = (appAssets.length > 0 ? appAssets : sourceAssets.slice(0, 1))
+    .map((item) => ({
+      name: item.name,
+      browser_download_url: item.browser_download_url ?? item.url,
+      size: Number.isFinite(item.size) ? item.size : null,
+    }))
+    .filter((item) => item.name && item.browser_download_url);
 
-  if (!tag || !sourceAsset?.name || !downloadURL) {
+  if (!tag || candidates.length === 0) {
     throw new Error("Latest release has no downloadable asset");
   }
 
-  const htmlURL = release.html_url ?? `https://github.com/warren-ai-labs/warren/releases/tag/${tag}`;
-  const asset = {
-    name: sourceAsset.name,
-    browser_download_url: downloadURL,
-    size: Number.isFinite(sourceAsset.size) ? sourceAsset.size : null,
+  const rank = (item) => {
+    const index = DOWNLOAD_PREFERENCE.indexOf(assetExtension(item.name));
+    return index === -1 ? DOWNLOAD_PREFERENCE.length : index;
   };
+  const download = candidates.reduce((best, item) => (rank(item) < rank(best) ? item : best));
+  const htmlURL = release.html_url ?? `https://github.com/warren-ai-labs/warren/releases/tag/${tag}`;
 
   // Keep the compact fields for the onboarding page while also exposing the
   // GitHub-compatible shape consumed by the desktop updater.
@@ -73,10 +87,10 @@ export function normalizeRelease(release, selectedAsset = null) {
     tag_name: tag,
     html_url: htmlURL,
     body: release.body ?? null,
-    assets: [asset],
-    name: asset.name,
-    size: asset.size,
-    url: asset.browser_download_url,
+    assets: candidates,
+    name: download.name,
+    size: download.size,
+    url: download.browser_download_url,
   };
 }
 
@@ -99,8 +113,8 @@ async function latestReleaseFromHtml() {
   if (!assets.ok) {
     throw new Error(`GitHub assets page responded with ${assets.status}`);
   }
-  const asset = releaseAssetFromHtml(await assets.text());
-  if (!asset) {
+  const appAssets = releaseAssetsFromHtml(await assets.text());
+  if (appAssets.length === 0) {
     throw new Error("Latest release has no downloadable asset");
   }
   return normalizeRelease(
@@ -108,11 +122,11 @@ async function latestReleaseFromHtml() {
       tag_name: tag,
       html_url: `https://github.com/warren-ai-labs/warren/releases/tag/${tag}`,
     },
-    {
+    appAssets.map((asset) => ({
       name: asset.name,
       browser_download_url: `https://github.com${asset.path}`,
       size: null,
-    },
+    })),
   );
 }
 

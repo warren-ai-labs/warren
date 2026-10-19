@@ -11,11 +11,11 @@ struct WarrenDesktopSidebarHeader: View {
     var onToggleActiveOnly: () -> Void = {}
     /// The Host this window is working on, named at the top of the sidebar.
     var host: WarrenDesktopSidebarHostIdentity? = nil
-    /// Whether the Host picker is open. The window root presents it, hanging
-    /// from this row, like every other chrome surface.
+    /// Whether the Host panel is open. The window root presents it, hanging
+    /// from this row, like every other chrome surface. It offers this Host's
+    /// own controls; other Hosts live at the sidebar's foot.
     var isHostPickerPresented: Bool = false
-    /// Opens or closes the Host picker, or `nil` when there is nothing to
-    /// switch to.
+    /// Opens or closes the Host panel, or `nil` when it is not offered.
     var onToggleHostPicker: (() -> Void)? = nil
     /// Whether Public Access is serving this Host, for the globe beside the
     /// Host name.

@@ -103,6 +103,7 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private var updateNotificationObserver: NSObjectProtocol?
     private var endpointCapabilitiesObserver: NSObjectProtocol?
     private var screenChangeObserver: NSObjectProtocol?
+    private var volumeMountObserver: NSObjectProtocol?
     private weak var copyLocalWebURLMenuItem: NSMenuItem?
     private weak var copyLocalWebURLSeparator: NSMenuItem?
 
@@ -149,6 +150,18 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 self?.recoverOrphanWindowIfNeeded()
             }
         }
+        volumeMountObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didMountNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let volumeURL = notification.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL else {
+                return
+            }
+            Task { @MainActor in
+                self?.installDiskImageUpdateIfPresent(onVolume: volumeURL)
+            }
+        }
         installCLIIfNeededInBackground()
         checkForUpdatesAutomatically()
         NSApp.activate(ignoringOtherApps: true)
@@ -191,6 +204,9 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         }
         if let screenChangeObserver {
             NotificationCenter.default.removeObserver(screenChangeObserver)
+        }
+        if let volumeMountObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(volumeMountObserver)
         }
     }
 
@@ -284,15 +300,7 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             defer { self.updateInstallTask = nil }
             do {
                 let stagedApplication = try await self.updater.downloadAndPrepare(release)
-                // Keep the user-level CLI in lockstep with the application
-                // before the detached installer replaces the running bundle.
-                _ = try WarrenCLIInstaller.install(
-                    bundleExecutableURL: stagedApplication
-                        .appendingPathComponent("Contents/MacOS/Warren")
-                )
-                try self.updater.launchInstaller(stagedApplicationURL: stagedApplication)
-                self.updateMenuItem?.title = "Restarting Warren…"
-                NSApp.terminate(nil)
+                try self.applyStagedUpdate(stagedApplication)
             } catch {
                 self.updateMenuItem?.isEnabled = true
                 self.updateMenuItem?.title = "Install Update \(release.displayVersion)…"
@@ -309,6 +317,59 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 )
             }
         }
+    }
+
+    /// Opening a downloaded Warren disk image while Warren runs installs it in
+    /// place: the user neither drags the app nor approves it a second time.
+    private func installDiskImageUpdateIfPresent(onVolume volumeURL: URL) {
+        guard updateInstallTask == nil,
+              let update = updater.diskImageUpdate(onVolume: volumeURL) else { return }
+        presentMainWindowIfNeeded()
+        NSApp.activate(ignoringOtherApps: true)
+        updateMenuItem?.isEnabled = false
+        updateMenuItem?.title = "Installing Update \(update.displayVersion)…"
+        NotificationCenter.default.post(name: WarrenUpdateNotification.installing, object: nil)
+        updateInstallTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.updateInstallTask = nil }
+            do {
+                let stagedApplication = try await self.updater.prepareDiskImageUpdate(update)
+                // The staged copy no longer needs the disk image; ejecting it
+                // also closes its Finder window.
+                try? NSWorkspace.shared.unmountAndEjectDevice(at: update.volumeURL)
+                try self.applyStagedUpdate(stagedApplication)
+            } catch {
+                self.updateMenuItem?.isEnabled = true
+                if let release = self.availableRelease {
+                    self.updateMenuItem?.title = "Install Update \(release.displayVersion)…"
+                    NotificationCenter.default.post(
+                        name: WarrenUpdateNotification.available,
+                        object: nil,
+                        userInfo: [WarrenUpdateNotification.keyRelease: release]
+                    )
+                } else {
+                    self.updateMenuItem?.title = "Check for Updates…"
+                }
+                NSLog("Unable to install Warren from disk image: %@", error.localizedDescription)
+                NotificationCenter.default.post(
+                    name: WarrenUpdateNotification.failed,
+                    object: nil,
+                    userInfo: [WarrenUpdateNotification.keyError: error.localizedDescription]
+                )
+            }
+        }
+    }
+
+    private func applyStagedUpdate(_ stagedApplication: URL) throws {
+        // Keep the user-level CLI in lockstep with the application
+        // before the detached installer replaces the running bundle.
+        _ = try WarrenCLIInstaller.install(
+            bundleExecutableURL: stagedApplication
+                .appendingPathComponent("Contents/MacOS/Warren")
+        )
+        try updater.launchInstaller(stagedApplicationURL: stagedApplication)
+        updateMenuItem?.title = "Restarting Warren…"
+        NSApp.terminate(nil)
     }
 
     private func makeMainWindow() -> NSWindow {
