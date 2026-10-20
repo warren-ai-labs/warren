@@ -7,90 +7,15 @@ import {
 } from "./changelog.js";
 import TerminalDemo from "./TerminalDemo.jsx";
 
-function Reveal({ className = "", delay = 0, children }) {
-  const ref = useRef(null);
+const REPO_URL = "https://github.com/warren-ai-labs/warren";
+const RELEASES_URL = `${REPO_URL}/releases/latest`;
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      el.classList.add("in");
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            entry.target.classList.add("in");
-            observer.unobserve(entry.target);
-          }
-        }
-      },
-      { threshold: 0.12 },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+function useDownload() {
+  const [state, setState] = useState("idle");
 
-  return (
-    <div
-      ref={ref}
-      className={`reveal ${className}`}
-      style={delay ? { "--reveal-delay": `${delay}ms` } : undefined}
-    >
-      {children}
-    </div>
-  );
-}
-
-function Nav({ current = "home" }) {
-  const { t } = useI18n();
-  const isChangelog = current === "changelog";
-  const homeHref = isChangelog ? "/" : "#top";
-  const terminalHref = isChangelog ? "/#demo" : "#demo";
-  const whyHref = isChangelog ? "/#why" : "#why";
-  return (
-    <header className="nav">
-      <a className="nav-brand" href={homeHref}>
-        <img src="/favicon.svg" alt="" width="20" height="20" />
-        <span>Warren</span>
-      </a>
-      <nav className="nav-links">
-        <a href={homeHref}>{t("nav.overview")}</a>
-        <a href={terminalHref}>{t("nav.terminal")}</a>
-        <a href={whyHref}>{t("nav.why")}</a>
-        <a
-          className={isChangelog ? "is-current" : ""}
-          href="/changelog"
-          aria-current={isChangelog ? "page" : undefined}
-        >
-          {t("nav.changelog")}
-        </a>
-      </nav>
-      <div className="nav-right">
-        <a
-          className="github-link"
-          href="https://github.com/warren-ai-labs/warren"
-          target="_blank"
-          rel="noreferrer"
-        >
-          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="currentColor">
-            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
-          </svg>
-          <span>GitHub</span>
-        </a>
-      </div>
-    </header>
-  );
-}
-
-function Hero() {
-  const { t } = useI18n();
-  const [downloadState, setDownloadState] = useState("idle");
-
-  async function handleDownload() {
-    if (downloadState !== "idle") return;
-    setDownloadState("loading");
+  async function start() {
+    if (state !== "idle") return;
+    setState("loading");
     try {
       const response = await fetch("/api/download", {
         credentials: "same-origin",
@@ -99,83 +24,233 @@ function Hero() {
       if (!response.ok) throw new Error(`release API ${response.status}`);
       const release = await response.json();
       if (!release?.url) throw new Error("no release url");
-      setDownloadState("ready");
+      setState("ready");
       window.location.assign(release.url);
-      window.setTimeout(() => setDownloadState("idle"), 4000);
     } catch {
-      setDownloadState("error");
-      window.location.assign("https://github.com/warren-ai-labs/warren/releases/latest");
-      window.setTimeout(() => setDownloadState("idle"), 4000);
+      setState("error");
+      window.location.assign(RELEASES_URL);
     }
+    window.setTimeout(() => setState("idle"), 4000);
   }
 
-  const downloadLabel = {
-    idle: t("hero.ctaDownload"),
-    loading: t("hero.downloading"),
-    ready: t("hero.downloadReady"),
-    error: t("hero.downloadFallback"),
-  }[downloadState];
+  return [state, start];
+}
+
+function DownloadIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor">
+      <path d="M8 1.5a.75.75 0 0 1 .75.75v6.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V2.25A.75.75 0 0 1 8 1.5Z" />
+      <path d="M2.5 10.75a.75.75 0 0 1 .75.75v1.5c0 .414.336.75.75.75h8a.75.75 0 0 0 .75-.75v-1.5a.75.75 0 0 1 1.5 0v1.5A2.25 2.25 0 0 1 12 15.25H4a2.25 2.25 0 0 1-2.25-2.25v-1.5a.75.75 0 0 1 .75-.75Z" />
+    </svg>
+  );
+}
+
+function DownloadButton({ label, small = false, icon = false }) {
+  const { t } = useI18n();
+  const [state, start] = useDownload();
+  const text = {
+    idle: label,
+    loading: t("download.loading"),
+    ready: t("download.ready"),
+    error: t("download.fallback"),
+  }[state];
+  return (
+    <button
+      type="button"
+      className={`btn primary${small ? " small" : ""}`}
+      onClick={start}
+      disabled={state !== "idle"}
+    >
+      {icon ? <DownloadIcon /> : null}
+      {text}
+    </button>
+  );
+}
+
+function Nav({ current = "home" }) {
+  const { locale, setLocale, t } = useI18n();
+  const onHome = current === "home";
+  const base = onHome ? "" : "/";
+  return (
+    <header className="nav">
+      <div className="wrap">
+        <a className="brand" href={onHome ? "#top" : "/"}>
+          <img src="/favicon.svg" alt="" width="20" height="20" />
+          <span>Warren</span>
+        </a>
+        <nav className="nav-links" aria-label={t("nav.label")}>
+          <a href={`${base}#anywhere`}>{t("nav.howItWorks")}</a>
+          <a href={`${base}#demo`}>{t("nav.demo")}</a>
+          <a
+            className={onHome ? "" : "is-current"}
+            href="/changelog"
+            aria-current={onHome ? undefined : "page"}
+          >
+            {t("nav.changelog")}
+          </a>
+          <a href={REPO_URL} target="_blank" rel="noreferrer">
+            GitHub
+          </a>
+        </nav>
+        <div className="nav-right">
+          <button
+            type="button"
+            className="lang-toggle"
+            onClick={() => setLocale(locale === "zh" ? "en" : "zh")}
+            lang={locale === "zh" ? "en" : "zh-CN"}
+          >
+            {locale === "zh" ? "English" : "中文"}
+          </button>
+          <DownloadButton label={t("nav.download")} small />
+        </div>
+      </div>
+    </header>
+  );
+}
+
+const CHIP_START_SECONDS = (2 * 24 + 6) * 3600 + 41 * 60 + 9;
+
+function formatUptime(totalSeconds) {
+  const pad = (value) => String(value).padStart(2, "0");
+  const days = Math.floor(totalSeconds / 86400);
+  const rest = totalSeconds % 86400;
+  return `${days}d ${pad(Math.floor(rest / 3600))}:${pad(Math.floor((rest % 3600) / 60))}:${pad(rest % 60)}`;
+}
+
+// A sample session whose clock keeps ticking, so the page shows work that is
+// still running rather than telling the reader about it.
+function SessionChip() {
+  const { t } = useI18n();
+  const startedAt = useRef(Date.now() - CHIP_START_SECONDS * 1000);
+  const [seconds, setSeconds] = useState(CHIP_START_SECONDS);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setSeconds(Math.floor((Date.now() - startedAt.current) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   return (
-    <section id="top" className="hero">
-      <Reveal className="hero-kicker">{t("hero.kicker")}</Reveal>
-      <h1 className="hero-title">
-        <span>{t("hero.titleA")}</span>
-        <span className="hero-title-accent">{t("hero.titleB")}</span>
-      </h1>
-      <Reveal className="hero-lede" delay={120}>
-        {t("hero.lede")}
-      </Reveal>
-      <Reveal className="hero-actions" delay={220}>
-        <button
-          type="button"
-          className={`btn primary download-btn${downloadState !== "idle" ? " is-busy" : ""}`}
-          onClick={handleDownload}
-          disabled={downloadState !== "idle"}
-        >
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="currentColor">
-            <path d="M8 1.5a.75.75 0 0 1 .75.75v6.19l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V2.25A.75.75 0 0 1 8 1.5Z" />
-            <path d="M2.5 10.75a.75.75 0 0 1 .75.75v1.5c0 .414.336.75.75.75h8a.75.75 0 0 0 .75-.75v-1.5a.75.75 0 0 1 1.5 0v1.5A2.25 2.25 0 0 1 12 15.25H4a2.25 2.25 0 0 1-2.25-2.25v-1.5a.75.75 0 0 1 .75-.75Z" />
-          </svg>
-          {downloadLabel}
-        </button>
-        <a className="btn ghost" href="#demo">
-          {t("hero.ctaTerminal")}
-        </a>
-        <a
-          className="btn ghost"
-          href="https://github.com/warren-ai-labs/warren"
-          target="_blank"
-          rel="noreferrer"
-        >
-          {t("hero.ctaDocs")}
-        </a>
-      </Reveal>
-      <Reveal className="hero-meta" delay={320}>
-        <span className="status-dot" aria-hidden="true" />
-        <span>{t("hero.status")}</span>
-        <span className="hero-meta-sep" aria-hidden="true" />
-        <span>{t("hero.platform")}</span>
-      </Reveal>
+    <div className="session-chip" aria-label={t("hero.chipLabel")}>
+      <span className="running-dot" aria-hidden="true" />
+      <span className="session-chip-title">{t("hero.chipTitle")}</span>
+      <span className="session-chip-meta">
+        claude · {t("hero.chipRunning")} <b>{formatUptime(seconds)}</b> · {t("hero.chipHistory")}
+      </span>
+    </div>
+  );
+}
+
+function Hero() {
+  const { t } = useI18n();
+  const version = t("changelog.entries")[0]?.version;
+  return (
+    <section className="hero">
+      <div className="wrap">
+        <h1>
+          <span>{t("hero.titleA")}</span>
+          <span className="dim">{t("hero.titleB")}</span>
+        </h1>
+        <p className="hero-lede">{t("hero.lede")}</p>
+        <div className="actions">
+          <DownloadButton label={t("hero.download")} icon />
+          <a className="btn" href={REPO_URL} target="_blank" rel="noreferrer">
+            {t("hero.source")}
+          </a>
+        </div>
+        <p className="requirements">
+          {version ? `v${version} · ` : ""}
+          {t("hero.requirements")}
+        </p>
+        <div className="hero-shot">
+          <div className="hero-shot-frame">
+            <img
+              src="/screenshot-desktop.png"
+              alt={t("hero.shotAlt")}
+              width="2560"
+              height="1600"
+              fetchPriority="high"
+            />
+          </div>
+          <SessionChip />
+        </div>
+      </div>
     </section>
   );
 }
 
-function Ticker() {
+function Anywhere() {
   const { t } = useI18n();
-  const items = t("ticker.items");
-  const row = [...items, ...items];
   return (
-    <div className="ticker" aria-hidden="true">
-      <div className="ticker-track">
-        {row.map((item, index) => (
-          <span className="ticker-item" key={`${item}-${index}`}>
-            <span>{item}</span>
-            <i className="ticker-star">✦</i>
-          </span>
-        ))}
+    <section id="anywhere" className="block">
+      <div className="wrap">
+        <div className="head">
+          <h2>{t("anywhere.title")}</h2>
+          <p>{t("anywhere.lede")}</p>
+        </div>
+        <div className="screens">
+          <figure className="pane">
+            <div className="pane-head">
+              <span className="pane-title">{t("anywhere.browser")}</span>
+              <span className="pane-path">warren / fix/resume-after-restart</span>
+            </div>
+            <img
+              src="/screenshot-web-agent.png"
+              alt={t("anywhere.browserAlt")}
+              width="2880"
+              height="1800"
+              loading="lazy"
+            />
+          </figure>
+          <figure className="pane pane-phone">
+            <div className="pane-head">
+              <span className="pane-title">iPhone</span>
+              <span className="pane-tag">{t("anywhere.soon")}</span>
+            </div>
+            <img
+              src="/screenshot-mobile-agent.png"
+              alt={t("anywhere.phoneAlt")}
+              width="776"
+              height="1688"
+              loading="lazy"
+            />
+          </figure>
+        </div>
+        <p className="note">{t("anywhere.note")}</p>
       </div>
-    </div>
+    </section>
+  );
+}
+
+function Lifecycle() {
+  const { t } = useI18n();
+  const rows = t("lifecycle.rows");
+  return (
+    <section id="lifecycle" className="block">
+      <div className="wrap">
+        <div className="head">
+          <h2>{t("lifecycle.title")}</h2>
+          <p>{t("lifecycle.lede")}</p>
+        </div>
+        <div className="ledger" role="table" aria-label={t("lifecycle.label")}>
+          {rows.map((row) => (
+            <div className={`ledger-row${row.ends ? " ends" : ""}`} role="row" key={row.action}>
+              <span className="ledger-action" role="cell">
+                {row.action}
+              </span>
+              <span className="ledger-state" role="cell">
+                <span className="running-dot" aria-hidden="true" />
+                {row.ends ? t("lifecycle.ends") : t("lifecycle.running")}
+              </span>
+              <span className="ledger-why" role="cell">
+                {row.why}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -183,144 +258,123 @@ function Film() {
   const { t } = useI18n();
   const [playing, setPlaying] = useState(false);
   return (
-    <section id="film" className="section film">
-      <Reveal className="section-head">
-        <p className="kicker">{t("film.kicker")}</p>
-        <h2>{t("film.title")}</h2>
-        <p className="section-lede">{t("film.lede")}</p>
-      </Reveal>
-      <Reveal className="film-frame">
+    <figure>
+      <div className="film">
         {playing ? (
           <video src="/warren-promo.mp4" poster="/warren-promo-poster.jpg" controls autoPlay playsInline />
         ) : (
           // The film has sound, so it waits for a click rather than autoplaying.
-          <button type="button" className="film-poster" onClick={() => setPlaying(true)} aria-label={t("film.play")}>
+          <button type="button" className="film-poster" onClick={() => setPlaying(true)}>
             <img src="/warren-promo-poster.jpg" alt="" loading="lazy" />
-            <span className="film-play" aria-hidden="true" />
+            <span className="film-play">
+              <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+                <path d="M4.5 2.8v10.4a.6.6 0 0 0 .9.52l8.6-5.2a.6.6 0 0 0 0-1.04l-8.6-5.2a.6.6 0 0 0-.9.52Z" />
+              </svg>
+              {t("film.play")}
+            </span>
           </button>
         )}
-      </Reveal>
-    </section>
+      </div>
+      <figcaption>{t("film.caption")}</figcaption>
+    </figure>
   );
 }
 
-const productShots = [
-  { src: "/screenshot-desktop.png", className: "product-card-desktop" },
-  { src: "/screenshot-web-agent.png", className: "product-card-web" },
-  { src: "/screenshot-web-terminal.png", className: "product-card-web" },
-  { src: "/screenshot-mobile-agent.png", className: "product-card-mobile" },
-  { src: "/screenshot-mobile-terminal.png", className: "product-card-mobile" },
-];
-
-function ProductShot() {
+function Demo() {
   const { t } = useI18n();
-  const devices = t("product.devices");
   return (
-    <section id="devices" className="section product">
-      <Reveal className="section-head">
-        <p className="kicker">{t("product.kicker")}</p>
-        <h2>{t("product.title")}</h2>
-        <p className="section-lede">{t("product.lede")}</p>
-      </Reveal>
-      <div className="product-gallery">
-        {productShots.map((shot, index) => {
-          const copy = devices[index] ?? devices[0];
-          return (
-            <Reveal
-              className={`product-card ${shot.className}`}
-              delay={100 + index * 60}
-              key={shot.src}
-            >
-              <figure className="product-frame">
-                <div className="product-media">
-                  <img src={shot.src} alt={copy.alt} loading="lazy" />
-                </div>
-                <figcaption>
-                  <span className="product-label">
-                    <strong>{copy.label}</strong>
-                    {copy.badge ? (
-                      <span className="product-badge">{copy.badge}</span>
-                    ) : null}
-                  </span>
-                  <span>{copy.caption}</span>
-                </figcaption>
-              </figure>
-            </Reveal>
-          );
-        })}
+    <section id="demo" className="block">
+      <div className="wrap">
+        <div className="head">
+          <h2>{t("demo.title")}</h2>
+          <p>{t("demo.lede")}</p>
+        </div>
+        <div className="duo">
+          <Film />
+          <TerminalDemo />
+        </div>
       </div>
     </section>
   );
 }
 
-function Features() {
+function Details() {
   const { t } = useI18n();
-  const items = t("features.items");
+  const items = t("details.items");
   return (
-    <section id="why" className="section features">
-      <Reveal className="section-head">
-        <p className="kicker">{t("features.kicker")}</p>
-        <h2>{t("features.title")}</h2>
-        <p className="section-lede">{t("features.lede")}</p>
-      </Reveal>
-      <div className="feature-grid">
-        {items.map((item, index) => (
-          <Reveal className="feature-card" delay={index * 60} key={item.title}>
-            <span className="feature-index">{String(index + 1).padStart(2, "0")}</span>
-            <h3>{item.title}</h3>
-            <p>{item.body}</p>
-          </Reveal>
-        ))}
+    <section id="details" className="block">
+      <div className="wrap">
+        <div className="head">
+          <h2>{t("details.title")}</h2>
+        </div>
+        <div className="specs">
+          {items.map((item) => (
+            <div className="spec" key={item.title}>
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );
 }
 
-function Architecture() {
+function HowItConnects() {
   const { t } = useI18n();
   return (
-    <section id="architecture" className="section architecture">
-      <Reveal className="section-head">
-        <p className="kicker">{t("architecture.kicker")}</p>
-        <h2>{t("architecture.title")}</h2>
-        <p className="section-lede">{t("architecture.lede")}</p>
-      </Reveal>
-      <Reveal className="arch">
-        <div className="arch-node">
-          <span className="arch-tag">{t("architecture.clients")}</span>
-          <strong>{t("architecture.clientLine")}</strong>
+    <section id="how" className="block">
+      <div className="wrap">
+        <div className="head">
+          <h2>{t("how.title")}</h2>
+          <p>{t("how.lede")}</p>
         </div>
-        <div className="arch-link">
-          <span>WebSocket · v1</span>
+        <div className="diagram">
+          <div className="diagram-stack">
+            {t("how.clients").map((client) => (
+              <strong key={client}>{client}</strong>
+            ))}
+          </div>
+          <div className="diagram-link">
+            <span>WebSocket v1</span>
+          </div>
+          <div className="diagram-host">
+            <strong>warren-headless</strong>
+            <span>{t("how.host")}</span>
+          </div>
+          <div className="diagram-link">
+            <span>Ghostline</span>
+          </div>
+          <div className="diagram-sessions">
+            {[0, 1, 2].map((index) => (
+              <span key={index}>
+                <i className="running-dot" aria-hidden="true" />
+                {t("how.session")}
+              </span>
+            ))}
+            <small>{t("how.store")}</small>
+          </div>
         </div>
-        <div className="arch-node arch-node-host">
-          <span className="arch-tag">{t("architecture.host")}</span>
-          <strong>{t("architecture.hostLine")}</strong>
-        </div>
-        <div className="arch-link">
-          <span>pty · durable store</span>
-        </div>
-        <div className="arch-node">
-          <span className="arch-tag">{t("architecture.runtime")}</span>
-          <strong>{t("architecture.runtimeLine")}</strong>
-        </div>
-      </Reveal>
-      <Reveal className="arch-note">{t("architecture.note")}</Reveal>
+        <p className="note">{t("how.note")}</p>
+      </div>
     </section>
   );
 }
 
-function Principle() {
+function Close() {
   const { t } = useI18n();
   return (
-    <section className="section principle">
-      <Reveal className="principle-inner">
-        <span className="principle-mark" aria-hidden="true">
-          "
-        </span>
-        <blockquote>{t("principle.quote")}</blockquote>
-        <cite>{t("principle.cite")}</cite>
-      </Reveal>
+    <section className="close">
+      <div className="wrap">
+        <h2>{t("close.title")}</h2>
+        <div className="actions">
+          <DownloadButton label={t("hero.download")} />
+          <a className="btn" href="/changelog">
+            {t("close.changelog")}
+          </a>
+        </div>
+        <p className="requirements">{t("close.license")}</p>
+      </div>
     </section>
   );
 }
@@ -329,31 +383,21 @@ function Footer() {
   const { t } = useI18n();
   return (
     <footer className="footer">
-      <div className="footer-main">
-        <div className="footer-brand">
-          <img src="/favicon.svg" alt="" width="18" height="18" />
-          <span>Warren</span>
-        </div>
-        <p>{t("footer.line")}</p>
-      </div>
-      <div className="footer-meta">
-        <span>{t("footer.servedBy")}</span>
-        <span className="footer-sep" aria-hidden="true">
-          ·
+      <div className="wrap">
+        <span className="brand">
+          <img src="/favicon.svg" alt="" width="16" height="16" />
+          Warren
         </span>
-        <a href="https://github.com/warren-ai-labs/warren" target="_blank" rel="noreferrer">
-          {t("footer.source")}
-        </a>
-        <span className="footer-sep" aria-hidden="true">
-          ·
-        </span>
-        <a href="https://github.com/warren-ai-labs/warren/blob/main/LICENSE" target="_blank" rel="noreferrer">
-          {t("footer.license")}
-        </a>
-        <span className="footer-sep" aria-hidden="true">
-          ·
-        </span>
-        <span>{t("footer.domain")}</span>
+        <span>warrenai.xyz</span>
+        <nav aria-label={t("footer.label")}>
+          <a href="/changelog">{t("nav.changelog")}</a>
+          <a href={REPO_URL} target="_blank" rel="noreferrer">
+            GitHub
+          </a>
+          <a href={`${REPO_URL}/blob/main/LICENSE`} target="_blank" rel="noreferrer">
+            {t("footer.license")}
+          </a>
+        </nav>
       </div>
     </footer>
   );
@@ -395,16 +439,12 @@ function ChangelogPage() {
   }, []);
 
   return (
-    <div className="site changelog-site">
-      <div className="grain" aria-hidden="true" />
+    <>
       <Nav current="changelog" />
-      <main>
+      <main className="wrap">
         <section className="changelog-hero">
-          <Reveal className="changelog-hero-inner">
-            <p className="kicker">{t("changelog.kicker")}</p>
-            <h1>{t("changelog.title")}</h1>
-            <p>{t("changelog.lede")}</p>
-          </Reveal>
+          <h1>{t("changelog.title")}</h1>
+          <p>{t("changelog.lede")}</p>
         </section>
         {loadState === "stale" ? (
           <p className="changelog-status">{t("changelog.stale")}</p>
@@ -413,8 +453,8 @@ function ChangelogPage() {
           <p className="changelog-status">{t("changelog.error")}</p>
         ) : null}
         <section className="changelog-list" aria-label={t("changelog.title")}>
-          {entries.map((entry, index) => (
-            <Reveal className="release-entry" delay={index * 70} key={entry.version}>
+          {entries.map((entry) => (
+            <article className="release-entry" key={entry.version}>
               <div className="release-meta">
                 <span className="release-version">v{entry.version}</span>
                 <time dateTime={entry.dateISO ?? undefined}>
@@ -422,14 +462,14 @@ function ChangelogPage() {
                 </time>
                 <a
                   className="release-link"
-                  href={`https://github.com/warren-ai-labs/warren/releases/tag/v${entry.version}`}
+                  href={`${REPO_URL}/releases/tag/v${entry.version}`}
                   target="_blank"
                   rel="noreferrer"
                 >
                   {t("changelog.viewRelease")} <span aria-hidden="true">↗</span>
                 </a>
               </div>
-              <article className="release-body">
+              <div className="release-body">
                 <h2>{entry.title ?? `${t("changelog.releaseTitle")} ${entry.version}`}</h2>
                 {entry.summary ? <p className="release-summary">{entry.summary}</p> : null}
                 {entry.sections.map((section, sectionIndex) => (
@@ -445,41 +485,39 @@ function ChangelogPage() {
                     </ul>
                   </section>
                 ))}
-              </article>
-            </Reveal>
+              </div>
+            </article>
           ))}
         </section>
       </main>
       <Footer />
-    </div>
+    </>
   );
 }
 
 function HomePage() {
   useEffect(() => {
     // The old #terminal link pointed straight at the WASM demo on page load.
-    // Keep that legacy URL at the top; the new #demo link remains opt-in.
+    // Keep that legacy URL at the top; the #demo link remains opt-in.
     if (window.location.hash !== "#terminal") return;
     window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, []);
 
   return (
-    <div className="site">
-      <div className="grain" aria-hidden="true" />
+    <>
       <Nav />
-      <main>
+      <main id="top">
         <Hero />
-        <Ticker />
-        <Film />
-        <ProductShot />
-        <TerminalDemo />
-        <Features />
-        <Architecture />
-        <Principle />
+        <Anywhere />
+        <Lifecycle />
+        <Demo />
+        <Details />
+        <HowItConnects />
+        <Close />
       </main>
       <Footer />
-    </div>
+    </>
   );
 }
 

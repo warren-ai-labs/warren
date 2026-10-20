@@ -8,7 +8,8 @@ The public onboarding site for Warren, served from a Cloudflare Worker.
 - Cloudflare Worker with static assets for hosting
 - `ghostty-web` for an interactive terminal demo (Ghostty's VT parser compiled to WebAssembly)
 - Built-in English / Simplified Chinese i18n
-- Chinese display type: ZCOOL XiaoWei (站酷小薇) + MiSans (小米)
+- System type (SF on Apple platforms); Chinese falls back from PingFang SC to MiSans (小米)
+- Colors mirror the desktop's Ember and Ember Paper tokens and follow the system appearance
 
 The Download button resolves the latest GitHub release through the Worker and
 starts the installer download directly. It uses `/api/download`, which records
