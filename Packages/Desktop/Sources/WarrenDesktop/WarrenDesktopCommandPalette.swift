@@ -117,29 +117,31 @@ struct WarrenDesktopCommandPalette: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
         VStack(spacing: 0) {
-            inputRow(tokens: tokens)
+            inputRow(palette: palette)
 
             if !rows.isEmpty || hasQuery {
-                Rectangle()
-                    .fill(tokens.border)
-                    .frame(height: WarrenSpacing.hairline)
+                divider(palette: palette)
 
                 if rows.isEmpty {
-                    Text("No results found.")
+                    Text("No results")
                         .font(WarrenTypography.popoverItem)
-                        .foregroundStyle(tokens.mutedForeground)
+                        .foregroundStyle(palette.meta)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, WarrenSpacing.large)
                 } else {
-                    resultsList(tokens: tokens)
+                    resultsList(tokens: tokens, palette: palette)
                 }
-            } else {
-                idlePrompt(tokens: tokens)
             }
+
+            divider(palette: palette)
+            footer(palette: palette)
         }
         .frame(width: width)
-        .warrenPresentationSurface(role: .commandSurface, cornerRadius: WarrenRadius.base)
+        // The dialog family's surface and radius: the palette is the one
+        // dialog without a title block, not a menu.
+        .warrenPresentationSurface(role: .commandSurface, cornerRadius: WarrenRadius.large)
         .onExitCommand(perform: onDismiss)
         .onChange(of: projection) { newProjection in
             rebuildIndex(for: newProjection)
@@ -185,16 +187,25 @@ struct WarrenDesktopCommandPalette: View {
 
     // MARK: - Layout
 
-    private func resultsList(tokens: WarrenColorTokens) -> some View {
+    private func divider(palette: WarrenDesktopMenuPalette) -> some View {
+        Rectangle()
+            .fill(palette.divider)
+            .frame(height: WarrenSpacing.hairline)
+    }
+
+    private func resultsList(
+        tokens: WarrenColorTokens,
+        palette: WarrenDesktopMenuPalette
+    ) -> some View {
         ScrollViewReader { proxy in
             WarrenOverflowFadeScrollView(
                 .vertical,
                 fadeLength: WarrenLayoutMetrics.sidebarScrollFadeLength,
                 surface: tokens.popoverSurface
             ) {
-                LazyVStack(alignment: .leading, spacing: WarrenSpacing.hairline) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(rows) { row in
-                        resultRow(row, tokens: tokens)
+                        resultRow(row, palette: palette)
                     }
                 }
                 .padding(WarrenLayoutMetrics.commandPaletteResultsPadding)
@@ -211,76 +222,66 @@ struct WarrenDesktopCommandPalette: View {
         }
     }
 
-    private func inputRow(tokens: WarrenColorTokens) -> some View {
-        HStack(spacing: WarrenSpacing.compact) {
+    private func inputRow(palette: WarrenDesktopMenuPalette) -> some View {
+        HStack(spacing: WarrenSpacing.medium) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(tokens.mutedForeground)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(palette.icon)
                 .frame(width: 18, height: 18)
                 .accessibilityHidden(true)
 
             WarrenDesktopCommandPaletteTextField(
                 text: queryBinding,
-                placeholder: "Search tasks, workspaces, sessions…  w: p: s: @blocked",
+                placeholder: "Search tasks, workspaces, sessions…",
                 onMove: moveSelection,
                 onSubmit: chooseSelection,
                 onCancel: onDismiss
             )
 
             if !query.isEmpty {
-                Button {
+                WarrenDesktopMenuInlineButton(
+                    systemImage: "xmark.circle.fill",
+                    label: "Clear search"
+                ) {
                     // Through the binding, so clearing also refreshes the rows.
                     queryBinding.wrappedValue = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 13, weight: .regular))
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(tokens.mutedForeground)
-                .accessibilityLabel("Clear search")
             }
-
-            keyCap("esc", tokens: tokens)
         }
         .padding(.horizontal, WarrenLayoutMetrics.commandPaletteInputHorizontalPadding)
         .frame(height: WarrenLayoutMetrics.commandInputHeight)
-        .background(tokens.popoverSurface)
     }
 
-    private func keyCap(_ label: String, tokens: WarrenColorTokens) -> some View {
-        Text(label)
-            .font(WarrenTypography.shortcut)
-            .tracking(0.5)
-            .foregroundStyle(tokens.mutedForeground)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(tokens.muted)
-            .clipShape(.rect(cornerRadius: WarrenRadius.xs))
-            .overlay {
-                RoundedRectangle(cornerRadius: WarrenRadius.xs)
-                    .stroke(tokens.ring, lineWidth: WarrenSpacing.hairline)
-            }
-            .accessibilityHidden(true)
-    }
+    /// The key-hint bar: how to move, open and close on the left, and the
+    /// scope filters on the right, so the placeholder can stay a sentence
+    /// instead of a cheat sheet.
+    private func footer(palette: WarrenDesktopMenuPalette) -> some View {
+        HStack(spacing: 14) {
+            keyHint(["\u{2191}", "\u{2193}"], "Select")
+            keyHint(["\u{23CE}"], "Open")
+            keyHint(["esc"], "Close")
 
-    private func idlePrompt(tokens: WarrenColorTokens) -> some View {
-        HStack(spacing: WarrenSpacing.small) {
-            Image(systemName: "arrow.turn.down.right")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(tokens.mutedForeground)
-                .accessibilityHidden(true)
+            Spacer(minLength: WarrenSpacing.compact)
 
-            Text("Start typing to search, or narrow with w: p: s: t: g: and @blocked")
-                .font(WarrenTypography.popoverMeta)
-                .foregroundStyle(tokens.mutedForeground)
+            Text("w: p: s: t: g: @blocked")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(palette.meta)
                 .lineLimit(1)
-
-            Spacer(minLength: 0)
+                .accessibilityLabel("Narrow with w:, p:, s:, t:, g:, or @blocked")
         }
-        .padding(.horizontal, WarrenLayoutMetrics.commandPaletteInputHorizontalPadding)
-        .frame(height: WarrenLayoutMetrics.commandPaletteIdleHeight)
-        .background(tokens.popoverSurface)
-        .accessibilityElement(children: .combine)
+        .font(.system(size: 11.5))
+        .foregroundStyle(palette.meta)
+        .padding(.horizontal, WarrenSpacing.medium)
+        .frame(height: WarrenLayoutMetrics.commandPaletteFooterHeight)
+    }
+
+    private func keyHint(_ caps: [String], _ label: String) -> some View {
+        HStack(spacing: WarrenSpacing.xs) {
+            WarrenDesktopMenuKeycaps(caps: caps)
+            Text(label)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
     }
 
     // MARK: - Result row
@@ -291,30 +292,31 @@ struct WarrenDesktopCommandPalette: View {
     /// spends horizontal space on a "Session" or "Working" label.
     private func resultRow(
         _ row: WarrenDesktopCommandPaletteSearch.Result,
-        tokens: WarrenColorTokens
+        palette: WarrenDesktopMenuPalette
     ) -> some View {
         let isSelected = rows.indices.contains(selectedIndex)
             && rows[selectedIndex].id == row.id
         return Button {
             choose(row)
         } label: {
-            HStack(spacing: WarrenSpacing.compact) {
-                rowGlyph(row, tokens: tokens)
-                    .frame(width: 16, height: 16)
+            HStack(spacing: WarrenDesktopMenuMetrics.iconSpacing) {
+                rowGlyph(row, palette: palette, isSelected: isSelected)
+                    .frame(width: WarrenDesktopMenuMetrics.iconSize, height: WarrenDesktopMenuMetrics.iconSize)
 
                 highlighted(
                     row.title,
                     ranges: row.titleRanges,
-                    tokens: tokens,
-                    isPrimary: true
+                    base: isSelected ? palette.rowHoverText : palette.rowText,
+                    match: palette.rowHoverText
                 )
+                    .font(WarrenTypography.popoverItem)
                     .lineLimit(1)
                     .layoutPriority(3)
 
                 if !row.context.isEmpty {
                     Text(row.context)
                         .font(WarrenTypography.popoverMeta)
-                        .foregroundStyle(tokens.mutedForeground)
+                        .foregroundStyle(palette.meta)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .layoutPriority(2)
@@ -326,8 +328,8 @@ struct WarrenDesktopCommandPalette: View {
                     highlighted(
                         evidence.text,
                         ranges: evidence.ranges,
-                        tokens: tokens,
-                        isPrimary: false
+                        base: palette.meta,
+                        match: isSelected ? palette.rowHoverText : palette.rowText
                     )
                     .font(evidence.role == .path
                         ? WarrenTypography.externalIDEPath
@@ -347,14 +349,7 @@ struct WarrenDesktopCommandPalette: View {
                 if row.status == .pinned {
                     Image(systemName: "pin.fill")
                         .font(.system(size: 9, weight: .regular))
-                        .foregroundStyle(tokens.mutedForeground)
-                        .accessibilityHidden(true)
-                }
-
-                if isSelected {
-                    Image(systemName: "return")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(tokens.mutedForeground)
+                        .foregroundStyle(palette.secondaryGlyph)
                         .accessibilityHidden(true)
                 }
             }
@@ -364,8 +359,9 @@ struct WarrenDesktopCommandPalette: View {
         }
         // The pointer and the arrow keys move one selection: hovering a row
         // selects it, so Return opens the row the pointer is on and no second
-        // row lights beside the keyboard's.
-        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, showsHoverBackground: false))
+        // row lights beside the keyboard's. The row lights with the menu
+        // spec's wash, so the palette reads like every other floating list.
+        .buttonStyle(WarrenDesktopMenuRowStyle(forceHover: isSelected))
         .onHover { inside in
             if inside { pointerSelect(row.id) }
         }
@@ -380,14 +376,16 @@ struct WarrenDesktopCommandPalette: View {
     @ViewBuilder
     private func rowGlyph(
         _ row: WarrenDesktopCommandPaletteSearch.Result,
-        tokens: WarrenColorTokens
+        palette: WarrenDesktopMenuPalette,
+        isSelected: Bool
     ) -> some View {
-        if let preset = row.providerKind.flatMap(WarrenDesktopSessionPreset.builtIn(for:)) {
-            WarrenDesktopPresetIcon(preset: preset)
+        if let kind = row.providerKind {
+            // The same app icon the Session wears in the tree and on its Tab.
+            WarrenDesktopSessionKindBadge(kind: kind, size: WarrenDesktopMenuMetrics.iconSize)
         } else {
             Image(systemName: row.kind.systemImage)
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(tokens.mutedForeground)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(isSelected ? palette.iconHover : palette.icon)
                 .accessibilityHidden(true)
         }
     }
@@ -416,10 +414,9 @@ struct WarrenDesktopCommandPalette: View {
     private func highlighted(
         _ value: String,
         ranges: [Range<Int>],
-        tokens: WarrenColorTokens,
-        isPrimary: Bool
+        base: Color,
+        match: Color
     ) -> Text {
-        let base = isPrimary ? tokens.foreground : tokens.mutedForeground
         guard !ranges.isEmpty else { return Text(value).foregroundColor(base) }
         let segments = WarrenSearchHighlight.segments(text: value, ranges: ranges)
         guard segments.contains(where: \.isMatch) else {
@@ -427,7 +424,7 @@ struct WarrenDesktopCommandPalette: View {
         }
         return segments.reduce(Text("")) { accumulated, segment in
             let piece = Text(segment.text)
-                .foregroundColor(segment.isMatch ? tokens.foreground : base)
+                .foregroundColor(segment.isMatch ? match : base)
             return accumulated + (segment.isMatch ? piece.bold() : piece)
         }
     }

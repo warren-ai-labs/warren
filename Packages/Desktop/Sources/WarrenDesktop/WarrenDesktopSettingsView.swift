@@ -1121,8 +1121,9 @@ struct WarrenDesktopSettingsView: View {
                     editingPresetID = isEditing ? nil : preset.id
                 } label: {
                     HStack(spacing: 10) {
-                        WarrenDesktopPresetIcon(preset: preset)
-                            .frame(width: 18, height: 18)
+                        // The same app icon the + menu, the Tab and the tree
+                        // draw for this preset's Sessions.
+                        WarrenDesktopSessionKindBadge(kind: preset.request.kind, size: 18)
                             .opacity(isVisible ? 1 : 0.45)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(preset.presetBarTitle)

@@ -177,21 +177,24 @@ public enum WarrenLayoutMetrics {
     public static let macTrafficLightInset: CGFloat = 80
     public static let sidebarHeaderRowHeight: CGFloat = 32
 
-    // Superset settings and command-palette measurements.
-    /// Superset's command dialog uses `max-w-[720px]`.
-    public static let commandPaletteWidth: CGFloat = 720
-    public static let commandPaletteResultsMaxHeight: CGFloat = 560
-    public static let commandPaletteInputHorizontalPadding: CGFloat = 14
-    public static let commandPaletteResultsPadding: CGFloat = 6
-    public static let commandPaletteItemHorizontalPadding: CGFloat = 10
-    /// Superset's command input row is `h-12`.
-    public static let commandInputHeight: CGFloat = 48
-    /// Idle search guidance stays a single compact row until a query is entered.
-    public static let commandPaletteIdleHeight: CGFloat = 32
-    /// Command-palette results are one line each. The row carries a title, its
-    /// ancestry, and the field that explains the match side by side, so height
-    /// buys nothing and costs the number of results a user can see at once.
-    public static let commandPaletteRowHeight: CGFloat = 28
+    // Command palette, as the Workbench dialog spec draws it: the dialog
+    // family's surface at 600 wide with no title block, the menu spec's rows,
+    // and a key-hint bar along the bottom.
+    public static let commandPaletteWidth: CGFloat = 600
+    public static let commandPaletteResultsMaxHeight: CGFloat = 480
+    public static let commandPaletteInputHorizontalPadding: CGFloat = 16
+    public static let commandPaletteResultsPadding: CGFloat = 4
+    public static let commandPaletteItemHorizontalPadding: CGFloat = 8
+    /// The palette is the one dialog without a title, so its input is the
+    /// heading: 44 high with 15pt text.
+    public static let commandInputHeight: CGFloat = 44
+    /// The key-hint bar under the results.
+    public static let commandPaletteFooterHeight: CGFloat = 32
+    /// Command-palette results are one line each, at the menu spec's row
+    /// height. The row carries a title, its ancestry, and the field that
+    /// explains the match side by side, so a second line buys nothing and
+    /// costs the number of results a user can see at once.
+    public static let commandPaletteRowHeight: CGFloat = 30
 
     // Presentation surface geometry. Business surfaces use a documented width
     // instead of inheriting arbitrary frame values from individual screens.

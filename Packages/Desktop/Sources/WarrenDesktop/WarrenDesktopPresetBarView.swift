@@ -470,52 +470,6 @@ struct WarrenDesktopPresetBar: View {
     }
 }
 
-struct WarrenDesktopPresetIcon: View {
-    let preset: WarrenDesktopSessionPreset
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-
-    var body: some View {
-        if let image = image {
-            let artwork = Image(nsImage: image)
-                .resizable()
-                .scaledToFit()
-                .accessibilityHidden(true)
-            if preset.presetBarIconIsTintable {
-                // A template image takes the foreground style, so the glyph is
-                // painted from the resolved token instead of from the grey the
-                // asset was authored with. The tint already carries the right
-                // weight for the appearance, so it does not also need the 0.9
-                // that softens the brand marks against Ember.
-                artwork
-                    .foregroundStyle(
-                        WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).mutedForeground
-                    )
-            } else {
-                artwork.opacity(0.9)
-            }
-        } else {
-            Image(systemName: preset.symbolName)
-                .font(.system(size: 13, weight: .medium))
-                .accessibilityHidden(true)
-        }
-    }
-
-    private var image: NSImage? {
-        guard var name = preset.presetBarIconName else { return nil }
-        // Codex's mark is two-tone, so it swaps artwork rather than being
-        // tinted: a template image would flatten its inner counter-shape.
-        if name == "preset-codex", colorScheme == .dark {
-            name = "preset-codex-white"
-        }
-        return WarrenPresetIconCache.shared.image(
-            named: name,
-            template: preset.presetBarIconIsTintable
-        )
-    }
-}
-
 @MainActor
 final class WarrenPresetIconCache {
     typealias Loader = @MainActor (String) -> NSImage?

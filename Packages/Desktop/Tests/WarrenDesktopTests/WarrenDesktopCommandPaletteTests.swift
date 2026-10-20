@@ -205,8 +205,8 @@ final class WarrenDesktopCommandPaletteTests: XCTestCase {
             rows.first { $0.kind == .session(promoted.id) }?.providerKind,
             .claude
         )
-        // Every provider Warren integrates owns a catalog entry, which is what
-        // supplies the mark; a missing one would silently fall back to a glyph.
+        // Every provider Warren integrates owns a catalog entry, so the row's
+        // badge and the preset it launches from name the same provider.
         XCTAssertNotNil(WarrenDesktopSessionPreset.builtIn(for: .codex))
         XCTAssertNotNil(WarrenDesktopSessionPreset.builtIn(for: .claude))
         XCTAssertNotNil(WarrenDesktopSessionPreset.builtIn(for: .shell))
