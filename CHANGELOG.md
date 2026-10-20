@@ -14,8 +14,17 @@ All notable changes to Warren are documented here.
   checks that the app is signed by the same developer, installs it, ejects the
   disk image, and restarts Warren.
 
+### Changed
+
+- Draw the Command+K search panel like the rest of the Workbench: the dialog
+  surface at 600 points, a larger search field, menu-style rows with the app
+  icon each Session wears on its Tab, and a key-hint bar that also lists the
+  scope filters.
+
 ### Fixed
 
+- Show each Launch Commands preset in Settings with the app icon the + menu,
+  Tabs and sidebar use, instead of the older bare logo.
 - Say why a Host cannot be reached on iPhone. Once a loss outlasts the grace
   period, the Inbox and the Session title show the reason, such as "Mac is
   offline · last seen 3 minutes ago", and a first load that cannot connect says

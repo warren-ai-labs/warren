@@ -50,7 +50,7 @@ struct WarrenDesktopCommandPaletteTextField: NSViewRepresentable {
         textField.isBezeled = false
         textField.drawsBackground = false
         textField.focusRingType = .none
-        textField.font = .systemFont(ofSize: 13, weight: .light)
+        textField.font = .systemFont(ofSize: 15, weight: .regular)
         textField.textColor = .labelColor
         textField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return textField

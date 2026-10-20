@@ -893,7 +893,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         0,
                         proxy.size.height * 0.8
                             - WarrenLayoutMetrics.commandInputHeight
-                            - WarrenSpacing.hairline
+                            - WarrenLayoutMetrics.commandPaletteFooterHeight
+                            - WarrenSpacing.hairline * 2
                     )
                     ZStack(alignment: .top) {
                         WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).modalScrim

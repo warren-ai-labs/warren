@@ -313,11 +313,21 @@ struct WarrenDesktopMenuRowStyle: ButtonStyle {
 
 /// A keyboard shortcut as one keycap per key.
 struct WarrenDesktopMenuKeycaps: View {
-    let keys: String
+    let caps: [String]
+
+    /// One cap per character of `keys`.
+    init(keys: String) {
+        caps = keys.map(String.init)
+    }
+
+    /// One cap per entry, so a named key such as `esc` sits on one cap.
+    init(caps: [String]) {
+        self.caps = caps
+    }
 
     var body: some View {
         HStack(spacing: WarrenDesktopMenuMetrics.keycapSpacing) {
-            ForEach(Array(keys.map(String.init).enumerated()), id: \.offset) { _, key in
+            ForEach(Array(caps.enumerated()), id: \.offset) { _, key in
                 WarrenDesktopMenuKeycap(key: key)
             }
         }
