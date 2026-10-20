@@ -370,9 +370,13 @@ struct WarrenCompositionRoot: View {
                     guard selectedEndpointCapabilities.canUseEmbeddedBrowser else { return nil }
                     return AnyView(WarrenBrowserSurface(sessionID: sessionID, model: remoteModel))
                 },
-                conversationSurface: { sessionID in
+                conversationSurface: { sessionID, wantsInputFocus in
                     guard remoteModel.isConversationSession(sessionID) else { return nil }
-                    return AnyView(WarrenConversationSurface(sessionID: sessionID, model: remoteModel))
+                    return AnyView(WarrenConversationSurface(
+                        sessionID: sessionID,
+                        model: remoteModel,
+                        wantsInputFocus: wantsInputFocus
+                    ))
                 },
                 searchPresented: Binding(
                     get: {
@@ -1737,8 +1741,9 @@ private struct WarrenTerminalSurfaceView: View {
     /// selected Host cannot run one.
     let browserSurface: @MainActor (String) -> AnyView?
     /// Builds the Conversation surface for an ACP Session, or `nil` for a
-    /// Session that has a terminal (RFC 0023).
-    let conversationSurface: @MainActor (TerminalSessionID) -> AnyView?
+    /// Session that has a terminal (RFC 0023). The flag is the pane's
+    /// keyboard intent; an inactive or overlaid pane must not take focus.
+    let conversationSurface: @MainActor (TerminalSessionID, Bool) -> AnyView?
     @Binding var searchPresented: Bool
     @State private var searchQuery = ""
     @FocusState private var searchFieldFocused: Bool
@@ -1761,7 +1766,10 @@ private struct WarrenTerminalSurfaceView: View {
            let viewer = browserSurface(sessionID.description) {
             viewer
         } else if let sessionID = context.tab.sessionID,
-                  let conversation = conversationSurface(sessionID) {
+                  let conversation = conversationSurface(
+                      sessionID,
+                      context.wantsTerminalFocus
+                  ) {
             // An ACP Session has no terminal: the conversation is the pane.
             conversation
         } else {
@@ -1849,7 +1857,10 @@ private struct WarrenTerminalSurfaceView: View {
                 for: WarrenDesktopCommand.settingsDismissed
             )
         ) { _ in
-            surfaceManager.requestFocusForActiveSurface()
+            // Returning the keyboard to the Session is the activation path's
+            // job: closing Settings restores the navigation it covered, which
+            // reaches `presentSelectedSession(activatingInput: true)`. Only the
+            // presentation can still be deferred here.
             if let sessionID = context.tab.sessionID {
                 surfaceManager.requestPresent(sessionID)
             }
@@ -1973,12 +1984,9 @@ private struct WarrenEmptyWorkspacePanel: View {
             mark: .symbol("terminal"),
             title: "Start a session",
             message: "Open a Shell or an Agent from + in the top bar.",
-            hints: [
-                .init(keys: "⌘T", label: "New shell"),
-                .init(keys: "⌘X", label: "Next tab"),
-                .init(keys: "⇧⌘X", label: "Previous tab"),
-                .init(keys: "⌘W", label: "Close pane"),
-            ]
+            // Only what starts a Session: tab and pane shortcuts have
+            // nothing to act on until one is open.
+            hints: [.init(keys: "⌘T", label: "New shell")]
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel("No open sessions")

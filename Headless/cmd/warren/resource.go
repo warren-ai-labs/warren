@@ -328,7 +328,7 @@ func resourceCommand(args []string) error {
 			data, _ := io.ReadAll(os.Stdin)
 			text = string(data)
 		}
-		_, err := subscribeTerminal(ctx, c, id)
+		_, err := subscribeTerminal(ctx, c, id, true)
 		if err != nil {
 			return err
 		}

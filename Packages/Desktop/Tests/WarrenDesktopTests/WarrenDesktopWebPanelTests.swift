@@ -371,6 +371,11 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertNil(snapshot.node(id: "settings.relay.registration"))
 
         try recorder.perform(.press, on: "settings.relay.reset")
+        // Reset asks before it forgets the enrollment, so the confirm step is
+        // part of the lifecycle this test pins.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNotNil(recorder.snapshot().node(id: "dialog.confirm"))
+        try recorder.perform(.press, on: "dialog.confirm")
         wait(for: [reset], timeout: 1)
     }
 

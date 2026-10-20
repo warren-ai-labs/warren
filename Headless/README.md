@@ -119,6 +119,7 @@ warren agent list
 warren agent read AGENT_ID --text-only
 warren agent send AGENT_ID "Run the relevant tests" --wait --timeout 30m
 warren agent wait AGENT_ID --timeout 30m
+warren agent cancel AGENT_ID --wait
 warren agent attach AGENT_ID
 warren session send SESSION_ID "Run a shell command"
 warren session read SESSION_ID --timeout 8s
@@ -330,7 +331,13 @@ Use `--recent N`, `--all`, `--include TYPE,...`, `--filter TYPE,...`, or
 the complete canonical event history. `agent send` waits for the Host execution
 binding and submits `agent.turn.start`; the Host owns provider input framing.
 `agent wait` consumes canonical turn events until the current or
-next turn finishes. `agent attach` is the explicit raw TTY operation.
+next turn finishes. `agent cancel` stops the running turn through
+`agent.turn.cancel`; the Host interrupts the provider, so a terminal TUI receives
+the key it expects and an ACP driver receives a protocol request. The CLI never
+writes terminal bytes. Cancelling an idle Agent prints
+`{"accepted":false,"status":"idle"}` and exits 0, and `--wait` prints the turn's
+result once it ends, whether it was cancelled, interrupted, completed, or
+failed. `agent attach` is the explicit raw TTY operation.
 
 `session` is the generic PTY resource. `session create` starts shells,
 custom commands, and other interactive programs; it does not create Codex,

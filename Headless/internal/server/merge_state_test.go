@@ -57,6 +57,31 @@ func addWorktree(t *testing.T, repo gitRepo, branch string) string {
 	return path
 }
 
+func addBranchWorktree(t *testing.T, repo gitRepo, branch, start string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "wt-"+branch)
+	repo.run("worktree", "add", "--quiet", "-b", branch, path, start)
+	return path
+}
+
+func repoOID(t *testing.T, repo gitRepo, revision string) string {
+	t.Helper()
+	output, err := exec.Command("git", "-C", repo.path, "rev-parse", revision).Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %s: %v", revision, err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func commitFile(t *testing.T, repo gitRepo, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo.path, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo.run("add", name)
+	repo.run("commit", "--quiet", "-m", "add "+name)
+}
+
 func newMergeTestService(t *testing.T, project api.Project, workspaces []api.Workspace) (*Service, *store.Store) {
 	t.Helper()
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "test-host")
@@ -219,6 +244,131 @@ func TestRefreshMergeStatesPrunesRemovedWorkspaces(t *testing.T) {
 	service.refreshMergeStates(context.Background())
 	if state, ok := mergeStateOf(t, service, "ws-merged"); ok {
 		t.Errorf("removed workspace state = %q, want pruned", state)
+	}
+}
+
+func TestRefreshMergeStatesKeepsBranchesWithoutOwnCommitsUnmerged(t *testing.T) {
+	t.Parallel()
+	repo := newGitRepo(t, "main")
+	older := repoOID(t, repo, "main")
+	commitFile(t, repo, "main-2.txt", "two\n")
+	fresh := repoOID(t, repo, "main")
+
+	// A fresh branch sits on the default tip and a branch created from an
+	// older default commit has no work of its own either.
+	freshPath := addBranchWorktree(t, repo, "feature/fresh", fresh)
+	olderPath := addBranchWorktree(t, repo, "feature/older", older)
+	project := api.Project{ID: "project-1", Name: "repo", Path: repo.path}
+	service, _ := newMergeTestService(t, project, []api.Workspace{
+		{ID: "ws-fresh", ProjectID: "project-1", Branch: "feature/fresh", Kind: "worktree", Path: freshPath, BaseCommit: fresh},
+		{ID: "ws-older", ProjectID: "project-1", Branch: "feature/older", Kind: "worktree", Path: olderPath, BaseCommit: older},
+	})
+	service.refreshMergeStates(context.Background())
+
+	for _, workspaceID := range []string{"ws-fresh", "ws-older"} {
+		if state, ok := mergeStateOf(t, service, workspaceID); !ok || state != api.MergeStateUnmerged {
+			t.Errorf("%s state = %q/%v, want unmerged", workspaceID, state, ok)
+		}
+	}
+}
+
+func TestRefreshMergeStatesFindsBaseFromReflog(t *testing.T) {
+	t.Parallel()
+	repo := newGitRepo(t, "main")
+	older := repoOID(t, repo, "main")
+	commitFile(t, repo, "main-2.txt", "two\n")
+
+	// An imported branch has no Warren-recorded base, but its reflog still
+	// proves it was created from an older default commit.
+	repo.run("branch", "feature/imported", older)
+	importedPath := addWorktree(t, repo, "feature/imported")
+	project := api.Project{ID: "project-1", Name: "repo", Path: repo.path}
+	service, _ := newMergeTestService(t, project, []api.Workspace{
+		{ID: "ws-imported", ProjectID: "project-1", Branch: "feature/imported", Kind: "worktree", Path: importedPath},
+	})
+	service.refreshMergeStates(context.Background())
+
+	if state, ok := mergeStateOf(t, service, "ws-imported"); !ok || state != api.MergeStateUnmerged {
+		t.Errorf("imported workspace state = %q/%v, want unmerged", state, ok)
+	}
+}
+
+func TestRefreshMergeStatesWithoutBaseOrReflog(t *testing.T) {
+	t.Parallel()
+	repo := newGitRepo(t, "main")
+	older := repoOID(t, repo, "main")
+	commitFile(t, repo, "main-2.txt", "two\n")
+	current := repoOID(t, repo, "main")
+
+	// Branches without a reflog and without a recorded base have no known
+	// creation point: an exact tip match stays unmerged, while an older tip
+	// keeps the previous content check.
+	repo.run("config", "core.logAllRefUpdates", "false")
+	repo.run("update-ref", "refs/heads/feature/current", current)
+	repo.run("update-ref", "refs/heads/feature/stale", older)
+	repo.run("config", "core.logAllRefUpdates", "true")
+	currentPath := addWorktree(t, repo, "feature/current")
+	stalePath := addWorktree(t, repo, "feature/stale")
+	project := api.Project{ID: "project-1", Name: "repo", Path: repo.path}
+	service, _ := newMergeTestService(t, project, []api.Workspace{
+		{ID: "ws-current", ProjectID: "project-1", Branch: "feature/current", Kind: "worktree", Path: currentPath},
+		{ID: "ws-stale", ProjectID: "project-1", Branch: "feature/stale", Kind: "worktree", Path: stalePath},
+	})
+	service.refreshMergeStates(context.Background())
+
+	if state, ok := mergeStateOf(t, service, "ws-current"); !ok || state != api.MergeStateUnmerged {
+		t.Errorf("workspace state = %q/%v, want unmerged", state, ok)
+	}
+	if state, ok := mergeStateOf(t, service, "ws-stale"); !ok || state != api.MergeStateMerged {
+		t.Errorf("stale workspace state = %q/%v, want merged", state, ok)
+	}
+}
+
+func TestRefreshMergeStatesRecognizesMergeShapesWithRecordedBase(t *testing.T) {
+	t.Parallel()
+	repo := newGitRepo(t, "main")
+
+	ffBase := repoOID(t, repo, "main")
+	repo.run("checkout", "--quiet", "-b", "feature/ff")
+	commitFile(t, repo, "ff.txt", "ff\n")
+	repo.run("checkout", "--quiet", "main")
+	repo.run("merge", "--quiet", "--ff-only", "feature/ff")
+
+	mergeCommitBase := repoOID(t, repo, "main")
+	repo.run("checkout", "--quiet", "-b", "feature/merge-commit")
+	commitFile(t, repo, "merge-commit.txt", "merge\n")
+	repo.run("checkout", "--quiet", "main")
+	repo.run("merge", "--quiet", "--no-ff", "feature/merge-commit", "-m", "merge feature/merge-commit")
+
+	squashBase := repoOID(t, repo, "main")
+	repo.run("checkout", "--quiet", "-b", "feature/squash")
+	commitFile(t, repo, "squash.txt", "squash\n")
+	repo.run("checkout", "--quiet", "main")
+	repo.run("merge", "--squash", "feature/squash")
+	repo.run("commit", "--quiet", "-m", "squash merge feature/squash")
+
+	aheadBase := repoOID(t, repo, "main")
+	repo.run("checkout", "--quiet", "-b", "feature/ahead")
+	commitFile(t, repo, "ahead.txt", "ahead\n")
+	repo.run("checkout", "--quiet", "main")
+
+	project := api.Project{ID: "project-1", Name: "repo", Path: repo.path}
+	workspaces := []api.Workspace{
+		{ID: "ws-ff", ProjectID: "project-1", Branch: "feature/ff", Kind: "worktree", Path: addWorktree(t, repo, "feature/ff"), BaseCommit: ffBase},
+		{ID: "ws-merge", ProjectID: "project-1", Branch: "feature/merge-commit", Kind: "worktree", Path: addWorktree(t, repo, "feature/merge-commit"), BaseCommit: mergeCommitBase},
+		{ID: "ws-squash", ProjectID: "project-1", Branch: "feature/squash", Kind: "worktree", Path: addWorktree(t, repo, "feature/squash"), BaseCommit: squashBase},
+		{ID: "ws-ahead", ProjectID: "project-1", Branch: "feature/ahead", Kind: "worktree", Path: addWorktree(t, repo, "feature/ahead"), BaseCommit: aheadBase},
+	}
+	service, _ := newMergeTestService(t, project, workspaces)
+	service.refreshMergeStates(context.Background())
+
+	for _, workspaceID := range []string{"ws-ff", "ws-merge", "ws-squash"} {
+		if state, ok := mergeStateOf(t, service, workspaceID); !ok || state != api.MergeStateMerged {
+			t.Errorf("%s state = %q/%v, want merged", workspaceID, state, ok)
+		}
+	}
+	if state, ok := mergeStateOf(t, service, "ws-ahead"); !ok || state != api.MergeStateUnmerged {
+		t.Errorf("ws-ahead state = %q/%v, want unmerged", state, ok)
 	}
 }
 

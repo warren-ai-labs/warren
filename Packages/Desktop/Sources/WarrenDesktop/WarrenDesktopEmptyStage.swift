@@ -3,7 +3,8 @@ import WarrenDesignSystem
 
 /// The one shape every empty content card takes: a mark in a tile, a title,
 /// a line of explanation, then the way forward — buttons, or the shortcuts
-/// that do the same.
+/// that do the same. A stage that is a beginning rather than a message has no
+/// mark: there is nothing to illustrate, only somewhere to go.
 ///
 /// The content card used to say "nothing here" five different ways: a light
 /// 20pt title with no mark when no Workspace was selected, a bare spinner
@@ -31,7 +32,7 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
         }
     }
 
-    let mark: Mark
+    let mark: Mark?
     let title: String
     let message: String?
     let hints: [Hint]
@@ -41,7 +42,7 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     public init(
-        mark: Mark,
+        mark: Mark? = nil,
         title: String,
         message: String? = nil,
         hints: [Hint] = [],
@@ -57,8 +58,10 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
     public var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(spacing: 0) {
-            tile(tokens: tokens)
-                .padding(.bottom, 16)
+            if let mark {
+                tile(mark, tokens: tokens)
+                    .padding(.bottom, 16)
+            }
 
             Text(title)
                 .font(.system(size: 15, weight: .semibold))
@@ -76,14 +79,18 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
                     .padding(.top, 6)
             }
 
-            HStack(spacing: 8) {
-                actions()
+            // A stage without buttons must not keep their padding, or the
+            // hints float away from the message they belong to.
+            if Actions.self != EmptyView.self {
+                HStack(spacing: 8) {
+                    actions()
+                }
+                .padding(.top, 18)
             }
-            .padding(.top, 18)
 
             if !hints.isEmpty {
-                hintGrid(tokens: tokens)
-                    .padding(.top, 22)
+                hintRow(tokens: tokens)
+                    .padding(.top, 20)
             }
         }
         .padding(.horizontal, WarrenSpacing.large)
@@ -94,7 +101,7 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
         .accessibilityElement(children: .contain)
     }
 
-    private func tile(tokens: WarrenColorTokens) -> some View {
+    private func tile(_ mark: Mark, tokens: WarrenColorTokens) -> some View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
         return Group {
             switch mark {
@@ -116,14 +123,14 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
         .accessibilityHidden(true)
     }
 
-    /// Shortcuts as the menus draw them: a key cap per key, then what it does,
-    /// in two aligned columns.
-    private func hintGrid(tokens: WarrenColorTokens) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    /// Shortcuts as the menus draw them: a key cap per key, then what it
+    /// does, side by side on one quiet line. No frame: on an empty stage a
+    /// second box competes with the mark for attention.
+    private func hintRow(tokens: WarrenColorTokens) -> some View {
+        HStack(spacing: 18) {
             ForEach(hints) { hint in
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
                     WarrenDesktopMenuKeycaps(keys: hint.keys)
-                        .frame(width: 64, alignment: .trailing)
                     Text(hint.label)
                         .font(.system(size: 12))
                         .foregroundStyle(tokens.mutedForeground)
@@ -132,17 +139,11 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
                 .accessibilityLabel("\(hint.keys): \(hint.label)")
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(tokens.cardBorder, lineWidth: 1)
-        )
     }
 }
 
 public extension WarrenDesktopEmptyStage where Actions == EmptyView {
-    init(mark: Mark, title: String, message: String? = nil, hints: [Hint] = []) {
+    init(mark: Mark? = nil, title: String, message: String? = nil, hints: [Hint] = []) {
         self.init(mark: mark, title: title, message: message, hints: hints) { EmptyView() }
     }
 }

@@ -6881,6 +6881,21 @@ button:disabled {
   font-size: var(--text-sm);
 }
 
+/* A slash command a person ran in the Agent's terminal: one mono line, never
+   a prompt bubble. */
+.conversation-command code {
+  font-family: var(--font-mono);
+}
+
+/* Command output reads as a short, muted quotation: folded after four lines. */
+.conversation-notice-output {
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .conversation-error {
   margin: 0;
   color: var(--color-status-failed);

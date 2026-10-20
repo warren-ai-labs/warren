@@ -125,6 +125,52 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.32.0",
+        dateISO: "2026-10-20",
+        date: "October 20, 2026",
+        title: "Warren installs from a disk image.",
+        summary:
+          "A minor release that ships a drag-to-install disk image, and opening a newer one installs it and restarts the app; the Command+K search panel is redrawn to the Workbench spec; iPhone Host reachability, pairing, and Relay fallback are fixed, and the Desktop recovers SSH and Relay connections after sleep, a network change, or a token refresh. The JSON control protocol remains at 4.0 and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Download Warren as a disk image. Its window shows where to drag the app and how to approve the first launch in Privacy & Security. The zip stays in each release for the in-app updater.",
+              "Install a downloaded disk image without dragging or a second approval. When Warren is running, opening a newer Warren disk image brings Warren forward, checks that the app is signed by the same developer, installs it, ejects the disk image, and restarts Warren.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Draw the Command+K search panel like the rest of the Workbench: the dialog surface at 600 points, a larger search field, menu-style rows with the app icon each Session wears on its Tab, and a key-hint bar that also lists the scope filters.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Show each Launch Commands preset in Settings with the app icon the + menu, Tabs and sidebar use, instead of the older bare logo.",
+              "Say why a Host cannot be reached on iPhone. Once a loss outlasts the grace period, the Inbox and the Session title show the reason, such as \"Mac is offline · last seen 3 minutes ago\", and a first load that cannot connect says so instead of showing placeholder rows.",
+              "Ask for a new pairing code when a Host no longer accepts a device. A removed device or a reset pairing used to retry forever while the app said it was waiting for the Mac; the iPhone and the Desktop now stop and say to pair again.",
+              "Keep a device paired when a Relay token refresh loses its reply on a weak network. Relay accepts the same refresh again for 60 seconds instead of revoking the device.",
+              "Fall back to Relay on iPhone when the phone leaves the Host's network, even with automatic LAN switching off, and return to the same LAN address when it answers again. Editing a Host no longer switches it to its LAN address.",
+              "Name Hosts paired over Relay after the Host instead of \"Warren Host\", keep a second Host's pairing code from joining the first Host, and keep every saved credential when a Host is renamed.",
+              "Show pairing progress and failures in the iPhone Hosts list, and whether each saved Host answers on this network or when it last connected. Switching Hosts shows the new Host at once.",
+              "Recover SSH Hosts on the Desktop after sleep or a network change. The SSH connection sends keepalives, a dead tunnel is rebuilt, and sidebar Hosts that could not connect retry on their own.",
+              "Keep a Desktop Relay connection when its token refreshes instead of reconnecting it.",
+              "Reconnect a Host to Relay as soon as its Mac wakes instead of waiting out the rest of its backoff.",
+              "Keep terminal output aligned while a split pane resizes. The Desktop changes a terminal's grid only at the output position where the Host reports the PTY actually resized, so text written for the old width is never drawn on the new grid and the pane no longer shows garbled rows.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0 and this release migrates no state.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.31.0",
         dateISO: "2026-10-19",
         date: "October 19, 2026",
@@ -1650,6 +1696,52 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.32.0",
+        dateISO: "2026-10-20",
+        date: "2026 年 10 月 20 日",
+        title: "Warren 用磁盘映像安装。",
+        summary:
+          "次版本：Warren 提供拖入安装的磁盘映像，打开更新版本的映像即可完成安装并重启；Command+K 搜索面板按 Workbench 规范重绘；修复 iPhone 上 Host 可达性、配对与 Relay 回退，Desktop 在睡眠、网络切换或令牌刷新后恢复 SSH 与 Relay 连接。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "以磁盘映像下载 Warren。映像窗口显示把应用拖到哪里，以及如何在“隐私与安全性”中批准首次启动。每个版本仍保留 zip，供应用内更新使用。",
+              "无需拖动或二次批准即可安装下载的磁盘映像。Warren 正在运行时，打开更新版本的 Warren 磁盘映像会前置 Warren，确认该应用由同一开发者签名，完成安装，推出磁盘映像并重启 Warren。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "让 Command+K 搜索面板与 Workbench 其余部分一致：600 点的对话框表面、更大的搜索框、带每个 Session 在其 Tab 上所戴应用图标的菜单式行，以及同时列出范围过滤键的按键提示栏。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "Settings 中的每个 Launch Commands 预设现在显示 + 菜单、Tab 和侧边栏所用的应用图标，而不是旧版裸标志。",
+              "在 iPhone 上说明 Host 为何无法连接。断连超过宽限期后，Inbox 与 Session 标题会给出原因，例如“Mac is offline · last seen 3 minutes ago”；首次加载连不上时也直接说明，而不是显示占位行。",
+              "当 Host 不再接受某设备时要求新的配对码。此前被移除的设备或重置的配对会一直重试，而应用只显示正在等待 Mac；现在 iPhone 与 Desktop 会停下并提示重新配对。",
+              "弱网下 Relay 令牌刷新丢失回复时仍保持设备已配对。Relay 在 60 秒内接受同一刷新，而不是吊销设备。",
+              "iPhone 离开 Host 所在网络时回退到 Relay，即使关闭了自动 LAN 切换也一样；当 LAN 地址重新可用时回到同一地址。编辑 Host 不再把它切换到 LAN 地址。",
+              "通过 Relay 配对的 Host 以 Host 命名，不再叫“Warren Host”；第二个 Host 的配对码不会并入第一个 Host；重命名 Host 会保留所有已保存的凭据。",
+              "在 iPhone 的 Hosts 列表中显示配对进度与失败，以及每个已保存的 Host 在当前网络上是否有响应或上次连接的时间。切换 Host 会立即显示新 Host。",
+              "Desktop 在睡眠或网络切换后恢复 SSH Host。SSH 连接发送 keepalive，失效的隧道会被重建，侧边栏中连接失败的 Host 会自行重试。",
+              "Desktop 的 Relay 连接在令牌刷新时保持，而不是重新连接。",
+              "Mac 唤醒后立即把 Host 重连到 Relay，而不是等完剩余的退避时间。",
+              "分屏面板调整大小时保持终端输出对齐。Desktop 只在 Host 报告 PTY 实际调整尺寸的那个输出位置改变终端网格，因此按旧宽度写入的文字不会画到新网格上，面板不再出现乱码行。",
+            ],
+          },
+          {
+            title: "发行说明",
+            items: [
+              "JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该压缩包适合内部或临时测试，不适合公开发布。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.31.0",
         dateISO: "2026-10-19",

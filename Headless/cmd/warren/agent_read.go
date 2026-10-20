@@ -19,7 +19,7 @@ import (
 
 func sessionRead(ctx context.Context, c *client.Client, params map[string]any, follow bool) error {
 	id := positional(params, 0, "session id")
-	if _, err := subscribeTerminal(ctx, c, id); err != nil {
+	if _, err := subscribeTerminal(ctx, c, id, false); err != nil {
 		return err
 	}
 	return sessionTerminalRead(ctx, c, params, follow)
@@ -27,8 +27,21 @@ func sessionRead(ctx context.Context, c *client.Client, params map[string]any, f
 
 // subscribeTerminal subscribes to a Session's terminal and refuses a Session
 // that has none, instead of waiting on output that can never arrive.
-func subscribeTerminal(ctx context.Context, c *client.Client, id string) (api.Session, error) {
-	session, err := c.Subscribe(ctx, id)
+//
+// claimControl is only true for a command that will type into the PTY. A
+// read-only command (read, follow) subscribes passively, because the claim is
+// the Host's permission for input and observation must never take it away from
+// the client the user is typing into.
+func subscribeTerminal(ctx context.Context, c *client.Client, id string, claimControl bool) (api.Session, error) {
+	var (
+		session api.Session
+		err     error
+	)
+	if claimControl {
+		session, err = c.Subscribe(ctx, id)
+	} else {
+		session, err = c.SubscribePassive(ctx, id)
+	}
 	if err != nil {
 		return session, err
 	}

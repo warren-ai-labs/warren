@@ -775,3 +775,39 @@ func TestOpenCodeParserMapsTerminalFinishReasons(t *testing.T) {
 		}
 	}
 }
+
+// OpenCode records a stopped turn as an aborted assistant message with no
+// finish value. It is an interruption, not a failure: the Agent returns to idle
+// and stays ready for the next prompt.
+func TestOpenCodeAbortedMessageReturnsToIdle(t *testing.T) {
+	parser := newOpenCodeParser(1 << 20)
+	parser.Parse([]byte(`{"messageId":"msg_user","role":"user","summary":"work"}`))
+	if got := parser.Activity(); got != api.AgentActivityWorking {
+		t.Fatalf("after the user message activity = %q, want working", got)
+	}
+	parser.DrainTurns() // the started boundary belongs to the user message
+	events := parser.Parse([]byte(`{"messageId":"msg_abort","role":"assistant","error":{"name":"MessageAbortedError","data":{"message":"Aborted"}}}`))
+	if len(events) != 1 || events[0].Type != "system" || events[0].StopReason != "interrupted" {
+		t.Fatalf("events = %#v, want one interruption notice", events)
+	}
+	if got := parser.Activity(); got != api.AgentActivityReady {
+		t.Fatalf("activity = %q, want ready", got)
+	}
+	turns := parser.DrainTurns()
+	if len(turns) != 1 || turns[0].Status != api.AgentTurnInterrupted {
+		t.Fatalf("turns = %#v, want an interrupted boundary", turns)
+	}
+}
+
+// A provider error is still a failure: only the abort class returns to idle.
+func TestOpenCodeProviderErrorStillFailsTheTurn(t *testing.T) {
+	parser := newOpenCodeParser(1 << 20)
+	parser.Parse([]byte(`{"messageId":"msg_user","role":"user","summary":"work"}`))
+	events := parser.Parse([]byte(`{"messageId":"msg_err","role":"assistant","error":{"name":"APIError","data":{"message":"User not found."}}}`))
+	if len(events) != 1 || events[0].Type != "error" || events[0].Error != "User not found." {
+		t.Fatalf("events = %#v, want one error event", events)
+	}
+	if got := parser.Activity(); got != api.AgentActivityFailed {
+		t.Fatalf("activity = %q, want failed", got)
+	}
+}
