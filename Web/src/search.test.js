@@ -413,3 +413,43 @@ test("highlight without ranges leaves text intact", () => {
     ["Café"],
   );
 });
+
+test("a session row carries attention that arrives with a ready lifecycle", () => {
+  const search = createSearch(buildCatalog({
+    workspaces: [{ id: "workspace", project: "project", name: "Review", branch: "main" }],
+    tabs: [
+      {
+        id: "a", session: "asking", workspace: "workspace", title: "Claude", customTitle: "Agent asking", kind: "claude",
+        lifecycle: "running", agentStatus: { activity: "ready", attention: { kind: "approval" } },
+      },
+      {
+        id: "b", session: "working", workspace: "workspace", title: "Claude", customTitle: "Agent working", kind: "claude",
+        lifecycle: "running", agentStatus: { activity: "working" },
+      },
+    ],
+  }));
+
+  const rows = search.results("agent");
+  const asking = rows.find(row => row.target.id === "asking");
+  assert.equal(asking.mark, "approvalNeeded");
+  // The request ranks above progressing work, as on the native clients.
+  assert.ok(rows.indexOf(asking) < rows.findIndex(row => row.target.id === "working"));
+  assert.equal(search.results("review").find(row => row.target.kind === "workspace").mark, "approvalNeeded");
+  // `@blocked` still finds every attention mark.
+  assert.ok(search.results("@blocked").some(row => row.target.id === "asking"));
+});
+
+test("a read completion and an ended session draw nothing in search", () => {
+  const catalog = buildCatalog({
+    tabs: [
+      { id: "a", session: "done", title: "Claude", customTitle: "Agent done", kind: "claude", lifecycle: "running", agentStatus: { activity: "ready" } },
+      { id: "b", session: "gone", title: "Claude", customTitle: "Agent gone", kind: "claude", lifecycle: "running", agentStatus: { activity: "exited" } },
+    ],
+  });
+  const unread = createSearch(catalog).results("agent");
+  assert.equal(unread.find(row => row.target.id === "done").mark, "ready");
+  assert.equal(unread.find(row => row.target.id === "gone").mark, null);
+
+  const read = createSearch(catalog, { done: "ready" }).results("agent");
+  assert.equal(read.find(row => row.target.id === "done").mark, null);
+});

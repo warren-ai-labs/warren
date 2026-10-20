@@ -273,6 +273,24 @@ struct WarrenDesktopBranchNameLabel: View {
 /// `5m`, `2h`, `3d`, `2w`, and then a date once it is older than five weeks.
 /// Every sidebar age shares this so a project, a workspace, and a Session
 /// never disagree about how to say "when".
+/// A row's activity age, kept current while the row is on screen. The label
+/// is relative to now, so read once in `body` it went stale: a row said
+/// "now" until something else redrew the sidebar.
+struct WarrenDesktopActivityAgeText: View {
+    let date: Date
+    let color: Color
+
+    var body: some View {
+        TimelineView(.everyMinute) { context in
+            Text(WarrenDesktopActivityAge.label(since: date, now: context.date))
+                .font(WarrenDesktopTreeTypography.age)
+                .foregroundStyle(color)
+                .fixedSize()
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 enum WarrenDesktopActivityAge {
     static func label(since date: Date?, now: Date = Date(), calendar: Calendar = .current) -> String {
         guard let date else { return "" }
@@ -309,6 +327,29 @@ enum WarrenDesktopActivityAge {
         formatter.dateFormat = "MMM d, yyyy"
         return formatter
     }()
+
+    /// The age as assistive technology reads it: whole words, and "just now"
+    /// rather than "now ago".
+    static func spokenLabel(since date: Date?, now: Date = Date(), calendar: Calendar = .current) -> String {
+        guard let date else { return "" }
+        let seconds = max(0, now.timeIntervalSince(date))
+        let minute: Double = 60
+        let hour = 60 * minute
+        let day = 24 * hour
+        let week = 7 * day
+        func ago(_ value: Double, _ unit: String) -> String {
+            let count = Int(value)
+            return "\(count) \(unit)\(count == 1 ? "" : "s") ago"
+        }
+        switch seconds {
+        case ..<minute: return "just now"
+        case ..<hour: return ago(seconds / minute, "minute")
+        case ..<day: return ago(seconds / hour, "hour")
+        case ..<week: return ago(seconds / day, "day")
+        case ..<(6 * week): return ago(seconds / week, "week")
+        default: return "on \(label(since: date, now: now, calendar: calendar))"
+        }
+    }
 
     /// The age a project shows: its most recently active worktree.
     static func lastActiveAt(of workspaces: [Workspace]) -> Date? {
@@ -397,7 +438,8 @@ struct WarrenDesktopIdleWorktreeRow: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let age = WarrenDesktopActivityAge.label(since: workspace.lastActiveAt)
+        let ageDate = workspace.lastActiveAt
+        let spokenAge = WarrenDesktopActivityAge.spokenLabel(since: ageDate)
         Button(action: onSelect) {
             HStack(spacing: WarrenDesktopSidebarMetrics.worktreeIconSpacing) {
                 WarrenDesktopWorkspaceGlyphView(workspace: workspace)
@@ -409,11 +451,8 @@ struct WarrenDesktopIdleWorktreeRow: View {
                     font: WarrenDesktopTreeTypography.branchName
                 )
                 Spacer(minLength: 0)
-                if !age.isEmpty {
-                    Text(age)
-                        .font(WarrenDesktopTreeTypography.age)
-                        .foregroundStyle(tokens.treeFaintText)
-                        .fixedSize()
+                if let ageDate {
+                    WarrenDesktopActivityAgeText(date: ageDate, color: tokens.treeFaintText)
                 }
             }
             .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
@@ -434,13 +473,13 @@ struct WarrenDesktopIdleWorktreeRow: View {
         // The cut name is whole on hover.
         .help(name)
         .accessibilityLabel("Workspace \(name)")
-        .accessibilityValue(age.isEmpty ? "No sessions" : "No sessions · last active \(age) ago")
+        .accessibilityValue(spokenAge.isEmpty ? "No sessions" : "No sessions · last active \(spokenAge)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .warrenSemanticElement(
             id: "workspace.\(semanticScope).\(workspace.id.description)",
             role: .button,
             label: "Workspace \(name)",
-            value: age.isEmpty ? "No sessions" : "No sessions · last active \(age) ago",
+            value: spokenAge.isEmpty ? "No sessions" : "No sessions · last active \(spokenAge)",
             isEnabled: isEnabled,
             isSelected: isSelected,
             action: { if isEnabled { onSelect() } }
@@ -466,7 +505,7 @@ struct WarrenDesktopInactiveProjectRow: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let age = WarrenDesktopActivityAge.label(since: lastActiveAt)
+        let spokenAge = WarrenDesktopActivityAge.spokenLabel(since: lastActiveAt)
         Button(action: onSelect) {
             HStack(spacing: WarrenDesktopSidebarMetrics.groupIconSpacing) {
                 WarrenDesktopProjectAvatar(
@@ -484,11 +523,8 @@ struct WarrenDesktopInactiveProjectRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
-                if !age.isEmpty {
-                    Text(age)
-                        .font(WarrenDesktopTreeTypography.age)
-                        .foregroundStyle(tokens.treeFaintText)
-                        .fixedSize()
+                if let lastActiveAt {
+                    WarrenDesktopActivityAgeText(date: lastActiveAt, color: tokens.treeFaintText)
                 }
             }
             .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
@@ -505,13 +541,13 @@ struct WarrenDesktopInactiveProjectRow: View {
         .warrenContextMenu(isEnabled && !isMutationDisabled ? contextMenuActions : [])
         .help(project.name)
         .accessibilityLabel("Project \(project.name)")
-        .accessibilityValue(age.isEmpty ? "No open sessions" : "No open sessions · last active \(age) ago")
+        .accessibilityValue(spokenAge.isEmpty ? "No open sessions" : "No open sessions · last active \(spokenAge)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .warrenSemanticElement(
             id: semanticID,
             role: .button,
             label: "Project \(project.name)",
-            value: age.isEmpty ? "No open sessions" : "No open sessions · last active \(age) ago",
+            value: spokenAge.isEmpty ? "No open sessions" : "No open sessions · last active \(spokenAge)",
             isEnabled: isEnabled,
             isSelected: isSelected,
             action: { if isEnabled { onSelect() } }

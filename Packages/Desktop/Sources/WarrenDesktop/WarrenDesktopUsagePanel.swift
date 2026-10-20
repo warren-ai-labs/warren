@@ -237,7 +237,7 @@ public struct WarrenDesktopUsagePanel: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
+                .strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline)
         )
         .accessibilityIdentifier("usage.composition")
     }
@@ -405,7 +405,7 @@ public struct WarrenDesktopUsagePanel: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
+                .strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline)
         )
         .accessibilityIdentifier("usage.detail")
     }
@@ -594,9 +594,10 @@ public struct WarrenDesktopUsagePanel: View {
             } label: {
                 Label(state == .loading ? "Updating…" : "Refresh", systemImage: "arrow.clockwise")
             }
-            .buttonStyle(.bordered)
+            // The page's own button, like Rebuild beside it, rather than the
+            // system's bordered style.
+            .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
             .disabled(state == .loading)
-            .font(WarrenTypography.settingsSupporting)
             .accessibilityIdentifier("usage.refresh")
         }
     }
@@ -679,7 +680,7 @@ public struct WarrenDesktopUsagePanel: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
+                .strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline)
         )
     }
 
@@ -818,7 +819,7 @@ public struct WarrenDesktopUsagePanel: View {
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
                 .strokeBorder(
-                    tinted ? accent.opacity(0.28) : tokens.border.opacity(0.35),
+                    tinted ? accent.opacity(0.28) : tokens.border,
                     lineWidth: WarrenSpacing.hairline
                 )
         )
@@ -1135,7 +1136,7 @@ public struct WarrenDesktopUsagePanel: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: WarrenRadius.large, style: .continuous)
-                .strokeBorder(tokens.border.opacity(0.40), lineWidth: WarrenSpacing.hairline)
+                .strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline)
         )
     }
 
@@ -1326,9 +1327,8 @@ public struct WarrenDesktopUsagePanel: View {
             Label(message, systemImage: "exclamationmark.triangle")
                 .font(WarrenTypography.settingsSupporting)
                 .foregroundStyle(tokens.destructive)
-            Button("Try again") { onLoad(range.days, selectedDay, true) }
-                .buttonStyle(.bordered)
-                .font(WarrenTypography.settingsSupporting)
+            Button("Try Again") { onLoad(range.days, selectedDay, true) }
+                .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("usage.error")

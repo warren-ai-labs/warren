@@ -7,6 +7,7 @@ import {
   formatElapsed,
   isToggleOption,
   stepLine,
+  streamingMarkdownBlocks,
   visibleStreamingText,
 } from "./conversation.js";
 
@@ -24,10 +25,19 @@ const markdownComponents = {
   a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
 };
 
-const Markdown = memo(function Markdown({ text }) {
+const remarkPlugins = [remarkGfm];
+
+const MarkdownBlock = memo(function MarkdownBlock({ text }) {
+  return <ReactMarkdown remarkPlugins={remarkPlugins} components={markdownComponents}>{text}</ReactMarkdown>;
+});
+
+/// While an answer streams, its finished blocks are parsed once and only the
+/// open tail is re-parsed per batch; the settled answer is parsed whole.
+const Markdown = memo(function Markdown({ text, streaming = false }) {
+  const blocks = useMemo(() => (streaming ? streamingMarkdownBlocks(text) : [text]), [text, streaming]);
   return (
     <div className="agent-markdown conversation-markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{text}</ReactMarkdown>
+      {blocks.map((block, index) => <MarkdownBlock key={index} text={block} />)}
     </div>
   );
 });
@@ -83,7 +93,7 @@ function Step({ step, onOpenSession, sessionExists }) {
   );
 }
 
-function Reasoning({ reasoning, running }) {
+const Reasoning = memo(function Reasoning({ reasoning, running }) {
   const [open, setOpen] = useState(false);
   if (!reasoning.count) return null;
   const seconds = Math.round((reasoning.endedAt - reasoning.startedAt) / 1000);
@@ -96,7 +106,7 @@ function Reasoning({ reasoning, running }) {
       {open && <div className="conversation-reasoning-text">{reasoning.text}</div>}
     </div>
   );
-}
+});
 
 /// Seconds tick for a running turn's elapsed label.
 function useNow(active) {
@@ -283,6 +293,11 @@ function CopyIcon() {
 export const Turn = memo(function Turn({ turn, live, waiting, onOpenSession, sessionExists }) {
   const running = live && turn.status === "running";
   const answer = running ? visibleStreamingText(turn.answer, turn.answerComplete) : turn.answer;
+  const reasoningDone = Boolean(turn.answer || turn.steps.length);
+  const reasoning = useMemo(
+    () => ({ ...turn.reasoning, done: reasoningDone }),
+    [turn.reasoning.text, turn.reasoning.startedAt, turn.reasoning.endedAt, turn.reasoning.count, reasoningDone],
+  );
   return (
     <article className="conversation-turn" data-turn={turn.id}>
       {turn.user && (
@@ -293,9 +308,9 @@ export const Turn = memo(function Turn({ turn, live, waiting, onOpenSession, ses
           )}
         </div>
       )}
-      <Reasoning reasoning={{ ...turn.reasoning, done: Boolean(turn.answer || turn.steps.length) }} running={running} />
+      <Reasoning reasoning={reasoning} running={running} />
       <WorkTrail turn={turn} running={running} waiting={waiting} onOpenSession={onOpenSession} sessionExists={sessionExists} />
-      {answer && <Markdown text={answer} />}
+      {answer && <Markdown text={answer} streaming={running} />}
       {turn.notices.map(notice => <p key={notice.id} className="conversation-notice">{notice.text}</p>)}
       {turn.errors.map(error => <p key={error.id} className="conversation-error" role="alert">{error.text}</p>)}
       {!running && turn.status === "cancelled" && !turn.errors.length && <p className="conversation-notice">Stopped.</p>}

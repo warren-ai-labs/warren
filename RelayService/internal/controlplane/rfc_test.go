@@ -57,12 +57,18 @@ func TestOwnedRelayEnrollmentAndRefreshRotation(t *testing.T) {
 		t.Fatal("exchange did not set refresh cookie")
 	}
 	var exchanged struct {
-		Access string `json:"access_token"`
+		Access   string `json:"access_token"`
+		HostName string `json:"host_name"`
 	}
 	_ = json.NewDecoder(exchange.Body).Decode(&exchanged)
 	exchange.Body.Close()
 	if _, err := server.signer.verify(exchanged.Access, hostID, "control"); err != nil {
 		t.Fatalf("access token: %v", err)
+	}
+	// The pairing client has no other way to learn what to call the Host
+	// before it first connects.
+	if exchanged.HostName != "Mac" {
+		t.Fatalf("exchange host_name = %q, want the Host's reported name", exchanged.HostName)
 	}
 
 	// The client-facing ticket is a shareable link, not a one-shot browser

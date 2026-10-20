@@ -139,7 +139,6 @@ func makeTabBar(
         tabMarks: [:],
         pinnedSessionIDs: [],
         selectedTabID: selectedTabID,
-        chromeMode: .workspace,
         isSidebarCollapsed: false,
         onToggleSidebar: {},
         onChromePopover: { _ in },
@@ -173,12 +172,6 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(WarrenPublicAccessCopy.publicEndpoint, "Public URL")
         XCTAssertEqual(WarrenPublicAccessCopy.resetLocalSetup, "Reset local route")
         XCTAssertFalse(WarrenPublicAccessCopy.title.localizedCaseInsensitiveContains("sharing"))
-    }
-
-    func testWorkspaceChromeIsDefaultAndDoesNotShowIndependentTopBar() {
-        XCTAssertFalse(WarrenDesktopChromeMode.workspace.showsIndependentTopBar)
-        XCTAssertTrue(WarrenDesktopChromeMode.dashboard.showsIndependentTopBar)
-
     }
 
     /// The toggle names its effect on the tree. A speech bubble claimed every
@@ -5215,6 +5208,24 @@ final class WarrenDesktopTests: XCTestCase {
             return XCTFail("Expected a pin action")
         }
         XCTAssertEqual(pinTitle, "Unpin Session")
+
+        // With activity to retire, the leaf offers what the Tab offers, in
+        // the Tab's order.
+        let withActivity = WarrenDesktopWorkspaceSessionRow.contextMenuActions(
+            isPinned: false,
+            onTogglePin: {},
+            onRename: {},
+            onEnd: {},
+            hasActivity: true,
+            onDismissActivity: {}
+        ).compactMap { action -> String? in
+            guard case .button(let title, _, _) = action else { return nil }
+            return title
+        }
+        XCTAssertEqual(
+            withActivity,
+            ["Pin Session", "Dismiss Activity", "Rename Session", "End Session…"]
+        )
     }
 
     /// A single pane gives the bar nothing to switch between, and its chip

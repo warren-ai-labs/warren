@@ -1,5 +1,6 @@
 import Foundation
 import WarrenDomain
+import WarrenTransport
 
 struct RemoteRoster: Decodable, Sendable, Equatable {
     struct Host: Decodable, Sendable, Equatable { let id: String; let name: String }
@@ -363,5 +364,41 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
             result.append(latest)
         }
         return result
+    }
+}
+
+extension RemoteRoster.AgentStatus {
+    /// Reads a status straight from an Agent event's JSON under the decoder's
+    /// own rules, without coding it through `Data` on the main actor:
+    /// `activity` is required; `attention` may be absent or null, but one that
+    /// is present and malformed rejects the whole status.
+    init?(json value: WarrenRemoteJSONValue) {
+        guard case .object(let fields) = value,
+              case .string(let activity)? = fields["activity"] else { return nil }
+        switch fields["attention"] {
+        case nil, .null?:
+            self.init(activity: activity, attention: nil)
+        case .object(let raw)?:
+            guard case .string(let kind)? = raw["kind"],
+                  case .string(let reason)? = raw["reason"],
+                  let requestID = Self.optionalString(raw["requestId"]),
+                  let since = Self.optionalString(raw["since"]) else { return nil }
+            self.init(
+                activity: activity,
+                attention: Attention(kind: kind, reason: reason, requestID: requestID, since: since)
+            )
+        default:
+            return nil
+        }
+    }
+
+    /// An optional string field: `.some(nil)` when absent or null, nil when it
+    /// holds anything other than a string.
+    private static func optionalString(_ value: WarrenRemoteJSONValue?) -> String?? {
+        switch value {
+        case nil, .null?: return .some(nil)
+        case .string(let string)?: return .some(string)
+        default: return nil
+        }
     }
 }

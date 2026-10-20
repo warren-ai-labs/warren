@@ -21,6 +21,16 @@ import (
 
 const defaultRemoteAddress = "127.0.0.1:8789"
 
+// A sleeping laptop or a network change leaves the SSH connection half open,
+// and without traffic of its own the client only notices when TCP gives up,
+// often many minutes later. Until then every forwarded dial hangs. Probing like
+// OpenSSH's ServerAliveInterval/ServerAliveCountMax ends a dead connection
+// within about keepaliveInterval*keepaliveMisses, so the Desktop can rebuild it.
+const (
+	keepaliveInterval = 15 * time.Second
+	keepaliveMisses   = 3
+)
+
 // Options controls one embedded SSH forwarding connection.
 type Options struct {
 	Target           string
@@ -142,9 +152,15 @@ func Start(ctx context.Context, options Options) (*Tunnel, Ready, error) {
 		done:        make(chan struct{}),
 		connections: make(map[net.Conn]struct{}),
 	}
-	tunnel.wg.Add(2)
+	tunnel.wg.Add(3)
 	go tunnel.acceptLoop(options.RemoteAddress)
 	go tunnel.monitorClient()
+	go func() {
+		defer tunnel.wg.Done()
+		if !keepAlive(tunnel.done, client, keepaliveInterval, keepaliveMisses) {
+			_ = tunnel.shutdown()
+		}
+	}()
 	return tunnel, Ready{
 		URL:   "http://" + listener.Addr().String(),
 		Token: token,
@@ -243,6 +259,46 @@ func (t *Tunnel) acceptLoop(remoteAddress string) {
 			defer upstream.Close()
 			proxy(local, upstream)
 		}(connection, remote)
+	}
+}
+
+type requestSender interface {
+	SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error)
+}
+
+// keepAlive sends an OpenSSH keepalive every interval until done closes, and
+// returns false once misses consecutive probes went unanswered within an
+// interval. Any reply counts as alive: OpenSSH answers this request with a
+// failure, which still proves the connection carries traffic.
+func keepAlive(done <-chan struct{}, sender requestSender, interval time.Duration, misses int) bool {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	missed := 0
+	for {
+		select {
+		case <-done:
+			return true
+		case <-ticker.C:
+		}
+		replied := make(chan error, 1)
+		go func() {
+			_, _, err := sender.SendRequest("keepalive@openssh.com", true, nil)
+			replied <- err
+		}()
+		select {
+		case <-done:
+			return true
+		case err := <-replied:
+			if err != nil {
+				return false
+			}
+			missed = 0
+		case <-time.After(interval):
+			missed++
+			if missed >= misses {
+				return false
+			}
+		}
 	}
 }
 

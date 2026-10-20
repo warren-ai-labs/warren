@@ -143,31 +143,31 @@ struct WarrenDesktopHostRefreshButton: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
     var body: some View {
         let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
         Button(action: refresh) {
-            Image(systemName: "arrow.clockwise")
-                .font(.system(size: 11, weight: .medium))
-                .rotationEffect(.degrees(isChecking && !reduceMotion ? 360 : 0))
-                .animation(
-                    isChecking && !reduceMotion
-                        ? .linear(duration: 0.8).repeatForever(autoreverses: false)
-                        : .default,
-                    value: isChecking
-                )
-                .opacity(isChecking && reduceMotion ? 0.5 : 1)
-                .frame(width: WarrenDesktopMenuMetrics.actionSize, height: WarrenDesktopMenuMetrics.actionSize)
-                // The menu spec's inline action: #8A8A8A at rest, a press
-                // wash under the pointer, like every other header action.
-                .foregroundStyle(isHovered ? palette.iconHover : palette.actionGlyph)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isHovered ? palette.pressFill : .clear)
-                )
-                .contentShape(.rect)
+            Group {
+                // The shared spinner rather than a `repeatForever` rotation:
+                // it is frame-limited, and it follows Reduce Motion as the
+                // setting changes instead of reading it once on appear.
+                if isChecking {
+                    WarrenBrailleSpinner(size: 12, accessibilityLabel: "Checking hosts")
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                }
+            }
+            .frame(width: WarrenDesktopMenuMetrics.actionSize, height: WarrenDesktopMenuMetrics.actionSize)
+            // The menu spec's inline action: #8A8A8A at rest, a press
+            // wash under the pointer, like every other header action.
+            .foregroundStyle(isHovered ? palette.iconHover : palette.actionGlyph)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovered ? palette.pressFill : .clear)
+            )
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
@@ -289,13 +289,13 @@ struct WarrenDesktopCurrentHostPanel: View {
                                 .fill(tokens.success)
                                 .frame(width: 7, height: 7)
                                 .padding(1.5)
-                                .background(Circle().fill(isHot ? palette.hoverFill : palette.surface))
+                                .background(Circle().fill(isHot ? palette.hotRing : palette.surface))
                                 .offset(x: 3, y: 3)
                         }
                     }
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Public Access")
-                        .font(.system(size: 13))
+                        .font(WarrenTypography.popoverItem)
                         .foregroundStyle(isHot ? palette.rowHoverText : palette.rowText)
                     if publicAccess.isOn, let url = publicAccess.url {
                         Text(WarrenDesktopHostPanelPublicAccess.displayAddress(url))
@@ -322,6 +322,13 @@ struct WarrenDesktopCurrentHostPanel: View {
         .onHover { hoveredID = $0 ? "public-access" : (hoveredID == "public-access" ? nil : hoveredID) }
         .accessibilityLabel("Public Access")
         .accessibilityValue(publicAccess.isOn ? "On" : "Off")
+        // The inline copy button only exists under the pointer, so assistive
+        // technology reaches the same command as an action on the row.
+        .accessibilityActions {
+            if publicAccess.isOn, let url = publicAccess.url {
+                Button("Copy public address") { publicAccess.copy(url) }
+            }
+        }
         .warrenSemanticElement(
             id: "endpoint.public-access",
             role: .button,
@@ -339,6 +346,7 @@ struct WarrenDesktopCurrentHostPanel: View {
                     action: copy
                 )
                 .opacity(isHot ? 1 : 0)
+                .accessibilityHidden(!isHot)
                 .padding(.trailing, Metrics.rowHorizontalPadding - 2)
                 .warrenTooltip("Copy public address")
                 .warrenSemanticElement(
@@ -369,7 +377,7 @@ struct WarrenDesktopCurrentHostPanel: View {
                     .foregroundStyle(isHot ? palette.iconHover : palette.icon)
                     .frame(width: Metrics.glyphSlot, height: Metrics.glyphSlot)
                 Text("Settings…")
-                    .font(.system(size: 13))
+                    .font(WarrenTypography.popoverItem)
                     .foregroundStyle(isHot ? palette.rowHoverText : palette.rowText)
                 Spacer(minLength: 0)
                 WarrenDesktopMenuKeycaps(keys: "⌘,")
@@ -420,15 +428,19 @@ struct WarrenDesktopCurrentHostPanel: View {
         action: @escaping () -> Void
     ) -> some View {
         let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
+        let rowID = "action.\(systemImage)"
+        let isHot = hoveredID == rowID
+        // Drawn like the Public Access and Settings rows below it: the same
+        // glyph size, and the same hover colours.
         return Button(action: action) {
             HStack(spacing: Metrics.iconSpacing) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(palette.icon)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(isHot ? palette.iconHover : palette.icon)
                     .frame(width: Metrics.glyphSlot, height: Metrics.glyphSlot)
                 Text(title)
-                    .font(.system(size: 13))
-                    .foregroundStyle(palette.rowText)
+                    .font(WarrenTypography.popoverItem)
+                    .foregroundStyle(isHot ? palette.rowHoverText : palette.rowText)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, Metrics.rowHorizontalPadding)
@@ -436,6 +448,7 @@ struct WarrenDesktopCurrentHostPanel: View {
             .contentShape(.rect)
         }
         .buttonStyle(WarrenDesktopMenuRowStyle())
+        .onHover { hoveredID = $0 ? rowID : (hoveredID == rowID ? nil : hoveredID) }
         .accessibilityHint(hint)
     }
 

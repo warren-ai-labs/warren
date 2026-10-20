@@ -115,6 +115,17 @@ final class WarrenConnectionPresentationTests: XCTestCase {
         )
     }
 
+    func testPairAgainCopyNamesTheFix() {
+        XCTAssertEqual(
+            warrenPairAgainMessage(hostName: "Mac"),
+            "Mac no longer accepts this device · scan a new pairing code"
+        )
+        XCTAssertEqual(
+            warrenPairAgainMessage(hostName: "  "),
+            "The Host no longer accepts this device · scan a new pairing code"
+        )
+    }
+
     func testUsableTransportStatesMatchTheDocumentedContract() {
         XCTAssertTrue(WarrenRemoteConnectionState.connected.isUsableForPresentation)
         for state: WarrenRemoteConnectionState in [.connecting, .reconnecting, .disconnected, .stopped] {

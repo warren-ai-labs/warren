@@ -70,7 +70,6 @@ public enum WarrenLayoutMetrics {
     public static let inspectorSplitDefaultRatio: Double = 0.62
 
     // Superset chrome and pane measurements.
-    public static let topBarHeight: CGFloat = 48
     /// The only chrome row above the Terminal: tabs on the leading side, the
     /// panels and "+" buttons on the trailing side. The presets that used to
     /// be a second row live behind "+", so one compact row is enough.
@@ -100,9 +99,7 @@ public enum WarrenLayoutMetrics {
     /// A Tab's floor: past this the track scrolls rather than shrinking further.
     public static let tabWidthMin: CGFloat = 96
     public static let tabAccessoryColumnWidth: CGFloat = 28
-    /// A split group's layout glyph, as drawn by `WarrenDesktopSplitGroupGlyph`.
-    /// The glyph scales from its own 12pt design square, so this value sets the
-    /// whole mark's weight.
+    /// The room reserved for a split group's mark in the Tab track.
     public static let tabGroupMarkSize: CGFloat = 15
     /// The room a drawn group's mark takes in the track, including the gap
     /// that separates it from the Tab that follows.
@@ -178,7 +175,6 @@ public enum WarrenLayoutMetrics {
     public static let externalIDEIconScale: CGFloat = 1.8
     public static let externalIDEIconSize: CGFloat = chromeIconSize * externalIDEIconScale
     public static let macTrafficLightInset: CGFloat = 80
-    public static let expandedSidebarChromeInset: CGFloat = 16
     public static let sidebarHeaderRowHeight: CGFloat = 32
 
     // Superset settings and command-palette measurements.

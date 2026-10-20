@@ -144,6 +144,46 @@ function pruneMemory(identity) {
   }
 }
 
+function streamRange(identity, from = 0, through = Number.MAX_SAFE_INTEGER) {
+  return IDBKeyRange.bound(
+    [identity.hostId, identity.accessScopeId, identity.streamId, from],
+    [identity.hostId, identity.accessScopeId, identity.streamId, through],
+  );
+}
+
+/**
+ * Bounds an IndexedDB stream to its newest MAX_EVENTS_PER_STREAM sequences,
+ * the same budget the in-memory fallback keeps. Counting rows would walk the
+ * whole stream on every batch, so the window is taken from the head instead;
+ * it holds the same rows while the stream has no holes. As in memory, a row
+ * past the contiguous cursor is kept: it is still needed to close a gap.
+ */
+function pruneStored(index, store, identity, state, fail, done) {
+  const cutoff = Math.min(state.contiguousThrough, state.headSequence - MAX_EVENTS_PER_STREAM);
+  if (!state.retainedFromSequence || cutoff < state.retainedFromSequence) {
+    done();
+    return;
+  }
+  const deleteRequest = index.openKeyCursor(streamRange(identity, 0, cutoff));
+  deleteRequest.onsuccess = deleteEvent => {
+    const cursor = deleteEvent.target.result;
+    if (cursor) {
+      store.delete(cursor.primaryKey);
+      cursor.continue();
+      return;
+    }
+    const firstRequest = index.openKeyCursor(streamRange(identity));
+    firstRequest.onsuccess = firstEvent => {
+      const first = firstEvent.target.result;
+      if (first) state.retainedFromSequence = first.key[3];
+      state.hasMoreBefore = state.retainedFromSequence > 1;
+      done();
+    };
+    firstRequest.onerror = () => fail(firstRequest.error || new Error("unable to prune Agent events"));
+  };
+  deleteRequest.onerror = () => fail(deleteRequest.error || new Error("unable to prune Agent events"));
+}
+
 export function openAgentDB() {
   if (!hasIndexedDB()) return Promise.resolve(null);
   if (dbPromise) return dbPromise;
@@ -274,22 +314,22 @@ export async function saveAgentEventsForStream(namespace, streamId, events = [],
       if (index >= incoming.length) {
         const stateRequest = stateStore.get([identity.hostId, identity.accessScopeId, identity.streamId]);
         stateRequest.onsuccess = () => {
-          const range = IDBKeyRange.bound(
-            [identity.hostId, identity.accessScopeId, identity.streamId, 0],
-            [identity.hostId, identity.accessScopeId, identity.streamId, Number.MAX_SAFE_INTEGER],
-          );
-          const cursorRequest = eventStore.index("by_stream_sequence").openCursor(range);
-          const rows = [];
-          cursorRequest.onsuccess = cursorEvent => {
+          // The stored state already summarizes every held row, so only the
+          // incoming batch is folded in. Held rows are read back only past
+          // the contiguous cursor, where an earlier out-of-order batch may
+          // now close a gap.
+          state = advanceState(stateRequest.result || initialState(), incoming, {
+            baselineSequence: boundary?.retainedFromSequence || 0,
+          });
+          const sequenceIndex = eventStore.index("by_stream_sequence");
+          const gapRequest = sequenceIndex.openKeyCursor(streamRange(identity, state.contiguousThrough + 1));
+          gapRequest.onsuccess = cursorEvent => {
             const cursor = cursorEvent.target.result;
-            if (cursor) {
-              rows.push(cursor.value.event);
+            if (cursor && cursor.key[3] === state.contiguousThrough + 1) {
+              state.contiguousThrough = cursor.key[3];
               cursor.continue();
               return;
             }
-            state = advanceState(stateRequest.result || initialState(), rows, {
-              baselineSequence: boundary?.retainedFromSequence || 0,
-            });
             if (boundary) {
               state.headSequence = Math.max(state.headSequence, boundary.headSequence);
               state.contiguousThrough = Math.max(state.contiguousThrough, boundary.checkpointSequence);
@@ -303,9 +343,9 @@ export async function saveAgentEventsForStream(namespace, streamId, events = [],
             state.hostId = identity.hostId;
             state.accessScopeId = identity.accessScopeId;
             state.streamId = identity.streamId;
-            stateStore.put(state);
+            pruneStored(sequenceIndex, eventStore, identity, state, fail, () => stateStore.put(state));
           };
-          cursorRequest.onerror = () => fail(cursorRequest.error || new Error("unable to read Agent events"));
+          gapRequest.onerror = () => fail(gapRequest.error || new Error("unable to read Agent events"));
         };
         stateRequest.onerror = () => fail(stateRequest.error || new Error("unable to read Agent sync state"));
         return;

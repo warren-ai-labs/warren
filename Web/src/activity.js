@@ -174,3 +174,87 @@ export function activityMarkIsAcknowledgeable(mark) {
 export function activityMarkIsDrawn(mark) {
   return mark !== "exited";
 }
+
+/// The mark a row draws: acknowledgment applied, and nothing for a mark that is
+/// never worth a dot.
+export function resolveDrawnActivityMark(status, acknowledgedLifecycle = null) {
+  const mark = resolveActivityMark(status, acknowledgedLifecycle);
+  return mark && activityMarkIsDrawn(mark) ? mark : null;
+}
+
+// Acknowledgments are what this person has already seen, per Session, on this
+// device: a plain `{ [sessionID]: lifecycle }` record. It mirrors
+// `WarrenDesktopActivityAcknowledgments` (DESIGN.md §8.2.6). It is device-local
+// on purpose — which completions this screen showed is not something the Host
+// or another client can know — and it never expires by time, only by the Agent
+// moving past the lifecycle that was read.
+
+function statusLifecycle(status) {
+  const lifecycle = String(status?.activity || "").toLowerCase();
+  return LIFECYCLES.has(lifecycle) ? lifecycle : null;
+}
+
+/// Records that this person has seen the Session in its current state.
+///
+/// Only an acknowledgeable mark is recorded: looking at a pending approval does
+/// not answer it, and a failure does not un-fail because it was visited.
+/// Returns the same record when nothing changed, so a caller can skip a render.
+export function acknowledgeActivity(acknowledgments, sessionID, status) {
+  if (!sessionID) return acknowledgments;
+  const mark = resolveActivityMark(status);
+  if (!mark || !activityMarkIsAcknowledgeable(mark)) return acknowledgments;
+  const lifecycle = activityMarkLifecycle(mark);
+  if (acknowledgments[sessionID] === lifecycle) return acknowledgments;
+  return { ...acknowledgments, [sessionID]: lifecycle };
+}
+
+/// Drops acknowledgments the Host has moved past, so `ready → (seen) → working
+/// → ready` lights up again, and — when `prune` is set because the roster is
+/// authoritative — forgets Sessions the Host no longer lists.
+///
+/// `sessions` is any iterable of `{ id, agentStatus }`. Returns the same record
+/// when nothing changed.
+export function reconcileActivityAcknowledgments(acknowledgments, sessions, { prune = true } = {}) {
+  const lifecycles = new Map();
+  for (const session of sessions) lifecycles.set(session.id, statusLifecycle(session.agentStatus));
+  let changed = false;
+  const next = {};
+  for (const [sessionID, lifecycle] of Object.entries(acknowledgments)) {
+    const listed = lifecycles.has(sessionID);
+    if ((listed && lifecycles.get(sessionID) !== lifecycle) || (!listed && prune)) {
+      changed = true;
+      continue;
+    }
+    next[sessionID] = lifecycle;
+  }
+  return changed ? next : acknowledgments;
+}
+
+function activityAcknowledgmentsKey(endpointIdentity) {
+  // Scoped per endpoint, like the Desktop store, because Session IDs belong to
+  // one Host.
+  return `warren.activity-acknowledgments.${encodeURIComponent(String(endpointIdentity || ""))}`;
+}
+
+export function loadActivityAcknowledgments(storage, endpointIdentity) {
+  try {
+    const parsed = JSON.parse(storage?.getItem(activityAcknowledgmentsKey(endpointIdentity)) || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, lifecycle]) => LIFECYCLES.has(lifecycle)),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function saveActivityAcknowledgments(storage, endpointIdentity, acknowledgments) {
+  const key = activityAcknowledgmentsKey(endpointIdentity);
+  try {
+    if (!Object.keys(acknowledgments || {}).length) storage?.removeItem(key);
+    else storage?.setItem(key, JSON.stringify(acknowledgments));
+  } catch {
+    // Best effort: restricted contexts can reject writes, and the record is a
+    // convenience rather than state the Host depends on.
+  }
+}

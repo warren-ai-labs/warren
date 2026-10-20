@@ -15,7 +15,14 @@ struct WarrenDesktopSettingsWindowPresenter: NSViewRepresentable {
     /// Bumped every time the page is asked for, so requesting it while its
     /// window is already open brings that window forward.
     let activation: Int
-    let content: AnyView
+    /// The values the page draws from. The window takes a new root view only
+    /// when these change: the root view re-renders on every Host, terminal and
+    /// Agent event, and handing the page a fresh root each time re-ran its
+    /// whole body while it was open.
+    let contentKey: WarrenDesktopSettingsInputs
+    /// Built only when the window is made or `contentKey` changes, so a closed
+    /// page costs the root view nothing.
+    let content: () -> AnyView
     let onClose: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -31,6 +38,7 @@ struct WarrenDesktopSettingsWindowPresenter: NSViewRepresentable {
         context.coordinator.update(
             isPresented: isPresented,
             activation: activation,
+            contentKey: contentKey,
             content: content
         )
     }
@@ -41,17 +49,31 @@ struct WarrenDesktopSettingsWindowPresenter: NSViewRepresentable {
         private var window: NSWindow?
         private var hosting: NSHostingView<AnyView>?
         private var lastActivation = Int.min
+        private var lastContentKey: WarrenDesktopSettingsInputs?
 
         /// The window the presenter owns, once it has been asked to present.
         var presentedWindow: NSWindow? { window }
 
-        func update(isPresented: Bool, activation: Int, content: AnyView) {
+        func update(
+            isPresented: Bool,
+            activation: Int,
+            contentKey: WarrenDesktopSettingsInputs,
+            content: () -> AnyView
+        ) {
             guard isPresented else {
                 window?.orderOut(nil)
                 return
             }
-            let window = window ?? makeWindow(content: content)
-            hosting?.rootView = Self.root(content)
+            let window: NSWindow
+            if let existing = self.window {
+                window = existing
+                if contentKey != lastContentKey {
+                    hosting?.rootView = Self.root(content())
+                }
+            } else {
+                window = makeWindow(content: content())
+            }
+            lastContentKey = contentKey
             if !window.isVisible || activation != lastActivation {
                 window.makeKeyAndOrderFront(nil)
             }

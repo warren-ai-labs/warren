@@ -16,6 +16,12 @@ final class WarrenDesktopMenuCenter: ObservableObject {
         case actions([WarrenDesktopContextMenuAction])
         /// A panel: a switch list, an editor, a notice list, whose own view
         /// owns its content and sits on the shared surface.
+        ///
+        /// This is the panel as it was when it opened. A panel presented
+        /// through `warrenMenuPanel` also republishes itself on every update
+        /// of the view that opened it (`WarrenDesktopMenuPanelContentKey`),
+        /// and the layer draws that live copy instead, so a panel never shows
+        /// state frozen at the moment it opened.
         case panel(AnyView)
     }
 
@@ -50,6 +56,7 @@ final class WarrenDesktopMenuCenter: ObservableObject {
         )
     }
 
+    @discardableResult
     func presentPanel(
         _ panel: AnyView,
         at anchor: CGPoint,
@@ -57,8 +64,8 @@ final class WarrenDesktopMenuCenter: ObservableObject {
         title: String? = nil,
         edge: WarrenDesktopMenuEdge = .auto,
         isPassive: Bool = false
-    ) {
-        request = Request(
+    ) -> UUID {
+        let request = Request(
             content: .panel(panel),
             anchor: anchor,
             title: title,
@@ -66,6 +73,8 @@ final class WarrenDesktopMenuCenter: ObservableObject {
             edge: edge,
             isPassive: isPassive
         )
+        self.request = request
+        return request.id
     }
 
     func dismiss() {
@@ -152,9 +161,14 @@ struct WarrenDesktopMenuPanelBindingModifier<Panel: View>: ViewModifier {
 
     @Environment(\.warrenMenuCenter) private var center: WarrenDesktopMenuCenter?
     @State private var anchor: CGPoint = .zero
+    @State private var presentedID: UUID?
 
     func body(content: Content) -> some View {
         content
+            .preference(
+                key: WarrenDesktopMenuPanelContentKey.self,
+                value: WarrenDesktopMenuPanelContentKey.live(presentedID, in: center, panel: panel)
+            )
             .background {
                 GeometryReader { geo in
                     Color.clear
@@ -165,7 +179,7 @@ struct WarrenDesktopMenuPanelBindingModifier<Panel: View>: ViewModifier {
             .onChange(of: isPresented) { presented in
                 guard let center else { return }
                 if presented {
-                    center.presentPanel(
+                    presentedID = center.presentPanel(
                         AnyView(panel()),
                         at: anchor,
                         width: width,
@@ -197,6 +211,7 @@ struct WarrenDesktopMenuPanelButtonModifier<Panel: View>: ViewModifier {
     let panel: () -> Panel
 
     @Environment(\.warrenMenuCenter) private var center: WarrenDesktopMenuCenter?
+    @State private var presentedID: UUID?
 
     func body(content: Content) -> some View {
         content.overlay {
@@ -205,7 +220,7 @@ struct WarrenDesktopMenuPanelButtonModifier<Panel: View>: ViewModifier {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         let frame = geo.frame(in: .global)
-                        center?.presentPanel(
+                        presentedID = center?.presentPanel(
                             AnyView(panel()),
                             at: CGPoint(
                                 x: frame.minX,
@@ -217,6 +232,38 @@ struct WarrenDesktopMenuPanelButtonModifier<Panel: View>: ViewModifier {
                     }
             }
         }
+        .preference(
+            key: WarrenDesktopMenuPanelContentKey.self,
+            value: WarrenDesktopMenuPanelContentKey.live(presentedID, in: center, panel: panel)
+        )
+    }
+}
+
+/// The open panel as its presenter draws it now.
+///
+/// A panel's content is a closure over its presenter's state: the notices it
+/// lists, the value a picker has selected. Evaluating it once, when the panel
+/// opens, froze that state, so marking a notice read or picking a value
+/// changed nothing on screen until the panel was opened again. The presenter
+/// instead republishes the panel under the request's id on every update while
+/// that request is the open one, and the menu overlay draws the latest copy.
+struct WarrenDesktopMenuPanelContentKey: PreferenceKey {
+    static var defaultValue: [UUID: AnyView] { [:] }
+
+    static func reduce(value: inout [UUID: AnyView], nextValue: () -> [UUID: AnyView]) {
+        value.merge(nextValue()) { _, next in next }
+    }
+
+    /// The live panel for `id`, or nothing once another request (or none)
+    /// has replaced it, so a closed panel stops being rebuilt.
+    @MainActor
+    static func live<Panel: View>(
+        _ id: UUID?,
+        in center: WarrenDesktopMenuCenter?,
+        panel: () -> Panel
+    ) -> [UUID: AnyView] {
+        guard let id, center?.request?.id == id else { return [:] }
+        return [id: AnyView(panel())]
     }
 }
 
@@ -283,13 +330,13 @@ struct WarrenDesktopMenuOverlayModifier: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        content.overlay {
+        content.overlayPreferenceValue(WarrenDesktopMenuPanelContentKey.self) { livePanels in
             // The transition belongs on the layer, the view that is inserted
             // and removed; on a view inside it nothing ever runs. The animation
             // is keyed here because the presenters set the request bare.
             ZStack {
                 if let request = center.request {
-                    WarrenDesktopMenuLayer(request: request) {
+                    WarrenDesktopMenuLayer(request: request, livePanel: livePanels[request.id]) {
                         center.dismiss()
                     }
                     .id(request.id)
@@ -376,6 +423,9 @@ struct WarrenDesktopRightClickCatcher: NSViewRepresentable {
 /// clamped to the window and flipped up when it would run off the bottom.
 struct WarrenDesktopMenuLayer: View {
     let request: WarrenDesktopMenuCenter.Request
+    /// The panel as its presenter draws it now; see
+    /// `WarrenDesktopMenuPanelContentKey`.
+    var livePanel: AnyView? = nil
     let onDismiss: () -> Void
 
     @State private var size: CGSize = .zero
@@ -401,8 +451,8 @@ struct WarrenDesktopMenuLayer: View {
                             title: request.title,
                             onDismiss: onDismiss
                         )
-                    case .panel(let view):
-                        view
+                    case .panel(let opened):
+                        (livePanel ?? opened)
                             .warrenMenuSurface(width: request.width)
                             // A panel's content rarely holds focus (the
                             // terminal keeps it), so its own Escape handling
@@ -513,6 +563,11 @@ struct WarrenDesktopActionMenu: View {
             if case .menu = self { return true }
             return false
         }
+
+        var isCheck: Bool {
+            if case .check = self { return true }
+            return false
+        }
     }
 
     private var entries: [Entry] {
@@ -555,13 +610,17 @@ struct WarrenDesktopActionMenu: View {
     }
 
     private var rows: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let entries = self.entries
+        // A page that holds any single-choice row keeps the check column on
+        // every row, so the names in a mixed menu share one text edge.
+        let unchecked: Bool? = entries.contains(where: \.isCheck) ? false : nil
+        return VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
                 switch entry {
                 case .divider:
                     WarrenDesktopMenuDivider()
                 case .button(let title, let destructive, let action):
-                    row(title: title, opensPage: false, danger: destructive, index: index) {
+                    row(title: title, isChecked: unchecked, opensPage: false, danger: destructive, index: index) {
                         action()
                         onDismiss()
                     }
@@ -571,7 +630,7 @@ struct WarrenDesktopActionMenu: View {
                         onDismiss()
                     }
                 case .menu(let title, _):
-                    row(title: title, opensPage: true, danger: false, index: index) {
+                    row(title: title, isChecked: unchecked, opensPage: true, danger: false, index: index) {
                         open(index)
                     }
                 }

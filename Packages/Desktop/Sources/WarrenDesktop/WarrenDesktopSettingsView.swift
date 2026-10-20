@@ -251,11 +251,18 @@ struct WarrenDesktopSettingsView: View {
     @State private var relayEnrollmentBusy = false
     @State private var relayEnrollmentError: String?
     @State private var relayInvite: WarrenDesktopRelayInvite?
+    /// The invite's QR code, made once when the invite arrives. Generated in
+    /// the body, Core Image ran again on every render of the Relay page.
+    @State private var relayInviteQRCode: NSImage?
     @State private var relayInviteBusy = false
     @State private var relayInviteError: String?
     @State private var lanPairingBusy = false
     @State private var lanPairingError: String?
-    @State private var usageRebuildConfirmation = false
+    /// The one blocking confirmation the page is showing, if any.
+    @State private var confirmation: SettingsConfirmation?
+    /// Why the last Revoke of a Relay device failed, by device.
+    @State private var relayRevokeErrors: [String: String] = [:]
+    @State private var hostPickerPresented = false
     @State private var usageRebuildBusy = false
     @State private var usageRebuildError: String?
     @State private var usageRebuildSummary: WarrenUsageRebuildSummary?
@@ -291,7 +298,11 @@ struct WarrenDesktopSettingsView: View {
     @State private var searchQuery = ""
     @FocusState private var searchFocused: Bool
     @State private var installedIDEs: [InstalledIDE] = []
-    @State private var customIDEs = WarrenDesktopCustomIDEStore.load()
+    /// Read when the External IDEs page appears. A `@State` default runs on
+    /// every initialisation of this view, which the root view repeats on each
+    /// render, so decoding the store there cost a defaults read and a JSON
+    /// decode per frame.
+    @State private var customIDEs: [WarrenDesktopCustomIDE] = []
     /// The editor the IDE button opens. The same key the root view uses, so
     /// the checkmark here and the button's action can never disagree.
     @AppStorage("warren.desktop.externalIDEID") private var externalIDEID = ""
@@ -422,6 +433,10 @@ struct WarrenDesktopSettingsView: View {
         .padding(8)
         .background(palette.windowBackdrop)
         .overlay { setupScriptDialogLayer }
+        // Dialogs hang from the page's root, not from the scrolled content
+        // that asked for them: a confirmation opened from the foot of a long
+        // page is placed against the window, never above the visible area.
+        .overlay { confirmationDialogLayer }
         .onExitCommand(perform: onBack)
         .onAppear(perform: applyDeepLinkPrefill)
         .onChange(of: initialSettingsSection) { _ in applyDeepLinkPrefill() }
@@ -556,10 +571,27 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
+    @ViewBuilder
     private func navigationItem(_ section: SettingsSection, palette: WarrenSettingsPalette) -> some View {
+        if section == .lanPairing, lanPairing.enabled {
+            // An open pairing window expires on a clock, not on a state
+            // change, so its tile re-reads the time while it is open.
+            TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                navigationItem(section, status: navigationStatus(for: section, at: timeline.date), palette: palette)
+            }
+        } else {
+            navigationItem(section, status: navigationStatus(for: section), palette: palette)
+        }
+    }
+
+    private func navigationItem(
+        _ section: SettingsSection,
+        status: WarrenStatusTone?,
+        palette: WarrenSettingsPalette
+    ) -> some View {
         WarrenSettingsNavItem(
             section: section,
-            status: navigationStatus(for: section),
+            status: status,
             isSelected: selectedSection == section,
             palette: palette,
             selectionNamespace: selectionNamespace,
@@ -574,8 +606,8 @@ struct WarrenDesktopSettingsView: View {
         !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// The one status a page can carry on its navigation tile.
-    private func navigationStatus(for section: SettingsSection) -> WarrenStatusTone? {
+    /// The one status a page can carry on its navigation tile, as of `date`.
+    private func navigationStatus(for section: SettingsSection, at date: Date = Date()) -> WarrenStatusTone? {
         switch section {
         case .relay:
             guard relaySettings.isEnrolled else { return nil }
@@ -584,7 +616,9 @@ struct WarrenDesktopSettingsView: View {
             if webStatus.publicAccessBusy { return .busy }
             return webStatus.tunnelRunning || webStatus.publicAccessAuthenticated ? .ok : nil
         case .lanPairing:
-            return lanPairing.enabled ? .warning : nil
+            // The window closes on its own; the dot goes with it rather than
+            // waiting for the next roster update to clear `enabled`.
+            return lanPairingIsOpen(at: date) ? .warning : nil
         case .aiTitles:
             if openAITestStatus.isTesting { return .busy }
             if openAITestStatus.failure != nil { return .failed }
@@ -623,10 +657,17 @@ struct WarrenDesktopSettingsView: View {
 
         return Group {
             if hasChoices {
-                row
-                    .warrenMenuPanel(width: 248, title: "Settings apply to") {
-                        hostPickerPanel(palette: palette)
-                    }
+                Button {
+                    hostPickerPresented.toggle()
+                } label: {
+                    row
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Settings apply to")
+                .accessibilityValue(currentHostLabel)
+                .warrenMenuPanel(isPresented: $hostPickerPresented, width: WarrenDesktopMenuMetrics.menuWidth) {
+                    hostPickerPanel(palette: palette)
+                }
             } else {
                 row
             }
@@ -638,8 +679,13 @@ struct WarrenDesktopSettingsView: View {
             ForEach(hostOptions) { option in
                 Button {
                     onSelectHost?(option.id)
+                    // A choice ends the menu, as in every other picker.
+                    hostPickerPresented = false
                 } label: {
-                    HStack(spacing: 9) {
+                    HStack(spacing: WarrenDesktopMenuMetrics.checkSpacing) {
+                        // The menu's leading check column, so the tiles and
+                        // names line up whichever Host is current.
+                        WarrenDesktopMenuCheckColumn(isChecked: option.id == selectedHostID)
                         Text(String(option.label.prefix(1)).lowercased())
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(palette.inkBody)
@@ -664,18 +710,21 @@ struct WarrenDesktopSettingsView: View {
                                     .lineLimit(1)
                             }
                         }
+                        .padding(.leading, WarrenDesktopMenuMetrics.iconSpacing - WarrenDesktopMenuMetrics.checkSpacing)
                         Spacer(minLength: 8)
-                        if option.id == selectedHostID {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(palette.inkBody)
-                        }
                     }
-                    .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                    .padding(.horizontal, WarrenDesktopMenuMetrics.rowHorizontalPadding)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: option.detail == nil
+                            ? WarrenDesktopMenuMetrics.rowHeight
+                            : WarrenDesktopMenuMetrics.twoLineRowHeight,
+                        alignment: .leading
+                    )
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(WarrenDesktopMenuRowStyle())
+                .accessibilityAddTraits(option.id == selectedHostID ? .isSelected : [])
             }
         }
     }
@@ -1001,8 +1050,8 @@ struct WarrenDesktopSettingsView: View {
                 let shortcuts: [(String, [String])] = [
                     ("Split Right", ["⌘", "D"]),
                     ("Split Below", ["⇧", "⌘", "D"]),
-                    ("Close Split Pane", ["⇧", "⌘", "W"]),
-                    ("Maximize Pane", ["⇧", "⌘", "↩"]),
+                    ("Close Pane", ["⌘", "W"]),
+                    ("Maximize Pane", ["⇧", "⌘", "⏎"]),
                     ("Cycle Pane Focus", ["⌘", "]"]),
                 ]
                 ForEach(Array(shortcuts.enumerated()), id: \.offset) { index, item in
@@ -1343,7 +1392,14 @@ struct WarrenDesktopSettingsView: View {
                 .accessibilityIdentifier("settings.external-ides.add")
             }
         }
-        .onAppear { installedIDEs = Self.probeInstalledIDEs() }
+        .onAppear {
+            customIDEs = WarrenDesktopCustomIDEStore.load()
+            // Launch Services lookups and icon renders on the main thread:
+            // probe once per page lifetime rather than on every visit.
+            if installedIDEs.isEmpty {
+                installedIDEs = Self.probeInstalledIDEs()
+            }
+        }
     }
 
     // MARK: - Notifications
@@ -1781,7 +1837,7 @@ struct WarrenDesktopSettingsView: View {
                             )
                         }
                         Button(usageRebuildBusy ? "Rebuilding…" : "Rebuild…") {
-                            usageRebuildConfirmation = true
+                            confirmation = .rebuildUsage
                         }
                         .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
                         .disabled(usageRebuildBusy || onRebuildUsage == nil)
@@ -1790,36 +1846,70 @@ struct WarrenDesktopSettingsView: View {
                 }
             }
         }
-        .overlay { usageRebuildDialog }
     }
 
-    /// The rebuild confirmation is a `WarrenDialog` like every other blocking
-    /// flow, so its ground, padding and buttons match the rest of the app
-    /// instead of arriving as a system alert.
+    /// The page's blocking confirmations. Each is a `WarrenDialog` like every
+    /// other blocking flow, so its ground, padding and buttons match the rest
+    /// of the app instead of arriving as a system alert.
     @ViewBuilder
-    private var usageRebuildDialog: some View {
-        if usageRebuildConfirmation {
-            WarrenDialog(
-                "Rebuild Usage data?",
+    private var confirmationDialogLayer: some View {
+        if let confirmation {
+            confirmationLayer(for: confirmation)
+        }
+    }
+
+    @ViewBuilder
+    private func confirmationLayer(for confirmation: SettingsConfirmation) -> some View {
+        switch confirmation {
+        case .rebuildUsage:
+            settingsConfirmation(
+                "Rebuild Usage Data?",
                 message: "Warren will re-read the transcripts of every Agent that reports token "
                     + "counts and replace those Agents' Usage aggregates. An Agent whose "
                     + "transcripts cannot be found keeps its current numbers. The Agent "
-                    + "journal and all other databases remain unchanged."
-            ) {
-                EmptyView()
-            } footer: {
-                WarrenDesktopDialogFooter(
-                    confirmLabel: "Rebuild",
-                    isDestructive: true,
-                    onCancel: { usageRebuildConfirmation = false },
-                    onConfirm: {
-                        usageRebuildConfirmation = false
-                        rebuildUsage()
-                    }
-                )
-            }
-            .onExitCommand { usageRebuildConfirmation = false }
+                    + "journal and all other databases remain unchanged.",
+                confirmLabel: "Rebuild",
+                onConfirm: rebuildUsage
+            )
+        case .resetRelay:
+            settingsConfirmation(
+                "Reset Relay Enrollment?",
+                message: "This Mac forgets its Relay URL and enrollment. Phones and browsers "
+                    + "paired through the Relay lose access until this Mac is enrolled again.",
+                confirmLabel: "Reset",
+                onConfirm: resetRelay
+            )
+        case .revokeDevice(let id, let name):
+            settingsConfirmation(
+                "Revoke \(name)?",
+                message: "This device loses access to this Host through the Relay. It can pair "
+                    + "again with a new invite.",
+                confirmLabel: "Revoke",
+                onConfirm: { revokeRelayDevice(id) }
+            )
         }
+    }
+
+    private func settingsConfirmation(
+        _ title: String,
+        message: String,
+        confirmLabel: String,
+        onConfirm: @escaping () -> Void
+    ) -> some View {
+        WarrenDialog(title, message: message) {
+            EmptyView()
+        } footer: {
+            WarrenDesktopDialogFooter(
+                confirmLabel: confirmLabel,
+                isDestructive: true,
+                onCancel: { confirmation = nil },
+                onConfirm: {
+                    confirmation = nil
+                    onConfirm()
+                }
+            )
+        }
+        .onExitCommand { confirmation = nil }
     }
 
     /// The usage panels still read the appearance tokens for their own cards.
@@ -2004,7 +2094,7 @@ struct WarrenDesktopSettingsView: View {
                     Spacer()
 
                     Button("Reset Enrollment…") {
-                        resetRelay()
+                        confirmation = .resetRelay
                     }
                     .buttonStyle(WarrenSettingsButtonStyle(kind: .danger))
                     .disabled(relayEnrollmentBusy || relayResetBusy || onResetRelay == nil)
@@ -2014,7 +2104,7 @@ struct WarrenDesktopSettingsView: View {
                         role: .button,
                         label: "Reset local Relay enrollment",
                         isEnabled: !relayEnrollmentBusy && !relayResetBusy && onResetRelay != nil,
-                        action: resetRelay
+                        action: { confirmation = .resetRelay }
                     )
                 }
 
@@ -2036,7 +2126,7 @@ struct WarrenDesktopSettingsView: View {
     private func relayInviteReveal(_ invite: WarrenDesktopRelayInvite, palette: WarrenSettingsPalette) -> some View {
         WarrenSettingsReveal {
             HStack(alignment: .top, spacing: 18) {
-                if let image = qrCodeImage(for: invite.url.absoluteString) {
+                if let image = relayInviteQRCode {
                     Image(nsImage: image)
                         .interpolation(.none)
                         .resizable()
@@ -2082,9 +2172,10 @@ struct WarrenDesktopSettingsView: View {
                 WarrenSettingsEmptyRow(text: "No other devices are currently associated.")
             } else {
                 ForEach(Array(relayDevices.enumerated()), id: \.element.id) { index, device in
+                    let name = device.clientID.isEmpty ? "Native device" : device.clientID
                     if index > 0 { WarrenSettingsRowDivider() }
                     WarrenSettingsListRow(
-                        title: device.clientID.isEmpty ? "Native device" : device.clientID,
+                        title: name,
                         subtitle: device.lastSeenAt.map { "Last active \($0.formatted(.relative(presentation: .named)))" } ?? "Last active unavailable",
                         leading: {
                             Image(systemName: "iphone")
@@ -2093,14 +2184,19 @@ struct WarrenDesktopSettingsView: View {
                                 .frame(width: 18)
                         },
                         trailing: {
-                            Button("Revoke") {
-                                onRevokeRelayDevice?(device.id) { _ in onLoadRelayDevices?() }
+                            Button("Revoke…") {
+                                confirmation = .revokeDevice(id: device.id, name: name)
                             }
                             .buttonStyle(WarrenSettingsButtonStyle(kind: .danger))
                             .disabled(onRevokeRelayDevice == nil)
                             .accessibilityIdentifier("settings.relay.device.revoke.\(device.id)")
                         }
                     )
+                    if let error = relayRevokeErrors[device.id] {
+                        WarrenSettingsStatusLine(tone: .failed, text: error, isError: true)
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 10)
+                    }
                 }
             }
         }
@@ -2515,12 +2611,19 @@ struct WarrenDesktopSettingsView: View {
         renderedTitle
     }
 
-    private var monospacedFamilies: [String] {
-        let families = NSFontManager.shared.availableFontFamilies.filter { family in
+    /// Every installed family opened as an `NSFont` to test its pitch. Done
+    /// once per launch: as a computed property it ran on every render of the
+    /// Terminal page, which is the page Settings opens on.
+    @MainActor private static let installedMonospacedFamilies: [String] = {
+        NSFontManager.shared.availableFontFamilies.filter { family in
             guard let font = NSFont(name: family, size: 12) else { return false }
             return font.isFixedPitch
         }
-        var result = families.sorted()
+        .sorted()
+    }()
+
+    private var monospacedFamilies: [String] {
+        var result = Self.installedMonospacedFamilies
         if !result.contains(fontFamily) {
             result.insert(fontFamily, at: 0)
         }
@@ -2539,6 +2642,7 @@ struct WarrenDesktopSettingsView: View {
                 switch result {
                 case let .success(value):
                     relayInvite = value
+                    relayInviteQRCode = qrCodeImage(for: value.url.absoluteString)
                     relayInviteError = nil
                 case let .failure(error):
                     relayInviteError = error.localizedDescription
@@ -2604,6 +2708,19 @@ struct WarrenDesktopSettingsView: View {
                 case let .failure(error):
                     relayEnrollmentError = error.localizedDescription
                 }
+            }
+        }
+    }
+
+    private func revokeRelayDevice(_ id: String) {
+        guard let onRevokeRelayDevice else { return }
+        relayRevokeErrors[id] = nil
+        onRevokeRelayDevice(id) { result in
+            Task { @MainActor in
+                if case let .failure(error) = result {
+                    relayRevokeErrors[id] = "Could not revoke: \(error.localizedDescription)"
+                }
+                onLoadRelayDevices?()
             }
         }
     }
@@ -2750,6 +2867,14 @@ private struct WarrenSettingsNavItem: View {
             action: onSelect
         )
     }
+}
+
+/// A blocking question the Settings page asks before an action that cannot
+/// be taken back.
+private enum SettingsConfirmation: Equatable {
+    case rebuildUsage
+    case resetRelay
+    case revokeDevice(id: String, name: String)
 }
 
 // MARK: - App icon choice

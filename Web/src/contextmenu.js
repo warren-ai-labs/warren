@@ -36,3 +36,28 @@ export function sessionMenuItems(session, actions) {
     { label: "Delete session", danger: true, action: () => actions.delete(session) },
   ];
 }
+
+/// The mobile command bar's overflow menu: the global actions that do not earn
+/// a permanent slot at phone width, then the open Session's own actions.
+export function mobileMoreMenuItems(session, { gitOpen, openSearch, toggleGit, ...sessionActions }) {
+  return [
+    { label: "Search projects", action: openSearch },
+    { label: gitOpen ? "Hide Git panel" : "Show Git panel", action: toggleGit },
+    ...(session ? sessionMenuItems(session, sessionActions) : []),
+  ];
+}
+
+/// Where a desktop menu opened at `point` actually goes: flipped to the other
+/// side of the pointer when it would overflow, and clamped to keep `margin`
+/// clear of every viewport edge.
+export function placeMenu(point, size, viewport, margin = 8) {
+  const axis = (start, length, limit) => {
+    let value = start;
+    if (value + length > limit - margin && start - length >= margin) value = start - length;
+    return Math.max(margin, Math.min(value, limit - margin - length));
+  };
+  return {
+    x: axis(point.x, size.width, viewport.width),
+    y: axis(point.y, size.height, viewport.height),
+  };
+}

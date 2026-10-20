@@ -10,7 +10,6 @@ struct WarrenDesktopSidebar: View {
     @Binding var sidebarTree: WarrenDesktopSidebarTreeState
     let selection: WarrenDesktopSidebarSelection?
     let selectedTabID: String?
-    let chromeMode: WarrenDesktopChromeMode
     let updateStatus: WarrenDesktopUpdateStatus
     let onUpdateAction: () -> Void
     let showsTasks: Bool
@@ -102,13 +101,10 @@ struct WarrenDesktopSidebar: View {
         // clipping keeps overflow on the trailing edge, where it is harmless.
         VStack(alignment: .leading, spacing: 0) {
             WarrenDesktopSidebarHeader(
-                chromeMode: chromeMode,
                 updateStatus: updateStatus,
                 onUpdateAction: onUpdateAction,
                 onToggle: toggleSidebar,
                 onCommandPalette: onCommandPalette,
-                showsActiveOnly: sidebarTree.showsActiveOnly,
-                onToggleActiveOnly: toggleActiveOnly,
                 host: hostSummary,
                 isHostPickerPresented: isHostPickerPresented,
                 isPublicAccessOn: isPublicAccessOn,
@@ -401,19 +397,16 @@ struct WarrenDesktopSidebar: View {
                 .truncationMode(.tail)
             Spacer(minLength: 0)
             HStack(spacing: WarrenSpacing.xxs) {
-                Text("\u{2318}B")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(tokens.treeSecondaryText)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(tokens.muted, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                // The menus' own keycaps, one per key, rather than a
+                // hand-drawn cap that matched nothing else in the app.
+                WarrenDesktopMenuKeycaps(keys: "\u{2318}B")
                 Text("pin")
                     .font(WarrenTypography.navigationMeta)
                     .foregroundStyle(tokens.treeQuietText)
             }
         }
         .padding(.horizontal, 14)
-        .frame(height: 36)
+        .frame(height: WarrenDesktopSidebarMetrics.footerHeight)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(tokens.cardBorder)

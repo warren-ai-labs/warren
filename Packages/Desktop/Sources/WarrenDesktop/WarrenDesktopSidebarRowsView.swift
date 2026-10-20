@@ -1338,6 +1338,9 @@ struct WarrenDesktopSidebarRows: View {
                     onAction(.setSessionPinned(session.id, !session.pinned))
                 },
                 onEnd: { onAction(.deleteSession(session.id)) },
+                onDismissActivity: session.activityMark.map { mark in
+                    { onAction(.dismissActivity(session.id, mark.activityState)) }
+                },
                 onSplitDrop: onSplitDropSession,
                 isSubagentsExpanded: isExpanded,
                 isSubagentsDoneExpanded: tree.expandedSubagentDoneSessionIDs.contains(session.id),
@@ -1536,6 +1539,8 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     var onRename: (() -> Void)? = nil
     var onTogglePin: (() -> Void)? = nil
     var onEnd: (() -> Void)? = nil
+    /// Retires the Session's activity mark, as the same entry on its Tab does.
+    var onDismissActivity: (() -> Void)? = nil
     /// Drops this Session onto a pane.
     ///
     /// The same handler the Tab strip uses, so a Session reaches a pane by
@@ -1564,6 +1569,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         onRename: (() -> Void)? = nil,
         onTogglePin: (() -> Void)? = nil,
         onEnd: (() -> Void)? = nil,
+        onDismissActivity: (() -> Void)? = nil,
         onSplitDrop: ((String, String, SplitDropTarget) -> Void)? = nil,
         isSubagentsExpanded: Bool = false,
         isSubagentsDoneExpanded: Bool = false,
@@ -1579,6 +1585,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         self.onRename = onRename
         self.onTogglePin = onTogglePin
         self.onEnd = onEnd
+        self.onDismissActivity = onDismissActivity
         self.onSplitDrop = onSplitDrop
         self.isSubagentsExpanded = isSubagentsExpanded
         self.isSubagentsDoneExpanded = isSubagentsDoneExpanded
@@ -1594,6 +1601,8 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     @Environment(\.warrenPointerInsideSidebar) private var pointerInsideSidebar
     @FocusState private var isFocused: Bool
     @State private var isHovered = false
+    /// The subagent chip highlights under its own pointer, not the row's.
+    @State private var isSubagentChipHovered = false
     /// The shell row's hover card, which trails the pointer by a beat so a row
     /// it only passes over never makes one.
     @State private var showsShellDetails = false
@@ -2111,12 +2120,13 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                 .padding(.horizontal, 5)
                 .frame(height: 16)
                 .background(
-                    isSubagentsExpanded || isHovered ? tokens.treeRowSelected : .clear,
+                    isSubagentsExpanded || isSubagentChipHovered ? tokens.treeRowSelected : .clear,
                     in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                 )
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .onHover { isSubagentChipHovered = $0 }
             .disabled(isInteractionDisabled)
             .accessibilityLabel(allDone
                 ? "\(completedSubagents.count) subagents done"
@@ -2305,18 +2315,26 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             isPinned: session.pinned,
             onTogglePin: onTogglePin,
             onRename: onRename,
-            onEnd: onEnd
+            onEnd: onEnd,
+            hasActivity: session.activityMark != nil,
+            onDismissActivity: onDismissActivity
         )
     }
 
     /// The leaf's menu model, kept separate from the view so the actions a
     /// Session can reach from the tree are assertable. A context menu is not
     /// part of the semantic tree, so this is the only place a test can see it.
+    ///
+    /// Its Session section reads in the same order as the Tab's — pin,
+    /// dismiss, rename — so the two menus differ only where their surfaces
+    /// do: the Tab closes panes, the leaf ends the Session.
     static func contextMenuActions(
         isPinned: Bool,
         onTogglePin: (() -> Void)?,
         onRename: (() -> Void)?,
-        onEnd: (() -> Void)?
+        onEnd: (() -> Void)?,
+        hasActivity: Bool = false,
+        onDismissActivity: (() -> Void)? = nil
     ) -> [WarrenDesktopContextMenuAction] {
         var actions: [WarrenDesktopContextMenuAction] = []
         if let onTogglePin {
@@ -2324,6 +2342,9 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                 title: isPinned ? "Unpin Session" : "Pin Session",
                 action: onTogglePin
             ))
+        }
+        if hasActivity, let onDismissActivity {
+            actions.append(.button(title: "Dismiss Activity", action: onDismissActivity))
         }
         if let onRename {
             actions.append(.button(title: "Rename Session", action: onRename))
@@ -2519,10 +2540,17 @@ struct WarrenDesktopActivityShimmer: ViewModifier {
     static let sweepShare: Double = 0.7
     /// How wide the moving band is, as a share of the line's width.
     static let bandWidth: Double = 0.6
+    /// The sweep's frame interval. The band is soft and slow, so 10 Hz reads
+    /// as drift; every working row redraws its window at this rate.
+    static let frameInterval: TimeInterval = 1.0 / 10
 
     func body(content: Content) -> some View {
         if isActive, !reduceMotion {
-            TimelineView(.animation(minimumInterval: 1.0 / 15, paused: false)) { context in
+            TimelineView(SweepSchedule(
+                period: Self.period,
+                sweepEnd: Self.period * Self.sweepShare,
+                interval: Self.frameInterval
+            )) { context in
                 content.foregroundStyle(gradient(at: context.date))
             }
         } else {
@@ -2561,6 +2589,27 @@ struct WarrenDesktopActivityShimmer: ViewModifier {
     static func smoothstep(_ value: Double) -> Double {
         let clamped = min(max(value, 0), 1)
         return clamped * clamped * (3 - 2 * clamped)
+    }
+
+    /// Frames only while the band crosses: one lands on the sweep's end so the
+    /// band comes to rest, and the next is the following cycle's start. The
+    /// rest third of each cycle draws nothing.
+    struct SweepSchedule: TimelineSchedule {
+        let period: TimeInterval
+        let sweepEnd: TimeInterval
+        let interval: TimeInterval
+
+        func entries(from startDate: Date, mode: TimelineScheduleMode) -> UnfoldFirstSequence<Date> {
+            sequence(first: startDate) { date in date.addingTimeInterval(step(after: date)) }
+        }
+
+        func step(after date: Date) -> TimeInterval {
+            let raw = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
+            let elapsed = raw < 0 ? raw + period : raw
+            let step = elapsed < sweepEnd ? min(interval, sweepEnd - elapsed) : period - elapsed
+            // Never stall on a rounding sliver at either boundary.
+            return max(step, 0.001)
+        }
     }
 }
 
@@ -2675,10 +2724,15 @@ struct WarrenDesktopSidebarSectionHeader: View {
         .onHover { isHovered = $0 }
     }
 
+    /// The section label's type, shared with the multi-Host "PROJECTS ·
+    /// HOSTS" heading so TASKS, PROJECTS and that heading read as one set.
+    static let titleFont = Font.system(size: 10.5, weight: .semibold)
+    static let titleTracking: CGFloat = 1.1
+
     private func titleLabel(tokens: WarrenColorTokens) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 10.5, weight: .semibold))
-            .tracking(1.1)
+            .font(Self.titleFont)
+            .tracking(Self.titleTracking)
             .foregroundStyle(tokens.treeQuietText)
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2834,7 +2888,9 @@ struct WarrenDesktopDeleteProjectConfirmation: View {
 }
 
 /// The shared Cancel / primary footer for a destructive confirmation.
-/// Primary is rightmost and carries its shortcut as a keycap.
+/// Primary is rightmost and carries its shortcut as a keycap, read from the
+/// same definition the button binds, so a destructive confirm shows and takes
+/// Command-Return.
 struct WarrenDesktopDialogFooter: View {
     let confirmLabel: String
     var isDestructive = false
@@ -2857,7 +2913,7 @@ struct WarrenDesktopDialogFooter: View {
                 HStack(spacing: 6) {
                     Text(confirmLabel)
                     WarrenDialogKeycap(
-                        "\u{2318}\u{23CE}",
+                        WarrenDialogConfirmButtonStyle.keycap(isDestructive: isDestructive),
                         isOnPrimary: !isDestructive
                     )
                 }

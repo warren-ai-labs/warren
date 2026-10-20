@@ -16,7 +16,6 @@ import WarrenObservation
 public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     public let projection: WarrenDesktopProjection
     public let navigation: WarrenDesktopNavigationState
-    public let chromeMode: WarrenDesktopChromeMode
     public let updateStatus: WarrenDesktopUpdateStatus
     public let onUpdateAction: () -> Void
     public let webStatus: WarrenDesktopWebStatus
@@ -223,6 +222,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// `Task` started when the request was made would keep the projection it
     /// captured then — which is precisely the projection without the Session it
     /// is waiting for, so every attempt would decide there is nothing new.
+    ///
+    /// The tick is attached only while a split is pending: its subscriber is a
+    /// background view that exists just for that time, so the autoconnected
+    /// timer stops with it and an idle window does not wake the main thread
+    /// 20 times a second for nothing.
     private let pendingSplitTick = Timer
         .publish(every: 0.05, on: .main, in: .common)
         .autoconnect()
@@ -289,7 +293,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     public init(
         projection: WarrenDesktopProjection,
         navigation: WarrenDesktopNavigationState? = nil,
-        chromeMode: WarrenDesktopChromeMode = .workspace,
         updateStatus: WarrenDesktopUpdateStatus = .none,
         onUpdateAction: @escaping () -> Void = {},
         actions: WarrenDesktopActions = WarrenDesktopActions(),
@@ -376,7 +379,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     ) {
         self.projection = projection
         self.navigation = navigation ?? WarrenDesktopNavigationReducer.initial(for: projection)
-        self.chromeMode = chromeMode
         self.updateStatus = updateStatus
         self.onUpdateAction = onUpdateAction
         self.webStatus = webStatus
@@ -595,7 +597,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             WarrenDesktopSettingsWindowPresenter(
                 isPresented: settingsPresented,
                 activation: settingsActivation,
-                content: settingsOverlay,
+                contentKey: settingsInputs,
+                content: { settingsOverlay },
                 onClose: { setSettingsPresented(false) }
             )
             .frame(width: 0, height: 0)
@@ -655,8 +658,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                         ? WarrenLayoutMetrics.editorRegionMinimumWidth
                             + WarrenLayoutMetrics.editorSplitDividerWidth
                         : 0)),
-            minHeight: (chromeMode.showsIndependentTopBar ? WarrenLayoutMetrics.topBarHeight : 0)
-                + WarrenLayoutMetrics.windowInset * 2
+            minHeight: WarrenLayoutMetrics.windowInset * 2
                 + WarrenLayoutMetrics.cardGap
                 + WarrenLayoutMetrics.tabBarHeight
                 + currentTree.windowMinimumPaneHeight
@@ -784,11 +786,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         .onChange(of: activeVisibleSessions) { sessions in
             onActiveScreenSessionsChanged(sessions)
         }
-        .onReceive(pendingSplitTick) { _ in
-            // A split waits for the Session it asked for, and that arrival is
-            // not guaranteed to reach this view as a change. The tick is what
-            // keeps the completion from depending on one.
-            reconcilePendingSplitsOnTick()
+        .background {
+            if !pendingSplits.isEmpty {
+                Color.clear.onReceive(pendingSplitTick) { _ in
+                    // A split waits for the Session it asked for, and that
+                    // arrival is not guaranteed to reach this view as a change.
+                    // The tick is what keeps the completion from depending on one.
+                    reconcilePendingSplitsOnTick()
+                }
+            }
         }
         .onChange(of: splitTrees) { _ in
             // The strip's order has to follow the layout, because ⌘1-9, tab
@@ -1446,7 +1452,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     externalIDEOptions: externalIDEOptions
                 )
             },
-            chromeMode: chromeMode,
             isSidebarCollapsed: sidebarState.isCollapsed,
             onToggleSidebar: toggleSidebar,
             sidebarAttentionMark: sidebarAttentionMark,
@@ -1457,10 +1462,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             rightSidebarOpen: showsRightSidebar(for: presentation.workspace),
             rightSidebarAvailable: rightSidebarAvailable(for: presentation.workspace),
             onToggleRightSidebar: { toggleRightSidebar(in: presentation) },
-            collapsedHost: chromeMode == .workspace && sidebarState.isCollapsed
+            collapsedHost: sidebarState.isCollapsed
                 ? WarrenDesktopCollapsedHost(
                     name: projection.host.name,
-                    initial: String(projection.host.name.prefix(1)).lowercased(),
+                    reachability: WarrenDesktopHostReachability(projection.connectionState),
                     isPublicAccessOn: webStatus.tunnelRunning,
                     isPickerPresented: chromePopover == .hostPicker,
                     toggle: {
@@ -1558,7 +1563,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             sidebarTree: $sidebarTree,
             selection: navigation.selection,
             selectedTabID: navigation.selectedTabID,
-            chromeMode: chromeMode,
             updateStatus: updateStatus,
             onUpdateAction: onUpdateAction,
             showsTasks: showsTasks,
@@ -1649,15 +1653,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             : nil
         return AnyView(
             VStack(spacing: WarrenLayoutMetrics.cardGap) {
-                if chromeMode.showsIndependentTopBar {
-                    WarrenDesktopTopBar(
-                        hostName: projection.host.name,
-                        isSidebarCollapsed: sidebarState.isCollapsed,
-                        onToggleSidebar: toggleSidebar,
-                        sidebarAttentionMark: sidebarAttentionMark,
-                        onSidebarButtonHover: { sidebarPeek.setPointer(.sidebarButton, isInside: $0) }
-                    )
-                }
                 // The presets live behind the tab bar's "+" button, so the
                 // chrome above the Terminal is this one row. It sits above the
                 // panes so the group shelf it drops is drawn over them.
@@ -1862,6 +1857,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onMaximizePane: { paneID in
                     handleMaximizePane(paneID: paneID, in: presentation)
                 },
+                onRestoreLayout: {
+                    guard let scope = currentScopeKey(presentation: presentation) else { return }
+                    zoomedPaneIDs.removeValue(forKey: scope)
+                },
                 onResizeSplit: { splitPath, ratio in
                     handleResizeSplit(splitPath: splitPath, ratio: ratio, in: presentation)
                 },
@@ -1876,6 +1875,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 onUnfoldPane: { paneID in
                     handleSelectPane(paneID, in: presentation, tree: currentTree)
                 },
+                onRetryConnection: onRetryConnection,
+                // Other Hosts are listed at the sidebar's foot; with the rail
+                // collapsed that list is gone, so the card brings it back.
+                onSwitchHost: sidebarState.isCollapsed && !sidebarOtherHosts.isEmpty
+                    ? { toggleSidebar() }
+                    : nil,
                 onAddProject: { dispatch(.addProject) },
                 onImportSuperset: { dispatch(.importSuperset) },
                 terminalSurface: terminalSurface
@@ -1984,6 +1989,33 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
     }
 
+    /// Every value `settingsOverlay` hands the page. Its closures all reach
+    /// the app model or this view's state through references, so the page
+    /// keeps working when it is not rebuilt; only these values can go stale.
+    private var settingsInputs: WarrenDesktopSettingsInputs {
+        WarrenDesktopSettingsInputs(
+            hostName: projection.host.name,
+            webStatus: webStatus,
+            lanPairing: lanPairing,
+            relaySettings: relaySettings,
+            relayDevices: relayDevices,
+            defaultRuntime: defaultRuntime,
+            autoOpenShell: autoOpenShell,
+            autoStartAI: autoStartAI,
+            openAIBaseURL: openAIBaseURL,
+            openAIModel: openAIModel,
+            openAITitleEnabled: openAITitleEnabled,
+            projects: projection.groups.map(\.project),
+            usageStats: usageStats,
+            usageState: usageState,
+            initialSettingsSection: settingsDeepLinkSection,
+            publicAccessPrefill: settingsPublicAccessPrefill,
+            relayPrefill: settingsRelayPrefill,
+            hostOptions: endpointOptions,
+            selectedHostID: selectedEndpointID
+        )
+    }
+
     private var settingsOverlay: AnyView {
         AnyView(
             WarrenDesktopSettingsView(
@@ -2014,8 +2046,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 openAITitleEnabled: openAITitleEnabled,
                 onSetOpenAISetting: onSetOpenAISetting,
                 onTestOpenAI: onTestOpenAI,
+                // Projects only: the page never reads a group's Workspaces,
+                // and their branch and status churn is not a Settings change.
                 projects: projection.groups.map(\.project),
-                projectGroups: projection.groups,
                 onSetProjectSetupScript: onSetProjectSetupScript,
                 usageStats: usageStats,
                 usageState: usageState,
@@ -3920,4 +3953,29 @@ private enum WarrenDesktopPerformance {
 private enum WarrenDesktopSidebarKeys {
     static let width = "warren.desktop.sidebarWidth"
     static let collapsed = "warren.desktop.sidebarCollapsed"
+}
+
+/// The values the settings page is drawn from, compared to decide whether its
+/// window needs a new root view. Closures are left out on purpose: they are
+/// rebuilt on every render and can never compare equal.
+struct WarrenDesktopSettingsInputs: Equatable {
+    var hostName = ""
+    var webStatus = WarrenDesktopWebStatus()
+    var lanPairing = WarrenDesktopLANPairing()
+    var relaySettings = WarrenDesktopRelaySettings()
+    var relayDevices: [WarrenDesktopRelayDevice] = []
+    var defaultRuntime: String?
+    var autoOpenShell = false
+    var autoStartAI = false
+    var openAIBaseURL = ""
+    var openAIModel = ""
+    var openAITitleEnabled = false
+    var projects: [Project] = []
+    var usageStats = WarrenUsageStats()
+    var usageState: WarrenUsageLoadState = .idle
+    var initialSettingsSection: WarrenDesktopSettingsSection?
+    var publicAccessPrefill: WarrenDesktopPublicAccessPrefill?
+    var relayPrefill: WarrenDesktopRelayPrefill?
+    var hostOptions: [WarrenDesktopEndpointOption] = []
+    var selectedHostID = ""
 }

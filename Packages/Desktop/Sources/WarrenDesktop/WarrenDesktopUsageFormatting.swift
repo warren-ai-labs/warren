@@ -22,11 +22,42 @@ public enum WarrenUsageFormatting {
 
     /// Exact token count with digit grouping, for tooltips.
     public static func exact(_ value: Int64) -> String {
+        exactFormatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
+    // Formatters are expensive to make, and the usage page asks for hundreds
+    // of strings per render: every heatmap cell labels itself with a day, a
+    // token count and an amount. These are configured once and only read
+    // afterwards, which Foundation's formatters allow from any thread.
+    nonisolated(unsafe) private static let exactFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         formatter.locale = .autoupdatingCurrent
-        return formatter.string(from: NSNumber(value: value)) ?? String(value)
-    }
+        return formatter
+    }()
+
+    nonisolated(unsafe) private static let moneyFormatters: [Int: NumberFormatter] = {
+        var formatters: [Int: NumberFormatter] = [:]
+        for fractionDigits in [2, 3, 4] {
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .currency
+            formatter.currencyCode = "USD"
+            formatter.locale = .autoupdatingCurrent
+            formatter.minimumFractionDigits = fractionDigits
+            formatter.maximumFractionDigits = fractionDigits
+            formatters[fractionDigits] = formatter
+        }
+        return formatters
+    }()
+
+    nonisolated(unsafe) private static let percentFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .percent
+        formatter.locale = .autoupdatingCurrent
+        formatter.minimumFractionDigits = 1
+        formatter.maximumFractionDigits = 1
+        return formatter
+    }()
 
     /// Money, with precision scaled to magnitude.
     ///
@@ -46,12 +77,9 @@ public enum WarrenUsageFormatting {
         default:
             fractionDigits = 2
         }
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        formatter.locale = .autoupdatingCurrent
-        formatter.minimumFractionDigits = fractionDigits
-        formatter.maximumFractionDigits = fractionDigits
+        guard let formatter = moneyFormatters[fractionDigits] else {
+            return String(format: "$%.2f", usd)
+        }
         return formatter.string(from: NSNumber(value: usd)) ?? String(format: "$%.2f", usd)
     }
 
@@ -66,12 +94,7 @@ public enum WarrenUsageFormatting {
 
     /// Percentage with one decimal.
     public static func percent(_ ratio: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .percent
-        formatter.locale = .autoupdatingCurrent
-        formatter.minimumFractionDigits = 1
-        formatter.maximumFractionDigits = 1
-        return formatter.string(from: NSNumber(value: ratio)) ?? "—"
+        percentFormatter.string(from: NSNumber(value: ratio)) ?? "—"
     }
 
     /// Long-form day for tooltips, from a `yyyy-MM-dd` key.
@@ -100,18 +123,12 @@ public enum WarrenUsageFormatting {
     }
 
     private static func format(_ day: String, template: String, calendar: Calendar) -> String {
-        let parser = DateFormatter()
-        parser.calendar = calendar
-        parser.locale = Locale(identifier: "en_US_POSIX")
-        parser.timeZone = calendar.timeZone
-        parser.dateFormat = "yyyy-MM-dd"
-        guard let date = parser.date(from: day) else { return day }
-        let display = DateFormatter()
-        display.calendar = calendar
-        display.locale = .autoupdatingCurrent
-        display.timeZone = calendar.timeZone
-        display.setLocalizedDateFormatFromTemplate(template)
-        return display.string(from: date)
+        let formatters = WarrenUsageDayFormatterCache.shared.formatters(
+            template: template,
+            calendar: calendar
+        )
+        guard let date = formatters.parser.date(from: day) else { return day }
+        return formatters.display.string(from: date)
     }
 
     /// A call count, which is a count of things rather than a token magnitude.
@@ -192,5 +209,44 @@ public enum WarrenUsageFormatting {
             return String(Int(rounded))
         }
         return String(format: "%.1f", rounded)
+    }
+}
+
+/// The parser and display formatter for each day template, reused while the
+/// calendar they were made for is the one asked for. A change of calendar,
+/// time zone or locale yields an unequal `Calendar` and a fresh pair.
+private final class WarrenUsageDayFormatterCache: @unchecked Sendable {
+    static let shared = WarrenUsageDayFormatterCache()
+
+    private struct Entry {
+        let calendar: Calendar
+        let parser: DateFormatter
+        let display: DateFormatter
+    }
+
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
+
+    func formatters(
+        template: String,
+        calendar: Calendar
+    ) -> (parser: DateFormatter, display: DateFormatter) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let entry = entries[template], entry.calendar == calendar {
+            return (entry.parser, entry.display)
+        }
+        let parser = DateFormatter()
+        parser.calendar = calendar
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = calendar.timeZone
+        parser.dateFormat = "yyyy-MM-dd"
+        let display = DateFormatter()
+        display.calendar = calendar
+        display.locale = .autoupdatingCurrent
+        display.timeZone = calendar.timeZone
+        display.setLocalizedDateFormatFromTemplate(template)
+        entries[template] = Entry(calendar: calendar, parser: parser, display: display)
+        return (parser, display)
     }
 }

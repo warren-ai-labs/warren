@@ -537,6 +537,27 @@ test("a late pong that data already answered is not surfaced to the application"
   );
 });
 
+test("control messages reach the application already parsed", () => {
+  FakeSocket.instances = [];
+  const received = [];
+  const connection = new WarrenConnection({
+    url: "ws://relay/v1/ws",
+    token: "secret",
+    WebSocketClass: FakeSocket,
+    onMessage: (event, parsed) => received.push([event.data, parsed]),
+  });
+  connection.start();
+  const socket = FakeSocket.instances[0];
+  socket.open();
+  received.length = 0;
+  socket.onmessage({ data: JSON.stringify({ t: "roster", state: {} }) });
+  socket.onmessage({ data: "{not json" });
+  assert.deepEqual(received[0][1], { t: "roster", state: {} });
+  // An unparseable frame still reaches the application, which reports it.
+  assert.deepEqual(received[1], ["{not json", undefined]);
+  connection.stop?.();
+});
+
 // A controllable clock for the presenter: `run()` fires the timers a virtual
 // advance would have fired, so grace-period rules are tested without waiting.
 function fakeTimers() {

@@ -154,6 +154,7 @@
   --text-xl: 20px;
   --text-2xl: 22px;
   --text-display: 30px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --weight-light: 300;
   --weight-regular: 400;
@@ -190,6 +191,9 @@
   --layer-command: 40;
   --layer-modal: 50;
   --layer-menu: 60;
+  /* Feedback outranks every surface, so a result is never hidden by the panel
+     that caused it. */
+  --layer-toast: 70;
 
   /* Motion. */
   --duration-fast: 100ms;
@@ -268,7 +272,7 @@ body,
 }
 
 body {
-  font: var(--text-base)/var(--leading-normal) -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font: var(--text-base)/var(--leading-normal) var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -359,6 +363,9 @@ button:disabled {
   grid-template-columns: 280px minmax(0, 1fr);
   height: 100%;
   min-height: 0;
+  /* `viewport-fit=cover` hands the notch to the page; a landscape iPhone
+     needs the side insets back so content does not sit under it. */
+  padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
 }
 
 .app[hidden] {
@@ -551,6 +558,15 @@ button:disabled {
       #00000026 calc(100% - var(--scroll-fade-bottom) * 0.30),
       #0000000d calc(100% - var(--scroll-fade-bottom) * 0.15),
       transparent);
+  }
+}
+
+/* The global reduced-motion rule also stops these scroll-driven timelines,
+   which would freeze the bottom fade at full strength and leave the last row
+   looking half-hidden forever. Without a timeline, keep a clean edge. */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-scroll[data-overflow="true"] {
+    --scroll-fade-bottom: 0px;
   }
 }
 
@@ -873,12 +889,6 @@ button:disabled {
   background: var(--color-status-connecting);
 }
 
-/* A Host attention payload outranks the lifecycle color. Keep stale
-   ready/working snapshots yellow until the Host explicitly clears it. */
-.activity.attention {
-  background: var(--color-status-waiting);
-}
-
 @keyframes ping {
   75%,
   100% {
@@ -1123,6 +1133,25 @@ button:disabled {
   }
 }
 
+/* Reduced motion stops the scroll timeline above, so fall back to the edges
+   the overflow classes already report. */
+@media (prefers-reduced-motion: reduce) {
+  .tabs.fade-left:not(.fade-right) {
+    --scroll-fade-left: var(--scroll-fade-size);
+    --scroll-fade-right: 0px;
+  }
+
+  .tabs.fade-right:not(.fade-left) {
+    --scroll-fade-left: 0px;
+    --scroll-fade-right: var(--scroll-fade-size);
+  }
+
+  .tabs.fade-left.fade-right {
+    --scroll-fade-left: var(--scroll-fade-size);
+    --scroll-fade-right: var(--scroll-fade-size);
+  }
+}
+
 .tabs-chevron {
   position: absolute;
   top: 50%;
@@ -1177,6 +1206,13 @@ button:disabled {
   transition-property: background-color, color, border-color;
   transition-duration: var(--duration-fast);
   transition-timing-function: var(--ease-out);
+}
+
+/* The strip scrolls, so an outset ring would be clipped top and bottom; draw
+   it inside the tab instead. */
+.tab:focus-visible,
+.mobile-tab:focus-visible {
+  outline-offset: -2px;
 }
 
 .tab.active,
@@ -1384,9 +1420,9 @@ button:disabled {
 }
 
 .pane-title .pane-action.has-attention {
-  color: var(--color-status-working);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-working) 48%, transparent);
-  background: color-mix(in srgb, var(--color-status-working) 12%, transparent);
+  color: var(--color-status-waiting);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-waiting) 48%, transparent);
+  background: color-mix(in srgb, var(--color-status-waiting) 12%, transparent);
 }
 
 .terminal-shell {
@@ -1425,13 +1461,11 @@ button:disabled {
   max-width: var(--measure-transcript);
   margin-inline: auto;
   padding: 6px 18px;
-  border-top: 1px solid color-mix(in srgb, var(--color-status-warning) 34%, transparent);
+  /* Every request takes the one attention hue the sidebar dot uses; the copy,
+     not the color, says whether it is an approval or a question. */
+  border-top: 1px solid color-mix(in srgb, var(--color-status-waiting) 34%, transparent);
   background: var(--color-bg-surface);
   color: var(--color-text-secondary);
-}
-
-.agent-attention.input {
-  border-top-color: color-mix(in srgb, var(--color-text-link) 34%, transparent);
 }
 
 .agent-attention-icon {
@@ -1442,17 +1476,9 @@ button:disabled {
   flex: 0 0 auto;
   border: 1px solid currentColor;
   border-radius: var(--radius-circle);
-  color: var(--color-status-warning);
+  color: var(--color-status-waiting);
   font-size: 11px;
   font-weight: var(--weight-semibold);
-}
-
-.agent-attention.input .agent-attention-icon {
-  color: var(--color-text-link);
-}
-
-.agent-attention.approval .agent-attention-icon {
-  color: var(--color-status-working);
 }
 
 .agent-attention-copy {
@@ -1485,9 +1511,9 @@ button:disabled {
   margin-inline-start: auto;
   min-height: 28px;
   padding: 0 12px;
-  border: 1px solid color-mix(in srgb, var(--color-status-warning) 42%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-status-waiting) 42%, transparent);
   border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--color-status-warning) 12%, transparent);
+  background: color-mix(in srgb, var(--color-status-waiting) 12%, transparent);
   color: var(--color-text-primary);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
@@ -1496,18 +1522,8 @@ button:disabled {
 }
 
 .agent-attention-action:hover {
-  background: color-mix(in srgb, var(--color-status-warning) 24%, transparent);
-  border-color: color-mix(in srgb, var(--color-status-warning) 60%, transparent);
-}
-
-.agent-attention.input .agent-attention-action {
-  border-color: color-mix(in srgb, var(--color-text-link) 42%, transparent);
-  background: color-mix(in srgb, var(--color-text-link) 12%, transparent);
-}
-
-.agent-attention.input .agent-attention-action:hover {
-  background: color-mix(in srgb, var(--color-text-link) 24%, transparent);
-  border-color: color-mix(in srgb, var(--color-text-link) 60%, transparent);
+  background: color-mix(in srgb, var(--color-status-waiting) 24%, transparent);
+  border-color: color-mix(in srgb, var(--color-status-waiting) 60%, transparent);
 }
 
 .agent-working {
@@ -1768,14 +1784,14 @@ button:disabled {
 
 .agent-body {
   margin: 0;
-  font: var(--text-sm)/1.55 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font: var(--text-sm)/1.55 var(--font-mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .agent-markdown {
   color: var(--color-text-primary);
-  font: var(--text-base)/var(--leading-relaxed) -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font: var(--text-base)/var(--leading-relaxed) var(--font-sans);
   overflow-wrap: anywhere;
 }
 
@@ -1797,12 +1813,12 @@ button:disabled {
   border-radius: var(--radius-md);
   background: var(--color-bg-scrim-soft);
   color: var(--color-text-primary);
-  font: var(--text-sm)/1.5 ui-monospace, monospace;
+  font: var(--text-sm)/1.5 var(--font-mono);
   white-space: pre;
 }
 
 .agent-markdown code {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 
 .agent-markdown pre code {
@@ -1815,7 +1831,7 @@ button:disabled {
   border-radius: var(--radius-xs);
   background: var(--color-bg-sunken);
   color: var(--color-text-primary);
-  font: var(--text-base) / 1 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font: var(--text-base) / 1 var(--font-mono);
   border: 1px solid var(--color-border-subtle);
 }
 
@@ -1880,7 +1896,7 @@ button:disabled {
 .agent-tool-name {
   flex: 0 0 auto;
   color: var(--color-text-primary);
-  font: var(--weight-semibold) var(--text-sm) ui-monospace, monospace;
+  font: var(--weight-semibold) var(--text-sm) var(--font-mono);
 }
 
 .agent-tool-summary {
@@ -1891,7 +1907,7 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-secondary);
-  font: var(--text-sm) ui-monospace, monospace;
+  font: var(--text-sm) var(--font-mono);
 }
 
 .agent-tool-card.command {
@@ -1908,13 +1924,13 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-primary);
-  font: var(--text-sm)/1.5 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font: var(--text-sm)/1.5 var(--font-mono);
 }
 
 .agent-tool-files-preview {
   flex: 0 1 auto;
   color: var(--color-text-tertiary);
-  font: var(--text-xs) ui-monospace, monospace;
+  font: var(--text-xs) var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2024,7 +2040,7 @@ button:disabled {
   border-radius: var(--radius-md);
   background: var(--color-bg-sunken);
   color: var(--color-text-primary);
-  font: 12.5px/1.55 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font: 12.5px/1.55 var(--font-mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2041,7 +2057,7 @@ button:disabled {
 
 .agent-tool-error {
   color: var(--color-text-danger);
-  font: var(--text-sm)/1.5 ui-monospace, monospace;
+  font: var(--text-sm)/1.5 var(--font-mono);
   white-space: pre-wrap;
 }
 
@@ -2115,7 +2131,7 @@ button:disabled {
   border-radius: 0;
   color: var(--color-text-secondary);
   background: none;
-  font: var(--text-sm) ui-monospace, monospace;
+  font: var(--text-sm) var(--font-mono);
   white-space: nowrap;
 }
 
@@ -2237,7 +2253,7 @@ button:disabled {
   border-radius: var(--radius-full);
   background: var(--fill-agent-chip);
   color: var(--color-text-secondary);
-  font: var(--text-xs) ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font: var(--text-xs) var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2785,7 +2801,7 @@ button:disabled {
   border: 0;
   background: transparent;
   color: var(--color-text-primary);
-  font: var(--text-md)/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font: var(--text-md)/1.45 var(--font-sans);
   outline: 0;
 }
 
@@ -2887,7 +2903,7 @@ button:disabled {
   outline: 0;
   background: transparent;
   color: var(--color-text-primary);
-  font: var(--text-sm) ui-monospace, monospace;
+  font: var(--text-sm) var(--font-mono);
 }
 
 .terminal-search input::placeholder {
@@ -2897,7 +2913,7 @@ button:disabled {
 .terminal-search-count {
   min-width: 54px;
   color: var(--color-text-secondary);
-  font: var(--text-xs) ui-monospace, monospace;
+  font: var(--text-xs) var(--font-mono);
   text-align: end;
   white-space: nowrap;
 }
@@ -3015,7 +3031,7 @@ button:disabled {
   background: var(--color-bg-sunken);
   color: var(--color-text-primary);
   font-size: var(--text-sm);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font-family: var(--font-sans);
   text-align: center;
   outline: none;
   transition: border-color var(--duration-base) var(--ease-out);
@@ -3023,6 +3039,7 @@ button:disabled {
 
 .auth-token-input:focus {
   border-color: var(--color-focus-ring);
+  box-shadow: var(--shadow-focus-ring);
 }
 
 .auth-token-input::placeholder {
@@ -3048,6 +3065,7 @@ button:disabled {
   display: none;
   width: 100%;
   height: 100%;
+  padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
   background: var(--color-bg-page);
 }
 
@@ -3127,13 +3145,13 @@ button:disabled {
   border-radius: var(--radius-sm);
   background: var(--fill-tertiary);
   color: var(--color-text-primary);
-  font: var(--text-base) -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font: var(--text-base) var(--font-sans);
   outline: 0;
 }
 
 .settings-search input:focus {
   border-color: var(--color-focus-ring);
-  box-shadow: 0 0 0 2px var(--color-accent-subtle);
+  box-shadow: var(--shadow-focus-ring);
 }
 
 .settings-search input::placeholder {
@@ -3325,13 +3343,13 @@ button:disabled {
   border-radius: var(--radius-sm);
   background: var(--color-bg-sunken);
   color: var(--color-text-primary);
-  font: var(--text-md) ui-monospace, monospace;
+  font: var(--text-md) var(--font-mono);
 }
 
 .settings input:focus {
   outline: 0;
   border-color: var(--color-focus-ring);
-  box-shadow: 0 0 0 2px var(--color-accent-subtle);
+  box-shadow: var(--shadow-focus-ring);
 }
 
 .font-preview {
@@ -3471,7 +3489,7 @@ button:disabled {
   border-radius: var(--radius-sm);
   background: var(--fill-hover);
   color: var(--color-text-secondary);
-  font: var(--text-sm) ui-monospace, monospace;
+  font: var(--text-sm) var(--font-mono);
   cursor: pointer;
   transition-property: color, background-color, transform;
   transition-duration: var(--duration-fast);
@@ -3574,7 +3592,7 @@ button:disabled {
   outline: 0;
   background: transparent;
   color: var(--color-text-primary);
-  font: var(--text-md)/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font: var(--text-md)/1.5 var(--font-sans);
 }
 
 .search-input::placeholder {
@@ -3588,7 +3606,7 @@ button:disabled {
   border-radius: var(--radius-xs);
   background: var(--fill-tertiary);
   color: var(--color-text-secondary);
-  font: var(--text-xs) ui-monospace, monospace;
+  font: var(--text-xs) var(--font-mono);
   letter-spacing: 0.05em;
 }
 
@@ -3867,13 +3885,13 @@ button:disabled {
 
 .worktree-candidate-title code {
   color: var(--color-text-secondary);
-  font: var(--text-sm) ui-monospace, monospace;
+  font: var(--text-sm) var(--font-mono);
 }
 
 .worktree-candidate-path {
   overflow: hidden;
   color: var(--color-text-secondary);
-  font: var(--text-sm) ui-monospace, monospace;
+  font: var(--text-sm) var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4169,7 +4187,7 @@ button:disabled {
 
 .transient-feedback {
   position: fixed;
-  z-index: var(--layer-inline-overlay);
+  z-index: var(--layer-toast);
   inset-inline-start: 50%;
   bottom: calc(var(--space-lg) + env(safe-area-inset-bottom));
   display: inline-flex;
@@ -4225,6 +4243,14 @@ button:disabled {
 .braille-spinner i:nth-child(7) { grid-area: 3 / 1; animation-delay: -0.54s; }
 .braille-spinner i:nth-child(8) { grid-area: 2 / 1; animation-delay: -0.63s; }
 
+/* With motion reduced the dots cannot chase, so they hold a static, clearly
+   visible glyph instead of eight dots frozen at their resting dimness. */
+@media (prefers-reduced-motion: reduce) {
+  .braille-spinner i {
+    opacity: 0.6;
+  }
+}
+
 .agent-interrupted-tag {
   display: inline-block;
   margin-inline-end: 6px;
@@ -4275,6 +4301,7 @@ button:disabled {
     inset-block: 0 auto 0 0;
     width: min(78vw, 360px);
     padding-top: env(safe-area-inset-top);
+    padding-inline-start: env(safe-area-inset-left);
     transform: translateX(-102%);
     transition-property: transform;
     transition-duration: var(--duration-slow);
@@ -4683,8 +4710,9 @@ button:disabled {
   }
 
   .agent-view-toggle button {
+    position: relative;
     height: 26px;
-    width: 30px;
+    width: 36px;
     padding-inline: 0;
     border: 0;
     border-radius: var(--radius-full);
@@ -4697,6 +4725,14 @@ button:disabled {
   .agent-view-toggle button svg {
     width: 15px;
     height: 15px;
+  }
+
+  /* The pill stays compact, but each half takes a full 44px-tall touch target
+     that reaches the bar's edges. */
+  .agent-view-toggle button::after {
+    content: "";
+    position: absolute;
+    inset: -9px -1px;
   }
 
   .agent-view-toggle button.active {
@@ -4775,54 +4811,6 @@ button:disabled {
 
   .terminal-search input {
     width: 120px;
-  }
-
-  .mobile-keys {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-sm);
-    padding: 5px 7px calc(5px + env(safe-area-inset-bottom));
-    border-top: var(--border-hairline) solid var(--color-border-separator);
-    background: var(--color-bg-chrome-translucent);
-    box-shadow: var(--shadow-mobile-keys);
-  }
-
-  .mobile-key-row {
-    display: flex;
-    gap: var(--space-sm);
-    width: 100%;
-  }
-
-  .mobile-key {
-    flex: 1 1 0;
-    min-width: 0;
-    height: 40px;
-    padding: 0;
-    display: grid;
-    place-items: center;
-    border: 1px solid var(--color-border-default);
-    border-radius: var(--radius-sm);
-    background: var(--color-border-subtle);
-    color: var(--color-text-primary);
-    cursor: pointer;
-    font-size: var(--text-xs);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .mobile-key-toggle {
-    max-width: 64px;
-    color: var(--color-text-secondary);
-  }
-
-  .mobile-key-toggle.active {
-    color: var(--color-text-primary);
-    background: var(--fill-selected);
-  }
-
-  main[data-keyboard-inset="open"] .mobile-keys {
-    padding-bottom: 5px;
   }
 
   main[data-keyboard-inset="open"] .agent-input {
@@ -5221,8 +5209,10 @@ button:disabled {
     bottom: 0;
     left: 0;
     right: 0;
-    z-index: var(--layer-drawer);
+    /* Below the drawer and its backdrop: opening navigation always wins. */
+    z-index: calc(var(--layer-drawer) - 2);
     width: 100%;
+    padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
     border-inline-start: none;
     border-top: var(--border-hairline) solid var(--color-border-separator);
     box-shadow: var(--shadow-dialog);
@@ -5238,6 +5228,75 @@ button:disabled {
     padding-bottom: calc(var(--space-2xl) + env(safe-area-inset-bottom));
   }
 
+}
+
+/* The terminal shortcut bar follows the input device, not only the width:
+   an iPad or a landscape phone has no Esc or Ctrl either, and the shell grid
+   and keyboard avoidance already reserve its row up to 1023px. */
+@media (max-width: 767px), (max-width: 1023px) and (pointer: coarse) {
+  .mobile-keys {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    padding: 5px 7px calc(5px + env(safe-area-inset-bottom));
+    border-top: var(--border-hairline) solid var(--color-border-separator);
+    background: var(--color-bg-chrome-translucent);
+    box-shadow: var(--shadow-mobile-keys);
+  }
+
+  /* Nine keys do not fit a phone row at a usable size, so the row scrolls
+     sideways instead of squeezing each key below a thumb's width. */
+  .mobile-key-row {
+    display: flex;
+    gap: var(--space-sm);
+    width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+
+  .mobile-key-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-key {
+    flex: 1 0 auto;
+    min-width: 44px;
+    height: 40px;
+    padding: 0 var(--space-sm);
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-border-subtle);
+    color: var(--color-text-primary);
+    cursor: pointer;
+    font-size: var(--text-xs);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mobile-key-toggle {
+    max-width: 64px;
+    color: var(--color-text-secondary);
+  }
+
+  .mobile-key-toggle.active {
+    color: var(--color-text-primary);
+    background: var(--fill-selected);
+  }
+
+  main[data-keyboard-inset="open"] .mobile-keys {
+    padding-bottom: 5px;
+  }
+
+  /* The bottom edge belongs to the shortcut bar and the soft keyboard, so
+     feedback drops in under the top chrome instead. */
+  .transient-feedback {
+    top: calc(env(safe-area-inset-top) + 96px);
+    bottom: auto;
+  }
 }
 
 @media (pointer: coarse) {
@@ -5994,7 +6053,7 @@ button:disabled {
   margin-inline-start: auto;
   display: flex;
   gap: var(--space-xs);
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   white-space: nowrap;
 }
@@ -6445,7 +6504,8 @@ button:disabled {
 }
 
 .conversation-menu-filter:focus {
-  border-color: var(--color-border-strong);
+  border-color: var(--color-focus-ring);
+  box-shadow: var(--shadow-focus-ring);
 }
 
 .conversation-menu-options.long {

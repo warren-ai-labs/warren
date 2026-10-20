@@ -97,14 +97,26 @@ public enum WarrenMarkdown {
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
         let lines = normalized.components(separatedBy: "\n")
+        return parseLines(lines, from: 0).blocks
+    }
+
+    /// Parses `lines` from `start`, which must be where a block starts (or
+    /// zero), with the line each block starts on. The loop carries no state
+    /// between blocks, and deciding where a block ends reads at most one line
+    /// past the next block's start, which is what lets a streaming message
+    /// keep its earlier blocks and parse only its tail.
+    static func parseLines(_ lines: [String], from start: Int) -> (blocks: [WarrenMarkdownBlock], starts: [Int]) {
         var blocks: [WarrenMarkdownBlock] = []
-        var index = 0
+        var starts: [Int] = []
+        var index = start
 
         while index < lines.count {
             if lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
                 index += 1
                 continue
             }
+            // Every branch below appends exactly one block.
+            starts.append(index)
 
             if let opening = fenceInfo(lines[index]) {
                 index += 1
@@ -185,7 +197,7 @@ public enum WarrenMarkdown {
             blocks.append(.paragraph(paragraphLines.joined(separator: "\n")))
         }
 
-        return blocks
+        return (blocks, starts)
     }
 
     private struct FenceInfo {
@@ -600,6 +612,19 @@ public final class WarrenMarkdownCache: @unchecked Sendable {
     private let blocksCache = NSCache<NSString, BlockBox>()
     private let lineBreaksCache = NSCache<NSString, NSString>()
 
+    /// The last parse of each message still streaming. A streamed text only
+    /// grows, so the next tick finds its entry as a prefix.
+    private struct StreamingEntry {
+        let text: String
+        let lineCount: Int
+        let blocks: [WarrenMarkdownBlock]
+        let starts: [Int]
+    }
+
+    private static let streamingEntryLimit = 4
+    private let streamingLock = NSLock()
+    private var streamingEntries: [StreamingEntry] = []
+
     private init() {
         blocksCache.countLimit = 512
         blocksCache.totalCostLimit = 8 * 1024 * 1024
@@ -620,6 +645,9 @@ public final class WarrenMarkdownCache: @unchecked Sendable {
     public func clear() {
         blocksCache.removeAllObjects()
         lineBreaksCache.removeAllObjects()
+        streamingLock.lock()
+        streamingEntries.removeAll()
+        streamingLock.unlock()
     }
 
     public func preservedLineBreaks(for value: String) -> String {
@@ -665,6 +693,46 @@ public final class WarrenMarkdownCache: @unchecked Sendable {
             }
         }
         return result
+    }
+
+    /// Blocks for a message that is still streaming, identical to
+    /// `blocks(for:)`. Blocks of the previous tick's text that end clear of
+    /// its last line cannot change as text is appended, so they are kept and
+    /// only the tail is parsed again. Nothing goes into the exact-text cache:
+    /// each partial text is seen once and would only evict settled messages.
+    public func streamingBlocks(for value: String) -> [WarrenMarkdownBlock] {
+        // The tail parse skips normalization; such text takes the full path.
+        guard !value.contains("\r") else { return WarrenMarkdown.uncachedParse(value) }
+        streamingLock.lock()
+        let previous = streamingEntries.last { value.hasPrefix($0.text) }
+        streamingLock.unlock()
+        if let previous, previous.text == value { return previous.blocks }
+
+        let lines = value.components(separatedBy: "\n")
+        var blocks: [WarrenMarkdownBlock] = []
+        var starts: [Int] = []
+        var from = 0
+        // Lines before the old last line are unchanged. A block is final when
+        // the next block starts at least two lines before that one.
+        if let previous,
+           let keep = previous.starts.lastIndex(where: { $0 + 1 < previous.lineCount - 1 }) {
+            blocks = Array(previous.blocks[..<keep])
+            starts = Array(previous.starts[..<keep])
+            from = previous.starts[keep]
+        }
+        let tail = WarrenMarkdown.parseLines(lines, from: from)
+        blocks.append(contentsOf: tail.blocks)
+        starts.append(contentsOf: tail.starts)
+
+        let entry = StreamingEntry(text: value, lineCount: lines.count, blocks: blocks, starts: starts)
+        streamingLock.lock()
+        streamingEntries.removeAll { value.hasPrefix($0.text) }
+        streamingEntries.append(entry)
+        if streamingEntries.count > Self.streamingEntryLimit {
+            streamingEntries.removeFirst(streamingEntries.count - Self.streamingEntryLimit)
+        }
+        streamingLock.unlock()
+        return blocks
     }
 
     public func blocks(for value: String) -> [WarrenMarkdownBlock] {

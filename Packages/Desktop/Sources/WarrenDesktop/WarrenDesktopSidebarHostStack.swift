@@ -779,7 +779,7 @@ struct WarrenDesktopHostTile: View {
             }
             .overlay(alignment: .bottomTrailing) {
                 Circle()
-                    .fill(host.isOnline ? tokens.success : tokens.treeQuietText)
+                    .fill(WarrenDesktopHostReachability(isOnline: host.isOnline).color(tokens))
                     .frame(width: Metrics.tileDotSize, height: Metrics.tileDotSize)
                     .padding(1.5)
                     .background {

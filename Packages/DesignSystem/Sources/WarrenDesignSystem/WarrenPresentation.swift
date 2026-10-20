@@ -64,13 +64,17 @@ public enum WarrenPresentationMetrics {
 
 /// The dialog family's surface, border and shadow.
 ///
-/// A dialog shares the menu's neutral ground — the same `#141414` card and
-/// `#262626` hairline with a hairline of light along the top edge — but keeps
-/// a heavier single shadow and the window scrim, because a dialog blocks
-/// rather than floats.
+/// A dialog stands on the same ground as every other floating surface —
+/// `popoverSurface`, which is opaque in the opaque material and the raised
+/// glass tone in glass, in both appearances — with a `#262626` hairline and a
+/// hairline of light along the top edge on Ember. It keeps a heavier single
+/// shadow and the window scrim, because a dialog blocks rather than floats.
+///
+/// The ground used to be a fixed `#141414` on Ember only, so a glass dialog
+/// was opaque in dark and translucent on paper.
 enum WarrenDialogPalette {
     static func surface(for colorScheme: ColorScheme, tokens: WarrenColorTokens) -> Color {
-        colorScheme == .light ? tokens.popoverSurface : WarrenColorTokens.hex(0x1414_14)
+        tokens.popoverSurface
     }
 
     static func border(for colorScheme: ColorScheme, tokens: WarrenColorTokens) -> Color {
@@ -337,6 +341,8 @@ public struct WarrenSecondaryButtonStyle: ButtonStyle {
         let isFocused: Bool
         let font: Font
         @Environment(\.isEnabled) private var isEnabled
+        // The button's own keyboard focus, OR'd with the caller's flag.
+        @Environment(\.isFocused) private var environmentFocused
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Environment(\.colorScheme) private var colorScheme
         @State private var hovered = false
@@ -347,7 +353,7 @@ public struct WarrenSecondaryButtonStyle: ButtonStyle {
                 disabled: !isEnabled,
                 pressed: configuration.isPressed,
                 selected: false,
-                focused: isFocused,
+                focused: isFocused || environmentFocused,
                 hovered: hovered
             )
             configuration.label
@@ -396,6 +402,8 @@ public struct WarrenDestructiveButtonStyle: ButtonStyle {
         let isFocused: Bool
         let font: Font
         @Environment(\.isEnabled) private var isEnabled
+        // The button's own keyboard focus, OR'd with the caller's flag.
+        @Environment(\.isFocused) private var environmentFocused
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Environment(\.colorScheme) private var colorScheme
         @State private var hovered = false
@@ -406,7 +414,7 @@ public struct WarrenDestructiveButtonStyle: ButtonStyle {
                 disabled: !isEnabled,
                 pressed: configuration.isPressed,
                 selected: false,
-                focused: isFocused,
+                focused: isFocused || environmentFocused,
                 hovered: hovered
             )
             configuration.label
@@ -419,13 +427,7 @@ public struct WarrenDestructiveButtonStyle: ButtonStyle {
                         .opacity(state == .pressed ? 0.82 : 1)
                 )
                 .clipShape(.rect(cornerRadius: WarrenRadius.small))
-                .overlay {
-                    RoundedRectangle(cornerRadius: WarrenRadius.small)
-                        .stroke(
-                            state == .focused ? tokens.focusRing : Color.clear,
-                            lineWidth: state == .focused ? 1 : 0
-                        )
-                }
+                .warrenFocusRing(state == .focused)
                 .opacity(state == .disabled ? 0.42 : 1)
                 .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: state)
                 .onHover { hovered = $0 }
@@ -492,7 +494,7 @@ public struct WarrenTextInputDialog: View {
                     HStack(spacing: 6) {
                         Text(confirmLabel)
                         WarrenDialogKeycap(
-                            "\u{23CE}",
+                            WarrenDialogConfirmButtonStyle.keycap(isDestructive: isDestructive),
                             isOnPrimary: !isDestructive
                         )
                     }

@@ -332,22 +332,30 @@ struct WarrenDesktopStatusDot: View {
                             .frame(width: size + 4, height: size + 4)
                     }
                 }
-                Circle()
-                    .fill(Self.color(for: drawn, tokens: tokens))
-                    .frame(width: size, height: size)
+                // The shared indicator, so `working` pulses here exactly as it
+                // does through `WarrenActivityMarkView`: one quiet,
+                // compositor-driven ring, and only for the live tier. Its slot
+                // is wider than the dot; the frame below keeps the layout at
+                // the dot's own size and lets the ring overflow.
+                WarrenStatusIndicator(
+                    color: Self.color(for: drawn, tokens: tokens),
+                    isActive: drawn.isAnimated,
+                    size: size,
+                    intensity: .quiet,
+                    accessibilityLabel: drawn.accessibilityLabel
+                )
             }
             .frame(width: size, height: size)
             .accessibilityHidden(true)
         }
     }
 
-    /// The Workbench's dot palette: green while an Agent works, Ember orange
+    /// The Desktop's one dot palette: green while an Agent works, Ember orange
     /// when it wants a person, red on failure, blue once it is done.
     ///
-    /// Separate from `WarrenActivityMark.color`, whose amber-for-working and
-    /// green-for-ready made a busy Agent and one that wants input the same
-    /// warm colour at dot size.
-    static func color(for mark: WarrenActivityMark, tokens: WarrenColorTokens) -> Color {
+    /// `WarrenActivityMark.color` forwards here, so every surface that draws a
+    /// mark — tree, tabs, tray, palette, peek — agrees on the hue.
+    nonisolated static func color(for mark: WarrenActivityMark, tokens: WarrenColorTokens) -> Color {
         switch mark {
         case .failed: tokens.destructive
         case .approvalNeeded, .inputNeeded, .attentionUnspecified: tokens.highlight
@@ -355,6 +363,84 @@ struct WarrenDesktopStatusDot: View {
         case .ready: tokens.info
         case .exited: tokens.treeQuietText
         }
+    }
+}
+
+/// Whether a Host answers, as the dot on its tile's corner.
+///
+/// One rule for every Host tile: green while reachable, red when it is not,
+/// the info hue while a connection is being made. A Host nothing has probed
+/// yet has no value here and draws no dot.
+enum WarrenDesktopHostReachability: Equatable, Sendable {
+    case reachable
+    case connecting
+    case unreachable
+
+    init(_ state: WarrenDesktopConnectionState) {
+        switch state {
+        case .attached: self = .reachable
+        case .connecting, .reconnecting: self = .connecting
+        case .disconnected, .failed: self = .unreachable
+        }
+    }
+
+    init(isOnline: Bool) {
+        self = isOnline ? .reachable : .unreachable
+    }
+
+    func color(_ tokens: WarrenColorTokens) -> Color {
+        switch self {
+        case .reachable: tokens.success
+        case .connecting: tokens.info
+        case .unreachable: tokens.destructive
+        }
+    }
+}
+
+/// A Host's lettered tile: the name's lowercase initial in the monospaced
+/// face on a neutral square, with its reachability on the corner.
+///
+/// The sidebar's Host row and the collapsed rail's Host button draw this one
+/// view, so the Host reads the same whether the sidebar is open or not. A
+/// project wears a filled colour square with a bold capital, so the two
+/// never read as one another.
+struct WarrenDesktopHostInitialTile: View {
+    let name: String
+    let size: CGFloat
+    /// `nil` draws no dot.
+    let reachability: WarrenDesktopHostReachability?
+    /// The surface under the tile, drawn as a ring around the dot.
+    var surface: Color? = nil
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+
+    static func initial(of name: String) -> String {
+        String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1)).lowercased()
+    }
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let dotSize: CGFloat = size >= 24 ? 8 : 6
+        Text(Self.initial(of: name))
+            .font(.system(size: (size * 0.55).rounded(), weight: .medium, design: .monospaced))
+            .foregroundStyle(tokens.foreground.opacity(0.8))
+            .frame(width: size, height: size)
+            .background(
+                tokens.foreground.opacity(0.07),
+                in: RoundedRectangle(cornerRadius: (size * 0.27).rounded(), style: .continuous)
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if let reachability {
+                    Circle()
+                        .fill(reachability.color(tokens))
+                        .frame(width: dotSize, height: dotSize)
+                        .padding(dotSize >= 8 ? 2 : 1.5)
+                        .background(surface ?? tokens.workbenchCardFill, in: Circle())
+                        .offset(x: dotSize / 2, y: dotSize / 2)
+                }
+            }
+            .accessibilityHidden(true)
     }
 }
 

@@ -445,6 +445,40 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
+    func testRejectedDirectCredentialsStopAClientThatAsksForIt() async throws {
+        let task = ScriptedWebSocketTask()
+        await task.enqueue(.text(#"{"t":"error","error":"unauthorized"}"#))
+        let client = WarrenRemoteClient(
+            configuration: .init(name: "Host", url: "http://127.0.0.1:9"),
+            task: task,
+            stopsWhenCredentialsRejected: true
+        )
+        let recorder = EventRecorder()
+        let consuming = recordEvents(from: client.events(), into: recorder)
+        await client.start()
+        try await waitUntil { await client.state() == .disconnected }
+        // A retry would have started after 500 ms; a refused credential stays stopped.
+        try await Task.sleep(for: .milliseconds(650))
+        let state = await client.state()
+        XCTAssertEqual(state, .disconnected)
+        let sawRejection = await recorder.contains {
+            if case .credentialsRejected = $0 { return true }
+            return false
+        }
+        XCTAssertTrue(sawRejection)
+        await client.stop()
+        consuming.cancel()
+    }
+
+    func testRateLimitIsNotTreatedAsRejectedCredentials() {
+        XCTAssertFalse(WarrenRemoteClient.isCredentialRejection(
+            WarrenRemoteClientError.authenticationFailed("rate limit exceeded")
+        ))
+        XCTAssertTrue(WarrenRemoteClient.isCredentialRejection(
+            WarrenRemoteClientError.authenticationFailed("unauthorized")
+        ))
+    }
+
     func testRequestResponseUsesRequestIDAndDecodesResult() async throws {
         let (client, task, consuming, _) = try await connectedClient()
         let request = Task {

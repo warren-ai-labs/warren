@@ -115,7 +115,7 @@ struct WarrenDesktopExternalIDEPopoverContent: View {
                         .frame(width: Metrics.glyphSlot, height: Metrics.glyphSlot)
                         .accessibilityHidden(true)
                     Text("Manage Editors…")
-                        .font(.system(size: 13))
+                        .font(WarrenTypography.popoverItem)
                         .foregroundStyle(palette.rowText)
                     Spacer(minLength: 0)
                 }
@@ -146,7 +146,7 @@ struct WarrenDesktopExternalIDEPopoverContent: View {
             HStack(spacing: Metrics.checkSpacing) {
                 WarrenDesktopMenuCheckColumn(isChecked: isChecked)
                 Text(title)
-                    .font(.system(size: 13))
+                    .font(WarrenTypography.popoverItem)
                     .foregroundStyle(isHot ? palette.rowHoverText : palette.rowText)
                     .lineLimit(1)
                     .truncationMode(.middle)

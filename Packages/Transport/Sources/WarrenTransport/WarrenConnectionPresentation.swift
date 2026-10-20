@@ -135,12 +135,22 @@ public func warrenRelativeTimeLabel(_ interval: TimeInterval) -> String {
 /// Go stamps RFC 3339 with fractional seconds only when the value has them, and
 /// `ISO8601DateFormatter` accepts exactly one of the two shapes per instance.
 public func warrenParseRelayTimestamp(_ value: String) -> Date? {
-    // Built per call rather than cached: this runs on a disconnect path, and a
-    // shared formatter is not Sendable.
-    let fractional = ISO8601DateFormatter()
-    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = fractional.date(from: value) { return date }
-    return ISO8601DateFormatter().date(from: value)
+    if let date = WarrenRelayTimestampFormatters.fractional.date(from: value) { return date }
+    return WarrenRelayTimestampFormatters.plain.date(from: value)
+}
+
+/// Shared by every call: Session rows parse a timestamp per event they scan,
+/// and building two formatters each time dominated that scan. Only
+/// `date(from:)` is ever called on them, which `ISO8601DateFormatter`
+/// documents as thread-safe; the options are fixed at creation.
+private enum WarrenRelayTimestampFormatters {
+    nonisolated(unsafe) static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    nonisolated(unsafe) static let plain = ISO8601DateFormatter()
 }
 
 /// How long a connection attempt may present as authenticating before the copy
@@ -165,6 +175,15 @@ public let warrenHostWaitCopyDelay: TimeInterval = 1.0
 public func warrenWaitingForHostMessage(hostName: String?) -> String {
     let trimmed = hostName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return trimmed.isEmpty ? "Waiting for the Host…" : "Waiting for \(trimmed)…"
+}
+
+/// Relay refused this device and its refresh capability, which only a new
+/// pairing fixes. Naming that fix keeps people from going to wake a Mac that
+/// is awake and simply no longer trusts the device.
+public func warrenPairAgainMessage(hostName: String?) -> String {
+    let trimmed = hostName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let name = trimmed.isEmpty ? "The Host" : trimmed
+    return "\(name) no longer accepts this device · scan a new pairing code"
 }
 
 /// Relay reports an absent Host only after waiting for it to come back, and

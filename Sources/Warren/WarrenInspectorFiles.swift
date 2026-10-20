@@ -76,6 +76,9 @@ struct WarrenInspectorFiles: View {
     @ObservedObject var inspector: WarrenInspectorModel
     @State private var paths: [String] = []
     @State private var tree: [WarrenFileNode] = []
+    /// The filter's haystack, lowercased and ordered shortest name first once
+    /// per listing instead of on every keystroke's render.
+    @State private var searchIndex: [SearchEntry] = []
     @State private var loaded = false
     @State private var filter = ""
     @State private var open: Set<String> = []
@@ -142,8 +145,17 @@ struct WarrenInspectorFiles: View {
             let listed = await WarrenWorkspaceFiles.list(at: inspector.path)
             paths = listed
             tree = WarrenFileNode.tree(from: listed)
+            searchIndex = listed
+                .map { SearchEntry(path: $0, lowercased: $0.lowercased(), nameLength: ($0 as NSString).lastPathComponent.count) }
+                .sorted { $0.nameLength < $1.nameLength }
             loaded = true
         }
+    }
+
+    private struct SearchEntry {
+        let path: String
+        let lowercased: String
+        let nameLength: Int
     }
 
     private struct Item {
@@ -210,12 +222,16 @@ struct WarrenInspectorFiles: View {
 
     private func filtered(tokens: WarrenColorTokens) -> some View {
         let needle = filter.lowercased()
-        let matches = paths.filter { $0.lowercased().contains(needle) }
-            .sorted { ($0 as NSString).lastPathComponent.count < ($1 as NSString).lastPathComponent.count }
-            .prefix(300)
+        // The index is already shortest name first, so the first 300 hits are
+        // the ones the sort would have kept.
+        var matches: [String] = []
+        for entry in searchIndex where entry.lowercased.contains(needle) {
+            matches.append(entry.path)
+            if matches.count == 300 { break }
+        }
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(matches), id: \.self) { path in
+                ForEach(matches, id: \.self) { path in
                     Button {
                         inspector.openFile = path
                     } label: {
@@ -259,6 +275,8 @@ struct WarrenFileEditor: View {
     @State private var readOnly = false
     @State private var saveError: String?
     @State private var loaded = false
+    /// Back was pressed with unsaved edits: the header asks before leaving.
+    @State private var confirmingClose = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
@@ -271,7 +289,7 @@ struct WarrenFileEditor: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(spacing: 0) {
             HStack(spacing: WarrenSpacing.small) {
-                Button(action: onClose) {
+                Button(action: requestClose) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(tokens.mutedForeground)
@@ -326,6 +344,9 @@ struct WarrenFileEditor: View {
             }
             .padding(.horizontal, WarrenSpacing.compact)
             .frame(height: 44)
+            if confirmingClose {
+                unsavedChangesBar(tokens: tokens)
+            }
             if let saveError {
                 Text(saveError)
                     .font(.system(size: 11.5))
@@ -350,37 +371,104 @@ struct WarrenFileEditor: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
-        .task { load() }
+        .task { await load() }
     }
 
-    private func load() {
-        do {
-            let data = try Data(contentsOf: url)
-            if data.prefix(8000).contains(0) {
-                loadError = "It looks like a binary file."
-                return
-            }
-            guard let value = String(data: data, encoding: .utf8) else {
-                loadError = "It is not UTF-8 text."
-                return
-            }
-            readOnly = data.count > Self.editableLimit
-            text = value
-            saved = value
-            loaded = true
-        } catch {
-            loadError = error.localizedDescription
+    /// Leaving the editor drops its buffer, so unsaved edits are asked about
+    /// first rather than silently discarded.
+    private func requestClose() {
+        if dirty {
+            confirmingClose = true
+        } else {
+            onClose()
         }
     }
 
-    private func save() {
-        guard dirty, !readOnly else { return }
+    private func unsavedChangesBar(tokens: WarrenColorTokens) -> some View {
+        HStack(spacing: WarrenSpacing.small) {
+            Text("Save changes before leaving?")
+                .font(.system(size: 11.5))
+                .foregroundStyle(tokens.foreground)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Button("Cancel") { confirmingClose = false }
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5))
+                .foregroundStyle(tokens.mutedForeground)
+                .keyboardShortcut(.cancelAction)
+            Button("Discard") {
+                confirmingClose = false
+                onClose()
+            }
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5))
+                .foregroundStyle(tokens.destructive)
+            Button("Save") {
+                confirmingClose = false
+                if save() { onClose() }
+            }
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(tokens.foreground)
+        }
+        .padding(.horizontal, WarrenSpacing.medium)
+        .padding(.bottom, WarrenSpacing.xs)
+    }
+
+    /// Reads and decodes off the main actor: a large file read and decoded
+    /// there stalled the whole window before the editor could even show its
+    /// placeholder.
+    private func load() async {
+        let url = self.url
+        let limit = Self.editableLimit
+        let result = await Task.detached(priority: .userInitiated) {
+            WarrenFileEditorLoad.read(url, editableLimit: limit)
+        }.value
+        guard !Task.isCancelled else { return }
+        switch result {
+        case let .text(value, isReadOnly):
+            readOnly = isReadOnly
+            text = value
+            saved = value
+            loaded = true
+        case let .failure(message):
+            loadError = message
+        }
+    }
+
+    /// Whether the buffer is on disk afterwards.
+    @discardableResult
+    private func save() -> Bool {
+        guard dirty, !readOnly else { return !dirty }
         do {
             try Data(text.utf8).write(to: url, options: .atomic)
             saved = text
             saveError = nil
+            return true
         } catch {
             saveError = "Not saved: \(error.localizedDescription)"
+            return false
+        }
+    }
+}
+
+/// The outcome of reading a file for the editor, produced off the main actor.
+private enum WarrenFileEditorLoad: Sendable {
+    case text(String, readOnly: Bool)
+    case failure(String)
+
+    static func read(_ url: URL, editableLimit: Int) -> Self {
+        do {
+            let data = try Data(contentsOf: url)
+            if data.prefix(8000).contains(0) {
+                return .failure("It looks like a binary file.")
+            }
+            guard let value = String(data: data, encoding: .utf8) else {
+                return .failure("It is not UTF-8 text.")
+            }
+            return .text(value, readOnly: data.count > editableLimit)
+        } catch {
+            return .failure(error.localizedDescription)
         }
     }
 }

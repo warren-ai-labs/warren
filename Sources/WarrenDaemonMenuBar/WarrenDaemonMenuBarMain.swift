@@ -24,8 +24,17 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         case failed(String)
     }
 
-    private let healthURL = URL(string: "http://127.0.0.1:8789/healthz")!
-    private let stateURL = URL(string: "http://127.0.0.1:8789/v1/state")!
+    /// Where the headless daemon listens. Every URL and every line of menu
+    /// text derives from these, so the port is written once.
+    nonisolated private static let endpointHost = "127.0.0.1"
+    nonisolated private static let endpointPort = 8789
+    nonisolated private static var endpointAuthority: String { "\(endpointHost):\(endpointPort)" }
+    nonisolated private static func endpointURL(_ path: String) -> URL {
+        URL(string: "http://\(endpointAuthority)\(path)")!
+    }
+
+    private let healthURL = WarrenDaemonMenuBarDelegate.endpointURL("/healthz")
+    private let stateURL = WarrenDaemonMenuBarDelegate.endpointURL("/v1/state")
     private var statusItem: NSStatusItem!
     private var statusDot: NSView?
     private var daemonProcess: Process?
@@ -50,6 +59,15 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
             statusItem.button?.title = "W"
         }
         installStatusDot()
+        // Reduce Motion can change while the daemon is checking; the dot
+        // follows it rather than the setting as it stood at launch.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyStatusDot() }
+        }
         statusItem.button?.toolTip = "Warren headless daemon"
         statusItem.menu = makeMenu()
         updateStatusItem()
@@ -105,7 +123,7 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
             state = .failed("Missing token")
             return
         }
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:8789/v1/runtime/refresh")!)
+        var request = URLRequest(url: Self.endpointURL("/v1/runtime/refresh"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token.trimmingCharacters(in: .whitespacesAndNewlines))", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 8
@@ -159,7 +177,7 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         status.tag = 1
         status.isEnabled = false
         menu.addItem(status)
-        let endpoint = NSMenuItem(title: "Endpoint: 127.0.0.1:8789", action: nil, keyEquivalent: "")
+        let endpoint = NSMenuItem(title: "Endpoint: \(Self.endpointAuthority)", action: nil, keyEquivalent: "")
         endpoint.tag = 2
         endpoint.isEnabled = false
         menu.addItem(endpoint)
@@ -380,14 +398,7 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         let dot = NSView()
         dot.translatesAutoresizingMaskIntoConstraints = false
         dot.wantsLayer = true
-        let green = NSColor(srgbRed: 126 / 255, green: 198 / 255, blue: 153 / 255, alpha: 1)
-        dot.layer?.backgroundColor = green.cgColor
         dot.layer?.cornerRadius = size / 2
-        dot.layer?.shadowColor = green.cgColor
-        dot.layer?.shadowRadius = 2
-        dot.layer?.shadowOpacity = 0.9
-        dot.layer?.borderWidth = 1
-        dot.layer?.borderColor = NSColor(srgbRed: 28 / 255, green: 25 / 255, blue: 24 / 255, alpha: 1).cgColor
         dot.isHidden = true
         button.addSubview(dot)
         NSLayoutConstraint.activate([
@@ -399,51 +410,49 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         statusDot = dot
     }
 
-    private func setStatusDotBreathing(_ breathing: Bool) {
+    /// The dot says what needs a look, not that all is well: a healthy daemon
+    /// draws nothing, a stopped one a grey dot, a failed one a red dot, and
+    /// only a check in progress moves.
+    private func applyStatusDot() {
         guard let dot = statusDot, let layer = dot.layer else { return }
-        let green = NSColor(srgbRed: 126 / 255, green: 198 / 255, blue: 153 / 255, alpha: 1)
-        layer.backgroundColor = green.cgColor
-        layer.shadowColor = green.cgColor
-        guard breathing else {
+        let tone: WarrenDaemonStatusTone?
+        switch state {
+        case .running: tone = nil
+        case .checking: tone = .checking
+        case .stopped: tone = .stopped
+        case .failed: tone = .failed
+        }
+        guard let tone else {
             layer.removeAnimation(forKey: statusDotPulseKey)
-            layer.opacity = 1
             dot.isHidden = true
             return
         }
-
         dot.isHidden = false
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        // The menu bar has its own appearance, which can differ from the
+        // app's; the color resolves against the button it sits on.
+        var color: CGColor = NSColor.secondaryLabelColor.cgColor
+        (statusItem.button?.effectiveAppearance ?? NSAppearance.currentDrawing()).performAsCurrentDrawingAppearance {
+            color = tone.color.cgColor
+        }
+        layer.backgroundColor = color
+
+        let breathes = tone == .checking && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        guard breathes else {
             layer.removeAnimation(forKey: statusDotPulseKey)
             layer.opacity = 1
             return
         }
-
         // Health polling can publish the same state repeatedly. Keep the
         // existing animation alive so every poll does not restart its phase.
         guard layer.animation(forKey: statusDotPulseKey) == nil else { return }
-
         let opacity = CABasicAnimation(keyPath: "opacity")
-        opacity.fromValue = 0.55
+        opacity.fromValue = 0.4
         opacity.toValue = 1.0
         opacity.duration = statusDotPulseDuration
-
-        let shadowOpacity = CABasicAnimation(keyPath: "shadowOpacity")
-        shadowOpacity.fromValue = 0.35
-        shadowOpacity.toValue = 0.9
-        shadowOpacity.duration = statusDotPulseDuration
-
-        let shadowRadius = CABasicAnimation(keyPath: "shadowRadius")
-        shadowRadius.fromValue = 1.2
-        shadowRadius.toValue = 2.4
-        shadowRadius.duration = statusDotPulseDuration
-
-        let pulse = CAAnimationGroup()
-        pulse.animations = [opacity, shadowOpacity, shadowRadius]
-        pulse.duration = statusDotPulseDuration
-        pulse.autoreverses = true
-        pulse.repeatCount = .infinity
-        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        layer.add(pulse, forKey: statusDotPulseKey)
+        opacity.autoreverses = true
+        opacity.repeatCount = .infinity
+        opacity.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(opacity, forKey: statusDotPulseKey)
     }
 
     private func updateStatusItem() {
@@ -466,7 +475,7 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         default:
             daemonRunning = false
         }
-        setStatusDotBreathing(daemonRunning)
+        applyStatusDot()
         var toolTip = switch state {
         case .checking: "Warren headless: Checking"
         case .running: "Warren headless: Running"
@@ -493,10 +502,10 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         }
         if let endpoint = statusItem.menu?.item(withTag: 2) {
             endpoint.title = switch state {
-            case .running: "Endpoint: 127.0.0.1:8789 · Web: 8789"
-            case .checking: "Endpoint: 127.0.0.1:8789 · Checking…"
-            case .stopped: "Endpoint: 127.0.0.1:8789 · Offline"
-            case .failed: "Endpoint: 127.0.0.1:8789 · Unavailable"
+            case .running: "Endpoint: \(Self.endpointAuthority) · Web: \(Self.endpointPort)"
+            case .checking: "Endpoint: \(Self.endpointAuthority) · Checking…"
+            case .stopped: "Endpoint: \(Self.endpointAuthority) · Offline"
+            case .failed: "Endpoint: \(Self.endpointAuthority) · Unavailable"
             }
         }
         if let version = statusItem.menu?.item(withTag: 3) {
@@ -511,6 +520,44 @@ private final class WarrenDaemonMenuBarDelegate: NSObject, NSApplicationDelegate
         if let refresh = statusItem.menu?.item(withTag: 10) {
             refresh.isEnabled = daemonRunning
         }
+    }
+}
+
+/// The menu bar dot's states and colors.
+///
+/// The values are the Ember (dark) and Ember Paper (light) status tokens from
+/// `WarrenColorTokens`; this helper target does not link the design system,
+/// so they are mirrored here and resolved per appearance.
+private enum WarrenDaemonStatusTone {
+    case checking
+    case stopped
+    case failed
+
+    var color: NSColor {
+        switch self {
+        case .checking, .stopped:
+            // mutedForeground
+            Self.dynamic(light: 0x6B6560, dark: 0xA3A3A3)
+        case .failed:
+            // destructive
+            Self.dynamic(light: 0xB3261E, dark: 0xCC4444)
+        }
+    }
+
+    private static func dynamic(light: UInt32, dark: UInt32) -> NSColor {
+        NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return hex(isDark ? dark : light)
+        }
+    }
+
+    private static func hex(_ value: UInt32) -> NSColor {
+        NSColor(
+            srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
     }
 }
 

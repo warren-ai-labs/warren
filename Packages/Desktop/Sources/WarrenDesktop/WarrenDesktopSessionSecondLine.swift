@@ -119,19 +119,17 @@ extension WarrenColorTokens {
     var sessionMetaIdleText: Color { sidebarTextBase.opacity(0.44) }
     var sessionSeparatorRunningText: Color { sidebarTextBase.opacity(0.44) }
     var sessionSeparatorIdleText: Color { sidebarTextBase.opacity(0.375) }
-    /// The `88% ctx` reminder. A reminder is not a state, so it does not use a
-    /// status colour; the amber is a fixed part of the line's own palette.
-    var sessionContextWarningText: Color {
-        Color(red: 154.0 / 255.0, green: 122.0 / 255.0, blue: 90.0 / 255.0)
-    }
+    /// The `88% ctx` reminder. A reminder is not a state, so it does not take
+    /// the attention hue; it is the palette's amber, softened like the rest
+    /// of the line, and resolved per appearance rather than fixed for the
+    /// dark ground.
+    var sessionContextWarningText: Color { amber.opacity(0.78) }
     /// A resting shell's collapsed title. Between the leaf tier and the idle
     /// second line: still a name, but no longer a row saying anything.
     var sessionCollapsedTitleText: Color { sidebarTextBase.opacity(0.81) }
-    /// A failed command's `exit 1` append. Red enough to read as failure on the
-    /// dark ground, muted enough not to compete with the primary fact.
-    var sessionFailureText: Color {
-        Color(red: 176.0 / 255.0, green: 98.0 / 255.0, blue: 92.0 / 255.0)
-    }
+    /// A failed command's `exit 1` append. Red enough to read as failure on
+    /// either ground, muted enough not to compete with the primary fact.
+    var sessionFailureText: Color { destructive.opacity(0.8) }
 }
 
 /// How much of the line the row can draw, decided from measured text.

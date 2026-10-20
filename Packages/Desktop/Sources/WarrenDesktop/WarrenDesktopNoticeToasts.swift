@@ -210,12 +210,11 @@ private struct WarrenDesktopNoticeToast: View {
         .padding(.leading, 10)
         .padding(.trailing, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(tokens.popoverSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(notice.kind == .error ? tokens.destructive.opacity(0.45) : tokens.border, lineWidth: 1)
-        )
-        .shadow(color: tokens.elevationShadow, radius: 13, y: 8)
+        // The notice center's own card, so a toast and the panel it opens
+        // are one material rather than two greys and two shadows.
+        .modifier(WarrenDesktopMenuCardModifier(
+            border: notice.kind == .error ? tokens.destructive.opacity(0.45) : nil
+        ))
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isStaticText)
     }

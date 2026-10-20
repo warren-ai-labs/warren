@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 import WarrenClientCore
@@ -63,6 +64,14 @@ struct WarrenDesktopCommandPalette: View {
     @State private var searchIndex: WarrenDesktopCommandPaletteSearch.Index
     @State private var outcome: Outcome
     @State private var indexTask: Task<Void, Never>?
+    /// Where the pointer was when it last chose a row. A row that slides
+    /// under a still pointer, because the arrow keys scrolled the list,
+    /// reports a hover too; only a pointer that actually moved may take the
+    /// selection from the keyboard.
+    @State private var pointerLocation: CGPoint?
+    /// Set when the pointer, not the keyboard, moved the selection, so the
+    /// list does not scroll a row the pointer is already on.
+    @State private var selectionFollowsPointer = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
@@ -135,6 +144,7 @@ struct WarrenDesktopCommandPalette: View {
         .onChange(of: projection) { newProjection in
             rebuildIndex(for: newProjection)
         }
+        .onAppear { pointerLocation = NSEvent.mouseLocation }
         .onDisappear { indexTask?.cancel() }
     }
 
@@ -191,6 +201,10 @@ struct WarrenDesktopCommandPalette: View {
             }
             .frame(maxHeight: min(resultsMaxHeight, WarrenLayoutMetrics.commandPaletteResultsMaxHeight))
             .onChange(of: selectedIndex) { newIndex in
+                guard !selectionFollowsPointer else {
+                    selectionFollowsPointer = false
+                    return
+                }
                 guard rows.indices.contains(newIndex) else { return }
                 proxy.scrollTo(rows[newIndex].id, anchor: .center)
             }
@@ -348,7 +362,13 @@ struct WarrenDesktopCommandPalette: View {
             .frame(height: WarrenLayoutMetrics.commandPaletteRowHeight)
             .contentShape(.rect)
         }
-        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected))
+        // The pointer and the arrow keys move one selection: hovering a row
+        // selects it, so Return opens the row the pointer is on and no second
+        // row lights beside the keyboard's.
+        .buttonStyle(WarrenInteractiveRowStyle(isSelected: isSelected, showsHoverBackground: false))
+        .onHover { inside in
+            if inside { pointerSelect(row.id) }
+        }
         .id(row.id)
         .accessibilityLabel(accessibilityLabel(row))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -424,6 +444,16 @@ struct WarrenDesktopCommandPalette: View {
         // Arrow keys move the cursor without re-running the search, so only the
         // selection is written back.
         outcome.selectedIndex = next
+    }
+
+    private func pointerSelect(_ id: WarrenDesktopCommandPaletteSearch.Result.ID) {
+        let location = NSEvent.mouseLocation
+        guard let last = pointerLocation, location != last,
+              let index = rows.firstIndex(where: { $0.id == id }) else { return }
+        pointerLocation = location
+        guard index != selectedIndex else { return }
+        selectionFollowsPointer = true
+        outcome.selectedIndex = index
     }
 
     private func chooseSelection() {

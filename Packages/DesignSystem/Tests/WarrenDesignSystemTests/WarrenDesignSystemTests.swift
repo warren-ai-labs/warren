@@ -166,6 +166,23 @@ final class WarrenDesignSystemTests: XCTestCase {
         }
     }
 
+    /// A dialog floats like any other raised surface, so it takes the same
+    /// ground in both appearances: opaque in the opaque material, the raised
+    /// glass tone in glass. It used to be a fixed opaque card on Ember only,
+    /// which made a glass dialog opaque in dark and translucent on paper.
+    func testDialogSurfaceIsThePopoverSurfaceInBothAppearancesAndMaterials() {
+        for scheme in [ColorScheme.dark, .light] {
+            for material in [WarrenWindowMaterial.opaque, .glass] {
+                let tokens = WarrenColorTokens.resolved(for: scheme, material: material)
+                XCTAssertEqual(
+                    WarrenDialogPalette.surface(for: scheme, tokens: tokens),
+                    tokens.popoverSurface,
+                    "\(scheme) \(material)"
+                )
+            }
+        }
+    }
+
     func testGlassDensitiesStayDenseEnoughForTheTextLadder() {
         XCTAssertGreaterThanOrEqual(WarrenGlassMetrics.coatDensity, 0.5)
         XCTAssertEqual(WarrenGlassMetrics.raisedOpacity(isLight: false), 0.55, accuracy: 0.0001)

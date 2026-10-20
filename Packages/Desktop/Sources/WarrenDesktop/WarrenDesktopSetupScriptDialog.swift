@@ -31,7 +31,7 @@ public struct WarrenDesktopSetupScriptDialog: View {
     public var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         WarrenDialog(
-            "Edit setup script",
+            "Edit Setup Script",
             message: "Runs on this Mac after a Workspace's worktree is created.",
             width: .l
         ) {

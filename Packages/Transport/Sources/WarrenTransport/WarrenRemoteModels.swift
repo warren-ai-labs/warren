@@ -130,6 +130,14 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
              lanAutoRoutingEnabled: lanAutoRoutingEnabled)
     }
 
+    /// Whether both describe the same Host and route, whatever credentials
+    /// they carry. A Relay refresh rewrites the stored tokens while the
+    /// connection that rotated them is healthy; treating that as a new
+    /// endpoint tore the connection down just after it came back.
+    public func hasSameRoute(as other: Self) -> Bool {
+        withTokens(token: "", refreshToken: nil) == other.withTokens(token: "", refreshToken: nil)
+    }
+
     public func withClientID(_ clientID: String?) -> Self {
         Self(name: name, url: url, token: token, ssh: ssh, sshRemote: sshRemote,
              type: type, hostID: hostID, relayHostID: relayHostID, routeID: routeID,
@@ -350,12 +358,21 @@ public struct WarrenRelaySessionExchange: Codable, Equatable, Hashable, Sendable
     public let accessToken: String
     public let refreshToken: String?
     public let expiresIn: Int?
+    /// The name the Host last reported to Relay. Older Relays leave it out.
+    public let hostName: String?
 
-    public init(hostID: String, accessToken: String, refreshToken: String? = nil, expiresIn: Int? = nil) {
+    public init(
+        hostID: String,
+        accessToken: String,
+        refreshToken: String? = nil,
+        expiresIn: Int? = nil,
+        hostName: String? = nil
+    ) {
         self.hostID = hostID
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.expiresIn = expiresIn
+        self.hostName = hostName
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -363,6 +380,7 @@ public struct WarrenRelaySessionExchange: Codable, Equatable, Hashable, Sendable
         case accessToken = "access_token"
         case refreshToken = "refresh_token"
         case expiresIn = "expires_in"
+        case hostName = "host_name"
     }
 }
 
@@ -385,6 +403,10 @@ public enum WarrenRelayPairingError: Error, Equatable, Sendable, LocalizedError 
     case unsupportedScheme
     case exchangeFailed(String)
     case invalidExchangeResponse
+    /// Relay no longer accepts the invite: it expired, or the Host made a new
+    /// one or reset its pairing.
+    case inviteExpired
+    case rateLimited
 
     public var errorDescription: String? {
         switch self {
@@ -393,6 +415,8 @@ public enum WarrenRelayPairingError: Error, Equatable, Sendable, LocalizedError 
         case .unsupportedScheme: return "Relay pairing requires an HTTP(S) link."
         case .exchangeFailed(let message): return "Relay pairing failed: \(message)"
         case .invalidExchangeResponse: return "Relay returned an invalid pairing response."
+        case .inviteExpired: return "This pairing code is no longer valid. Show a new one on your computer and scan it again."
+        case .rateLimited: return "Too many pairing attempts. Wait a minute and try again."
         }
     }
 }
@@ -491,6 +515,11 @@ public enum WarrenRelayPairingClient {
             throw WarrenRelayPairingError.exchangeFailed("invalid server response")
         }
         guard (200..<300).contains(http.statusCode) else {
+            switch http.statusCode {
+            case 401, 404, 410: throw WarrenRelayPairingError.inviteExpired
+            case 429: throw WarrenRelayPairingError.rateLimited
+            default: break
+            }
             let detail = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
             throw WarrenRelayPairingError.exchangeFailed(detail?.isEmpty == false ? detail! : "HTTP \(http.statusCode)")
         }
@@ -2359,6 +2388,12 @@ public enum WarrenRemoteEvent: Sendable {
     /// client keeps retrying, while the UI may say so immediately instead of
     /// waiting out a grace period.
     case hostAbsent(detail: String)
+    /// The Host or Relay refused this client's credentials and they could not
+    /// be renewed: the device was removed, the Host reset its pairing, or the
+    /// Relay revoked the refresh family. Retrying cannot help, so a client
+    /// created with `stopsWhenCredentialsRejected` has stopped; only pairing
+    /// again recovers.
+    case credentialsRejected(detail: String)
 }
 
 public enum WarrenRemoteConnectionState: String, Equatable, Sendable {

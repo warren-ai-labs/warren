@@ -32,6 +32,16 @@ final class WarrenMultiHostSidebarModelTests: XCTestCase {
         XCTAssertNil(legacy.error)
     }
 
+    /// A Host whose route failed to come up is retried on its own, starting
+    /// soon and backing off to a minute so a Mac left asleep costs little.
+    func testFailedRouteRetriesBackOffToAMinute() {
+        XCTAssertEqual(WarrenMultiHostSidebarModel.startRetryDelay(failures: 0), .seconds(5))
+        XCTAssertEqual(WarrenMultiHostSidebarModel.startRetryDelay(failures: 1), .seconds(10))
+        XCTAssertEqual(WarrenMultiHostSidebarModel.startRetryDelay(failures: 3), .seconds(40))
+        XCTAssertEqual(WarrenMultiHostSidebarModel.startRetryDelay(failures: 4), .seconds(60))
+        XCTAssertEqual(WarrenMultiHostSidebarModel.startRetryDelay(failures: 50), .seconds(60))
+    }
+
     func testResolveAliasesFallsBackForMalformedOrFutureConfiguration() {
         let malformed = WarrenMultiHostSidebarModel.resolveAliases(
             display: WarrenDisplayConfiguration(endpoints: [" dev"]),

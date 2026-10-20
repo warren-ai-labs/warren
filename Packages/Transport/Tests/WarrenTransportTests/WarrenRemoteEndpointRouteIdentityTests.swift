@@ -110,4 +110,24 @@ final class WarrenRemoteEndpointRouteIdentityTests: XCTestCase {
         )
         XCTAssertEqual(decoded, endpoint)
     }
+
+    /// A Relay refresh rewrites only the credentials. The Desktop compares
+    /// stored endpoints to decide whether to reconnect, so a rotation must not
+    /// read as a different route.
+    func testRotatedCredentialsKeepTheSameRoute() {
+        let endpoint = WarrenRemoteEndpointConfiguration(
+            name: "Host",
+            url: "https://relay.example.test",
+            token: "access-1",
+            type: "relay",
+            relayHostID: "relay-host-9",
+            refreshToken: "refresh-1"
+        )
+        let rotated = endpoint.withTokens(token: "access-2", refreshToken: "refresh-2")
+        XCTAssertNotEqual(rotated, endpoint)
+        XCTAssertTrue(rotated.hasSameRoute(as: endpoint))
+        XCTAssertFalse(
+            endpoint.withRouteDetails(relayHostID: "relay-host-10").hasSameRoute(as: endpoint)
+        )
+    }
 }

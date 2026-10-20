@@ -72,7 +72,7 @@ struct WarrenDesktopTaskRow: View {
             .buttonStyle(.plain)
             .disabled(isInteractionDisabled)
             .focused($isFocused)
-            .accessibilityLabel("Task \(task.name), \(workspaceCount) workspaces")
+            .accessibilityLabel("Task \(task.name), \(workspaceCountText)")
             .accessibilityValue(taskAccessibilityValue)
             .warrenSemanticElement(
                 id: "task.\(task.id.description)",
@@ -206,6 +206,10 @@ struct WarrenDesktopTaskRow: View {
     }
 
     private var taskAccessibilityValue: String {
-        "\(workspaceCount) workspaces · \(isExpanded ? "Expanded" : "Collapsed")"
+        "\(workspaceCountText) · \(isExpanded ? "Expanded" : "Collapsed")"
+    }
+
+    private var workspaceCountText: String {
+        "\(workspaceCount) \(workspaceCount == 1 ? "workspace" : "workspaces")"
     }
 }

@@ -579,3 +579,26 @@ test("refresh restore prefers the saved session's workspace", () => {
     "workspace-main",
   );
 });
+
+test("a roster delta keeps the Session objects it did not change", () => {
+  const baseline = rosterFromMessage({
+    state: {
+      revision: 1,
+      workspaces: [{ id: "workspace-a", project: "project-a" }],
+      sessions: [
+        { id: "session-a", workspace: "workspace-a", lifecycle: "running", kind: "shell" },
+        { id: "session-b", workspace: "workspace-a", lifecycle: "running", kind: "shell" },
+      ],
+    },
+  });
+  const before = buildCatalog(baseline);
+  const after = buildCatalog(applyRosterDelta(baseline, {
+    t: "roster.delta",
+    baseRevision: 1,
+    revision: 2,
+    sessions: { upsert: [{ id: "session-b", workspace: "workspace-a", lifecycle: "running", kind: "codex" }] },
+  }));
+  assert.equal(after.sessions.get("session-a"), before.sessions.get("session-a"));
+  assert.notEqual(after.sessions.get("session-b"), before.sessions.get("session-b"));
+  assert.equal(after.sessions.get("session-b").kind, "codex");
+});
