@@ -262,8 +262,10 @@ struct WarrenDesktopUsageBarsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
+            // The same order as the curve's metric control, whatever each
+            // card selects first, so the two switches never mirror each other.
             WarrenSettingsSegmented(
-                options: WarrenUsageCurveMetric.allCases.reversed().map { ($0, $0.label) },
+                options: WarrenUsageCurveMetric.allCases.map { ($0, $0.label) },
                 selection: Binding(get: { metric }, set: { switchMetric($0) }),
                 accessibilityID: "usage.bars.metric"
             )

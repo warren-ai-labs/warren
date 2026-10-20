@@ -82,19 +82,26 @@ struct WarrenSettingsPalette {
             // it steps the same way in the light appearance.
             inkBody: ink.opacity(isLight ? 1 : 0.89),
             inkQuiet: tokens.sidebarTextBase,
-            // #5C5C5C on the dark ground: the section tier the sidebar uses.
-            inkFaint: tokens.mutedForeground.opacity(0.62),
+            // The sidebar's section tier, from the same base: faded from
+            // `mutedForeground` it fell to 2.6:1 on paper, while the sidebar's
+            // ladder keeps it near 3.1:1 in both appearances.
+            inkFaint: tokens.sidebarTextBase.opacity(WarrenSidebarTextWeight.section),
             meta: tokens.mutedForeground.opacity(0.72),
             icon: tokens.mutedForeground,
             hover: tokens.fillHover,
             selected: tokens.fillSelected,
             controlFill: tokens.chromeSurface,
             controlBorder: tokens.border,
-            controlSelected: tokens.chromeSurface,
+            // A wash over the control rather than the control's own fill, so
+            // a selected segment or a hovered inline button is a visible step
+            // above the box instead of the same grey with a hairline.
+            controlSelected: tokens.fillSelected,
             controlSelectedBorder: tokens.ring,
             field: tokens.inputSurface,
             fieldBorder: tokens.border,
-            fieldFocusBorder: tokens.ring,
+            // Keyboard focus is the one accent ring everywhere in the app; the
+            // passive `ring` grey nearly vanished against paper.
+            fieldFocusBorder: tokens.focusRing,
             fieldErrorBorder: tokens.destructive.opacity(0.6),
             // The primary is the inverted ink in both appearances.
             primaryFill: ink,
@@ -108,7 +115,7 @@ struct WarrenSettingsPalette {
             success: tokens.success,
             warning: tokens.warning,
             info: tokens.info,
-            focusRing: tokens.ring,
+            focusRing: tokens.focusRing,
             // Off has to read as a control, not as a hole in the card: a
             // visible track and a knob nearly as bright as the on state's.
             switchOffTrack: ink.opacity(isLight ? 0.14 : 0.16),
@@ -130,22 +137,32 @@ enum WarrenStatusTone: Equatable {
 }
 
 /// The 7pt corner dot. A status is a dot before it is a word.
+///
+/// The dot is centred on its own frame; the caller places it on the corner it
+/// belongs to. Busy work pulses through `WarrenStatusIndicator`, whose ring is
+/// driven by Core Animation and follows Reduce Motion as it changes, rather
+/// than a SwiftUI `repeatForever` that redraws the whole hosting view.
 struct WarrenSettingsStatusDot: View {
     let tone: WarrenStatusTone
     var ring: Color
 
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pulsing = false
 
     var body: some View {
         let palette = WarrenSettingsPalette.resolved(for: colorScheme)
-        Group {
+        ZStack {
+            Circle()
+                .fill(ring)
+                .frame(width: 10, height: 10)
             switch tone {
             case .busy:
-                Circle()
-                    .strokeBorder(palette.inkQuiet, lineWidth: 1.25)
-                    .frame(width: 7, height: 7)
+                WarrenStatusIndicator(
+                    color: palette.inkQuiet,
+                    isActive: true,
+                    size: 7,
+                    intensity: .quiet,
+                    accessibilityLabel: "Busy"
+                )
             case .ok:
                 Circle().fill(palette.success).frame(width: 7, height: 7)
             case .warning:
@@ -154,16 +171,7 @@ struct WarrenSettingsStatusDot: View {
                 Circle().fill(palette.dangerText).frame(width: 7, height: 7)
             }
         }
-        .padding(1.5)
-        .background(Circle().fill(ring))
-        .offset(x: 3, y: 3)
-        .opacity(tone == .busy && pulsing ? 0.35 : 1)
-        .onAppear {
-            guard tone == .busy, !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) {
-                pulsing = true
-            }
-        }
+        .frame(width: 10, height: 10)
         .accessibilityHidden(true)
     }
 }
@@ -447,19 +455,12 @@ struct WarrenSettingsSwitchStyle: ToggleStyle {
             )
         }
         .buttonStyle(.plain)
-        .modifier(WarrenSettingsSwitchEnabledLook())
+        // A locked switch does not fade itself: the row it sits in fades as
+        // a whole, once, at 0.42, so the switch still shows which way it is
+        // set instead of nearly vanishing under a second fade.
         .accessibilityRepresentation {
             Toggle(isOn: configuration.$isOn) { configuration.label }
         }
-    }
-}
-
-/// A locked switch fades as a whole, so it still shows which way it is set.
-private struct WarrenSettingsSwitchEnabledLook: ViewModifier {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func body(content: Content) -> some View {
-        content.opacity(isEnabled ? 1 : 0.45)
     }
 }
 
@@ -472,8 +473,6 @@ struct WarrenSettingsSegmented<Value: Hashable>: View {
     var accessibilityID: String? = nil
 
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var selectionNamespace
 
     var body: some View {
         let palette = WarrenSettingsPalette.resolved(for: colorScheme)
@@ -489,7 +488,8 @@ struct WarrenSettingsSegmented<Value: Hashable>: View {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(palette.controlBorder, lineWidth: 1)
         }
-        .animation(WarrenMotion.selection(reduceMotion: reduceMotion), value: selection)
+        // The selection moves at once: the spec keeps a segmented control
+        // still, with no plate sliding between segments.
         .accessibilityIdentifier(accessibilityID ?? "")
     }
 
@@ -507,7 +507,6 @@ struct WarrenSettingsSegmented<Value: Hashable>: View {
                     if isSelected {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .fill(palette.controlSelected)
-                            .matchedGeometryEffect(id: "segment-selection", in: selectionNamespace)
                     }
                 }
                 .overlay {
@@ -528,6 +527,10 @@ struct WarrenSettingsSegmented<Value: Hashable>: View {
 
 /// A drop-down that shows the current value and opens the shared floating
 /// surface with a checkmark on the current row.
+///
+/// The trigger is a real button, so it sits in the key-view loop and
+/// VoiceOver can press it; the list answers the arrow keys and Return, and a
+/// choice closes it, as every menu in the app does.
 struct WarrenSettingsPicker<Value: Hashable>: View {
     let label: String
     let value: String
@@ -540,48 +543,76 @@ struct WarrenSettingsPicker<Value: Hashable>: View {
     var accessibilityID: String? = nil
 
     @Environment(\.colorScheme) private var colorScheme
+    @FocusState private var isFocused: Bool
+    @State private var isPresented = false
 
     var body: some View {
         let palette = WarrenSettingsPalette.resolved(for: colorScheme)
-        HStack(spacing: 6) {
-            Text(value)
-                .font(monospaced
-                    ? .system(size: 12, design: .monospaced)
-                    : .system(size: 12.5))
-                .foregroundStyle(palette.inkBody)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(palette.inkFaint)
+        Button {
+            isPresented.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Text(value)
+                    .font(monospaced
+                        ? .system(size: 12, design: .monospaced)
+                        : .system(size: 12.5))
+                    .foregroundStyle(palette.inkBody)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(palette.inkFaint)
+            }
+            .padding(.leading, 10)
+            .padding(.trailing, 8)
+            .frame(minWidth: minWidth, maxWidth: maxWidth, minHeight: 28)
+            .background(palette.controlFill)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(isFocused ? palette.focusRing : palette.controlBorder, lineWidth: 1)
+            }
+            .contentShape(Rectangle())
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 8)
-        .frame(minWidth: minWidth, maxWidth: maxWidth, minHeight: 28)
-        .background(palette.controlFill)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(palette.controlBorder, lineWidth: 1)
-        }
+        .buttonStyle(.plain)
+        .focused($isFocused)
         .help(value)
         .accessibilityLabel(label)
         .accessibilityValue(value)
         .accessibilityIdentifier(accessibilityID ?? "")
-        .warrenMenuPanel(width: 232, title: label) {
-            pickerPanel(palette: palette)
+        .warrenMenuPanel(isPresented: $isPresented, width: WarrenDesktopMenuMetrics.menuWidth) {
+            WarrenSettingsPickerPanel(
+                options: options,
+                selection: $selection,
+                sourceNote: sourceNote,
+                onChoose: { isPresented = false }
+            )
         }
     }
+}
 
-    private func pickerPanel(palette: WarrenSettingsPalette) -> some View {
+/// The picker's list: the menu's check rows, with one highlighted row that
+/// the pointer and the arrow keys share.
+private struct WarrenSettingsPickerPanel<Value: Hashable>: View {
+    let options: [(value: Value, label: String, detail: String?)]
+    @Binding var selection: Value
+    let sourceNote: String?
+    let onChoose: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hot: Int?
+
+    var body: some View {
+        let palette = WarrenSettingsPalette.resolved(for: colorScheme)
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+            ForEach(Array(options.enumerated()), id: \.offset) { index, option in
+                let isChecked = selection == option.value
                 Button {
-                    selection = option.value
+                    choose(index)
                 } label: {
-                    HStack(spacing: 7) {
-                        WarrenDesktopMenuCheckColumn(isChecked: selection == option.value)
+                    HStack(spacing: WarrenDesktopMenuMetrics.checkSpacing) {
+                        WarrenDesktopMenuCheckColumn(isChecked: isChecked)
                         Text(option.label)
                             .font(.system(size: 13))
                             .foregroundStyle(palette.inkBody)
@@ -594,21 +625,58 @@ struct WarrenSettingsPicker<Value: Hashable>: View {
                                 .lineLimit(1)
                         }
                     }
-                    .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                    .padding(.horizontal, WarrenDesktopMenuMetrics.rowHorizontalPadding)
+                    .frame(maxWidth: .infinity, minHeight: WarrenDesktopMenuMetrics.rowHeight, alignment: .leading)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(WarrenDesktopMenuRowStyle())
+                .buttonStyle(WarrenDesktopMenuRowStyle(forceHover: hot == index))
+                .onHover { inside in
+                    hot = inside ? index : (hot == index ? nil : hot)
+                }
+                .accessibilityAddTraits(isChecked ? .isSelected : [])
             }
 
             if let sourceNote {
                 Text(sourceNote)
                     .font(.system(size: 11.5))
                     .foregroundStyle(palette.meta)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, WarrenDesktopMenuMetrics.rowHorizontalPadding)
                     .padding(.top, 5)
             }
         }
+        .overlay { WarrenDesktopKeyCatcher(onKey: handle) }
+    }
+
+    private func choose(_ index: Int) {
+        guard options.indices.contains(index) else { return }
+        selection = options[index].value
+        onChoose()
+    }
+
+    private func handle(_ event: NSEvent) -> Bool {
+        guard !options.isEmpty else { return false }
+        switch event.keyCode {
+        case 125: // down
+            hot = ((hot ?? currentIndex ?? -1) + 1) % options.count
+        case 126: // up
+            hot = ((hot ?? currentIndex ?? options.count) - 1 + options.count) % options.count
+        case 115: // home
+            hot = 0
+        case 119: // end
+            hot = options.count - 1
+        case 36, 76: // return
+            guard let hot else { return true }
+            choose(hot)
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// The row the list opened on, so the first arrow moves from the value
+    /// already chosen rather than from the top.
+    private var currentIndex: Int? {
+        options.firstIndex { $0.value == selection }
     }
 }
 
@@ -673,7 +741,7 @@ struct WarrenSettingsStepper: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.3)
+        .opacity(enabled ? 1 : 0.42)
         .accessibilityLabel(symbol == "minus" ? "Decrease" : "Increase")
     }
 }
@@ -796,76 +864,63 @@ enum WarrenSettingsButtonKind {
     case danger
 }
 
+/// Settings' buttons are the app's buttons: a primary, a secondary and a
+/// destructive action look and behave here exactly as they do in a dialog.
+/// Only the text-only `plain` kind, which the shared styles have no peer
+/// for, draws itself.
 struct WarrenSettingsButtonStyle: ButtonStyle {
     let kind: WarrenSettingsButtonKind
-    var font: Font = .system(size: 12.5)
 
+    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        WarrenSettingsButtonBody(configuration: configuration, kind: kind, font: font)
+        switch kind {
+        case .primary:
+            WarrenPrimaryButtonStyle().makeBody(configuration: configuration)
+        case .secondary:
+            WarrenSecondaryButtonStyle().makeBody(configuration: configuration)
+        case .danger:
+            WarrenDestructiveButtonStyle().makeBody(configuration: configuration)
+        case .plain:
+            WarrenSettingsPlainButtonBody(configuration: configuration)
+        }
     }
+}
 
-    struct WarrenSettingsButtonBody: View {
-        let configuration: Configuration
-        let kind: WarrenSettingsButtonKind
-        let font: Font
+/// A text-only action: quiet ink, a wash on hover, a deeper wash while
+/// pressed, and the accent ring while it holds keyboard focus.
+private struct WarrenSettingsPlainButtonBody: View {
+    let configuration: ButtonStyleConfiguration
 
-        @Environment(\.colorScheme) private var colorScheme
-        @Environment(\.isEnabled) private var isEnabled
-        @State private var hovering = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isFocused) private var isFocused
+    @State private var hovering = false
 
-        /// A disabled primary steps down to the secondary's outline, so it reads
-        /// as unavailable rather than as a grey slab beside a live button.
-        private var effectiveKind: WarrenSettingsButtonKind {
-            kind == .primary && !isEnabled ? .secondary : kind
-        }
-
-        var body: some View {
-            let palette = WarrenSettingsPalette.resolved(for: colorScheme)
-            let kind = effectiveKind
-            configuration.label
-                .font(font)
-                .foregroundStyle(isEnabled ? foreground(palette) : palette.inkFaint)
-                .padding(.horizontal, kind == .plain ? 8 : 12)
-                .frame(minHeight: 28)
-                .background {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(background(palette))
-                }
-                .overlay {
-                    if kind == .secondary || kind == .danger {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .strokeBorder(palette.secondaryBorder, lineWidth: 1)
-                    }
-                }
-                .overlay {
-                    if kind == .plain && hovering {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(palette.hover)
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .contentShape(Rectangle())
-                .opacity(isEnabled ? 1 : 0.7)
-                .onHover { hovering = $0 && isEnabled }
-        }
-
-        private func foreground(_ palette: WarrenSettingsPalette) -> Color {
-            switch effectiveKind {
-            case .primary: palette.primaryText
-            case .secondary: hovering ? palette.ink : palette.secondaryText
-            case .plain: hovering ? palette.ink : palette.plainText
-            case .danger: palette.dangerText
+    var body: some View {
+        let palette = WarrenSettingsPalette.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        let shape = RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
+        let hot = hovering && isEnabled
+        configuration.label
+            .font(WarrenTypography.body)
+            .foregroundStyle(hot ? palette.ink : palette.plainText)
+            .padding(.horizontal, 8)
+            .frame(minHeight: WarrenLayoutMetrics.compactControlHeight)
+            .background {
+                shape.fill(
+                    configuration.isPressed && isEnabled
+                        ? tokens.fillSelected
+                        : (hot ? tokens.fillHover : .clear)
+                )
             }
-        }
-
-        private func background(_ palette: WarrenSettingsPalette) -> Color {
-            switch effectiveKind {
-            case .primary: hovering ? palette.primaryFill.opacity(0.88) : palette.primaryFill
-            case .secondary: hovering ? palette.controlSelected : palette.secondaryFill
-            case .plain: .clear
-            case .danger: hovering ? palette.controlSelected : palette.secondaryFill
+            .overlay {
+                if isFocused, isEnabled {
+                    shape.strokeBorder(tokens.focusRing, lineWidth: 1)
+                }
             }
-        }
+            .contentShape(shape)
+            .opacity(isEnabled ? 1 : 0.42)
+            .onHover { hovering = $0 }
     }
 }
 

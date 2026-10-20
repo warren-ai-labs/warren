@@ -6,9 +6,10 @@ import WarrenDesignSystem
 import WarrenDomain
 import WarrenObservation
 
-/// Superset v2's workspace chrome is one 40pt row. Leading controls only
-/// appear when the left rail is collapsed; an expanded sidebar owns its own
-/// header controls, so the workspace never gets a duplicate 48pt top bar.
+/// The window's whole top chrome is this one row,
+/// `WarrenLayoutMetrics.tabBarHeight` tall. Leading controls only appear when
+/// the left rail is collapsed; an expanded sidebar owns its own header
+/// controls, so there is no second top bar above it.
 struct WarrenDesktopTabBar: View {
     /// What the bar draws, resolved once from the display mode and the layout.
     ///
@@ -28,7 +29,6 @@ struct WarrenDesktopTabBar: View {
     /// The solo pill's title menu, built from the bar's own rename request and
     /// the current editor list. Nil leaves the menu empty.
     var soloTitleActions: ((WarrenDesktopSoloPaneIdentity.Model) -> [WarrenDesktopContextMenuAction])? = nil
-    let chromeMode: WarrenDesktopChromeMode
     let isSidebarCollapsed: Bool
     let onToggleSidebar: () -> Void
     /// The dot the collapsed sidebar button carries, or nil.
@@ -110,7 +110,6 @@ struct WarrenDesktopTabBar: View {
         splitGroups: [WarrenDesktopSplitGroup] = [],
         onCopyPaneTitle: @escaping () -> Void = {},
         soloTitleActions: ((WarrenDesktopSoloPaneIdentity.Model) -> [WarrenDesktopContextMenuAction])? = nil,
-        chromeMode: WarrenDesktopChromeMode,
         isSidebarCollapsed: Bool,
         onToggleSidebar: @escaping () -> Void,
         sidebarAttentionMark: WarrenActivityMark? = nil,
@@ -152,7 +151,6 @@ struct WarrenDesktopTabBar: View {
         self.splitGroups = splitGroups
         self.onCopyPaneTitle = onCopyPaneTitle
         self.soloTitleActions = soloTitleActions
-        self.chromeMode = chromeMode
         self.isSidebarCollapsed = isSidebarCollapsed
         self.onToggleSidebar = onToggleSidebar
         self.sidebarAttentionMark = sidebarAttentionMark
@@ -207,7 +205,7 @@ struct WarrenDesktopTabBar: View {
         // leading side, a capsule holding the panels and "+" buttons on the
         // trailing side, and the backdrop between them as the drag area.
         HStack(spacing: WarrenLayoutMetrics.cardGap) {
-            if chromeMode == .workspace, isSidebarCollapsed {
+            if isSidebarCollapsed {
                 WarrenDesktopCollapsedWorkspaceLeading(
                     onToggleSidebar: onToggleSidebar,
                     host: collapsedHost,
@@ -230,14 +228,18 @@ struct WarrenDesktopTabBar: View {
             }
 
             if presentation.showsTrack {
-                // No outer container: the selected plate is the anchor, so the
-                // Tabs sit straight on the bar.
-                HStack(spacing: 2) {
-                    ForEach(rowElements.filter(\.drawsGroupMark)) { element in
-                        groupPill(element)
-                    }
-                    if !rowElements.trackTabs.isEmpty {
-                        track(tokens: tokens)
+                // The same capsule the single pane's pill sits in, so opening
+                // a second Session does not drop the frame and restyle the
+                // selection: every Tab pill sits on the card fill, and the
+                // selected one wears the same plate as the single pane's.
+                WarrenDesktopChromeCapsule {
+                    HStack(spacing: 2) {
+                        ForEach(rowElements.filter(\.drawsGroupMark)) { element in
+                            groupPill(element)
+                        }
+                        if !rowElements.trackTabs.isEmpty {
+                            track(tokens: tokens)
+                        }
                     }
                 }
                 .layoutPriority(1)
@@ -273,7 +275,7 @@ struct WarrenDesktopTabBar: View {
                     if presentation.showsTrack, trackOverflows {
                         overflowButton(tokens: tokens)
                     }
-                    if chromeMode == .workspace, rightSidebarAvailable {
+                    if rightSidebarAvailable {
                         WarrenDesktopRightSidebarToggle(
                             isOpen: rightSidebarOpen,
                             action: onToggleRightSidebar
@@ -296,8 +298,8 @@ struct WarrenDesktopTabBar: View {
         .onChange(of: tabs) { _ in
             // Workspace changes can remove or reuse a pending target without
             // publishing a matching selection. Clear the visual gate
-            // immediately so the next workspace's tabs are never left
-            // disabled for the timeout.
+            // immediately so the next workspace's selection is never
+            // blocked for the timeout.
             guard let pendingTabID,
                   !tabs.contains(where: { $0.id == pendingTabID }) else { return }
             self.pendingTabID = nil
@@ -377,7 +379,10 @@ struct WarrenDesktopTabBar: View {
                 onMoveSession(sessionID, destination)
             }
         )
-        .disabled(pendingTabID != nil)
+        // Only the target reads as pending. The rest of the bar stays live —
+        // close buttons and context menus included — and `selectTab` guards
+        // against a second selection while this one is in flight. Disabling
+        // every Tab used to dim the whole bar on each click.
         .opacity(pendingTabID == tab.id ? 0.72 : 1)
         .overlay(alignment: .bottom) {
             // Keep the pending state visible while the selection itself
@@ -471,7 +476,7 @@ struct WarrenDesktopTabBar: View {
         return WarrenOverflowFadeScrollView(
             .horizontal,
             fadeLength: WarrenLayoutMetrics.tabScrollFadeLength,
-            surface: tokens.windowBackdrop,
+            surface: tokens.workbenchCardFill,
             showsEdgeChevrons: false
         ) {
             HStack(spacing: 0) {
@@ -1282,26 +1287,25 @@ private struct WarrenDesktopCollapsedWorkspaceLeading: View {
 
     private func hostButton(_ host: WarrenDesktopCollapsedHost) -> some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let flagsReachability = host.reachability.map { $0 != .reachable } ?? false
         return Button(action: host.toggle) {
-            HStack(spacing: 5) {
-                Text(host.initial)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(tokens.foreground.opacity(0.8))
-                    .frame(width: 20, height: 20)
-                    .background(
-                        tokens.foreground.opacity(0.07),
-                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    )
-                    .overlay(alignment: .bottomTrailing) {
-                        if host.isPublicAccessOn {
-                            Circle()
-                                .fill(tokens.success)
-                                .frame(width: 6, height: 6)
-                                .padding(1)
-                                .background(Circle().fill(tokens.workbenchCardFill))
-                                .offset(x: 3, y: 3)
-                        }
-                    }
+            // The sidebar's own Host tile, so collapsing the rail does not
+            // change how the Host reads. An unreachable Host keeps its red
+            // dot here; a reachable one gives the corner to Public Access.
+            WarrenDesktopHostInitialTile(
+                name: host.name,
+                size: 20,
+                reachability: flagsReachability ? host.reachability : nil
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if host.isPublicAccessOn, !flagsReachability {
+                    Circle()
+                        .fill(tokens.success)
+                        .frame(width: 6, height: 6)
+                        .padding(1)
+                        .background(Circle().fill(tokens.workbenchCardFill))
+                        .offset(x: 3, y: 3)
+                }
             }
             .frame(width: 28, height: WarrenLayoutMetrics.tabPillHeight)
             .background(
@@ -1310,10 +1314,10 @@ private struct WarrenDesktopCollapsedWorkspaceLeading: View {
             )
             .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(WarrenChromeButtonStyle())
         .help("Host \(host.name)")
         .accessibilityLabel("Host \(host.name)")
-        .accessibilityValue(host.isPublicAccessOn ? "Public Access on" : "")
+        .accessibilityValue(host.accessibilityValue)
         .warrenSemanticElement(
             id: "collapsed-host",
             role: .button,
@@ -1328,10 +1332,19 @@ private struct WarrenDesktopCollapsedWorkspaceLeading: View {
 /// The Host picker entry the collapsed rail keeps in the top bar.
 struct WarrenDesktopCollapsedHost {
     let name: String
-    let initial: String
+    /// `nil` while nothing has reported on the connection yet.
+    var reachability: WarrenDesktopHostReachability? = nil
     let isPublicAccessOn: Bool
     let isPickerPresented: Bool
     let toggle: () -> Void
+
+    var accessibilityValue: String {
+        var parts: [String] = []
+        if reachability == .unreachable { parts.append("Not connected") }
+        if reachability == .connecting { parts.append("Connecting") }
+        if isPublicAccessOn { parts.append("Public Access on") }
+        return parts.joined(separator: ", ")
+    }
 }
 
 /// The right sidebar's toggle.

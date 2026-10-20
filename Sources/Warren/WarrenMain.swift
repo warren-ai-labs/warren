@@ -61,7 +61,7 @@ private extension NSWindow {
 ///
 /// A SwiftUI `WindowGroup` always reserves a system titlebar strip even with
 /// `.hiddenTitleBar`. Warren runs a real borderless `NSWindow` instead, so the
-/// 40pt chrome and sidebar header form one continuous surface from pixel zero;
+/// tab bar chrome and sidebar header form one continuous surface from pixel zero;
 /// the traffic lights are drawn inside the sidebar header.
 @main
 enum WarrenMain {

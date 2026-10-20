@@ -240,6 +240,9 @@ struct WarrenDesktopPaneGroupPill: View {
     @FocusState private var isFocused: Bool
     @State private var isHovered = false
     @State private var keyMonitor: Any?
+    /// The window this pill is mounted in, so the app-wide key monitor only
+    /// answers keys aimed at it.
+    @State private var hostWindow = WarrenDesktopPaneGroupWindowBox()
 
     private typealias Metrics = WarrenLayoutMetrics
 
@@ -279,7 +282,9 @@ struct WarrenDesktopPaneGroupPill: View {
                 Circle()
                     .fill(tokens.highlight)
                     .frame(width: 6, height: 6)
-                    .background(Circle().fill(tokens.workbenchCardFill).padding(-1.5))
+                    // The ring is the pill's own fill, so it does not show as
+                    // a darker halo on the selected pill.
+                    .background(Circle().fill(surface).padding(-1.5))
                     .padding(.top, 2)
                     .padding(.trailing, 3)
                     .opacity(lifted ? 0 : 1)
@@ -317,6 +322,7 @@ struct WarrenDesktopPaneGroupPill: View {
             actions.merge(tabID)
             return true
         }
+        .background(WarrenDesktopPaneGroupWindowProbe(box: hostWindow))
         .focusable()
         .focused($isFocused)
         .onAppear(perform: installKeyMonitor)
@@ -429,31 +435,25 @@ struct WarrenDesktopPaneGroupPill: View {
         return Color.clear
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .overlay(alignment: .leading) {
-                ZStack(alignment: .leading) {
-                    Text(group.title)
-                        .opacity(lifted ? 0 : 1)
-                        .offset(x: lifted ? spread : 0)
-                    Text(memberTitle)
-                        .opacity(lifted ? 1 : 0)
-                        .offset(x: spread)
+                // Fades only when the title does not fit, like a sidebar row's
+                // name, rather than through a fixed mask that dimmed the end
+                // of every title. The trailing padding stands in for the
+                // lifted title's offset, so the fade still measures it.
+                WarrenDesktopFadingLine {
+                    ZStack(alignment: .leading) {
+                        Text(group.title)
+                            .opacity(lifted ? 0 : 1)
+                            .offset(x: lifted ? spread : 0)
+                        Text(memberTitle)
+                            .opacity(lifted ? 1 : 0)
+                            .offset(x: spread)
+                    }
+                    .padding(.trailing, lifted ? spread : 0)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(color)
                 }
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(color)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
             }
             .clipped()
-            .mask(
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0),
-                        .init(color: .black, location: 0.85),
-                        .init(color: .clear, location: 1),
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
             .contentShape(.rect)
             .onHover { inside in
                 if inside { hover.aim(nil) }
@@ -475,7 +475,11 @@ struct WarrenDesktopPaneGroupPill: View {
     /// pill focused, ↓ opens the shelf and the shelf takes ↑↓ ⏎ ⌫ Esc.
     ///
     /// Only keys that name an existing member are taken, so every other ⌥ chord
-    /// still reaches the terminal.
+    /// still reaches the terminal. The monitor is app-wide, so it also lets
+    /// through every key aimed at another window (Settings, a sheet) or at
+    /// this window while it is not key, and leaves ⌥-digits to a focused text
+    /// control (the command palette, a search field, the composer), where
+    /// they type characters.
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -491,9 +495,13 @@ struct WarrenDesktopPaneGroupPill: View {
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
+        guard let window = hostWindow.window,
+              event.window === window,
+              window.isKeyWindow else { return false }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             .subtracting([.numericPad, .function, .capsLock])
         if modifiers == .option,
+           !(window.firstResponder is NSText),
            let number = WarrenDesktopPaneGroupKeys.memberNumber(keyCode: event.keyCode),
            number <= group.members.count {
             actions.selectMember(group.members[number - 1].id)
@@ -526,6 +534,39 @@ struct WarrenDesktopPaneGroupPill: View {
             return true
         }
         return false
+    }
+}
+
+/// A weak reference to the pill's window, held in `@State` so the key
+/// monitor's closure reads the current value without capturing the view.
+final class WarrenDesktopPaneGroupWindowBox {
+    weak var window: NSWindow?
+}
+
+/// Reports the window it is mounted in to a `WarrenDesktopPaneGroupWindowBox`.
+private struct WarrenDesktopPaneGroupWindowProbe: NSViewRepresentable {
+    let box: WarrenDesktopPaneGroupWindowBox
+
+    func makeNSView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.box = box
+        return view
+    }
+
+    func updateNSView(_ view: ProbeView, context: Context) {
+        view.box = box
+        box.window = view.window
+    }
+
+    final class ProbeView: NSView {
+        var box: WarrenDesktopPaneGroupWindowBox?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            box?.window = window
+        }
     }
 }
 

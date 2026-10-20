@@ -110,8 +110,16 @@ public final class GhosttySurface: Identifiable {
             workingDirectory: workingDirectory
         )
         self.state = state
+        // The writer reports every slice it feeds Ghostty. One queued hop
+        // covers all of them: a refresh ticks the controller once for whatever
+        // has arrived, so a burst no longer stacks a main-actor task per slice.
+        // The gate reopens before the tick, so a slice landing during it still
+        // queues the next refresh.
+        let refreshGate = DisplayRefreshGate()
         outputWriter.onOutputReceived = { [weak self] in
+            guard refreshGate.claim() else { return }
             Task { @MainActor in
+                refreshGate.reopen()
                 self?.requestDisplayRefresh()
             }
         }
@@ -174,9 +182,11 @@ public final class GhosttySurface: Identifiable {
     /// Requests one app-mailbox progress turn. Ghostty's renderer owns frame
     /// pacing; this is not a replacement display loop.
     public func requestDisplayRefresh() {
-        TerminalDiagnostics.logVerbose("display_refresh", [
-            "session": id.description,
-        ])
+        if TerminalDiagnostics.isVerbose {
+            TerminalDiagnostics.logVerbose("display_refresh", [
+                "session": id.description,
+            ])
+        }
         state.controller.tick()
     }
 
@@ -194,9 +204,9 @@ public final class GhosttySurface: Identifiable {
     /// draw instead of leaving a pane black while a block stays open.
     @discardableResult
     public func presentNow(forceDraw: Bool = false) -> Bool {
-        let size = state.surfaceSize.map {
-            "\($0.columns)x\($0.rows)"
-        } ?? "nil"
+        func size() -> String {
+            state.surfaceSize.map { "\($0.columns)x\($0.rows)" } ?? "nil"
+        }
         let view = mountedTerminalView
         let viewAttached = view?.window != nil
         let viewHidden = view?.isHidden ?? true
@@ -208,7 +218,7 @@ public final class GhosttySurface: Identifiable {
                 "session": id.description,
                 "result": "false",
                 "surfaceReady": "false",
-                "size": size,
+                "size": size(),
                 "viewAttached": viewAttached ? "true" : "false",
                 "viewHidden": viewHidden ? "true" : "false",
                 "viewVisible": viewVisible ? "true" : "false",
@@ -223,7 +233,7 @@ public final class GhosttySurface: Identifiable {
                 "session": id.description,
                 "result": "false",
                 "surfaceReady": "true",
-                "size": size,
+                "size": size(),
                 "viewAttached": viewAttached ? "true" : "false",
                 "viewHidden": viewHidden ? "true" : "false",
                 "viewVisible": "false",
@@ -252,15 +262,17 @@ public final class GhosttySurface: Identifiable {
         // are already applied to the grid this would draw.
         if !forceDraw, outputWriter.isInSynchronizedOutput, !outputWriter.isSyncStalled {
             state.controller.tick()
-            TerminalDiagnostics.logVerbose("present_now_deferred", [
-                "session": id.description,
-                "enqueued": String(outputWriter.enqueuedSequence),
-                "rendered": String(outputWriter.renderedSequence),
-                "reason": "sync-pending",
-            ])
+            if TerminalDiagnostics.isVerbose {
+                TerminalDiagnostics.logVerbose("present_now_deferred", [
+                    "session": id.description,
+                    "enqueued": String(outputWriter.enqueuedSequence),
+                    "rendered": String(outputWriter.renderedSequence),
+                    "reason": "sync-pending",
+                ])
+            }
             return false
         }
-        if forceDraw, outputWriter.isInSynchronizedOutput {
+        if forceDraw, outputWriter.isInSynchronizedOutput, TerminalDiagnostics.isVerbose {
             TerminalDiagnostics.logVerbose("present_now_forced", [
                 "session": id.description,
                 "enqueued": String(outputWriter.enqueuedSequence),
@@ -269,16 +281,18 @@ public final class GhosttySurface: Identifiable {
         }
         state.controller.tick()
         ghostty_surface_draw(raw)
-        let fields = [
-            "session": id.description,
-            "result": "true",
-            "surfaceReady": "true",
-            "size": size,
-            "viewAttached": viewAttached ? "true" : "false",
-            "viewHidden": viewHidden ? "true" : "false",
-            "viewVisible": viewVisible ? "true" : "false",
-        ]
-        TerminalDiagnostics.logVerbose("present_now", fields)
+        // This is the per-frame path: build the record only when it is kept.
+        if TerminalDiagnostics.isVerbose {
+            TerminalDiagnostics.logVerbose("present_now", [
+                "session": id.description,
+                "result": "true",
+                "surfaceReady": "true",
+                "size": size(),
+                "viewAttached": viewAttached ? "true" : "false",
+                "viewHidden": viewHidden ? "true" : "false",
+                "viewVisible": viewVisible ? "true" : "false",
+            ])
+        }
         return true
     }
 
@@ -352,13 +366,12 @@ public final class GhosttySurface: Identifiable {
             builder.withCustom("adjust-cell-height", Self.defaultCellHeightAdjustment)
             builder.withCustom("copy-on-select", "true")
             // Match standalone Ghostty's find highlighting: black text on a
-            // golden yellow background for candidate matches, and on Warren's
-            // orange accent for the focused match. The previous near-black
-            // candidate background was almost invisible on the terminal grid.
+            // golden yellow background for candidate matches. The previous
+            // near-black candidate background was almost invisible on the
+            // terminal grid. The focused match takes Warren's accent, which is
+            // appearance-dependent, so it lives in `makeThemeConfiguration`.
             builder.withCustom("search-foreground", "#0b0b0b")
             builder.withCustom("search-background", "#ffe082")
-            builder.withCustom("search-selected-foreground", "#0b0b0b")
-            builder.withCustom("search-selected-background", "#e07850")
             builder.withWindowPaddingX(0)
             builder.withWindowPaddingY(0)
             // Ghostty compresses cold scrollback pages while idle and restores
@@ -410,7 +423,7 @@ public final class GhosttySurface: Identifiable {
     /// The colors and palette for one appearance.
     ///
     /// Everything appearance-dependent lives here, and `makeConfiguration` keeps
-    /// the appearance-independent half — font, cell metrics, find highlighting —
+    /// the appearance-independent half — font, cell metrics, candidate find highlighting —
     /// so the two cannot drift into disagreeing about which is which.
     private static func makeThemeConfiguration(
         appearance: TerminalColorScheme
@@ -422,6 +435,9 @@ public final class GhosttySurface: Identifiable {
                 builder.withForeground("#ededed")
                 builder.withCursorColor("#e07850")
                 builder.withCursorText("#0b0b0b")
+                // The focused find match takes the cursor's accent and text.
+                builder.withCustom("search-selected-foreground", "#0b0b0b")
+                builder.withCustom("search-selected-background", "#e07850")
                 // Ghostty colors carry no alpha; blend Superset's 25% orange
                 // selection over #0b0b0b instead of using its rgba() value.
                 builder.withSelectionBackground("#40261c")
@@ -434,6 +450,8 @@ public final class GhosttySurface: Identifiable {
                 builder.withForeground("#1c1917")
                 builder.withCursorColor("#b7522c")
                 builder.withCursorText("#ffffff")
+                builder.withCustom("search-selected-foreground", "#ffffff")
+                builder.withCustom("search-selected-background", "#b7522c")
                 // The same 25% accent selection, blended over white.
                 builder.withSelectionBackground("#f0d5c9")
                 builder.withBoldColor("bright")
@@ -658,5 +676,27 @@ public extension GhosttySurface {
         let bytes = UnsafeBufferPointer(start: text, count: Int(out.text_len))
             .map { UInt8(bitPattern: $0) }
         return String(decoding: bytes, as: UTF8.self)
+    }
+}
+
+/// At most one display refresh in flight between the output writer's thread
+/// and the main actor.
+private final class DisplayRefreshGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = false
+
+    /// True when the caller should queue a refresh; false while one is queued.
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !pending else { return false }
+        pending = true
+        return true
+    }
+
+    func reopen() {
+        lock.lock()
+        pending = false
+        lock.unlock()
     }
 }

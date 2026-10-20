@@ -370,11 +370,13 @@ struct WarrenDesktopApprovalTrayPanel: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                // Interactive text takes the link color; `info` is the status
+                // blue, and beside an attention mark it read as a state.
                 Button("Open") { openSession(entry) }
                     .buttonStyle(.plain)
                     .font(.system(size: 12))
-                    .foregroundStyle(tokens.info)
-                    .warrenTooltip("Open this Session", shortcut: "\u{21A9}")
+                    .foregroundStyle(tokens.link)
+                    .warrenTooltip("Open this Session", shortcut: "\u{23CE}")
                     .accessibilityLabel("Open \(entry.title)")
                     .warrenSemanticElement(
                         id: "approval-tray.open.\(entry.id.description)",

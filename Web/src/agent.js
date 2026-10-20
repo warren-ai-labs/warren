@@ -653,6 +653,8 @@ export function retryAgentQueueItem(queue = [], id) {
  * create a gap the user can never scroll back into.
  */
 export function mergeAgentEvents(existing = [], incoming = [], { cap = true } = {}) {
+  const appended = appendAgentEvents(existing || [], incoming || []);
+  if (appended) return appended.slice(cap ? -agentEventLimit : undefined);
   const bySequence = new Map();
   for (const event of existing || []) {
     const normalized = event;
@@ -674,6 +676,31 @@ export function mergeAgentEvents(existing = [], incoming = [], { cap = true } = 
   return [...bySequence.values()]
     .sort((left, right) => agentEventSequence(left) - agentEventSequence(right))
     .slice(cap ? -agentEventLimit : undefined);
+}
+
+/**
+ * The live case of mergeAgentEvents: every incoming row lands past the held
+ * tail in order, so the result is a plain append. Returns null whenever the
+ * general merge could produce something else (unsorted or unsequenced held
+ * rows, an overlap, or a batch out of order).
+ */
+function appendAgentEvents(existing, incoming) {
+  let tail = 0;
+  for (const event of existing) {
+    const sequence = agentEventSequence(event);
+    if (!event || sequence <= tail) return null;
+    tail = sequence;
+  }
+  const normalized = [];
+  for (const event of incoming) {
+    const row = normalizeCanonicalAgentEvent(event);
+    const sequence = agentEventSequence(row);
+    if (!row || !sequence) continue;
+    if (sequence <= tail) return null;
+    tail = sequence;
+    normalized.push(row);
+  }
+  return existing.concat(normalized);
 }
 
 /**

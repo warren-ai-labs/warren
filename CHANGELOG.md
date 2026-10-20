@@ -16,6 +16,33 @@ All notable changes to Warren are documented here.
 
 ### Fixed
 
+- Say why a Host cannot be reached on iPhone. Once a loss outlasts the grace
+  period, the Inbox and the Session title show the reason, such as "Mac is
+  offline · last seen 3 minutes ago", and a first load that cannot connect says
+  so instead of showing placeholder rows.
+- Ask for a new pairing code when a Host no longer accepts a device. A removed
+  device or a reset pairing used to retry forever while the app said it was
+  waiting for the Mac; the iPhone and the Desktop now stop and say to pair
+  again.
+- Keep a device paired when a Relay token refresh loses its reply on a weak
+  network. Relay accepts the same refresh again for 60 seconds instead of
+  revoking the device.
+- Fall back to Relay on iPhone when the phone leaves the Host's network, even
+  with automatic LAN switching off, and return to the same LAN address when it
+  answers again. Editing a Host no longer switches it to its LAN address.
+- Name Hosts paired over Relay after the Host instead of "Warren Host", keep a
+  second Host's pairing code from joining the first Host, and keep every saved
+  credential when a Host is renamed.
+- Show pairing progress and failures in the iPhone Hosts list, and whether each
+  saved Host answers on this network or when it last connected. Switching Hosts
+  shows the new Host at once.
+- Recover SSH Hosts on the Desktop after sleep or a network change. The SSH
+  connection sends keepalives, a dead tunnel is rebuilt, and sidebar Hosts that
+  could not connect retry on their own.
+- Keep a Desktop Relay connection when its token refreshes instead of
+  reconnecting it.
+- Reconnect a Host to Relay as soon as its Mac wakes instead of waiting out the
+  rest of its backoff.
 - Keep terminal output aligned while a split pane resizes. The Desktop changes a
   terminal's grid only at the output position where the Host reports the PTY
   actually resized, so text written for the old width is never drawn on the new

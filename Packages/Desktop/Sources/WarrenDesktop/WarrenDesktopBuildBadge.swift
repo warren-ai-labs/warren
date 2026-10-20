@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WarrenDesignSystem
 
@@ -218,7 +219,8 @@ struct WarrenDesktopBuildBadge: View {
 /// bell. It is absent while there is nothing to say; otherwise its colour
 /// and motion carry the state without a word:
 ///
-/// - ready to install: an accent arrow that breathes, and a click installs;
+/// - ready to install: an accent arrow with a slow halo, and a click
+///   installs;
 /// - installing: an amber arrow inside a ring that turns;
 /// - failed: a red retry arrow, and a click retries.
 struct WarrenDesktopUpdateIcon: View {
@@ -255,13 +257,15 @@ struct WarrenDesktopUpdateIcon: View {
             isEnabled: status.isActionable,
             action: onAction
         )
-        // Restart the motion whenever the state changes, so a ready arrow
-        // never inherits the installing ring's phase.
+        // Restart the motion whenever the state changes, so the installing
+        // ring always starts from its own phase, and follow Reduce Motion as
+        // it is switched rather than only as it stood when this appeared.
         .onAppear { isAnimating = !reduceMotion }
         .onChange(of: status) { _ in
             isAnimating = false
             DispatchQueue.main.async { isAnimating = !reduceMotion }
         }
+        .onChange(of: reduceMotion) { isAnimating = !$0 }
     }
 
     @ViewBuilder
@@ -270,30 +274,32 @@ struct WarrenDesktopUpdateIcon: View {
         case .none:
             EmptyView()
         case .available:
+            // An update can wait for days, so the arrow itself holds still:
+            // a SwiftUI `repeatForever` redraws the whole hosting view every
+            // frame, which starves the terminal renderer. The motion is the
+            // Core Animation pulse every activity dot uses, which also stops
+            // the moment Reduce Motion is turned on.
             Image(systemName: "arrow.down.circle.fill")
                 .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(tint)
-                .opacity(isAnimating ? 0.55 : 1)
-                .animation(
-                    isAnimating
-                        ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true)
-                        : .default,
-                    value: isAnimating
-                )
+                .background {
+                    // A halo that swells out from behind the arrow.
+                    WarrenStatusIndicator(
+                        color: tint,
+                        isActive: true,
+                        size: 12,
+                        intensity: .quiet,
+                        accessibilityLabel: "Update ready"
+                    )
+                    .accessibilityHidden(true)
+                }
         case .updating:
             ZStack {
                 Circle()
                     .stroke(tint.opacity(0.22), lineWidth: 1.5)
-                Circle()
-                    .trim(from: 0, to: 0.28)
-                    .stroke(tint, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                    .rotationEffect(.degrees(isAnimating ? 360 : 0))
-                    .animation(
-                        isAnimating
-                            ? .linear(duration: 0.9).repeatForever(autoreverses: false)
-                            : .default,
-                        value: isAnimating
-                    )
+                // Turned by Core Animation, like the halo above: a SwiftUI
+                // `repeatForever` would redraw the hosting view every frame.
+                WarrenDesktopUpdateRing(color: tint, isAnimating: isAnimating)
                 Image(systemName: "arrow.down")
                     .font(.system(size: 7.5, weight: .bold))
                     .foregroundStyle(tint)
@@ -313,5 +319,89 @@ struct WarrenDesktopUpdateIcon: View {
         case .updating: tokens.amber
         case .failed: tokens.destructive
         }
+    }
+}
+
+/// The installing ring's arc. It turns on the compositor, below SwiftUI's
+/// invalidation boundary, the way `WarrenStatusPulseView` pulses.
+private struct WarrenDesktopUpdateRing: NSViewRepresentable {
+    let color: Color
+    let isAnimating: Bool
+
+    func makeNSView(context: Context) -> WarrenDesktopUpdateRingView {
+        let view = WarrenDesktopUpdateRingView(frame: .zero)
+        view.update(color: NSColor(color), isAnimating: isAnimating)
+        return view
+    }
+
+    func updateNSView(_ nsView: WarrenDesktopUpdateRingView, context: Context) {
+        nsView.update(color: NSColor(color), isAnimating: isAnimating)
+    }
+}
+
+@MainActor
+private final class WarrenDesktopUpdateRingView: NSView {
+    private static let animationKey = "warren.update-ring"
+    private static let lineWidth: CGFloat = 1.5
+    /// The share of the circle the arc covers.
+    private static let arcLength: CGFloat = 0.28
+    private static let turnDuration: CFTimeInterval = 0.9
+
+    private let arcLayer = CAShapeLayer()
+    private var isAnimating = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = false
+        arcLayer.fillColor = nil
+        arcLayer.lineWidth = Self.lineWidth
+        arcLayer.lineCap = .round
+        arcLayer.strokeEnd = Self.arcLength
+        layer?.addSublayer(arcLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Clicks belong to the update button the ring sits in.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        arcLayer.frame = bounds
+        // Centred on the frame's edge, like the SwiftUI track it turns on.
+        arcLayer.path = CGPath(ellipseIn: bounds, transform: nil)
+        CATransaction.commit()
+        installAnimationIfNeeded()
+    }
+
+    func update(color: NSColor, isAnimating: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        arcLayer.strokeColor = color.cgColor
+        CATransaction.commit()
+        self.isAnimating = isAnimating
+        if isAnimating {
+            installAnimationIfNeeded()
+        } else {
+            arcLayer.removeAnimation(forKey: Self.animationKey)
+        }
+    }
+
+    private func installAnimationIfNeeded() {
+        guard isAnimating, arcLayer.animation(forKey: Self.animationKey) == nil else { return }
+        // A layer's y axis points up, so a clockwise turn is a negative angle.
+        let turn = CABasicAnimation(keyPath: "transform.rotation.z")
+        turn.fromValue = 0
+        turn.toValue = -2 * Double.pi
+        turn.duration = Self.turnDuration
+        turn.repeatCount = .infinity
+        turn.isRemovedOnCompletion = false
+        arcLayer.add(turn, forKey: Self.animationKey)
     }
 }

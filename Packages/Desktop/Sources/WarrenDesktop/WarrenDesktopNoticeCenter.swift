@@ -14,7 +14,7 @@ struct WarrenDesktopNoticeTitleActions: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: WarrenSpacing.xs) {
-            Button("Mark all read", action: onMarkAllRead)
+            Button("Mark All Read", action: onMarkAllRead)
             .buttonStyle(.plain)
             .font(WarrenTypography.popoverMeta)
             .foregroundStyle(
@@ -26,7 +26,7 @@ struct WarrenDesktopNoticeTitleActions: View {
             .accessibilityLabel("Mark all notifications as read")
             .accessibilityHint("Mark every unread notification as read")
 
-            Button(isMuted ? "Unmute all" : "Mute all") {
+            Button(isMuted ? "Unmute All" : "Mute All") {
                 isMuted.toggle()
             }
             .buttonStyle(.plain)

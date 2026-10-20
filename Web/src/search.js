@@ -9,6 +9,7 @@
  */
 
 import { resolvedCommand, terminalTabTitle } from "./title.js";
+import { activityMarkLifecycle, resolveDrawnActivityMark } from "./activity.js";
 
 /** Where a matched value came from. The value is its ranking weight. */
 export const fieldRole = {
@@ -426,20 +427,28 @@ export function highlightRanges(text, tokens) {
 }
 
 /**
- * Ranking weight for live state. Blocked work is what a user opens search to
- * find, so it leads; a pin is an explicit signal that stacks on top.
+ * Ranking weight for live state, keyed by the activity mark the row draws (see
+ * `activity.js`). A request is what a user opens search to find, so every
+ * attention mark leads; a pin is an explicit signal that stacks on top.
+ *
+ * This order is not the sidebar rollup's: a rollup ranks a failure highest
+ * because it is the more specific fact, while a search ranks the request
+ * highest because that is what the person is hunting for. It matches
+ * `Status.boost(mark:pinned:)` on the Desktop and iOS.
  */
-export function activityBoost(activity, pinned) {
+export function activityBoost(mark, pinned) {
   const base = {
-    blocked: 70,
+    approvalNeeded: 70,
+    inputNeeded: 70,
+    attentionUnspecified: 70,
     failed: 60,
     working: 50,
     ready: 20,
-  }[activity] || 0;
+  }[mark] || 0;
   return base + (pinned ? 30 : 0);
 }
 
-function dominantActivity(left, right) {
+function dominantMark(left, right) {
   return activityBoost(right, false) > activityBoost(left, false) ? right : left;
 }
 
@@ -507,13 +516,13 @@ function basename(path) {
  * Sessions at the wire boundary, so a result can never point at something the
  * client cannot open. Tasks are absent because the web client shows none.
  */
-export function searchDescriptors(catalog) {
+export function searchDescriptors(catalog, acknowledgments = {}) {
   const descriptors = [];
   const targets = new Map();
-  const activities = new Map();
+  const marks = new Map();
   const providers = new Map();
   const pinned = new Set();
-  const workspaceActivities = new Map();
+  const workspaceMarks = new Map();
 
   const projectsByID = catalog.projectsByID || new Map();
   const workspacesByID = new Map(
@@ -524,7 +533,7 @@ export function searchDescriptors(catalog) {
     .map(value => String(value || "").trim())
     .filter(Boolean);
 
-  const add = ({ key, target, activity, pinned: isPinned, provider, ...descriptor }) => {
+  const add = ({ key, target, mark, pinned: isPinned, provider, ...descriptor }) => {
     descriptors.push({
       ...descriptor,
       key,
@@ -533,7 +542,7 @@ export function searchDescriptors(catalog) {
       kinds: clean(descriptor.kinds),
     });
     targets.set(key, target);
-    if (activity) activities.set(key, activity);
+    if (mark) marks.set(key, mark);
     if (isPinned) pinned.add(key);
     if (provider) providers.set(key, provider);
   };
@@ -545,11 +554,13 @@ export function searchDescriptors(catalog) {
     if (!tab.session || (tab.lifecycle && tab.lifecycle !== "running")) continue;
     const workspace = workspacesByID.get(tab.workspace);
     const project = workspace ? projectsByID.get(workspace.project) : null;
-    const activity = tab.agentStatus?.activity || "";
+    // The full status, not only its lifecycle: an attention payload that
+    // arrives with `ready` still reads as the request it is.
+    const mark = resolveDrawnActivityMark(tab.agentStatus, acknowledgments[tab.session] ?? null);
     if (workspace) {
-      workspaceActivities.set(
+      workspaceMarks.set(
         workspace.id,
-        dominantActivity(workspaceActivities.get(workspace.id) || "", activity),
+        dominantMark(workspaceMarks.get(workspace.id) || null, mark),
       );
     }
     const branch = workspace?.branch || workspace?.name || "";
@@ -571,7 +582,7 @@ export function searchDescriptors(catalog) {
       context: [context, project?.name, workspace?.name, workspace?.branch],
       kinds: [tab.kind],
       provider: sessionProvider(tab),
-      activity,
+      mark,
       pinned: Boolean(tab.pinned),
     });
   }
@@ -605,12 +616,12 @@ export function searchDescriptors(catalog) {
       path: abbreviateHome(workspace.path),
       aliases: [workspace.name, workspace.branch, basename(workspace.path)],
       context: [projectName, workspace.name, workspace.branch],
-      activity: workspaceActivities.get(workspace.id) || "",
+      mark: workspaceMarks.get(workspace.id) || null,
       pinned: Boolean(workspace.pinned),
     });
   }
 
-  return { descriptors, targets, activities, providers, pinned };
+  return { descriptors, targets, marks, providers, pinned };
 }
 
 /**
@@ -630,19 +641,25 @@ function searchableSessionTitle(session) {
  * One ready-to-render search surface over a catalog: the index, the live state
  * it ranks by, and the navigation target behind each row.
  */
-export function createSearch(catalog) {
-  const { descriptors, targets, activities, providers, pinned } = searchDescriptors(catalog);
+/**
+ * `acknowledgments` is the device-local record of completions this person has
+ * already read, so a row draws the same mark as the sidebar does.
+ */
+export function createSearch(catalog, acknowledgments = {}) {
+  const { descriptors, targets, marks, providers, pinned } = searchDescriptors(catalog, acknowledgments);
   const index = buildIndex(descriptors);
-  const boost = key => activityBoost(activities.get(key) || "", pinned.has(key));
+  const boost = key => activityBoost(marks.get(key), pinned.has(key));
   const accepts = (key, statuses) => {
     if (!statuses.size) return true;
-    if (statuses.has(activities.get(key) || " ")) return true;
+    // `@blocked` keeps matching every attention mark: the filter vocabulary is
+    // the lifecycle the Host reports, not the word the row shows.
+    if (statuses.has(activityMarkLifecycle(marks.get(key)) || " ")) return true;
     return statuses.has("pinned") && pinned.has(key);
   };
   const decorate = results => results.map(result => ({
     ...result,
     target: targets.get(result.key),
-    activity: activities.get(result.key) || "",
+    mark: marks.get(result.key) || null,
     provider: providers.get(result.key) || "",
     pinned: pinned.has(result.key),
   }));

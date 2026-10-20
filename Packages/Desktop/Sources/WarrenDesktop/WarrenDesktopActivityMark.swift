@@ -35,18 +35,12 @@ extension WarrenActivityMark {
 
     /// The palette entry for this mark.
     ///
-    /// Color is the reinforcing channel, never the distinguishing one: on the
-    /// light palette `warning` and `amber` are the same value, so `working` and a
-    /// blocked Session were the same color until the actionable tier took on its
-    /// own shape. The hues here only have to agree with the shape, not carry it.
+    /// Delegates to `WarrenDesktopStatusDot.color(for:tokens:)`, the one
+    /// Desktop dot palette, so the tray, the command palette, the peek, the
+    /// Host header and the tree's own dots cannot drift onto different hues
+    /// for the same state.
     func color(_ tokens: WarrenColorTokens) -> Color {
-        switch self {
-        case .failed: tokens.destructive
-        case .approvalNeeded, .inputNeeded, .attentionUnspecified: tokens.warning
-        case .working: tokens.amber
-        case .ready: tokens.success
-        case .exited: tokens.mutedForeground
-        }
+        WarrenDesktopStatusDot.color(for: self, tokens: tokens)
     }
 }
 

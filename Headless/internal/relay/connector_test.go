@@ -683,3 +683,22 @@ func TestSuspendedBetweenIgnoresAnAwakeInterval(t *testing.T) {
 		t.Fatalf("awake interval reported %s of suspension", suspended)
 	}
 }
+
+func TestWaitBackoffRunsTheFullDelayWithoutASleep(t *testing.T) {
+	start := time.Now()
+	woke, cancelled := waitBackoff(context.Background(), 60*time.Millisecond, 5*time.Millisecond)
+	if woke || cancelled {
+		t.Fatalf("woke=%v cancelled=%v", woke, cancelled)
+	}
+	if elapsed := time.Since(start); elapsed < 60*time.Millisecond {
+		t.Fatalf("backoff ended early after %v", elapsed)
+	}
+}
+
+func TestWaitBackoffStopsWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, cancelled := waitBackoff(ctx, time.Minute, time.Second); !cancelled {
+		t.Fatal("a cancelled backoff kept waiting")
+	}
+}

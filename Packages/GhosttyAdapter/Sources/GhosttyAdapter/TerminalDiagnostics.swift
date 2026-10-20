@@ -106,10 +106,19 @@ public enum TerminalDiagnostics {
     }
 
     /// Milestone event: always recorded once diagnostics are configured.
+    ///
+    /// Called on the main thread it goes through the serial writer instead,
+    /// like `logAsync`: the JSON encoding and the file write would otherwise
+    /// sit between AppKit events and the next frame. The main thread's own
+    /// events keep their order because they all share that queue.
     public static func log(
         _ event: String,
         _ fields: [String: String] = [:]
     ) {
+        if Thread.isMainThread {
+            logAsync(event, fields)
+            return
+        }
         store.lock.lock()
         defer { store.lock.unlock() }
         guard store.enabled else { return }
@@ -136,10 +145,22 @@ public enum TerminalDiagnostics {
     }
 
     /// Verbose event: recorded only with `WARREN_TERMINAL_DIAGNOSTICS=1`.
+    /// Off the main thread's back for the same reason as `log`.
     public static func logVerbose(
         _ event: String,
         _ fields: [String: String] = [:]
     ) {
+        if Thread.isMainThread {
+            guard isVerbose else { return }
+            let timestamp = Date().timeIntervalSince1970
+            asyncQueue.async {
+                store.lock.lock()
+                defer { store.lock.unlock() }
+                guard store.enabled, store.verbose else { return }
+                writeLocked(event, fields, timestamp: timestamp)
+            }
+            return
+        }
         store.lock.lock()
         defer { store.lock.unlock() }
         guard store.enabled, store.verbose else { return }

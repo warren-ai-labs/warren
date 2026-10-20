@@ -21,7 +21,9 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
     private final class Connection {
         let endpointID: String
         let endpointLabel: String
-        let configuration: WarrenRemoteEndpointConfiguration
+        /// Rewritten in place when only the credentials rotate, so a later
+        /// restart dials with the current tokens.
+        var configuration: WarrenRemoteEndpointConfiguration
         let generation = UUID()
 
         var task: Task<Void, Never>?
@@ -31,6 +33,19 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
         var state: WarrenDesktopConnectionState = .connecting
         var lastError: String?
         var tunnelRestartScheduled = false
+        /// The sidebar projection last built from this Host's state. Every
+        /// change in the window's own Host rebuilds the whole sidebar, and a
+        /// background Host's roster rarely moved in the meantime.
+        var builtProjection: (
+            roster: WarrenRemoteRoster?,
+            state: WarrenDesktopConnectionState,
+            lastError: String?,
+            projection: WarrenDesktopSidebarHostProjection
+        )?
+        /// Consecutive failures to bring the route up (SSH tunnel or local
+        /// daemon), which spaces out the automatic retries.
+        var startFailures = 0
+        var retryTask: Task<Void, Never>?
 
         init(
             endpointID: String,
@@ -134,11 +149,15 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
         overflowAliases = Set(backgroundAliases.dropFirst(backgroundCapacity))
 
         let connectionsToRemove: [(String, Connection)] = connections.compactMap { endpointID, connection in
-            guard !connectableAliases.contains(endpointID)
-                    || nextConfigurations[endpointID] != connection.configuration else {
-                return nil
+            guard let next = nextConfigurations[endpointID],
+                  connectableAliases.contains(endpointID),
+                  next.hasSameRoute(as: connection.configuration) else {
+                return (endpointID, connection)
             }
-            return (endpointID, connection)
+            // A Relay refresh rewrote the tokens of a connection that is
+            // healthy; keep it and remember the new ones.
+            connection.configuration = next
+            return nil
         }
         for (endpointID, connection) in connectionsToRemove {
             stop(connection)
@@ -186,9 +205,19 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
     /// change, or reactivation, and ends any backoff wait they are sitting in.
     func resumeConnections() {
         for connection in connections.values {
+            if connection.state == .failed, connection.client == nil {
+                // The route never came up. The wake or network change that
+                // brought us here is the best moment to build it again.
+                connection.retryTask?.cancel()
+                connection.retryTask = nil
+                connection.startFailures = 0
+                start(connection)
+                continue
+            }
             guard let client = connection.client else { continue }
             Task { await client.probeConnection() }
         }
+        rebuildProjection()
     }
 
     func stop() {
@@ -245,7 +274,10 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                         refreshToken: refreshToken
                     )
                     try? WarrenEndpointCatalog.upsert(updated)
-                }
+                },
+                // A refused Relay credential needs a new pairing; retrying it
+                // forever only hides that.
+                stopsWhenCredentialsRejected: configuration.isRelay
             )
             connection.client = client
             await client.start()
@@ -293,6 +325,7 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 connection.state = .failed
                 connection.lastError = Self.boundedError(error.localizedDescription)
                 rebuildProjection()
+                scheduleStartRetry(for: connection)
                 return nil
             }
             guard isCurrent(connection, generation: generation) else {
@@ -323,7 +356,35 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
         connection.state = .failed
         connection.lastError = "The local daemon is not running."
         rebuildProjection()
+        scheduleStartRetry(for: connection)
         return nil
+    }
+
+    /// A Host that was asleep or off the network when its route was built
+    /// used to stay failed until someone pressed Retry. Try again on a
+    /// growing delay instead; a wake or network change retries at once
+    /// through `resumeConnections()`.
+    private func scheduleStartRetry(for connection: Connection) {
+        connection.retryTask?.cancel()
+        let delay = Self.startRetryDelay(failures: connection.startFailures)
+        connection.startFailures += 1
+        let generation = connection.generation
+        connection.retryTask = Task { @MainActor [weak self, weak connection] in
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            guard let self, let connection,
+                  self.isCurrent(connection, generation: generation),
+                  connection.state == .failed else { return }
+            connection.retryTask = nil
+            self.start(connection)
+        }
+    }
+
+    nonisolated static func startRetryDelay(failures: Int) -> Duration {
+        .seconds(min(60, 5 << min(failures, 4)))
     }
 
     private func resolvedRelayConfiguration(
@@ -352,6 +413,7 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
             case .connected:
                 connection.state = .attached
                 connection.lastError = nil
+                connection.startFailures = 0
                 requestRoster(using: client, connection: connection, generation: generation)
             case .connecting:
                 connection.state = .connecting
@@ -394,6 +456,9 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 client: client,
                 generation: generation
             )
+        case .credentialsRejected(let detail):
+            connection.state = .failed
+            connection.lastError = Self.boundedError(detail)
         case .welcome, .output, .atomicState, .browserFrame, .anchor, .terminalResized, .agentEvents, .maintenance:
             break
         }
@@ -473,6 +538,8 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
     }
 
     private func stop(_ connection: Connection) {
+        connection.retryTask?.cancel()
+        connection.retryTask = nil
         connection.tunnelRestartScheduled = false
         connection.task?.cancel()
         connection.task = nil
@@ -783,13 +850,23 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
     private static func makeProjection(
         for connection: Connection
     ) -> WarrenDesktopSidebarHostProjection {
-        makeProjection(
+        // Comparing the roster is linear but allocation-free; rebuilding it
+        // parses dates and regroups every project.
+        if let built = connection.builtProjection,
+           built.state == connection.state,
+           built.lastError == connection.lastError,
+           built.roster == connection.roster {
+            return built.projection
+        }
+        let projection = makeProjection(
             endpointID: connection.endpointID,
             endpointLabel: connection.endpointLabel,
             roster: connection.roster,
             connectionState: connection.state,
             lastError: connection.lastError
         )
+        connection.builtProjection = (connection.roster, connection.state, connection.lastError, projection)
+        return projection
     }
 
     nonisolated private static func agentStatus(

@@ -543,15 +543,40 @@ func (connector *Connector) runLoop(ctx context.Context, done chan struct{}) {
 		}
 		delay := BackoffDelay(attempt, connector.config.Random)
 		attempt++
-		timer := time.NewTimer(delay)
+		woke, cancelled := waitBackoff(ctx, delay, relayWakeCheckInterval)
+		if cancelled {
+			return
+		}
+		if err == nil || woke {
+			attempt = 0
+		}
+	}
+}
+
+// waitBackoff sleeps for delay unless ctx ends or the machine wakes from sleep
+// part way through. A Mac that slept through a 30s backoff would otherwise sit
+// out the rest of it after waking, leaving phones on "Waiting for the Host"
+// while the network is already back. woke reports the early end, which also
+// earns a fresh backoff sequence.
+func waitBackoff(ctx context.Context, delay, checkInterval time.Duration) (woke, cancelled bool) {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	check := time.NewTicker(checkInterval)
+	defer check.Stop()
+	lastCheck := time.Now()
+	for {
 		select {
 		case <-ctx.Done():
-			timer.Stop()
-			return
+			return false, true
 		case <-timer.C:
-		}
-		if err == nil {
-			attempt = 0
+			return false, false
+		case <-check.C:
+			now := time.Now()
+			suspended := suspendedBetween(lastCheck, now)
+			lastCheck = now
+			if suspended >= relayWakeThreshold {
+				return true, false
+			}
 		}
 	}
 }

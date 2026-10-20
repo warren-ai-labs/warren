@@ -322,6 +322,23 @@ final class WarrenDesktopSidebarBandsTests: XCTestCase {
         )
     }
 
+    /// The spoken form never reads "now ago" or a bare unit letter.
+    func testActivityAgeHasAWholeWordSpokenForm() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 16, hour: 12))!
+        func spoken(_ seconds: TimeInterval) -> String {
+            WarrenDesktopActivityAge.spokenLabel(since: now.addingTimeInterval(-seconds), now: now, calendar: calendar)
+        }
+        XCTAssertEqual(WarrenDesktopActivityAge.spokenLabel(since: nil, now: now), "")
+        XCTAssertEqual(spoken(10), "just now")
+        XCTAssertEqual(spoken(60), "1 minute ago")
+        XCTAssertEqual(spoken(5 * 60), "5 minutes ago")
+        XCTAssertEqual(spoken(3 * 3_600), "3 hours ago")
+        XCTAssertEqual(spoken(8 * 86_400), "1 week ago")
+        XCTAssertEqual(spoken(42 * 86_400), "on Sep 4")
+    }
+
     func testWorkspaceFallsBackToItsCreationForLastActivity() {
         let created = Date(timeIntervalSince1970: 100)
         let active = Date(timeIntervalSince1970: 200)
@@ -429,15 +446,15 @@ final class WarrenDesktopSidebarBandsTests: XCTestCase {
         ))
         XCTAssertEqual(
             open["workspace.project-list.\(idleA.id.description)"]?.value,
-            "No sessions · last active 3d ago"
+            "No sessions · last active 3 days ago"
         )
         XCTAssertEqual(
             open["workspace.project-list.\(idleB.id.description)"]?.value,
-            "No sessions · last active 1w ago"
+            "No sessions · last active 1 week ago"
         )
         XCTAssertEqual(
             open["project.\(sumi.id.description)"]?.value,
-            "No open sessions · last active 2d ago"
+            "No open sessions · last active 2 days ago"
         )
     }
 }

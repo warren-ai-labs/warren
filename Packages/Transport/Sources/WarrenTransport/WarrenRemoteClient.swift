@@ -1030,6 +1030,10 @@ public actor WarrenRemoteClient {
     /// restarts, because the socket URL was already built from the stale id.
     private let relayHostIDCorrectionHandler: (@Sendable (String) -> Void)?
     private var relayIdentityCorrectionRequested = false
+    /// Stop, rather than retry forever, once the Host or Relay has refused the
+    /// credentials and they cannot be renewed. A phone opts in so it can ask
+    /// for a new pairing instead of reconnecting against a closed door.
+    private let stopsWhenCredentialsRejected: Bool
     /// Native pairing supplies a stable device identity so Relay capabilities
     /// remain bound to the same client across reconnects. Keeping this
     /// optional preserves compatibility with older capabilities that have no
@@ -1090,7 +1094,8 @@ public actor WarrenRemoteClient {
         additionalCapabilities: [String] = [],
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
         tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil,
-        relayHostIDCorrectionHandler: (@Sendable (String) -> Void)? = nil
+        relayHostIDCorrectionHandler: (@Sendable (String) -> Void)? = nil,
+        stopsWhenCredentialsRejected: Bool = false
     ) {
         self.configuration = configuration
         self.urlSession = urlSession ?? WarrenRemoteNetworking.session(for: configuration)
@@ -1101,6 +1106,7 @@ public actor WarrenRemoteClient {
         self.refreshTokenHandler = refreshTokenHandler
         self.tokenUpdateHandler = tokenUpdateHandler
         self.relayHostIDCorrectionHandler = relayHostIDCorrectionHandler
+        self.stopsWhenCredentialsRejected = stopsWhenCredentialsRejected
         self.advertisedCapabilities = [
             "roster-delta",
             "pane-groups-v1",
@@ -1135,7 +1141,8 @@ public actor WarrenRemoteClient {
         clientID: String? = nil,
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
         tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil,
-        relayHostIDCorrectionHandler: (@Sendable (String) -> Void)? = nil
+        relayHostIDCorrectionHandler: (@Sendable (String) -> Void)? = nil,
+        stopsWhenCredentialsRejected: Bool = false
     ) {
         self.init(
             configuration: configuration,
@@ -1147,7 +1154,8 @@ public actor WarrenRemoteClient {
             clientID: clientID,
             refreshTokenHandler: refreshTokenHandler,
             tokenUpdateHandler: tokenUpdateHandler,
-            relayHostIDCorrectionHandler: relayHostIDCorrectionHandler
+            relayHostIDCorrectionHandler: relayHostIDCorrectionHandler,
+            stopsWhenCredentialsRejected: stopsWhenCredentialsRejected
         )
     }
 
@@ -1164,7 +1172,8 @@ public actor WarrenRemoteClient {
         clientID: String? = nil,
         refreshTokenHandler: (@Sendable (String) -> Void)? = nil,
         tokenUpdateHandler: (@Sendable (String, String?) -> Void)? = nil,
-        relayHostIDCorrectionHandler: (@Sendable (String) -> Void)? = nil
+        relayHostIDCorrectionHandler: (@Sendable (String) -> Void)? = nil,
+        stopsWhenCredentialsRejected: Bool = false
     ) {
         self.configuration = configuration
         self.urlSession = urlSession ?? WarrenRemoteNetworking.session(for: configuration)
@@ -1174,6 +1183,7 @@ public actor WarrenRemoteClient {
         self.refreshTokenHandler = refreshTokenHandler
         self.tokenUpdateHandler = tokenUpdateHandler
         self.relayHostIDCorrectionHandler = relayHostIDCorrectionHandler
+        self.stopsWhenCredentialsRejected = stopsWhenCredentialsRejected
         self.advertisedCapabilities = capabilities
         self.clientID = clientID ?? configuration.clientID
         self.injectedTasks = tasks
@@ -1398,7 +1408,7 @@ public actor WarrenRemoteClient {
             throw WarrenRemoteClientError.invalidResponse
         }
         if http.statusCode == 401, retryAfterRefresh,
-           await refreshRelayAccessToken() {
+           await refreshRelayAccessToken() == .rotated {
             return try await relayLiveActivityRequest(
                 method: method,
                 body: body,
@@ -2127,7 +2137,7 @@ public actor WarrenRemoteClient {
             if configuration.isRelay,
                Self.relayAccessTokenNeedsRefresh(accessToken, now: Date()) {
                 notePhase("token")
-                notePhase(await refreshRelayAccessToken() ? "token-ok" : "token-failed")
+                notePhase(await refreshRelayAccessToken() == .rotated ? "token-ok" : "token-failed")
                 if relayIdentityCorrectionRequested {
                     setConnectionState(.disconnected)
                     return
@@ -2161,6 +2171,7 @@ public actor WarrenRemoteClient {
             negotiatedCapabilities = []
             let connectionStartedAt = ContinuousClock.now
             var refreshedAfterAuthenticationFailure = false
+            var credentialsRejected = false
             do {
                 let version = try await socket.connect(
                     token: accessToken,
@@ -2201,7 +2212,9 @@ public actor WarrenRemoteClient {
                 if configuration.isRelay,
                    Self.isAuthenticationFailure(error) {
                     notePhase("token")
-                    refreshedAfterAuthenticationFailure = await refreshRelayAccessToken()
+                    let refresh = await refreshRelayAccessToken()
+                    refreshedAfterAuthenticationFailure = refresh == .rotated
+                    credentialsRejected = refresh == .rejected && Self.isCredentialRejection(error)
                     notePhase(refreshedAfterAuthenticationFailure ? "token-ok" : "token-failed")
                     if relayIdentityCorrectionRequested {
                         // The stored Relay identity disagreed with the Relay's own
@@ -2214,6 +2227,19 @@ public actor WarrenRemoteClient {
                         setConnectionState(.disconnected)
                         return
                     }
+                }
+                if !configuration.isRelay, Self.isCredentialRejection(error) {
+                    // A direct Host has no refresh step: its scoped token is
+                    // either valid or revoked.
+                    credentialsRejected = true
+                }
+                if credentialsRejected, stopsWhenCredentialsRejected {
+                    if self.socket === socket { self.socket = nil }
+                    await socket.close()
+                    running = false
+                    setConnectionState(.disconnected)
+                    emit(.credentialsRejected(detail: error.localizedDescription))
+                    return
                 }
                 if case .hostOffline(let detail) = error as? WarrenRemoteClientError {
                     // Relay is reachable and this client is authorized; the
@@ -2279,15 +2305,25 @@ public actor WarrenRemoteClient {
         return "\(nsError.domain == NSURLErrorDomain ? "url" : nsError.domain)\(nsError.code)"
     }
 
+    /// Both Relay and the Host answer a refused credential with exactly
+    /// `unauthorized`. Other pre-welcome errors, such as a rate limit, are
+    /// worth retrying.
+    static func isCredentialRejection(_ error: Error) -> Bool {
+        guard case .authenticationFailed(let message) = error as? WarrenRemoteClientError else {
+            return false
+        }
+        return message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "unauthorized"
+    }
+
     private static func isAuthenticationFailure(_ error: Error) -> Bool {
         guard let remoteError = error as? WarrenRemoteClientError else { return false }
         if case .authenticationFailed = remoteError { return true }
         return false
     }
 
-    private func refreshRelayAccessToken() async -> Bool {
+    private func refreshRelayAccessToken() async -> RelayRefreshOutcome {
         guard configuration.isRelay,
-              let url = configuration.relaySessionRefreshURL else { return false }
+              let url = configuration.relaySessionRefreshURL else { return .unreachable }
 
         // A stored refresh token is the preferred credential. The cookie the
         // Relay sets during an exchange is the legacy fallback for clients that
@@ -2296,12 +2332,15 @@ public actor WarrenRemoteClient {
         // would be answered the same way.
         if let token = refreshToken, !token.isEmpty {
             switch await rotateRelaySession(at: url, refreshToken: token) {
-            case .rotated: return true
-            case .rejected: return false
+            case .rotated: return .rotated
+            case .rejected: return .rejected
             case .unreachable: break
             }
+            // The token itself was never judged, so a refused cookie says
+            // nothing about it.
+            return await rotateRelaySession(at: url, refreshToken: nil) == .rotated ? .rotated : .unreachable
         }
-        return await rotateRelaySession(at: url, refreshToken: nil) == .rotated
+        return await rotateRelaySession(at: url, refreshToken: nil)
     }
 
     private enum RelayRefreshOutcome { case rotated, rejected, unreachable }

@@ -27,9 +27,13 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
     let onSelectPane: (String) -> Void
     let onClosePane: (String) -> Void
     let onMaximizePane: (String) -> Void
+    /// Shows every pane again while one is zoomed.
+    let onRestoreLayout: () -> Void
     let onResizeSplit: ([Bool], Double) -> Void
     let onFoldPane: (String, [Bool], Double?) -> Void
     let onUnfoldPane: (String) -> Void
+    let onRetryConnection: (() -> Void)?
+    let onSwitchHost: (() -> Void)?
     let onAddProject: () -> Void
     let onImportSuperset: () -> Void
     let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
@@ -56,9 +60,12 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
         onSelectPane: @escaping (String) -> Void = { _ in },
         onClosePane: @escaping (String) -> Void = { _ in },
         onMaximizePane: @escaping (String) -> Void = { _ in },
+        onRestoreLayout: @escaping () -> Void = {},
         onResizeSplit: @escaping ([Bool], Double) -> Void = { _, _ in },
         onFoldPane: @escaping (String, [Bool], Double?) -> Void = { _, _, _ in },
         onUnfoldPane: @escaping (String) -> Void = { _ in },
+        onRetryConnection: (() -> Void)? = nil,
+        onSwitchHost: (() -> Void)? = nil,
         onAddProject: @escaping () -> Void,
         onImportSuperset: @escaping () -> Void,
         terminalSurface: @escaping @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
@@ -84,9 +91,12 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
         self.onSelectPane = onSelectPane
         self.onClosePane = onClosePane
         self.onMaximizePane = onMaximizePane
+        self.onRestoreLayout = onRestoreLayout
         self.onResizeSplit = onResizeSplit
         self.onFoldPane = onFoldPane
         self.onUnfoldPane = onUnfoldPane
+        self.onRetryConnection = onRetryConnection
+        self.onSwitchHost = onSwitchHost
         self.onAddProject = onAddProject
         self.onImportSuperset = onImportSuperset
         self.terminalSurface = terminalSurface
@@ -129,6 +139,7 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                 onFoldPane: onFoldPane,
                 onUnfoldPane: onUnfoldPane,
                 terminalSurface: terminalSurface,
+                onRestoreLayout: onRestoreLayout,
                 lonePaneChrome: WarrenDesktopSplitTreeView<TerminalSurface>.LonePaneChrome(
                     showsHeader: showsPaneHeader,
                     canClose: resolvedTab.sessionID != nil,
@@ -213,12 +224,44 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
 
     private func connectionUnavailableState(tokens: WarrenColorTokens) -> some View {
         let presentation = WarrenDesktopConnectionPresentation(connectionState)
+        // The way out has to be here: with the sidebar collapsed this card
+        // is the only thing on screen. Other Hosts live at the sidebar's
+        // foot, which is what the message points to.
         return WarrenDesktopEmptyStage(
             mark: .warning("bolt.horizontal.circle"),
             title: presentation.label,
-            message: "Choose another Host from the sidebar's Host menu, or wait for \(hostName) to return."
-        )
-        .accessibilityElement(children: .combine)
+            message: "Retry the connection, switch to another Host from the list at the bottom of the sidebar, "
+                + "or wait for \(hostName) to return."
+        ) {
+            if let onRetryConnection {
+                Button(action: onRetryConnection) {
+                    Text("Retry Connection")
+                        .font(WarrenTypography.body)
+                }
+                .buttonStyle(WarrenPrimaryButtonStyle(isFocused: primaryButtonFocused))
+                .focused($primaryButtonFocused)
+                .warrenSemanticElement(
+                    id: "connection.retry",
+                    role: .button,
+                    label: "Retry Connection",
+                    action: onRetryConnection
+                )
+            }
+            if let onSwitchHost {
+                Button(action: onSwitchHost) {
+                    Text("Switch Host…")
+                        .font(WarrenTypography.body)
+                }
+                .buttonStyle(WarrenSecondaryButtonStyle())
+                .warrenSemanticElement(
+                    id: "connection.switch-host",
+                    role: .button,
+                    label: "Switch Host",
+                    action: onSwitchHost
+                )
+            }
+        }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(presentation.label)
     }
 
@@ -250,13 +293,21 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
     /// to follow the keys rather than the selection, or it claims the terminal
     /// is taking input that is going into a document.
     var isKeyboardFocused: Bool = true
+    /// True while this pane is shown alone over the others, which stay
+    /// mounted but hidden beneath it.
+    var isZoomed: Bool = false
+    /// How many panes the layout holds, for the zoomed pane's "1 / N" mark.
+    var paneCount: Int = 1
     var onFocus: () -> Void = {}
     var onClose: () -> Void = {}
     var onMaximize: () -> Void = {}
+    var onRestoreLayout: () -> Void = {}
     let terminalSurface: TerminalSurface
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @AppStorage(WarrenPreferenceKey.terminalSplitChordsEnabled)
+    private var splitChordsEnabled = false
     @State private var isHeaderHovered = false
 
     var body: some View {
@@ -324,6 +375,21 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                 .truncationMode(.middle)
                 .textSelection(.enabled)
             Spacer(minLength: 0)
+            if isZoomed {
+                // Stays visible without hover: the other panes are hidden,
+                // and nothing else on the card says so.
+                Text("1 / \(paneCount)")
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(tokens.treeQuietText)
+                    .padding(.horizontal, 5)
+                    .frame(height: 16)
+                    .background(
+                        tokens.foreground.opacity(0.07),
+                        in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    )
+                    .warrenTooltip("Showing 1 of \(paneCount) panes")
+                    .accessibilityLabel("Showing 1 of \(paneCount) panes")
+            }
             HStack(spacing: 2) {
                 paneHeaderButton(
                     systemImage: "doc.on.doc",
@@ -332,11 +398,18 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                 ) {
                     WarrenCopyFeedback.shared.copy(fullDisplayTitle, announcing: "Copied title")
                 }
-                if canMaximize {
+                if isZoomed {
+                    paneHeaderButton(
+                        systemImage: "arrow.down.right.and.arrow.up.left",
+                        label: "Restore Layout",
+                        tokens: tokens,
+                        action: onRestoreLayout
+                    )
+                } else if canMaximize {
                     paneHeaderButton(
                         systemImage: "arrow.up.left.and.arrow.down.right",
                         label: "Maximize Pane",
-                        shortcut: "C-x 1",
+                        shortcut: Self.shortcut("⇧⌘↩", chord: "C-x 1", chordsEnabled: splitChordsEnabled),
                         tokens: tokens,
                         action: onMaximize
                     )
@@ -347,7 +420,7 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                     paneHeaderButton(
                         systemImage: "xmark",
                         label: "Close Pane",
-                        shortcut: "C-x 0",
+                        shortcut: Self.shortcut("⌘W", chord: "C-x 0", chordsEnabled: splitChordsEnabled),
                         tokens: tokens,
                         action: onClose
                     )
@@ -362,6 +435,12 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
         .help(fullDisplayTitle)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Pane context \(fullDisplayTitle)")
+    }
+
+    /// The shortcut a header button's tooltip names: the View menu's, which
+    /// always works, and the C-x chord only while the opt-in chords are on.
+    static func shortcut(_ menu: String, chord: String, chordsEnabled: Bool) -> String {
+        chordsEnabled ? "\(menu)  \(chord)" : menu
     }
 
     private func paneHeaderButton(
@@ -503,6 +582,8 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
     /// Brings a folded pane back.
     var onUnfoldPane: (String) -> Void = { _ in }
     let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
+    /// Ends a zoom, showing every pane again.
+    var onRestoreLayout: () -> Void = {}
     var lonePaneChrome: LonePaneChrome? = nil
 
     @Environment(\.warrenPaneGroupHover) private var groupHover
@@ -671,9 +752,12 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
             canMaximize: chrome == nil && paneCount > 1,
             isSplit: chrome == nil && paneCount > 1,
             isKeyboardFocused: wantsTerminalFocus,
+            isZoomed: paneCount > 1 && pane.id == zoomedPaneID,
+            paneCount: paneCount,
             onFocus: { onSelectPane(pane.id) },
             onClose: { onClosePane(pane.id) },
             onMaximize: { onMaximizePane(pane.id) },
+            onRestoreLayout: onRestoreLayout,
             terminalSurface: terminalSurface(
                 WarrenDesktopTerminalContext(
                     workspace: workspace,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { webAssetURL } from "./runtime.js";
 import { terminalSearchSummary } from "./terminal.js";
 import { terminalTabTitle } from "./title.js";
@@ -7,13 +7,14 @@ import { rovingIndex, rovingTabIndex } from "./roving.js";
 import { connectionSettling } from "./connection.js";
 import { createSearch, fieldRole, highlightSegments } from "./search.js";
 import { acpProviders } from "./conversation.js";
+import { placeMenu } from "./contextmenu.js";
 import {
   activityMarkIsAnimated,
   activityMarkLabel,
   activityMarkLifecycle,
   activityMarkPriority,
   activityMarkWord,
-  resolveActivityMark,
+  resolveDrawnActivityMark,
 } from "./activity.js";
 import {
   AGENT_REASONING_OPTIONS,
@@ -308,8 +309,13 @@ function useBodyScrollLock(active) {
   }, [active]);
 }
 
-function statusLabel(status) {
-  return activityMarkWord(resolveActivityMark(status));
+/// What this person has already seen, per Session, on this device
+/// (`{ [sessionID]: lifecycle }`). Every dot reads it, so a completion read in
+/// one place stops drawing everywhere at once.
+export const ActivityAcknowledgmentsContext = createContext({});
+
+function sessionMark(session, acknowledgments) {
+  return resolveDrawnActivityMark(session?.agentStatus, acknowledgments[session?.id] ?? null);
 }
 
 /// One Agent status as a dot.
@@ -318,8 +324,12 @@ function statusLabel(status) {
 /// is progressing. Shape was tried for the states that want someone — a glyph
 /// badge — and it read worse at the size a row actually uses, so the kind of a
 /// request lives in the tooltip and the label instead.
-export function ActivityDot({ status }) {
-  const mark = resolveActivityMark(status);
+///
+/// Pass `session` for one Session's own dot, or a precomputed `mark` for a
+/// rollup that already applied the acknowledgments.
+export function ActivityDot({ session, mark: resolvedMark }) {
+  const acknowledgments = useContext(ActivityAcknowledgmentsContext);
+  const mark = resolvedMark === undefined ? sessionMark(session, acknowledgments) : resolvedMark;
   if (!mark) return null;
   const label = activityMarkLabel(mark);
   // The lifecycle class keeps carrying the hue, so the palette stays in one
@@ -332,17 +342,18 @@ export function ActivityDot({ status }) {
   return <span className={className} title={label} aria-label={label} role="img" />;
 }
 
-function mergedBadgeTitle(tabs) {
+function mergedBadgeTitle(tabs, acknowledgments) {
   const count = tabs.length;
   const parts = ["Merged to default branch"];
   if (count) parts.push(`${count} active`);
-  const activity = statusLabel(highestStatus(tabs));
+  const activity = activityMarkWord(highestMark(tabs, acknowledgments));
   if (activity) parts.push(activity);
   return parts.join(" · ");
 }
 
 export function MergedBadge({ tabs = [] }) {
-  const label = mergedBadgeTitle(tabs);
+  const acknowledgments = useContext(ActivityAcknowledgmentsContext);
+  const label = mergedBadgeTitle(tabs, acknowledgments);
   return (
     <span className="merge-badge" title={label} aria-label={label} role="img">
       {mergeIcon}
@@ -359,7 +370,11 @@ function SessionPresetIcon({ kind }) {
   );
 }
 
-export function Sidebar({
+// Memoized: App re-renders on every terminal and Agent update, and the
+// navigation only changes with the roster, the selection, or a drag.
+export const Sidebar = memo(SidebarView);
+
+function SidebarView({
   catalog,
   activeWorkspace,
   expandedProjects,
@@ -381,6 +396,7 @@ export function Sidebar({
   creatingSession = false,
 }) {
   const isBuild = useBuildVariant();
+  const acknowledgments = useContext(ActivityAcknowledgmentsContext);
   const scrollRef = useRef(null);
   const scrollOverflows = useOverflowFlag(scrollRef, [catalog, expandedProjects]);
   const roving = useRovingFocus(scrollRef, ".sidebar-scroll button:not(:disabled)");
@@ -541,7 +557,7 @@ export function Sidebar({
                       >
                         {workspace.mergeState === "merged"
                           ? <MergedBadge tabs={tabsForWorkspace(workspace.id)} />
-                          : <ActivityDot status={highestStatus(tabsForWorkspace(workspace.id))} />}
+                          : <ActivityDot mark={highestMark(tabsForWorkspace(workspace.id), acknowledgments)} />}
                         {workspace.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
                         <span className="branch">{workspace.branch || workspace.name || "Workspace"}</span>
                       </button>
@@ -605,7 +621,9 @@ export function Sidebar({
   );
 }
 
-export function TopBar({
+export const TopBar = memo(TopBarView);
+
+function TopBarView({
   tabs,
   activeSession,
   workspace,
@@ -717,7 +735,7 @@ export function TopBar({
                   else tabRefs.current.delete(session.id);
                 }}
               >
-                <ActivityDot status={session.agentStatus} />
+                <ActivityDot session={session} />
                 {session.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
                 <span className="tab-title">{terminalTabTitle(session, workspace)}</span>
               </button>
@@ -766,11 +784,8 @@ export function MobileShell({
   onAttachSession,
   onToggleAgentView,
   onOpenMenu,
-  onOpenSearch,
-  onToggleGit,
-  gitActive,
   onNewSession,
-  onOpenSessionMenu,
+  onOpenMoreMenu,
   onSessionContextMenu,
   pendingSessionID = null,
   creatingSession = false,
@@ -838,24 +853,11 @@ export function MobileShell({
           </div>
         )}
         <div className="chrome-spacer" />
-        {activeSession && (
-          <button type="button" className="chrome-button" aria-label="Session actions" onClick={onOpenSessionMenu}>
-            {moreIcon}
-          </button>
-        )}
-        {onToggleGit && (
-          <button
-            type="button"
-            className={`chrome-button${gitActive ? " active" : ""}`}
-            aria-label="Toggle Git panel"
-            aria-pressed={gitActive}
-            onClick={onToggleGit}
-          >
-            {GitIcon}
-          </button>
-        )}
-        <button type="button" className="chrome-button" aria-label="Search projects" onClick={onOpenSearch}>
-          <SearchIcon />
+        {/* Search and Git live in the overflow menu at phone width: every
+            permanent slot here is taken from the breadcrumb, which is the one
+            thing that says where you are. */}
+        <button type="button" className="chrome-button" aria-label="More actions" onClick={onOpenMoreMenu}>
+          {moreIcon}
         </button>
         <button type="button" className="new-session" aria-label="New session" disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={onNewSession}>
           <PlusIcon />
@@ -879,7 +881,7 @@ export function MobileShell({
               onClick={() => onAttachSession(session.id)}
               onContextMenu={event => onSessionContextMenu?.(event, session)}
             >
-              <ActivityDot status={session.agentStatus} />
+              <ActivityDot session={session} />
               <span className="mobile-tab-title">{terminalTabTitle(session, workspace)}</span>
             </button>
           );
@@ -894,6 +896,7 @@ export function ContextMenu({ menu, onClose }) {
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 767px)").matches);
+  const [placement, setPlacement] = useState(null);
   useFocusRestore(Boolean(menu));
   useFocusTrap(Boolean(menu), menuRef);
   useBodyScrollLock(Boolean(menu) && mobile);
@@ -946,6 +949,22 @@ export function ContextMenu({ menu, onClose }) {
     };
   }, [Boolean(menu), mobile]);
 
+  // A desktop menu opens at the pointer, so near the right or bottom edge it
+  // would overflow the viewport. Measure it before paint and flip or clamp it.
+  // The phone sheet is pinned to the bottom edge and needs no placement.
+  useLayoutEffect(() => {
+    const node = menuRef.current;
+    if (!menu || mobile || !node) {
+      setPlacement(null);
+      return;
+    }
+    setPlacement(placeMenu(
+      { x: menu.x, y: menu.y },
+      { width: node.offsetWidth, height: node.offsetHeight },
+      { width: window.innerWidth, height: window.innerHeight },
+    ));
+  }, [menu, mobile]);
+
   if (!menu) return null;
   return (
     <>
@@ -965,7 +984,7 @@ export function ContextMenu({ menu, onClose }) {
         role={mobile ? "dialog" : "menu"}
         aria-modal={mobile ? "true" : undefined}
         aria-label={mobile ? "Actions" : undefined}
-        style={{ left: menu.x, top: menu.y }}
+        style={placement ? { left: placement.x, top: placement.y } : { left: menu.x, top: menu.y }}
       >
         {menu.items.map((item, index) => (
           <button
@@ -1126,9 +1145,8 @@ export function EmptyTerminal({
   return <div className={`terminal-empty${switching ? " switching" : ""}`} hidden={hidden}>{content}</div>;
 }
 
-export function TerminalSearch({
+export const TerminalSearch = memo(function TerminalSearch({
   open,
-  query,
   resultIndex,
   resultCount,
   focusNonce,
@@ -1138,9 +1156,12 @@ export function TerminalSearch({
   onClose,
 }) {
   const inputRef = useRef(null);
+  // The field owns its text; App only hears about each change.
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
+    else setQuery("");
   }, [open, focusNonce]);
 
   const handleKeyDown = event => {
@@ -1165,7 +1186,10 @@ export function TerminalSearch({
       <input
         ref={inputRef}
         value={query}
-        onChange={event => onQueryChange(event.target.value)}
+        onChange={event => {
+          setQuery(event.target.value);
+          onQueryChange(event.target.value);
+        }}
         onKeyDown={handleKeyDown}
         placeholder="Find…"
         aria-label="Find in terminal"
@@ -1184,7 +1208,7 @@ export function TerminalSearch({
       </button>
     </div>
   );
-}
+});
 
 export function MobileKeys({ onInput }) {
   const [extended, setExtended] = useState(false);
@@ -1213,7 +1237,16 @@ export function MobileKeys({ onInput }) {
   ];
 
   return (
-    <nav className="mobile-keys" aria-label="Terminal keys">
+    // A tap must not take focus from the terminal: on a phone that collapses
+    // the soft keyboard the key was meant to complement. Cancelling the press
+    // keeps focus where it is; the click still fires, and panning the row is
+    // unaffected.
+    <nav
+      className="mobile-keys"
+      aria-label="Terminal keys"
+      onPointerDown={event => event.preventDefault()}
+      onMouseDown={event => event.preventDefault()}
+    >
       <div className="mobile-key-row">
         {keyRows[0].map(([key, label, sequence]) => (
           <button type="button" className="mobile-key" key={key} onClick={() => onInput(sequence)}>{label}</button>
@@ -1846,6 +1879,10 @@ export function SettingsPage({
     }
   }, [needle, activeSection, visibleSections]);
 
+  // Closed Settings is display: none with no transition, so skip building
+  // the whole form on every App render.
+  if (!open) return null;
+
   return (
     <section className={`settings-page settings${open ? " open" : ""}`} aria-label="Settings">
       <nav className="settings-nav" aria-label="Settings sections">
@@ -2169,7 +2206,11 @@ export function SearchPanel({
   // The panel stays mounted, and the catalog is a new object on every roster
   // delta, so indexing is gated on `open`: a closed panel must not re-index the
   // Host every time an agent reports progress.
-  const search = useMemo(() => (open ? createSearch(catalog) : null), [open, catalog]);
+  const acknowledgments = useContext(ActivityAcknowledgmentsContext);
+  const search = useMemo(
+    () => (open ? createSearch(catalog, acknowledgments) : null),
+    [open, catalog, acknowledgments],
+  );
   // Querying is synchronous. A ranked pass costs about a millisecond, so
   // debouncing would only add latency the user can feel.
   const rows = useMemo(() => (search ? search.results(query) : []), [search, query]);
@@ -2311,7 +2352,7 @@ function SearchResultRow({ row, active, onHover, onChoose, registerRef }) {
       )}
       {/* Activity is a dot, not the glyph's colour: the glyph now carries the
           provider's own mark, and this is the marker the sidebar already uses. */}
-      {row.activity && <ActivityDot status={{ activity: row.activity }} />}
+      {row.mark && <ActivityDot mark={row.mark} />}
       {row.pinned && <span className="search-pin" title="Pinned">{pinIcon}</span>}
       {active && <kbd className="search-enter">⏎</kbd>}
     </button>
@@ -2366,18 +2407,13 @@ export function TransientFeedback({ feedback }) {
   );
 }
 
-function highestStatus(sessions) {
+// A Workspace rolls up the marks its Sessions actually draw, so a completion
+// read in the Session no longer lights the Workspace either.
+function highestMark(sessions, acknowledgments) {
   return sessions.reduce((highest, session) => {
-    const priority = statusPriority(session.agentStatus);
-    const highestPriority = statusPriority(highest);
-    return priority > highestPriority
-      ? session.agentStatus
-      : highest;
+    const mark = sessionMark(session, acknowledgments);
+    return activityMarkPriority(mark) > activityMarkPriority(highest) ? mark : highest;
   }, null);
-}
-
-function statusPriority(status) {
-  return activityMarkPriority(resolveActivityMark(status));
 }
 
 function PlusIcon() {

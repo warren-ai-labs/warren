@@ -120,8 +120,15 @@ import { handleUnixTextEditingKey, InputQueue, MobileInputDeduper } from "./inpu
 import { OutputBatcher } from "./output.js";
 import { decodeFrame, isBinaryEnvelope } from "./wire.js";
 import { useKeyboardInset } from "./keyboard.js";
-import { projectMenuItems, sessionMenuItems, workspaceMenuItems } from "./contextmenu.js";
+import { mobileMoreMenuItems, projectMenuItems, sessionMenuItems, workspaceMenuItems } from "./contextmenu.js";
 import {
+  acknowledgeActivity,
+  loadActivityAcknowledgments,
+  reconcileActivityAcknowledgments,
+  saveActivityAcknowledgments,
+} from "./activity.js";
+import {
+  ActivityAcknowledgmentsContext,
   ConfirmationDialog,
   EmptyTerminal,
   ContextMenu,
@@ -217,6 +224,10 @@ const previewWorkspace = {
   path: "/Users/me/Workspace/warren",
 };
 
+// One shared empty list, so a Session without Agent rows does not hand the
+// transcript a new array on every render.
+const EMPTY_LIST = Object.freeze([]);
+
 function clearPendingRequest(pending, id) {
   if (!id) return;
   const handler = pending.get(id);
@@ -226,11 +237,38 @@ function clearPendingRequest(pending, id) {
   pending.delete(id);
 }
 
+/// Applies one persisted live Agent batch to the per-Session state, exactly
+/// as if it had been its own state update.
+function applyAgentBatch(previous, batch) {
+  const { sessionID, streamID, executionID, incoming, replicaState } = batch;
+  const current = previous[sessionID] || {};
+  const streamChanged = current.streamId && current.streamId !== streamID;
+  const merged = mergeAgentEvents(streamChanged ? [] : (current.events || []), incoming);
+  const control = projectAgentControlState(merged, streamChanged ? {} : current);
+  return {
+    ...previous,
+    [sessionID]: {
+      ...current,
+      streamId: streamID,
+      executionId: executionID,
+      events: merged,
+      ...control,
+      headSequence: Math.max(Number(current.headSequence) || 0, replicaState.headSequence),
+      contiguousThrough: replicaState.contiguousThrough,
+      historyLoaded: true,
+    },
+  };
+}
+
 export default function App() {
   const [catalog, setCatalog] = useState(() => buildCatalog());
   const [activeWorkspace, setActiveWorkspace] = useState(() => localStorage.getItem(storageKeys.activeWorkspace));
   const [activeSession, setActiveSession] = useState(() => localStorage.getItem(storageKeys.activeSession));
   const [navigationMemory, setNavigationMemory] = useState(() => loadNavigationMemory());
+  // Completions this person has already read here (DESIGN.md §8.2.6).
+  const [activityAcknowledgments, setActivityAcknowledgments] = useState(
+    () => loadActivityAcknowledgments(localStorage, webSocketURL()),
+  );
   const [attachedSession, setAttachedSession] = useState(null);
   // Transport readiness and presentation readiness are deliberately separate.
   // The daemon acknowledges a subscription before it sends the atomic state;
@@ -282,7 +320,10 @@ export default function App() {
   const [gitAction, setGitAction] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [terminalSearchOpen, setTerminalSearchOpen] = useState(false);
-  const [terminalSearchQuery, setTerminalSearchQuery] = useState("");
+  // The query lives in the search field; App keeps only what a step needs,
+  // so typing re-renders the field rather than all of App.
+  const terminalSearchQueryRef = useRef("");
+  const terminalSearchTimerRef = useRef(null);
   const [terminalSearchIndex, setTerminalSearchIndex] = useState(-1);
   const [terminalSearchCount, setTerminalSearchCount] = useState(0);
   const [terminalSearchFocusNonce, setTerminalSearchFocusNonce] = useState(0);
@@ -297,6 +338,11 @@ export default function App() {
   const agentCapabilitiesRef = useRef(new Set());
   const agentReplicaNamespaceRef = useRef(null);
   const agentConnectionGenerationRef = useRef(0);
+  // Live Agent batches arrive many times a second while an answer streams.
+  // They are folded into one state update per frame, so App and the
+  // transcript re-render once per paint rather than once per batch.
+  const pendingAgentBatchesRef = useRef([]);
+  const agentBatchFlushRef = useRef(null);
   const quarantinedAgentStreamsRef = useRef(new Set());
   const agentGapRequestsRef = useRef(new Set());
   const agentQueueRef = useRef({});
@@ -362,6 +408,41 @@ export default function App() {
       || message.includes("agent event id conflict")
       || message.includes("agent event sequence conflict");
   };
+
+  const flushAgentBatches = useCallback(() => {
+    const scheduled = agentBatchFlushRef.current;
+    agentBatchFlushRef.current = null;
+    if (scheduled) {
+      cancelAnimationFrame(scheduled.frame);
+      clearTimeout(scheduled.timer);
+    }
+    // A batch queued before a reconnect or a Host change is fenced exactly as
+    // it was when it applied on arrival.
+    const batches = pendingAgentBatchesRef.current.filter(batch => (
+      agentReplicaNamespaceRef.current === batch.namespace
+      && agentConnectionGenerationRef.current === batch.connectionGeneration
+    ));
+    pendingAgentBatchesRef.current = [];
+    if (batches.length) setAgentStateBySession(previous => batches.reduce(applyAgentBatch, previous));
+  }, []);
+
+  const queueAgentBatch = useCallback(batch => {
+    pendingAgentBatchesRef.current.push(batch);
+    if (agentBatchFlushRef.current) return;
+    // A hidden tab gets no animation frames; the timer keeps state (and the
+    // completion notices that read it) moving there.
+    agentBatchFlushRef.current = {
+      frame: requestAnimationFrame(flushAgentBatches),
+      timer: setTimeout(flushAgentBatches, 100),
+    };
+  }, [flushAgentBatches]);
+
+  useEffect(() => () => {
+    const scheduled = agentBatchFlushRef.current;
+    if (!scheduled) return;
+    cancelAnimationFrame(scheduled.frame);
+    clearTimeout(scheduled.timer);
+  }, []);
 
   const persistAgentEvents = (streamID, events, options = {}, namespace = agentReplicaNamespaceRef.current) => {
     if (!namespace || !streamID || !Array.isArray(events)) return Promise.reject(new Error("Agent replica identity is unavailable"));
@@ -642,6 +723,25 @@ export default function App() {
     [catalog, selectedWorkspaceID],
   );
   const selectedSession = activeSession ? catalog.sessions.get(activeSession) || null : null;
+
+  // A completion is a notice, not a state: opening the Session reads it, and
+  // the record retires by itself once the Agent moves past what was read, so
+  // `ready → (seen) → working → ready` lights up again. Unlisted Sessions are
+  // forgotten only once a real roster has arrived.
+  useEffect(() => {
+    setActivityAcknowledgments(previous => {
+      const reconciled = reconcileActivityAcknowledgments(previous, catalog.sessions.values(), {
+        prune: catalog.revision !== null && catalog.revision !== undefined,
+      });
+      return selectedSession
+        ? acknowledgeActivity(reconciled, selectedSession.id, selectedSession.agentStatus)
+        : reconciled;
+    });
+  }, [catalog, selectedSession]);
+
+  useEffect(() => {
+    saveActivityAcknowledgments(localStorage, webSocketURL(), activityAcknowledgments);
+  }, [activityAcknowledgments]);
   const paneTitle = selectedSession
     ? renderTerminalTitle(titleTemplate, selectedSession, selectedWorkspace, catalog.host)
     : "";
@@ -814,6 +914,13 @@ export default function App() {
     gitOpenRef.current = typeof value === "function" ? value(gitOpenRef.current) : value;
     setGitOpen(value);
   }, []);
+
+  // On a phone the Git panel and the navigation drawer are both full-height
+  // overlays, and the drawer must never open underneath the panel.
+  const openDrawer = useCallback(() => {
+    if (isMobile) setGitOpenState(false);
+    setDrawerOpen(true);
+  }, [isMobile, setGitOpenState]);
 
   const loadGitPanel = useCallback((force = false, requestedWorkspaceID = selectedWorkspaceID) => {
     const workspaceID = requestedWorkspaceID;
@@ -1966,7 +2073,9 @@ export default function App() {
 
   const clearTerminalSearch = useCallback(() => {
     setTerminalSearchOpen(false);
-    setTerminalSearchQuery("");
+    terminalSearchQueryRef.current = "";
+    clearTimeout(terminalSearchTimerRef.current);
+    terminalSearchTimerRef.current = null;
     setTerminalSearchIndex(-1);
     setTerminalSearchCount(0);
     searchAddonRef.current?.clearDecorations();
@@ -1983,8 +2092,10 @@ export default function App() {
     terminalRef.current?.focus();
   }, [clearTerminalSearch]);
 
-  const updateTerminalSearchQuery = useCallback(query => {
-    setTerminalSearchQuery(query);
+  const runTerminalSearchQuery = useCallback(() => {
+    clearTimeout(terminalSearchTimerRef.current);
+    terminalSearchTimerRef.current = null;
+    const query = terminalSearchQueryRef.current;
     const addon = searchAddonRef.current;
     if (!addon) return;
     if (!query) {
@@ -1999,14 +2110,28 @@ export default function App() {
     });
   }, []);
 
+  // Each pass decorates every match in the scrollback; run it once typing
+  // pauses rather than on every keystroke.
+  const updateTerminalSearchQuery = useCallback(query => {
+    terminalSearchQueryRef.current = query;
+    clearTimeout(terminalSearchTimerRef.current);
+    terminalSearchTimerRef.current = setTimeout(runTerminalSearchQuery, 120);
+  }, [runTerminalSearchQuery]);
+
+  useEffect(() => () => clearTimeout(terminalSearchTimerRef.current), []);
+
   const stepTerminalSearch = useCallback(direction => {
+    // A step taken before the pending pass ran applies to the current query.
+    if (terminalSearchTimerRef.current !== null) runTerminalSearchQuery();
     const addon = searchAddonRef.current;
-    const query = terminalSearchQuery;
+    const query = terminalSearchQueryRef.current;
     if (!addon || !query) return;
     const options = { decorations: terminalSearchDecorations };
     if (direction === "next") addon.findNext(query, options);
     else addon.findPrevious(query, options);
-  }, [terminalSearchQuery]);
+  }, [runTerminalSearchQuery]);
+  const findNextInTerminal = useCallback(() => stepTerminalSearch("next"), [stepTerminalSearch]);
+  const findPreviousInTerminal = useCallback(() => stepTerminalSearch("previous"), [stepTerminalSearch]);
 
   const refreshTerminal = useCallback(() => {
     const terminal = terminalRef.current;
@@ -2583,7 +2708,11 @@ export default function App() {
       stagedRecoveryOutputRef.current = [];
     }
 
-    setConnectionStatus({ message: "Connected", online: true });
+    // Every roster delta lands here; keep the status object when it already
+    // reads Connected so the delta does not re-render on its account.
+    setConnectionStatus(previous => (previous.online && previous.message === "Connected"
+      ? previous
+      : { message: "Connected", online: true }));
     presenter().live();
     setEmptyOverride(null);
     if (gitNeedsReloadRef.current || fileDiffNeedsReloadRef.current) {
@@ -2618,7 +2747,7 @@ export default function App() {
     }
   }, [applyRosterDelta, attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, presenter, recordNavigation, request, restoreGitUIForWorkspace]);
 
-  const acceptMessage = useCallback(event => {
+  const acceptMessage = useCallback((event, parsed) => {
     if (event.data instanceof ArrayBuffer) {
       const bytes = new Uint8Array(event.data);
       const decoded = decodeFrame(bytes);
@@ -2671,18 +2800,21 @@ export default function App() {
       return;
     }
 
-    // Control messages, exit messages, and recovery markers must never jump
-    // ahead of buffered terminal bytes; flush the batch first.
-    batcherRef.current?.flush();
-
     let message;
     try {
-      message = JSON.parse(event.data);
+      message = parsed !== undefined ? parsed : JSON.parse(event.data);
     } catch {
+      batcherRef.current?.flush();
       setConnectionStatus({ message: "Protocol error", online: false });
       connectionRef.current?.reset();
       return;
     }
+
+    // Control messages, exit messages, and recovery markers must never jump
+    // ahead of buffered terminal bytes; flush the batch first. Agent batches
+    // and runtime metadata never touch the terminal, and while an answer
+    // streams they would otherwise flush it many times a frame.
+    if (message?.t !== "agent.events" && message?.t !== "runtimeMetadata") batcherRef.current?.flush();
 
     switch (message.t) {
     case "welcome":
@@ -2913,27 +3045,14 @@ export default function App() {
           const replicaState = await persistAgentEvents(streamID, incoming, {}, namespace);
           if (agentReplicaNamespaceRef.current !== namespace
             || agentConnectionGenerationRef.current !== connectionGeneration) return;
-          setAgentStateBySession(previous => {
-            const current = previous[sessionID] || {};
-            const streamChanged = current.streamId && current.streamId !== streamID;
-            const merged = mergeAgentEvents(streamChanged ? [] : (current.events || []), incoming);
-            const contiguous = replicaState.contiguousThrough;
-            let head = Number(current.headSequence) || 0;
-            const control = projectAgentControlState(merged, streamChanged ? {} : current);
-            head = Math.max(head, replicaState.headSequence);
-            return {
-              ...previous,
-              [sessionID]: {
-                ...current,
-                streamId: streamID,
-                executionId: message.executionId || streamID,
-                events: merged,
-                ...control,
-                headSequence: head,
-                contiguousThrough: contiguous,
-                historyLoaded: true,
-              },
-            };
+          queueAgentBatch({
+            namespace,
+            connectionGeneration,
+            sessionID,
+            streamID,
+            executionID: message.executionId || streamID,
+            incoming,
+            replicaState,
           });
           if (replicaState.contiguousThrough < replicaState.headSequence) void recoverAgentGap(sessionID, streamID, namespace);
         } catch (error) {
@@ -3631,7 +3750,7 @@ export default function App() {
           agentCausationCapability,
           ...agentCapabilities,
         ],
-        onMessage: event => messageHandlerRef.current(event),
+        onMessage: (event, parsed) => messageHandlerRef.current(event, parsed),
         onState: state => connectionStateHandlerRef.current(state),
       });
       connectionRef.current = connection;
@@ -4029,20 +4148,20 @@ export default function App() {
     }));
   }, [deleteSession, openTerminalSearch, renameSession, showContextMenu, toggleSessionPin]);
 
-  const openSessionMenu = useCallback(() => {
+  const openMobileMoreMenu = useCallback(event => {
     const state = appStateRef.current;
     const session = state.activeSession ? state.catalog?.sessions.get(state.activeSession) : null;
-    if (!session) return;
-    // Mobile has no right-click; anchor the session menu near the thumb at
-    // the bottom of the screen so it reads as a native action sheet.
-    const event = new MouseEvent("contextmenu", {
-      clientX: window.innerWidth - 16,
-      clientY: window.innerHeight - 96,
-      bubbles: true,
-      cancelable: true,
-    });
-    sessionContextMenu(event, session);
-  }, [sessionContextMenu]);
+    // Mobile has no right-click; the menu renders as a bottom action sheet.
+    showContextMenu(event, mobileMoreMenuItems(session, {
+      gitOpen: gitOpenRef.current,
+      openSearch: () => setSearchOpen(true),
+      toggleGit: () => setGitOpenState(open => !open),
+      togglePin: toggleSessionPin,
+      rename: renameSession,
+      search: openTerminalSearch,
+      delete: deleteSession,
+    }));
+  }, [deleteSession, openTerminalSearch, renameSession, setGitOpenState, showContextMenu, toggleSessionPin]);
 
   const beginProjectDrag = useCallback(previousExpanded => {
     projectDragRef.current = { previousExpanded };
@@ -4235,8 +4354,27 @@ export default function App() {
   }, []);
 
   const selectedAgentEvents = selectedSession
-    ? agentStateBySession[selectedSession.id]?.events || []
-    : [];
+    ? agentStateBySession[selectedSession.id]?.events || EMPTY_LIST
+    : EMPTY_LIST;
+  // The transcript's turns are memoized; stable callbacks let a streamed
+  // batch re-render only the turn it touched.
+  const openAgentLinkedSession = useCallback(sessionID => attachSessionRef.current?.(sessionID), []);
+  const catalogSessions = catalog?.sessions;
+  const agentSessionExists = useCallback(sessionID => Boolean(catalogSessions?.get?.(sessionID)), [catalogSessions]);
+  // Stable navigation props, so the memoized Sidebar and TopBar skip the
+  // renders driven by terminal output and Agent batches. Each workspace's
+  // tabs are derived once per catalog.
+  const tabsForWorkspace = useMemo(() => {
+    const cache = new Map();
+    return workspaceID => {
+      if (!cache.has(workspaceID)) cache.set(workspaceID, workspaceTabs(catalog, workspaceID));
+      return cache.get(workspaceID);
+    };
+  }, [catalog]);
+  const openNewSessionInWorkspace = useCallback(workspaceID => openWorkspace(workspaceID, true), [openWorkspace]);
+  const createShellSession = useCallback(() => createSession("shell"), [createSession]);
+  const openSearchPanel = useCallback(() => setSearchOpen(true), []);
+  const toggleGitPanel = useCallback(() => setGitOpenState(open => !open), [setGitOpenState]);
   const isAgentSession = isSupportedAgentSession(selectedSession);
   // An ACP Session has no terminal: the Conversation surface is all there is.
   const isConversationSession = isACPSession(selectedSession)
@@ -4426,7 +4564,7 @@ export default function App() {
   }, [connectionPresentation, connectionStatus]);
 
   return (
-    <>
+    <ActivityAcknowledgmentsContext.Provider value={activityAcknowledgments}>
       <TransientFeedback feedback={feedback} />
       <h1 className="visually-hidden">Warren</h1>
       <div className={`app${drawerOpen ? " drawer-open" : ""}${gitOpen && !isMobile ? " git-panel-open" : ""}`} hidden={settingsOpen}>
@@ -4435,13 +4573,13 @@ export default function App() {
           catalog={catalog}
           activeWorkspace={selectedWorkspaceID}
           expandedProjects={expandedProjects}
-          tabsForWorkspace={workspaceID => workspaceTabs(catalog, workspaceID)}
+          tabsForWorkspace={tabsForWorkspace}
           connection={connectionView}
           onToggleProject={toggleProject}
           onChooseWorkspace={chooseWorkspace}
           onOpenWorkspace={openWorkspace}
-          onNewSessionInWorkspace={workspaceID => openWorkspace(workspaceID, true)}
-          onNewSession={() => createSession("shell")}
+          onNewSessionInWorkspace={openNewSessionInWorkspace}
+          onNewSession={createShellSession}
           onOpenSettings={openSettings}
           onProjectContextMenu={projectContextMenu}
           onWorkspaceContextMenu={workspaceContextMenu}
@@ -4465,12 +4603,9 @@ export default function App() {
               agentViewActive={agentViewActive}
               onAttachSession={attachSession}
               onToggleAgentView={toggleAgentView}
-              onOpenMenu={() => setDrawerOpen(true)}
-              onOpenSearch={() => setSearchOpen(true)}
-              onToggleGit={() => setGitOpenState(open => !open)}
-              gitActive={gitOpen}
+              onOpenMenu={openDrawer}
               onNewSession={() => openSessionSheet()}
-              onOpenSessionMenu={openSessionMenu}
+              onOpenMoreMenu={openMobileMoreMenu}
               onSessionContextMenu={sessionContextMenu}
               pendingSessionID={pendingSessionID}
               creatingSession={Boolean(creatingSessionKind)}
@@ -4482,10 +4617,10 @@ export default function App() {
                 activeSession={activeSession}
                 workspace={selectedWorkspace}
                 onAttachSession={attachSession}
-                onNewSession={() => createSession("shell")}
-                onOpenMenu={() => setDrawerOpen(true)}
-                onOpenSearch={() => setSearchOpen(true)}
-                onToggleGit={() => setGitOpenState(open => !open)}
+                onNewSession={createShellSession}
+                onOpenMenu={openDrawer}
+                onOpenSearch={openSearchPanel}
+                onToggleGit={toggleGitPanel}
                 gitActive={gitOpen}
                 onTabContextMenu={sessionContextMenu}
                 pendingSessionID={pendingSessionID}
@@ -4563,7 +4698,7 @@ export default function App() {
                 session={selectedSession}
                 turn={agentStateBySession[selectedSession.id]?.turn || selectedSession.agentTurn || null}
                 events={selectedAgentEvents}
-                stateEvents={agentStateBySession[selectedSession.id]?.stateEvents || []}
+                stateEvents={agentStateBySession[selectedSession.id]?.stateEvents || EMPTY_LIST}
                 status={agentStateBySession[selectedSession.id]?.status || selectedSession.agentStatus || null}
                 onSend={sendAgentMessageFromView}
                 onRequestControl={() => requestSessionFocus(true)}
@@ -4573,8 +4708,8 @@ export default function App() {
                 onSetConfig={(configID, value) => setAgentConfig(selectedSession.id, configID, value)}
                 canHandoff={isConversationSession && Boolean(selectedSession.agentSessionId)}
                 onHandoff={() => handoffChatSession(selectedSession.id)}
-                onOpenSession={sessionID => attachSession(sessionID)}
-                sessionExists={sessionID => Boolean(catalog?.sessions?.get?.(sessionID))}
+                onOpenSession={openAgentLinkedSession}
+                sessionExists={agentSessionExists}
                 endpointIdentity={webSocketURL()}
                 capabilities={sessionAgentCapabilities(catalog, agentCapabilitiesRef.current, selectedSession.id)}
                 actionError={agentActionError}
@@ -4582,7 +4717,7 @@ export default function App() {
                 onSendNow={(text, attachments) => sendAgentMessageNow(selectedSession.id, text, attachments)}
                 onInteraction={value => respondAgentInteraction(selectedSession.id, value)}
                 onUploadAttachments={uploadAgentAttachments}
-                queueItems={agentQueueBySession[selectedSession.id] || []}
+                queueItems={agentQueueBySession[selectedSession.id] || EMPTY_LIST}
                 onQueueEdit={(itemID, text, attachments) => editAgentQueueItem(selectedSession.id, itemID, text, attachments)}
                 onQueueDelete={itemID => deleteAgentQueueItem(selectedSession.id, itemID)}
                 onQueueMoveToFront={itemID => moveAgentQueueItemToFront(selectedSession.id, itemID)}
@@ -4599,13 +4734,12 @@ export default function App() {
             )}
             <TerminalSearch
               open={terminalSearchOpen}
-              query={terminalSearchQuery}
               resultIndex={terminalSearchIndex}
               resultCount={terminalSearchCount}
               focusNonce={terminalSearchFocusNonce}
               onQueryChange={updateTerminalSearchQuery}
-              onNext={() => stepTerminalSearch("next")}
-              onPrevious={() => stepTerminalSearch("previous")}
+              onNext={findNextInTerminal}
+              onPrevious={findPreviousInTerminal}
               onClose={closeTerminalSearch}
             />
             {!agentViewActive
@@ -4743,7 +4877,7 @@ export default function App() {
         />
       )}
       <ContextMenu menu={contextMenu} onClose={closeContextMenu} />
-    </>
+    </ActivityAcknowledgmentsContext.Provider>
   );
 }
 

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import GhosttyAdapter
 
@@ -9,6 +10,17 @@ enum WarrenHangDiagnostics {
     private static let lock = NSLock()
     private static let stallThreshold: Duration = .seconds(2)
     private static let pingInterval: Duration = .milliseconds(200)
+    private static let pingSeconds: TimeInterval = 0.2
+    /// A ping this late means one main-thread turn held the window for
+    /// several frames: a visible hitch, though far from a hang.
+    private static let hitchThreshold: TimeInterval = 0.1
+    /// Hitches are summarised at most this often, so a janky stretch costs
+    /// one line rather than one per frame.
+    private static let hitchReportInterval: TimeInterval = 10
+    @MainActor private static var previousPing: Date?
+    @MainActor private static var hitchCount = 0
+    @MainActor private static var worstHitch: TimeInterval = 0
+    @MainActor private static var lastHitchReport = Date.distantPast
 
     static func start() {
         guard watchdogTask == nil else { return }
@@ -52,12 +64,37 @@ enum WarrenHangDiagnostics {
 
     private static func schedulePing() {
         Task { @MainActor in
-            lock.withLock { lastPingDate = Date() }
+            let now = Date()
+            lock.withLock { lastPingDate = now }
+            noteMainThreadTurn(at: now)
             if watchdogTask != nil {
                 try? await Task.sleep(for: pingInterval)
                 schedulePing()
             }
         }
+    }
+
+    /// Counts pings that ran late by a hitch or more and reports the count
+    /// and the worst one at most every `hitchReportInterval`. Only while the
+    /// app is active: App Nap delays a background app's timers on purpose.
+    @MainActor
+    private static func noteMainThreadTurn(at now: Date) {
+        defer { previousPing = now }
+        guard let previous = previousPing, NSApplication.shared.isActive else { return }
+        let late = now.timeIntervalSince(previous) - pingSeconds
+        if late >= hitchThreshold {
+            hitchCount += 1
+            worstHitch = max(worstHitch, late)
+        }
+        guard hitchCount > 0, now.timeIntervalSince(lastHitchReport) >= hitchReportInterval else { return }
+        TerminalDiagnostics.log("main_thread_hitch", [
+            "count": String(hitchCount),
+            "worst_ms": String(Int(worstHitch * 1000)),
+            "threshold_ms": String(Int(hitchThreshold * 1000)),
+        ])
+        hitchCount = 0
+        worstHitch = 0
+        lastHitchReport = now
     }
 
     private static func run() async {

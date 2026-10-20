@@ -90,6 +90,19 @@ export function updateSessionAgentStatus(catalog, sessionID, agentStatus) {
   });
 }
 
+// Roster deltas and status updates keep unchanged tab objects, so the
+// Session derived from one is reused and views keyed on it stay put.
+const sessionsByTab = new WeakMap();
+
+function sessionForTab(tab) {
+  let session = sessionsByTab.get(tab);
+  if (!session) {
+    session = { ...tab, id: tab.session };
+    sessionsByTab.set(tab, session);
+  }
+  return session;
+}
+
 export function buildCatalog(input = rosterFromMessage()) {
   const roster = isRecord(input) && Array.isArray(input.tabs) ? input : rosterFromMessage(input);
   const sessions = new Map();
@@ -100,7 +113,7 @@ export function buildCatalog(input = rosterFromMessage()) {
   const tabs = arrayOrEmpty(roster.tabs).sort(pinnedFirst);
 
   for (const tab of tabs) {
-    sessions.set(tab.session, { ...tab, id: tab.session });
+    sessions.set(tab.session, sessionForTab(tab));
     append(tabsByWorkspace, tab.workspace, tab);
   }
   for (const workspace of workspaces) {

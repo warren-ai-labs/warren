@@ -314,4 +314,39 @@ extension WarrenConversationTests {
         second.detail = "example.org"
         XCTAssertEqual(WarrenConversation.summarize([step, second]), "Used 2 tools")
     }
+
+    func testProjectorFoldedInBatchesMatchesAWholeProjection() {
+        let events = [
+            event("message.created", ["role": .string("user"), "content": .string("fix it"), "messageId": .string("u")]),
+            event("turn.started"),
+            event("message.created", ["role": .string("assistant"), "content": .string("Look"), "messageId": .string("m1")]),
+            event("message.delta", ["role": .string("assistant"), "content": .string("ing"), "messageId": .string("m1")]),
+            event("tool.started", ["callId": .string("c1"), "toolKind": .string("read"), "toolDetail": .string("a.go")]),
+            event("tool.completed", ["callId": .string("c1"), "toolKind": .string("read")]),
+            event("interaction.requested", ["interactionId": .string("p"), "state": .string("pending"), "title": .string("Run")]),
+            event("interaction.resolved", ["interactionId": .string("p")]),
+            event("message.created", ["role": .string("assistant"), "content": .string("Do"), "messageId": .string("m2")]),
+            event("message.delta", ["role": .string("assistant"), "content": .string("ne."), "messageId": .string("m2")]),
+            event("turn.completed"),
+            event("message.created", ["role": .string("user"), "content": .string("again"), "messageId": .string("u2")], turn: "2"),
+        ]
+        var projector = WarrenConversation.Projector()
+        var snapshots: [WarrenConversation] = []
+        for start in stride(from: 0, to: events.count, by: 3) {
+            XCTAssertTrue(projector.append(Array(events[start..<min(start + 3, events.count)])))
+            snapshots.append(projector.conversation())
+            XCTAssertEqual(snapshots.last, WarrenConversation.project(Array(events[0..<min(start + 3, events.count)])))
+        }
+        XCTAssertEqual(projector.lastSequence, events.last?.sequence)
+        XCTAssertEqual(snapshots.last?.turns.map(\.answer), ["Done.", ""])
+    }
+
+    func testProjectorRefusesABatchThatReachesBack() {
+        let first = event("message.created", ["role": .string("assistant"), "content": .string("a"), "messageId": .string("m")])
+        let second = event("message.delta", ["role": .string("assistant"), "content": .string("b"), "messageId": .string("m")])
+        var projector = WarrenConversation.Projector()
+        XCTAssertTrue(projector.append([second]))
+        XCTAssertFalse(projector.append([first]))
+        XCTAssertEqual(projector.conversation().turns.first?.answer, "b")
+    }
 }

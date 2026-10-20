@@ -134,6 +134,7 @@ type Server struct {
 	sessionMu       sync.Mutex
 	refreshTokens   map[string]refreshRecord
 	usedRefresh     map[string]string
+	refreshRetries  map[string]refreshRetry
 	revokedFamilies map[string]bool
 	pairingLimiter  *rateLimiter
 	clientLimiter   *rateLimiter
@@ -142,6 +143,22 @@ type Server struct {
 	liveActivityMu  sync.RWMutex
 	liveActivities  map[string]map[string]liveActivityRegistration
 	apns            *apnsSender
+}
+
+// refreshReuseGrace is how long a consumed refresh capability may be presented
+// again before it counts as reuse. A phone that loses the rotation response on
+// a weak link only ever holds the previous capability; revoking the family for
+// that retry locked the device out until it was paired again. Within the grace,
+// and only while the successor has never been used, the retry is answered with
+// a fresh successor and the undelivered one is withdrawn, so the family still
+// has exactly one live capability.
+const refreshReuseGrace = time.Minute
+
+// refreshRetry maps a just-consumed refresh capability to the successor it was
+// rotated into. Kept in memory only: a Relay restart simply ends the grace.
+type refreshRetry struct {
+	Successor string
+	Until     time.Time
 }
 
 type refreshRecord struct {
@@ -309,6 +326,7 @@ func NewServer(config Config) (*Server, error) {
 		mux:             http.NewServeMux(),
 		refreshTokens:   make(map[string]refreshRecord),
 		usedRefresh:     make(map[string]string),
+		refreshRetries:  make(map[string]refreshRetry),
 		revokedFamilies: make(map[string]bool),
 		pairingLimiter:  newRateLimiter(config.PairingRateLimit, config.RateLimitWindow),
 		clientLimiter:   newRateLimiter(config.ClientRateLimit, config.RateLimitWindow),
@@ -893,6 +911,11 @@ func (server *Server) exchangeSession(response http.ResponseWriter, request *htt
 	}
 	server.setRefreshCookie(response, request, entry.HostID, refresh)
 	result := map[string]any{"host_id": entry.HostID, "access_token": access, "expires_in": int(server.config.AccessTTL.Seconds()), "refresh_token": refresh}
+	// The device being paired names the Host after this, the same name the
+	// Host reports and Relay already quotes when it is offline.
+	if host, ok := server.registry.host(entry.HostID); ok && host.Name != "" {
+		result["host_name"] = host.Name
+	}
 	if route, ok := server.registry.route(entry.HostID); ok {
 		if tunnelToken, tunnelErr := server.signer.issueCapability(tokenClaims{HostID: entry.HostID, Scope: []string{"tunnel"}, Generation: entry.Generation, RouteID: route.ID, Expiry: time.Now().Add(server.config.AccessTTL).Unix()}); tunnelErr == nil {
 			result["tunnel_token"] = tunnelToken
@@ -925,11 +948,24 @@ func (server *Server) refreshSession(response http.ResponseWriter, request *http
 		}
 	}
 	hash := hashRefresh(refresh)
+	now := time.Now()
 	server.sessionMu.Lock()
+	server.pruneRefreshRetriesLocked(now)
 	entry, ok := server.refreshTokens[hash]
 	if ok {
 		delete(server.refreshTokens, hash)
 		server.usedRefresh[hash] = entry.Family
+	}
+	if !ok && refresh != "" {
+		if retry, retried := server.refreshRetries[hash]; retried && now.Before(retry.Until) {
+			if successor, unused := server.refreshTokens[retry.Successor]; unused {
+				// The client never received the successor. Withdraw it without
+				// recording it as used, so it is merely unknown if it does turn
+				// up, and rotate from the same record instead.
+				delete(server.refreshTokens, retry.Successor)
+				entry, ok = successor, true
+			}
+		}
 	}
 	if !ok {
 		if family, reused := server.usedRefresh[hash]; reused {
@@ -961,6 +997,7 @@ func (server *Server) refreshSession(response http.ResponseWriter, request *http
 		return
 	}
 	server.sessionMu.Lock()
+	server.refreshRetries[hash] = refreshRetry{Successor: hashRefresh(next), Until: now.Add(refreshReuseGrace)}
 	if nextEntry, ok := server.refreshTokens[hashRefresh(next)]; ok {
 		nextEntry.CreatedAt = entry.CreatedAt
 		if nextEntry.CreatedAt.IsZero() {
@@ -980,6 +1017,14 @@ func (server *Server) refreshSession(response http.ResponseWriter, request *http
 		}
 	}
 	writeJSON(response, http.StatusOK, result)
+}
+
+func (server *Server) pruneRefreshRetriesLocked(now time.Time) {
+	for hash, retry := range server.refreshRetries {
+		if !now.Before(retry.Until) {
+			delete(server.refreshRetries, hash)
+		}
+	}
 }
 
 func hashRefresh(value string) string {

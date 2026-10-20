@@ -96,8 +96,14 @@ extension WarrenDialog {
 }
 
 /// The primary/destructive confirm button, so a caller does not have to branch
-/// on the style itself. Return sets the default action; the destructive variant
-/// keeps its inverted label and its danger fill.
+/// on the style itself. A primary confirm is the default action, so Return
+/// takes it; a destructive confirm takes Command-Return, so a stray Return
+/// cannot delete anything. The destructive variant keeps its inverted label
+/// and its danger fill.
+///
+/// The footer's keycap reads `keycap(isDestructive:)`, which is derived from
+/// the same choice as the shortcut, so the cap a dialog shows is the key it
+/// actually answers to.
 public struct WarrenDialogConfirmButtonStyle: ViewModifier {
     private let isDestructive: Bool
     private let isEnabled: Bool
@@ -107,17 +113,27 @@ public struct WarrenDialogConfirmButtonStyle: ViewModifier {
         self.isEnabled = isEnabled
     }
 
+    /// The key a confirm button answers to.
+    public static func shortcut(isDestructive: Bool) -> KeyboardShortcut {
+        isDestructive ? KeyboardShortcut(.return, modifiers: .command) : .defaultAction
+    }
+
+    /// The keycap text for `shortcut(isDestructive:)`.
+    public static func keycap(isDestructive: Bool) -> String {
+        isDestructive ? "\u{2318}\u{23CE}" : "\u{23CE}"
+    }
+
     @ViewBuilder
     public func body(content: Content) -> some View {
         if isDestructive {
             content
                 .buttonStyle(WarrenDestructiveButtonStyle(font: WarrenTypography.dialogCriticalAction))
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(Self.shortcut(isDestructive: true))
                 .disabled(!isEnabled)
         } else {
             content
                 .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(Self.shortcut(isDestructive: false))
                 .disabled(!isEnabled)
         }
     }

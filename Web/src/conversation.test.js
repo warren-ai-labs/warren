@@ -10,7 +10,9 @@ import {
   isACPSession,
   orderDecisionOptions,
   projectConversation,
+  reuseUnchangedTurns,
   stepLine,
+  streamingMarkdownBlocks,
   summarizeSteps,
   visibleStreamingText,
 } from "./conversation.js";
@@ -191,4 +193,37 @@ test("state events from before the loaded window reach the projection", () => {
   assert.deepEqual(merged.map(event => event.sequence), [3, 40]);
   assert.equal(projectConversation(merged).config[0].id, "model");
   assert.equal(withStateEvents(page, []), page);
+});
+
+test("an unchanged turn keeps its object across projections", () => {
+  const first = [
+    event("message.created", { role: "user", content: "one", messageId: "u1" }, "1"),
+    event("message.created", { role: "assistant", content: "Answer one.", messageId: "a1" }, "1"),
+    event("turn.completed", {}, "1"),
+    event("message.created", { role: "user", content: "two", messageId: "u2" }, "2"),
+    event("message.created", { role: "assistant", content: "Part", messageId: "a2" }, "2"),
+  ];
+  const before = projectConversation(first).turns;
+  const growing = [...first, event("message.delta", { role: "assistant", content: " more", messageId: "a2" }, "2")];
+  const after = reuseUnchangedTurns(before, projectConversation(growing).turns);
+  assert.equal(after[0], before[0]);
+  assert.notEqual(after[1], before[1]);
+  assert.equal(after[1].answer, "Part more");
+  // Dropping a turn's oldest row (the transcript cap) is a change too.
+  const trimmed = reuseUnchangedTurns(after, projectConversation(growing.slice(1)).turns);
+  assert.notEqual(trimmed[0], after[0]);
+  assert.equal(trimmed[1], after[1]);
+});
+
+test("a streaming answer splits only at closed top-level blocks", () => {
+  const fence = "`".repeat(3);
+  const source = `# Plan\n\nFirst line\nsecond\n\n${fence}sh\nmake\n\nmake test\n${fence}\n\n- one\n\n- two\n\n    still the list\n\nTail is open`;
+  const blocks = streamingMarkdownBlocks(source);
+  assert.equal(blocks.join(""), source);
+  assert.deepEqual(blocks.map(block => block.split("\n")[0]), ["# Plan", "First line", `${fence}sh`, "Tail is open"]);
+  // An open fence keeps everything after it in the tail.
+  assert.deepEqual(streamingMarkdownBlocks(`Intro\n\n${fence}\ncode\n\nmore`), ["Intro\n\n", `${fence}\ncode\n\nmore`]);
+  // Link definitions and raw HTML reach across blocks: no split.
+  assert.equal(streamingMarkdownBlocks("See [x]\n\n[x]: https://example.com").length, 1);
+  assert.equal(streamingMarkdownBlocks("<details>\n\nbody\n\n</details>").length, 1);
 });

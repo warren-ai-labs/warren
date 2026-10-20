@@ -76,6 +76,9 @@ final class WarrenConversationFeed: ObservableObject {
 
     private var events: [UInt64: WarrenRemoteAgentEvent] = [:]
     private var streamID: String?
+    /// Folds live batches forward; a batch that reaches back (a page of
+    /// history) re-projects from every event held.
+    private var projector = WarrenConversation.Projector()
 
     init(sessionID: TerminalSessionID) {
         self.sessionID = sessionID
@@ -90,14 +93,19 @@ final class WarrenConversationFeed: ObservableObject {
             // A new execution is a new conversation (RFC 0016 §3).
             self.streamID = streamID
             events.removeAll()
+            projector = WarrenConversation.Projector()
         }
-        var changed = false
+        var added: [WarrenRemoteAgentEvent] = []
         for event in incoming where events[event.sequence] == nil {
             events[event.sequence] = event
-            changed = true
+            added.append(event)
         }
-        guard changed else { return }
-        conversation = WarrenConversation.project(Array(events.values))
+        guard !added.isEmpty else { return }
+        if !projector.append(added) {
+            projector = WarrenConversation.Projector()
+            _ = projector.append(Array(events.values))
+        }
+        conversation = projector.conversation()
         let echoed = Set(conversation.turns.compactMap(\.promptCausedBy))
         pendingPrompts.removeAll { echoed.contains($0.id) }
         revision &+= 1
@@ -287,6 +295,7 @@ struct WarrenConversationView: View {
     @State private var pinnedToBottom = true
     @State private var hasNewReply = false
     @State private var jumpRequest = 0
+    @State private var followPending = false
     @State private var width: CGFloat = 700
     @State private var viewportHeight: CGFloat = 0
     @State private var stopping = false
@@ -351,10 +360,12 @@ struct WarrenConversationView: View {
                                 contentWidth: contentWidth,
                                 narrow: narrow,
                                 providerName: providerName,
+                                linkedSessionsOpen: turn.steps.compactMap(\.terminalSessionID).map(actions.sessionExists),
                                 actions: actions,
                                 onEditPrompt: bringIntoComposer,
                                 onRetry: retry
                             )
+                            .equatable()
                             .padding(.bottom, index == conversation.turns.count - 1
                                 ? ConversationLayout.lastTurnGap
                                 : ConversationLayout.turnGap)
@@ -396,7 +407,7 @@ struct WarrenConversationView: View {
                 DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             .onChange(of: feed.revision) { _ in
-                if pinnedToBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+                if pinnedToBottom { followLatest(proxy) }
                 else { hasNewReply = true }
             }
             .onChange(of: feed.pendingPrompts.count) { _ in proxy.scrollTo("bottom", anchor: .bottom) }
@@ -408,6 +419,19 @@ struct WarrenConversationView: View {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
+        }
+    }
+
+    /// Follows a streaming answer at most once a frame. Tokens can publish
+    /// faster than the display refreshes, and each `scrollTo` lays the whole
+    /// transcript out again; the trailing scroll still lands on the newest line.
+    private func followLatest(_ proxy: ScrollViewProxy) {
+        guard !followPending else { return }
+        followPending = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 16_000_000)
+            followPending = false
+            if pinnedToBottom { proxy.scrollTo("bottom", anchor: .bottom) }
         }
     }
 
@@ -652,7 +676,7 @@ struct WarrenConversationView: View {
             }
             .buttonStyle(.plain)
             .disabled(!canSend)
-            .warrenTooltip("Send", shortcut: "Return")
+            .warrenTooltip("Send", shortcut: "⏎")
             .accessibilityLabel("Send")
         }
     }
@@ -917,7 +941,7 @@ enum WarrenConversationDecisionReply: Equatable {
 
 // MARK: - Turn
 
-private struct WarrenConversationTurnView: View {
+private struct WarrenConversationTurnView: View, Equatable {
     let turn: WarrenConversation.Turn
     let live: Bool
     let waiting: Bool
@@ -925,9 +949,27 @@ private struct WarrenConversationTurnView: View {
     let contentWidth: CGFloat
     let narrow: Bool
     let providerName: String
+    /// Whether each step's linked terminal Session is open, in step order.
+    /// The step rows ask `actions.sessionExists`, which the equality below
+    /// cannot see, so the answer travels with the compared inputs.
+    let linkedSessionsOpen: [Bool]
     let actions: WarrenConversationActions
     let onEditPrompt: (String) -> Void
     let onRetry: (WarrenConversation.Turn) -> Void
+
+    /// Lets a settled turn skip its body while the live one streams. The
+    /// closures are left out: they capture the model, this Session and the
+    /// pane's state storage, none of which change under one transcript.
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.turn == rhs.turn
+            && lhs.live == rhs.live
+            && lhs.waiting == rhs.waiting
+            && lhs.isLast == rhs.isLast
+            && lhs.contentWidth == rhs.contentWidth
+            && lhs.narrow == rhs.narrow
+            && lhs.providerName == rhs.providerName
+            && lhs.linkedSessionsOpen == rhs.linkedSessionsOpen
+    }
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var hovering = false
@@ -1292,12 +1334,17 @@ private struct WarrenConversationWorkTrail: View {
                         if waiting {
                             Text("Waiting").font(WarrenTypography.caption).foregroundStyle(palette.ink3)
                         } else {
-                            WarrenConversationShimmer(
-                                text: "Working for \(elapsed)",
-                                font: WarrenTypography.caption,
-                                base: palette.ink3,
-                                highlight: palette.ink
-                            )
+                            // The label ticks on its own clock: a settled
+                            // turn view skips re-renders, and a long tool run
+                            // publishes nothing for the count to ride on.
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                WarrenConversationShimmer(
+                                    text: "Working for \(elapsed(at: context.date))",
+                                    font: WarrenTypography.caption,
+                                    base: palette.ink3,
+                                    highlight: palette.ink
+                                )
+                            }
                         }
                     } else {
                         Text(turn.settledLabel)
@@ -1358,14 +1405,15 @@ private struct WarrenConversationWorkTrail: View {
         .onAppear { if forcesExpanded, !turn.steps.isEmpty { open = true } }
     }
 
-    private var elapsed: String {
+    private func elapsed(at date: Date) -> String {
         guard let startedAt = turn.startedAt else { return "0s" }
-        return WarrenConversation.formatElapsed(Date().timeIntervalSince(startedAt))
+        return WarrenConversation.formatElapsed(date.timeIntervalSince(startedAt))
     }
 }
 
-/// A stepped highlight sweep across secondary text: 2 s per pass in 40 steps,
-/// off under Reduce Motion. The transcript's only moving thing.
+/// A stepped highlight sweep across secondary text: 2 s per pass in 20 steps,
+/// off under Reduce Motion. The transcript's only moving thing; 10 Hz keeps the
+/// sweep legible while asking half as many display cycles of the pane as 20 Hz.
 struct WarrenConversationShimmer: View {
     let text: String
     var font: Font = WarrenTypography.caption
@@ -1373,13 +1421,16 @@ struct WarrenConversationShimmer: View {
     let highlight: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private static let stepInterval: TimeInterval = 0.1
+    private static let stepsPerPass: Double = 20
+
     var body: some View {
         if reduceMotion {
             Text(text).font(font).foregroundStyle(base)
         } else {
-            TimelineView(.periodic(from: .now, by: 0.05)) { context in
-                let step = (context.date.timeIntervalSinceReferenceDate / 0.05).rounded(.down)
-                let phase = step.truncatingRemainder(dividingBy: 40) / 40
+            TimelineView(.periodic(from: .now, by: Self.stepInterval)) { context in
+                let step = (context.date.timeIntervalSinceReferenceDate / Self.stepInterval).rounded(.down)
+                let phase = step.truncatingRemainder(dividingBy: Self.stepsPerPass) / Self.stepsPerPass
                 let center = -0.5 + 2 * phase
                 Text(text)
                     .font(font)
@@ -1468,7 +1519,7 @@ private struct WarrenConversationStepRow: View {
             .buttonStyle(.plain)
             .disabled(!hasOutput && !hasDiff)
             if let terminal = step.terminalSessionID, sessionExists(terminal) {
-                Button("Open terminal") { openSession(terminal) }
+                Button("Open Terminal") { openSession(terminal) }
                     .buttonStyle(.plain)
                     .font(WarrenTypography.caption)
                     .foregroundStyle(palette.blue)
@@ -1551,7 +1602,7 @@ private struct WarrenConversationAnswerFooter: View {
                     copyFeedback.copy(answer, announcing: "Copied Markdown")
                 }
                 if let onRetry {
-                    Button("Retry turn", action: onRetry)
+                    Button("Retry Turn", action: onRetry)
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -1728,6 +1779,22 @@ struct WarrenConversationMarkdown: View {
     }
 
     private func inline(_ value: String, tokens: WarrenConversationPalette, caret: Bool) -> Text {
+        // The streaming paragraph changes with every token, so caching it
+        // would only crowd settled text out of the cache.
+        guard let attributed = styledInline(value, cacheable: !caret) else { return Text(value) }
+        var text = Text(attributed)
+        if caret {
+            text = text + Text(" ▌").foregroundColor(palette.ink3)
+        }
+        return text
+    }
+
+    /// The parsed and coloured fragment, or nil when Foundation cannot parse
+    /// it. Keyed by everything that styles it: the source, the style and the
+    /// appearance the palette resolves from.
+    private func styledInline(_ value: String, cacheable: Bool) -> AttributedString? {
+        let key = "\(style == .answer ? "a" : "m")\(colorScheme == .light ? "l" : "d")|\(value)"
+        if let cached = WarrenConversationInlineCache.shared.value(for: key) { return cached }
         let source = WarrenMarkdownCache.shared.preservedLineBreaks(for: value)
         let codeFont = Font.system(size: 13, design: .monospaced)
         let codeBackground = style == .message ? palette.ink.opacity(0.07) : palette.bubble
@@ -1735,7 +1802,7 @@ struct WarrenConversationMarkdown: View {
             markdown: source,
             options: .init(interpretedSyntax: .full, failurePolicy: .returnPartiallyParsedIfPossible)
         ) else {
-            return Text(value)
+            return nil
         }
         for run in attributed.runs {
             if let intent = run.inlinePresentationIntent, intent.contains(.code) {
@@ -1750,11 +1817,35 @@ struct WarrenConversationMarkdown: View {
                 attributed[run.range].foregroundColor = palette.ink
             }
         }
-        var text = Text(attributed)
-        if caret {
-            text = text + Text(" ▌").foregroundColor(palette.ink3)
-        }
-        return text
+        if cacheable { WarrenConversationInlineCache.shared.store(attributed, for: key) }
+        return attributed
+    }
+}
+
+/// Styled inline Markdown for the Conversation. Every settled answer re-renders
+/// whenever its pane does, and `AttributedString(markdown:)` per paragraph was
+/// the transcript's heaviest body cost. Bounded like `WarrenMarkdownCache`.
+private final class WarrenConversationInlineCache: @unchecked Sendable {
+    static let shared = WarrenConversationInlineCache()
+
+    private final class Box {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+
+    private let cache = NSCache<NSString, Box>()
+
+    private init() {
+        cache.countLimit = 1024
+        cache.totalCostLimit = 8 * 1024 * 1024
+    }
+
+    func value(for key: String) -> AttributedString? {
+        cache.object(forKey: key as NSString)?.value
+    }
+
+    func store(_ value: AttributedString, for key: String) {
+        cache.setObject(Box(value), forKey: key as NSString, cost: key.utf8.count)
     }
 }
 
@@ -1964,7 +2055,7 @@ private struct WarrenConversationFilesCard: View {
                 }
                 .font(WarrenTypography.monoSmall)
                 Spacer(minLength: 0)
-                Button("Review all", action: onReviewAll)
+                Button("Review All", action: onReviewAll)
                     .buttonStyle(.plain)
                     .font(WarrenTypography.caption)
                     .foregroundStyle(palette.ink3)

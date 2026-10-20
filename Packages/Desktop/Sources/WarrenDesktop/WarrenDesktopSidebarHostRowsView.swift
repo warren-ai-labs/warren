@@ -625,6 +625,11 @@ struct WarrenDesktopSidebarHostRows: View {
                 onEnd: canMutate(host)
                     ? { onAction(.deleteSession(session.id)) }
                     : nil,
+                onDismissActivity: canMutate(host)
+                    ? session.activityMark.map { mark in
+                        { onAction(.dismissActivity(session.id, mark.activityState)) }
+                    }
+                    : nil,
                 onSplitDrop: host.endpointID == activeEndpointID
                     ? onSplitDropSession
                     : nil
@@ -1287,15 +1292,17 @@ private struct WarrenDesktopSidebarHostsSectionHeader: View {
             hostCount: hostCount,
             isHovered: isHovered
         ))
-        .font(WarrenTypography.sectionLabel)
-        .tracking(1.0)
-        .foregroundStyle(tokens.mutedForeground)
+        .font(WarrenDesktopSidebarSectionHeader.titleFont)
+        .tracking(WarrenDesktopSidebarSectionHeader.titleTracking)
+        .foregroundStyle(tokens.treeQuietText)
+        .lineLimit(1)
         // The count replaces the word in place; the two cross-fade.
         .animation(
             WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
             value: isHovered
         )
-        .frame(maxWidth: .infinity, minHeight: WarrenLayoutMetrics.sidebarSectionLabelHeight, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: WarrenDesktopSidebarMetrics.sectionHeaderHeight)
         // A Host heading shares the section labels' leading edge:
         // TASKS, PROJECTS, and every Host line up on one column.
         .padding(.leading, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
@@ -1479,20 +1486,13 @@ private struct WarrenDesktopSidebarHostHeader: View {
         }
     }
 
+    /// The tree's own disclosure chevron, so a Host folds with the same
+    /// glyph and turn as every other collapsible row.
     private func chevron(tokens: WarrenColorTokens, isEngaged: Bool) -> some View {
-        Image(systemName: "chevron.right")
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(
-                isEngaged ? tokens.sidebarMetaTextActive : tokens.sidebarMetaText
-            )
-            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-            .animation(
-                WarrenMotion.animation(
-                    .stateChange,
-                    reduceMotion: reduceMotion
-                ),
-                value: isExpanded
-            )
+        WarrenDesktopTreeChevron(
+            isExpanded: isExpanded,
+            color: isEngaged ? tokens.sidebarMetaTextActive : tokens.sidebarMetaText
+        )
     }
 
     /// The Host's tile: a hollow square ringed in the Host's own hue with its
@@ -1510,7 +1510,7 @@ private struct WarrenDesktopSidebarHostHeader: View {
             }
             .overlay(alignment: .bottomTrailing) {
                 Circle()
-                    .fill(host.connectionState.isConnected ? tokens.success : tokens.treeQuietText)
+                    .fill(WarrenDesktopHostReachability(host.connectionState).color(tokens))
                     .frame(width: 6, height: 6)
                     .overlay {
                         Circle().strokeBorder(tokens.workbenchCardFill, lineWidth: 1.5)

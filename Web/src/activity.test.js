@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   ACTIVITY_MARKS,
+  acknowledgeActivity,
   activityMarkIsDrawn,
   activityMarkIsAcknowledgeable,
   activityMarkIsAnimated,
@@ -11,7 +12,11 @@ import {
   activityMarkPriority,
   activityMarkTier,
   activityMarkWord,
+  loadActivityAcknowledgments,
+  reconcileActivityAcknowledgments,
   resolveActivityMark,
+  resolveDrawnActivityMark,
+  saveActivityAcknowledgments,
 } from "./activity.js";
 
 // The order is the rollup order, so a Workspace summary is a max over it.
@@ -183,4 +188,70 @@ test("an ended session never draws", () => {
     "approvalNeeded",
   );
   assert.ok(activityMarkIsDrawn("approvalNeeded"));
+});
+
+test("a drawn mark applies the acknowledgment and hides an ended session", () => {
+  assert.equal(resolveDrawnActivityMark({ activity: "ready" }), "ready");
+  assert.equal(resolveDrawnActivityMark({ activity: "ready" }, "ready"), null);
+  assert.equal(resolveDrawnActivityMark({ activity: "exited" }), null);
+  assert.equal(resolveDrawnActivityMark({ activity: "working" }, "ready"), "working");
+  assert.equal(resolveDrawnActivityMark(null), null);
+});
+
+test("selecting a session acknowledges only a completion", () => {
+  const empty = {};
+  const seen = acknowledgeActivity(empty, "a", { activity: "ready" });
+  assert.deepEqual(seen, { a: "ready" });
+  // Seeing it again is not a change.
+  assert.equal(acknowledgeActivity(seen, "a", { activity: "ready" }), seen);
+  // Looking is not answering, and a failure does not un-fail.
+  assert.equal(acknowledgeActivity(empty, "a", { activity: "ready", attention: { kind: "approval" } }), empty);
+  assert.equal(acknowledgeActivity(empty, "a", { activity: "failed" }), empty);
+  assert.equal(acknowledgeActivity(empty, "a", { activity: "working" }), empty);
+  assert.equal(acknowledgeActivity(empty, "a", null), empty);
+  assert.equal(acknowledgeActivity(empty, null, { activity: "ready" }), empty);
+});
+
+test("an acknowledgment retires once the agent moves on", () => {
+  const seen = { a: "ready", b: "ready" };
+  const unchanged = reconcileActivityAcknowledgments(seen, [
+    { id: "a", agentStatus: { activity: "ready" } },
+    { id: "b", agentStatus: { activity: "ready" } },
+  ]);
+  assert.equal(unchanged, seen);
+
+  // ready → (seen) → working → ready lights up again.
+  const moved = reconcileActivityAcknowledgments(seen, [
+    { id: "a", agentStatus: { activity: "working" } },
+    { id: "b", agentStatus: { activity: "ready" } },
+  ]);
+  assert.deepEqual(moved, { b: "ready" });
+  assert.equal(resolveDrawnActivityMark({ activity: "ready" }, moved.a ?? null), "ready");
+});
+
+test("unlisted sessions are forgotten only from an authoritative roster", () => {
+  const seen = { gone: "ready" };
+  assert.deepEqual(reconcileActivityAcknowledgments(seen, []), {});
+  assert.equal(reconcileActivityAcknowledgments(seen, [], { prune: false }), seen);
+});
+
+test("acknowledgments persist per endpoint", () => {
+  const values = new Map();
+  const storage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: key => values.delete(key),
+  };
+  saveActivityAcknowledgments(storage, "wss://one", { a: "ready" });
+  assert.deepEqual(loadActivityAcknowledgments(storage, "wss://one"), { a: "ready" });
+  assert.deepEqual(loadActivityAcknowledgments(storage, "wss://two"), {});
+  saveActivityAcknowledgments(storage, "wss://one", {});
+  assert.equal(values.size, 0);
+
+  // Corrupt or foreign values never reach the renderer.
+  storage.setItem("warren.activity-acknowledgments.wss%3A%2F%2Fone", JSON.stringify({ a: "bogus", b: "ready" }));
+  assert.deepEqual(loadActivityAcknowledgments(storage, "wss://one"), { b: "ready" });
+  storage.setItem("warren.activity-acknowledgments.wss%3A%2F%2Fone", "[");
+  assert.deepEqual(loadActivityAcknowledgments(storage, "wss://one"), {});
+  assert.deepEqual(loadActivityAcknowledgments({ getItem() { throw new Error("denied"); } }, "x"), {});
 });

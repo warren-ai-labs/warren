@@ -107,6 +107,22 @@ export function withStateEvents(events = [], stateEvents = []) {
   return [...missing, ...events].sort((left, right) => (Number(left?.sequence) || 0) - (Number(right?.sequence) || 0));
 }
 
+// What each projected turn was folded from: the events that touched it and
+// the size of what they produced. Events are immutable by sequence, so an
+// equal signature means an equal turn.
+const turnSignatures = new WeakMap();
+
+/// Hands back the previous projection's turn objects wherever a turn is
+/// unchanged, so a memoized turn view skips the turns a batch did not touch.
+export function reuseUnchangedTurns(previous = [], turns = []) {
+  if (!previous.length) return turns;
+  const byID = new Map(previous.map(turn => [turn.id, turn]));
+  return turns.map(turn => {
+    const prior = byID.get(turn.id);
+    return prior && turnSignatures.has(turn) && turnSignatures.get(prior) === turnSignatures.get(turn) ? prior : turn;
+  });
+}
+
 /// Projects canonical events into a conversation.
 export function projectConversation(events = []) {
   const turns = [];
@@ -117,6 +133,8 @@ export function projectConversation(events = []) {
   let config = [];
   const interactions = new Map();
   const compactions = new Set();
+  const touches = new Map();
+  let applying = 0;
 
   const turnFor = event => {
     const id = text(event?.turnId || event?.turn || "");
@@ -127,11 +145,16 @@ export function projectConversation(events = []) {
       byID.set(key, turn);
       turns.push(turn);
     }
+    const touch = touches.get(turn) || { count: 0, first: applying, last: 0 };
+    touch.count += 1;
+    touch.last = applying;
+    touches.set(turn, touch);
     return turn;
   };
 
   for (const event of events) {
     if (!event) continue;
+    applying = Number(event.sequence) || 0;
     const type = canonicalType(event);
     const payload = payloadOf(event);
     switch (type) {
@@ -246,7 +269,14 @@ export function projectConversation(events = []) {
     }
   }
 
-  for (const turn of turns) finishTurn(turn);
+  for (const turn of turns) {
+    finishTurn(turn);
+    const touch = touches.get(turn) || { count: 0, first: 0, last: 0 };
+    turnSignatures.set(turn, [
+      touch.count, touch.first, touch.last, turn.status, turn.messages.length, turn.steps.length,
+      turn.notices.length, turn.errors.length, turn.answer.length, turn.user?.text.length ?? -1, turn.reasoning.count,
+    ].join(":"));
+  }
 
   const decisions = [...interactions.values()]
     .filter(record => record.state === "pending")
@@ -472,6 +502,41 @@ export function visibleStreamingText(value, complete) {
   if (complete) return source;
   const match = source.match(/^[\s\S]*[\s.,;:!?)\]}，。；：！？、]/);
   return match ? match[0] : "";
+}
+
+/// Splits a streaming answer into its finished top-level blocks and the open
+/// tail, so a view can parse each finished block once and re-parse only the
+/// tail as tokens arrive. A block ends at a blank line outside a code fence
+/// before an unindented line that is not a list item; anything that could
+/// reach across that line (an indented continuation, a list, a link
+/// definition, raw HTML) keeps the blocks together. Joined, the parts are
+/// the source.
+export function streamingMarkdownBlocks(source) {
+  const value = text(source);
+  if (/^ {0,3}(\[[^\]]+\]:|<)/m.test(value)) return [value];
+  const lines = value.split("\n");
+  const blocks = [];
+  let start = 0;
+  let fence = null;
+  let afterBlank = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (fence) {
+      const close = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      afterBlank = false;
+      continue;
+    }
+    if (afterBlank && index > start && /^[^\s]/.test(line) && !/^([*+-]|\d{1,9}[.)])(\s|$)/.test(line)) {
+      blocks.push(lines.slice(start, index).join("\n"));
+      start = index;
+    }
+    const open = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (open) fence = open[1];
+    afterBlank = line.trim() === "";
+  }
+  blocks.push(lines.slice(start).join("\n"));
+  return blocks.map((block, index) => (index < blocks.length - 1 ? `${block}\n` : block));
 }
 
 /// Elapsed time in the compact form the status line uses.

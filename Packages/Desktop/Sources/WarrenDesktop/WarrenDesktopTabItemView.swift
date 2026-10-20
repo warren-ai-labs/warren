@@ -207,11 +207,10 @@ struct WarrenDesktopTabItem: View {
             if isSelected {
                 // The plate is the anchor: it slides to the newly selected Tab
                 // rather than fading in place.
+                // The same plate as the single pane's pill and the split
+                // group's, so a selected Tab reads one way at any count.
                 pillShape
-                    .fill(tokens.treeRowSelected)
-                    .overlay {
-                        pillShape.strokeBorder(tokens.cardBorder, lineWidth: 1)
-                    }
+                    .fill(tokens.selectedTabPillFill)
                     .matchedGeometryEffect(
                         id: plateTravels ? "tab-selection" : "tab-selection-here",
                         in: selectionNamespace

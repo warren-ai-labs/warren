@@ -6,7 +6,14 @@ import WarrenDesignSystem
 ///
 /// The dark numbers are the spec's own. The light appearance keeps the same
 /// structure with paper-appropriate greys rather than inverting the dark
-/// numbers, which would leave a menu darker than the card it floats above.
+/// numbers, which would leave a menu darker than the card it floats above;
+/// its quiet text and glyphs take the sidebar's warm section tier, so a menu
+/// opened beside the sidebar reads in the same greys.
+///
+/// A row's hover and press are the app's one row wash (`fillHover`,
+/// `fillSelected`) with no hairline of their own, so a menu row lights the way
+/// a sidebar or palette row does, and on glass the wash stays translucent
+/// instead of painting an opaque plate on the material.
 struct WarrenDesktopMenuPalette {
     let surface: Color
     let border: Color
@@ -25,9 +32,11 @@ struct WarrenDesktopMenuPalette {
     let check: Color
 
     let hoverFill: Color
-    let hoverBorder: Color
     let pressFill: Color
-    let pressBorder: Color
+    /// The hover wash already composited over `surface`: the ring a corner
+    /// dot draws on a hot row has to be opaque to cut the dot out of the
+    /// glyph beneath it.
+    let hotRing: Color
 
     let actionGlyph: Color
     let dangerText: Color
@@ -63,10 +72,9 @@ struct WarrenDesktopMenuPalette {
         icon: WarrenColorTokens.hex(0x8F8F8F),
         iconHover: WarrenColorTokens.hex(0xEDEDED),
         check: WarrenColorTokens.hex(0xD4D4D4),
-        hoverFill: WarrenColorTokens.hex(0x1F1F1F),
-        hoverBorder: WarrenColorTokens.hex(0x2A2A2A),
-        pressFill: WarrenColorTokens.hex(0x262626),
-        pressBorder: WarrenColorTokens.hex(0x333333),
+        hoverFill: WarrenColorTokens.dark.fillHover,
+        pressFill: WarrenColorTokens.dark.fillSelected,
+        hotRing: WarrenColorTokens.hex(0x232323),
         actionGlyph: WarrenColorTokens.hex(0x8A8A8A),
         dangerText: WarrenColorTokens.hex(0xE57B74),
         dangerIcon: WarrenColorTokens.hex(0xE0524A),
@@ -80,26 +88,30 @@ struct WarrenDesktopMenuPalette {
         addText: WarrenColorTokens.hex(0x8A8A8A)
     )
 
+    /// Paper's quiet tier: the sidebar's section weight of its warm text
+    /// base, rather than the cool neutral greys the dark spec uses.
+    private static let lightQuiet = WarrenColorTokens.light.sidebarTextBase
+        .opacity(WarrenSidebarTextWeight.section)
+
     static let light = Self(
         surface: WarrenColorTokens.hex(0xFFFFFF),
         border: WarrenColorTokens.hex(0xE0DBD6),
         topHighlight: .clear,
         divider: WarrenColorTokens.hex(0xE8E4E0),
-        headerText: WarrenColorTokens.hex(0x8A8A8A),
+        headerText: lightQuiet,
         rowText: WarrenColorTokens.hex(0x1C1917),
         rowHoverText: WarrenColorTokens.hex(0x000000),
-        meta: WarrenColorTokens.hex(0x8A8A8A),
-        secondaryGlyph: WarrenColorTokens.hex(0xA3A3A3),
-        value: WarrenColorTokens.hex(0xA3A3A3),
-        chevron: WarrenColorTokens.hex(0x8A8A8A),
-        icon: WarrenColorTokens.hex(0xA3A3A3),
+        meta: lightQuiet,
+        secondaryGlyph: lightQuiet,
+        value: lightQuiet,
+        chevron: lightQuiet,
+        icon: lightQuiet,
         iconHover: WarrenColorTokens.hex(0x1C1917),
         check: WarrenColorTokens.hex(0x1C1917),
-        hoverFill: WarrenColorTokens.hex(0xF2EFEC),
-        hoverBorder: WarrenColorTokens.hex(0xE0DBD6),
-        pressFill: WarrenColorTokens.hex(0xE5E0DB),
-        pressBorder: WarrenColorTokens.hex(0xD2CCC6),
-        actionGlyph: WarrenColorTokens.hex(0x8A8A8A),
+        hoverFill: WarrenColorTokens.light.fillHover,
+        pressFill: WarrenColorTokens.light.fillSelected,
+        hotRing: WarrenColorTokens.hex(0xF4F3F3),
+        actionGlyph: lightQuiet,
         dangerText: WarrenColorTokens.hex(0xB3261E),
         dangerIcon: WarrenColorTokens.hex(0xB3261E),
         keycapFill: WarrenColorTokens.hex(0xF2EFEC),
@@ -116,6 +128,10 @@ struct WarrenDesktopMenuPalette {
 /// The one floating surface every menu and popover draws on: an opaque card
 /// with a full hairline, a hairline of light along its top edge, and a single
 /// soft shadow.
+///
+/// On glass the card is the shared raised tone (`popoverSurface`) over an
+/// in-window blur, the same material the command palette and every other
+/// floating surface use, instead of the opaque card painted over the blur.
 struct WarrenDesktopMenuSurfaceModifier: ViewModifier {
     /// `nil` lets the surface size to its content instead of a fixed width.
     let width: CGFloat?
@@ -123,13 +139,9 @@ struct WarrenDesktopMenuSurfaceModifier: ViewModifier {
     /// the window throws its shadow upward instead.
     var shadowY: CGFloat = 12
 
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.warrenMenuMaxHeight) private var maxHeight
 
     func body(content: Content) -> some View {
-        let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
-        let shape = RoundedRectangle(cornerRadius: WarrenDesktopMenuMetrics.radius, style: .continuous)
         content
             // The room is this surface's alone, not a nested one's.
             .environment(\.warrenMenuMaxHeight, nil)
@@ -138,11 +150,33 @@ struct WarrenDesktopMenuSurfaceModifier: ViewModifier {
             ))
             .padding(WarrenDesktopMenuMetrics.inset)
             .frame(width: width, alignment: .leading)
+            .modifier(WarrenDesktopMenuCardModifier(shadowY: shadowY))
+    }
+}
+
+/// The menu surface's card alone: its fill, hairline, top highlight and
+/// shadow, with no inset or height cap. A surface that is not a menu but
+/// floats beside one, such as a notice toast rising to the notice center,
+/// draws on this so the two read as the same material.
+struct WarrenDesktopMenuCardModifier: ViewModifier {
+    var shadowY: CGFloat = 12
+    /// A hairline that replaces the neutral one, for a card that has to say
+    /// something with its edge (an error toast).
+    var border: Color? = nil
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+
+    func body(content: Content) -> some View {
+        let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        let shape = RoundedRectangle(cornerRadius: WarrenDesktopMenuMetrics.radius, style: .continuous)
+        content
             .background {
                 if windowMaterial == .glass {
                     ZStack {
                         Rectangle().fill(.regularMaterial)
-                        palette.surface
+                        tokens.popoverSurface
                     }
                 } else {
                     palette.surface
@@ -150,7 +184,7 @@ struct WarrenDesktopMenuSurfaceModifier: ViewModifier {
             }
             .clipShape(shape)
             .overlay {
-                shape.strokeBorder(palette.border, lineWidth: 1)
+                shape.strokeBorder(border ?? palette.border, lineWidth: 1)
             }
             .overlay(alignment: .top) {
                 Rectangle()
@@ -223,12 +257,17 @@ public extension View {
     }
 }
 
-/// The fill and inner hairline of one menu row in its resting, hovered,
-/// pressed or disabled state. The parent owns hover so it can also reveal the
-/// row's inline action.
+/// The fill of one menu row in its resting, hovered, pressed or disabled
+/// state.
+///
+/// A list that drives its rows from the keyboard owns the highlight: it
+/// passes `forceHover` for every row, and the row then draws exactly that,
+/// never its own pointer hover as well, so the pointer and the arrow keys
+/// share one highlighted row instead of lighting two. Left `nil`, the row
+/// follows the pointer itself.
 struct WarrenDesktopMenuRowStyle: ButtonStyle {
     var danger = false
-    var forceHover = false
+    var forceHover: Bool? = nil
     var cornerRadius: CGFloat = WarrenDesktopMenuMetrics.rowRadius
 
     func makeBody(configuration: Configuration) -> some View {
@@ -243,7 +282,7 @@ struct WarrenDesktopMenuRowStyle: ButtonStyle {
     private struct Row: View {
         let configuration: Configuration
         let danger: Bool
-        let forceHover: Bool
+        let forceHover: Bool?
         let cornerRadius: CGFloat
 
         @Environment(\.isEnabled) private var isEnabled
@@ -256,17 +295,11 @@ struct WarrenDesktopMenuRowStyle: ButtonStyle {
             let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             let pressed = configuration.isPressed
             let disabled = !isEnabled
-            let hot = (forceHover || isHovered) && !disabled
+            let hot = (forceHover ?? isHovered) && !disabled
             configuration.label
                 .background {
                     shape.fill(
                         disabled ? .clear : (pressed ? palette.pressFill : (hot ? palette.hoverFill : .clear))
-                    )
-                }
-                .overlay {
-                    shape.strokeBorder(
-                        disabled ? .clear : (pressed ? palette.pressBorder : (hot ? palette.hoverBorder : .clear)),
-                        lineWidth: 1
                     )
                 }
                 .opacity(disabled ? 0.42 : 1)
@@ -393,48 +426,36 @@ struct WarrenDesktopMenuStatusDot: View {
     let isHot: Bool
 
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isPulsing = false
 
     var body: some View {
         let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
-        let ring = isHot ? palette.hoverFill : palette.surface
-        Group {
+        let size = WarrenDesktopMenuMetrics.statusDotSize
+        ZStack {
+            Circle()
+                .fill(isHot ? palette.hotRing : palette.surface)
+                .frame(width: size + 3, height: size + 3)
             switch status {
             case .ok(let color), .failed(let color):
                 Circle()
                     .fill(color)
-                    .frame(width: WarrenDesktopMenuMetrics.statusDotSize, height: WarrenDesktopMenuMetrics.statusDotSize)
-                    .padding(1.5)
-                    .background(Circle().fill(ring))
-                    .opacity(pulseOpacity)
-                    .onAppear { startPulseIfNeeded() }
-                    .onDisappear { isPulsing = false }
+                    .frame(width: size, height: size)
             case .checking:
-                Circle()
-                    .strokeBorder(palette.secondaryGlyph, lineWidth: 1.25)
-                    .frame(width: WarrenDesktopMenuMetrics.statusDotSize, height: WarrenDesktopMenuMetrics.statusDotSize)
-                    .padding(1.5)
-                    .background(Circle().fill(ring))
-                    .opacity(pulseOpacity)
-                    .onAppear { startPulseIfNeeded() }
-                    .onDisappear { isPulsing = false }
+                // Only a probe in flight moves; a settled result sits still.
+                // The pulse is the Core Animation ring every activity dot
+                // uses, so it never re-renders the hosting view each frame
+                // and it stops as soon as Reduce Motion is turned on.
+                WarrenStatusIndicator(
+                    color: palette.secondaryGlyph,
+                    isActive: true,
+                    size: size,
+                    intensity: .quiet,
+                    accessibilityLabel: "Checking"
+                )
             }
         }
+        .frame(width: size + 3, height: size + 3)
         .offset(x: 3 + 1.5, y: 3 + 1.5)
         .accessibilityHidden(true)
-    }
-
-    /// A failed status is the one that breathes; the others sit still.
-    private var pulseOpacity: Double {
-        isPulsing ? 0.35 : 1
-    }
-
-    private func startPulseIfNeeded() {
-        guard status == .checking, !reduceMotion else { return }
-        withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) {
-            isPulsing = true
-        }
     }
 }
 

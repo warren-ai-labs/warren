@@ -206,6 +206,27 @@ test("mergeAgentEvents keeps older pages intact when paginating", () => {
   );
 });
 
+test("mergeAgentEvents appends live batches exactly as the general merge orders them", () => {
+  const held = Array.from({ length: 5 }, (_, index) => normalizeCanonicalAgentEvent(canonicalEvent(index + 1)));
+  const appended = mergeAgentEvents(held, [canonicalEvent(6), canonicalEvent(7)]);
+  assert.deepEqual(appended.map(event => event.sequence), [1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(appended[0], held[0]);
+  assert.deepEqual(appended[5], normalizeCanonicalAgentEvent(canonicalEvent(6)));
+  // Out-of-order, overlapping, and replayed batches still take the general
+  // merge: sorted by sequence, first observed row wins.
+  assert.deepEqual(mergeAgentEvents(held, [canonicalEvent(8), canonicalEvent(6)]).map(event => event.sequence), [1, 2, 3, 4, 5, 6, 8]);
+  const replay = mergeAgentEvents(held, [canonicalEvent(5, "assistant", "rewritten"), canonicalEvent(6)]);
+  assert.equal(replay[4], held[4]);
+  assert.deepEqual(replay.map(event => event.sequence), [1, 2, 3, 4, 5, 6]);
+  const unsorted = [held[2], held[0], held[1]];
+  assert.deepEqual(mergeAgentEvents(unsorted, [canonicalEvent(4)]).map(event => event.sequence), [1, 2, 3, 4]);
+  const capped = Array.from({ length: agentEventLimit }, (_, index) => normalizeCanonicalAgentEvent(canonicalEvent(index + 1)));
+  const live = mergeAgentEvents(capped, [canonicalEvent(agentEventLimit + 1)]);
+  assert.equal(live.length, agentEventLimit);
+  assert.equal(live[0].sequence, 2);
+  assert.equal(live.at(-1).sequence, agentEventLimit + 1);
+});
+
 test("groupAgentEvents pairs tool calls with their outputs", () => {
   const blocks = groupAgentEvents([
     { sequence: 1, type: "user", content: "hello" },

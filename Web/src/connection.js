@@ -469,9 +469,13 @@ export class WarrenConnection {
     socket.onmessage = event => {
       if (socket !== this.socket) return;
       this.noteInboundActivity();
+      // The parsed control message is handed on with the event, so the
+      // application does not parse every frame a second time.
+      let parsed;
       if (typeof event.data === "string") {
         try {
           const message = JSON.parse(event.data);
+          parsed = message;
           // Heartbeat traffic is transport bookkeeping and never reaches the
           // application. A pong whose id no longer matches (data already
           // satisfied the probe, or it answered a superseded one) is swallowed
@@ -493,7 +497,7 @@ export class WarrenConnection {
           // The application owns protocol error reporting.
         }
       }
-      this.onMessage(event);
+      this.onMessage(event, parsed);
     };
     socket.onerror = () => socket.close();
     socket.onclose = () => {

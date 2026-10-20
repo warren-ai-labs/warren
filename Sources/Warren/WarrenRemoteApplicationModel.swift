@@ -286,6 +286,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private let inputRouter = WarrenTerminalInputRouter()
     private var initialRefreshPending = false
     private var currentRoster: RemoteRoster?
+    /// The last full roster off the wire and its application shape, so a
+    /// Host resending an unchanged roster skips the JSON round trip.
+    private var decodedRosterCache: (source: WarrenRemoteRoster, roster: RemoteRoster)?
     private var rosterApplicationGeneration: UInt64 = 0
     private var resizeTask: Task<Void, Never>?
     private var resizeBuffer = WarrenResizeRequestBuffer()
@@ -622,6 +625,18 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             self.unsubscribeFromOutput(sessionID)
         }
         let resolvedConfiguration = resolvedConnectionConfiguration(configuration)
+        if resolvedConfiguration.isRelay,
+           let current = endpointConfiguration,
+           current != resolvedConfiguration,
+           current.hasSameRoute(as: resolvedConfiguration),
+           eventTask != nil,
+           isLocalEndpoint == isLocal {
+            // Only the credentials moved, which is what a Relay refresh does
+            // to the catalog while this connection is healthy. Keep the
+            // connection and hand the next attempt the new tokens.
+            endpointConfiguration = resolvedConfiguration
+            return
+        }
         guard endpointConfiguration != resolvedConfiguration
             || eventTask == nil
             || isLocalEndpoint != isLocal else {
@@ -846,7 +861,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     ) async {
         var attempt = 0
         while !Task.isCancelled, isCurrentConnection(configuration, generation: generation) {
-            var wireConfiguration = configuration
+            // A Relay refresh during the last attempt left newer tokens on
+            // the endpoint; dialing with the ones this loop started with would
+            // present a refresh token the Relay already rotated.
+            let latestConfiguration = endpointConfiguration ?? configuration
+            var wireConfiguration = latestConfiguration
             var tunnel: WarrenEmbeddedSSHTunnel?
             var helper: WarrenEmbeddedSSHTunnel?
             defer {
@@ -897,7 +916,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // refresh callbacks anchored to the durable alias so a token
             // rotation cannot replace SSH metadata with that runtime route.
             let persistedConfiguration = isSSHEndpoint
-                ? configuration
+                ? latestConfiguration
                 : wireConfiguration
             let wire = WarrenRemoteClient(
                 configuration: wireConfiguration,
@@ -923,7 +942,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     // user has switched Hosts, and selecting the old alias
                     // would race the shared catalog monitor.
                     try? WarrenEndpointCatalog.upsert(updated)
-                }
+                },
+                // Only a Relay credential is final: a direct daemon token can be
+                // rewritten under the client (the local token file, an SSH
+                // bootstrap), and the next attempt picks the new one up.
+                stopsWhenCredentialsRejected: wireConfiguration.isRelay
             )
             self.wire = wire
             let events = wire.events()
@@ -946,6 +969,24 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     // when the visible Session IDs did not change.
                     let reportedScreenSessions = self.lastReportedScreenSessions
                     self.sendScreenReport(reportedScreenSessions, using: wire)
+                }
+                if case .credentialsRejected = event {
+                    // The Relay refused this Mac and the refresh capability is
+                    // gone too. Retrying cannot recover; only a new pairing can.
+                    await wire.stop()
+                    failConnection(NSError(
+                        domain: "WarrenRemote", code: 32,
+                        userInfo: [NSLocalizedDescriptionKey: "\(configuration.name) no longer accepts this Mac. Pair it again from a new pairing code."]
+                    ))
+                    return
+                }
+                if let tunnel, !tunnel.isRunning, Self.isConnectionLoss(event) {
+                    // The SSH helper exits when its connection drops, after a
+                    // sleep or a network change. The client would keep dialing
+                    // the dead loopback port forever, so end this wire and let
+                    // the next attempt build a new tunnel.
+                    disconnectReason = "ssh_tunnel_exited"
+                    break
                 }
                 if case .disconnected(let reason) = event {
                     disconnectReason = reason
@@ -1004,7 +1045,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         _ configuration: WarrenRemoteEndpointConfiguration,
         generation: UInt64
     ) -> Bool {
-        connectionGeneration == generation && endpointConfiguration == configuration
+        connectionGeneration == generation
+            && endpointConfiguration?.hasSameRoute(as: configuration) == true
     }
 
     /// Returns the configuration that can reach the daemon right now. Direct
@@ -1249,6 +1291,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             || message.contains("incompatible protocol version:")
             || message.contains("upgrade required:")
             || message.contains("unsupported terminal state format")
+    }
+
+    nonisolated static func isConnectionLoss(_ event: WarrenRemoteEvent) -> Bool {
+        switch event {
+        case .disconnected, .connection(.reconnecting), .connection(.disconnected):
+            return true
+        default:
+            return false
+        }
     }
 
     private func failConnection(_ error: Error) {
@@ -4412,6 +4463,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: detail]
             ))
+        case .credentialsRejected(let detail):
+            // The connection loop has already failed the connection; keep the
+            // reason for the Host popover.
+            connectionError = detail
         }
     }
 
@@ -4661,9 +4716,17 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
+    /// Maps the wire roster into the application's own shape through JSON,
+    /// which keeps one set of decoding rules (raw values, defaults, tolerated
+    /// unknowns) for both. The round trip is a full encode and decode on the
+    /// main actor, so an unchanged roster reuses the previous result; comparing
+    /// two rosters costs far less than re-coding one.
     private func decodeApplicationRoster(_ roster: WarrenRemoteRoster) -> RemoteRoster? {
-        guard let data = try? JSONEncoder().encode(roster) else { return nil }
-        return try? JSONDecoder().decode(RemoteRoster.self, from: data)
+        if let cached = decodedRosterCache, cached.source == roster { return cached.roster }
+        guard let data = try? JSONEncoder().encode(roster),
+              let decoded = try? JSONDecoder().decode(RemoteRoster.self, from: data) else { return nil }
+        decodedRosterCache = (roster, decoded)
+        return decoded
     }
 
     private func decodeApplicationRosterDelta(_ delta: WarrenRemoteRoster.Delta) -> RemoteRoster.Delta? {
@@ -4876,8 +4939,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             agentProjectionSequenceByStreamID[streamID] = latest.sequence
             agentPendingProjectionByStreamID[streamID]?.removeAll()
             let payload = latest.payload?["status"] ?? .object(latest.payload ?? [:])
-            if let data = try? JSONEncoder().encode(payload),
-               let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: data),
+            if let remote = RemoteRoster.AgentStatus(json: payload),
                let sessionID = agentSessionByStreamID[streamID],
                let status = Self.agentStatus(from: remote) {
                 applyAgentProjection(status, for: sessionID)
@@ -5307,8 +5369,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             $0.key > sequence
         }
         guard let rawStatus = state["status"],
-              let data = try? JSONEncoder().encode(rawStatus),
-              let remote = try? JSONDecoder().decode(RemoteRoster.AgentStatus.self, from: data),
+              let remote = RemoteRoster.AgentStatus(json: rawStatus),
               let sessionID = agentSessionByStreamID[streamID],
               let status = Self.agentStatus(from: remote) else { return }
         applyAgentProjection(status, for: sessionID)
@@ -6532,7 +6593,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 return
             }
             guard let self,
-                  self.endpointConfiguration == expectedConfiguration,
+                  self.endpointConfiguration?.hasSameRoute(as: expectedConfiguration) == true,
                   self.maintenanceMessage == nil else { return }
             self.presentDiagnostic(error)
         }

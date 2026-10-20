@@ -183,43 +183,54 @@ struct WarrenDesktopProjectRow: View {
                 action: { if !isInteractionDisabled { onToggleExpansion() } }
             )
 
-            Button(action: onAddWorkspace) {
-                Image(systemName: "plus")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(tokens.treeQuietText)
-                    .frame(width: 18, height: 18)
-                    .contentShape(.rect)
-                    .accessibilityHidden(true)
-            }
-            .buttonStyle(WarrenChromeButtonStyle(isFocused: isAddFocused))
-            .disabled(isInteractionDisabled || isMutationDisabled)
-            .opacity(isHovered || isAddFocused || forceHover ? 1 : 0)
-            .animation(
-                WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
-                value: isHovered || isAddFocused || forceHover
-            )
-            .focused($isAddFocused)
-            .accessibilityLabel("New workspace in \(project.name)")
-            .warrenTooltip("New workspace")
-            .warrenSemanticElement(
-                id: "\(semanticID).new-workspace",
-                role: .button,
-                label: "New workspace in \(project.name)",
-                isEnabled: !isInteractionDisabled && !isMutationDisabled,
-                action: {
-                    if !isInteractionDisabled && !isMutationDisabled {
-                        onAddWorkspace()
-                    }
+            // The hidden "+" gives back its gap as well as its width, the
+            // same as the task row, so a resting row spends that room on the
+            // name.
+            HStack(spacing: showsAddButton ? WarrenDesktopSidebarMetrics.groupIconSpacing : 0) {
+                Button(action: onAddWorkspace) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(tokens.treeQuietText)
+                        .frame(width: 18, height: 18)
+                        .contentShape(.rect)
+                        .accessibilityHidden(true)
                 }
-            )
-
-            if !isExpanded, WarrenDesktopTreeFoldDots.drawsAny(foldMarks) {
-                WarrenDesktopTreeFoldDots(marks: foldMarks)
+                .buttonStyle(WarrenChromeButtonStyle(isFocused: isAddFocused))
+                .disabled(isInteractionDisabled || isMutationDisabled)
+                .opacity(showsAddButton ? 1 : 0)
+                .animation(
+                    WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
+                    value: showsAddButton
+                )
+                // Hidden, it gives its width back to the name, as the task
+                // row's add menu does.
+                .frame(width: showsAddButton ? nil : 0)
+                .clipped()
+                .focused($isAddFocused)
+                .accessibilityLabel("New workspace in \(project.name)")
+                .warrenTooltip("New workspace")
+                .warrenSemanticElement(
+                    id: "\(semanticID).new-workspace",
+                    role: .button,
+                    label: "New workspace in \(project.name)",
+                    isEnabled: !isInteractionDisabled && !isMutationDisabled,
+                    action: {
+                        if !isInteractionDisabled && !isMutationDisabled {
+                            onAddWorkspace()
+                        }
+                    }
+                )
+                if !isExpanded, WarrenDesktopTreeFoldDots.drawsAny(foldMarks) {
+                    WarrenDesktopTreeFoldDots(marks: foldMarks)
+                }
             }
 
             Button(action: onToggleExpansion) {
                 WarrenDesktopTreeChevron(isExpanded: isExpanded)
-                    .frame(width: 14, height: WarrenDesktopSidebarMetrics.groupRowHeight)
+                    .frame(
+                        width: WarrenDesktopSidebarMetrics.chevronSize,
+                        height: WarrenDesktopSidebarMetrics.groupRowHeight
+                    )
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -317,6 +328,10 @@ struct WarrenDesktopProjectRow: View {
         }
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityHidden(true)
+    }
+
+    private var showsAddButton: Bool {
+        isHovered || isAddFocused || forceHover
     }
 
     private func projectAccessibilityValue(isExpanded: Bool? = nil) -> String {

@@ -184,7 +184,6 @@ struct WarrenCompositionRoot: View {
         WarrenDesktopRoot(
             projection: activeProjection,
             navigation: activeNavigation,
-            chromeMode: .workspace,
             updateStatus: updateStatus,
             onUpdateAction: {
                 NotificationCenter.default.post(
@@ -1977,7 +1976,7 @@ private struct WarrenEmptyWorkspacePanel: View {
                 .init(keys: "⌘T", label: "New shell"),
                 .init(keys: "⌘X", label: "Next tab"),
                 .init(keys: "⇧⌘X", label: "Previous tab"),
-                .init(keys: "⌘W", label: "Close terminal"),
+                .init(keys: "⌘W", label: "Close pane"),
             ]
         )
         .accessibilityElement(children: .combine)

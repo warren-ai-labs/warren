@@ -265,4 +265,29 @@ final class WarrenDesktopActivityAcknowledgmentTests: XCTestCase {
         let afterBoth = afterOne.withSessionAcknowledgedActivity(seen[unseen.id], for: unseen.id)
         XCTAssertNil(afterBoth.mark(in: workspaceID))
     }
+
+    /// The tray, the command palette and the peek reach the palette through
+    /// `WarrenActivityMark.color`; the tree draws `WarrenDesktopStatusDot`. The
+    /// two used to be separate tables, so an approval was orange in the
+    /// sidebar and yellow in the tray. Both paths have to agree on every mark.
+    @MainActor
+    func testEveryMarkHasOneColorOnBothPaths() {
+        for tokens in [WarrenColorTokens.dark, WarrenColorTokens.light] {
+            for mark in WarrenActivityMark.allCases {
+                XCTAssertEqual(
+                    mark.color(tokens),
+                    WarrenDesktopStatusDot.color(for: mark, tokens: tokens),
+                    "\(mark)"
+                )
+            }
+        }
+        XCTAssertEqual(
+            WarrenActivityMark.approvalNeeded.color(.dark),
+            WarrenColorTokens.dark.highlight
+        )
+        XCTAssertEqual(
+            WarrenActivityMark.working.color(.dark),
+            WarrenColorTokens.dark.success
+        )
+    }
 }

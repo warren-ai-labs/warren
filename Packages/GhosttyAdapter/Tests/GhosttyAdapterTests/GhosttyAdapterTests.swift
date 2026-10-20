@@ -206,8 +206,14 @@ final class GhosttyAdapterTests: XCTestCase {
         XCTAssertTrue(surface.state.renderedConfig.contains("mouse-scroll-multiplier = precision:2"))
         XCTAssertTrue(surface.state.renderedConfig.contains("search-foreground = #0b0b0b"))
         XCTAssertTrue(surface.state.renderedConfig.contains("search-background = #ffe082"))
-        XCTAssertTrue(surface.state.renderedConfig.contains("search-selected-background = #e07850"))
         let theme = surface.state.theme.dark.rendered
+        XCTAssertTrue(theme.contains("search-selected-background = #e07850"))
+        XCTAssertTrue(theme.contains("search-selected-foreground = #0b0b0b"))
+        // The focused match follows the accent like the cursor does, so paper
+        // takes paper's darker accent rather than Ember's.
+        let lightTheme = surface.state.theme.light.rendered
+        XCTAssertTrue(lightTheme.contains("search-selected-background = #b7522c"))
+        XCTAssertTrue(lightTheme.contains("search-selected-foreground = #ffffff"))
         XCTAssertTrue(theme.contains("palette = 0=#0b0b0b"))
         XCTAssertTrue(theme.contains("palette = 1=#dc6b6b"))
         XCTAssertTrue(theme.contains("palette = 8=#5c5c5c"))

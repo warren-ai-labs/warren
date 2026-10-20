@@ -375,6 +375,11 @@ private struct WarrenInspectorBranchCard: View {
     @State private var composingPR = false
     @State private var prTitle = ""
     @State private var prBody = ""
+    /// A Create is in flight from this editor. The editor stays open until
+    /// it succeeds, so a failure never throws away what was written.
+    @State private var submittingPR = false
+    /// Why the last Create failed, shown inside the editor it came from.
+    @State private var prError: String?
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
@@ -415,15 +420,20 @@ private struct WarrenInspectorBranchCard: View {
                             .lineLimit(2...6)
                         HStack {
                             Spacer(minLength: 0)
-                            Button("Cancel") { composingPR = false }
+                            Button("Cancel") {
+                                composingPR = false
+                                prError = nil
+                            }
                                 .buttonStyle(.plain)
                                 .font(.system(size: 11.5))
                                 .foregroundStyle(tokens.mutedForeground)
+                                .disabled(submittingPR)
                             Button {
+                                prError = nil
+                                submittingPR = true
                                 inspector.createPullRequest(title: prTitle, body: prBody)
-                                composingPR = false
                             } label: {
-                                Text("Create")
+                                Text(submittingPR ? "Creating…" : "Create")
                                     .font(.system(size: 11.5, weight: .medium))
                                     .foregroundStyle(tokens.background)
                                     .padding(.horizontal, 10)
@@ -431,15 +441,31 @@ private struct WarrenInspectorBranchCard: View {
                                     .background(tokens.foreground, in: Capsule())
                             }
                             .buttonStyle(.plain)
-                            .disabled(prTitle.trimmingCharacters(in: .whitespaces).isEmpty)
+                            .disabled(
+                                prTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    || inspector.action != nil
+                            )
+                        }
+                        if let prError {
+                            Text(prError)
+                                .font(WarrenTypography.supporting)
+                                .foregroundStyle(tokens.destructive)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 } else {
                     Button {
-                        prTitle = panel.unmergedCommits.last?.subject ?? ""
-                        prBody = panel.unmergedCommits.count > 1
-                            ? panel.unmergedCommits.reversed().map { "- \($0.subject)" }.joined(separator: "\n")
-                            : ""
+                        // Defaults fill only an empty editor: reopening it
+                        // after a Cancel keeps what was written.
+                        if prTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            prTitle = panel.unmergedCommits.last?.subject ?? ""
+                            if prBody.isEmpty, panel.unmergedCommits.count > 1 {
+                                prBody = panel.unmergedCommits.reversed()
+                                    .map { "- \($0.subject)" }
+                                    .joined(separator: "\n")
+                            }
+                        }
                         composingPR = true
                     } label: {
                         HStack(spacing: WarrenSpacing.small) {
@@ -492,6 +518,19 @@ private struct WarrenInspectorBranchCard: View {
         .padding(.vertical, WarrenSpacing.compact)
         .background(tokens.inputSurface.opacity(0.45), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
+        .onChange(of: inspector.action) { action in
+            guard submittingPR, action == nil else { return }
+            submittingPR = false
+            if let error = inspector.actionError {
+                // Shown in the editor, not again at the top of the page.
+                prError = error
+                inspector.actionError = nil
+            } else {
+                composingPR = false
+                prTitle = ""
+                prBody = ""
+            }
+        }
     }
 
     /// Upstream and the main line as one quiet line under the branch name.
@@ -622,7 +661,7 @@ private struct WarrenInspectorCommitBox: View {
                 .buttonStyle(.plain)
                 .disabled(!canCommit)
                 .keyboardShortcut(.return, modifiers: .command)
-                .warrenTooltip("Commit", shortcut: "⌘Return")
+                .warrenTooltip("Commit", shortcut: "⌘⏎")
             }
             .padding(.horizontal, WarrenSpacing.medium)
             .padding(.bottom, WarrenSpacing.compact)

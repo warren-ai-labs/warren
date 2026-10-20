@@ -2,13 +2,10 @@ import SwiftUI
 import WarrenDesignSystem
 
 struct WarrenDesktopSidebarHeader: View {
-    let chromeMode: WarrenDesktopChromeMode
     let updateStatus: WarrenDesktopUpdateStatus
     let onUpdateAction: () -> Void
     let onToggle: () -> Void
     let onCommandPalette: () -> Void
-    var showsActiveOnly: Bool = false
-    var onToggleActiveOnly: () -> Void = {}
     /// The Host this window is working on, named at the top of the sidebar.
     var host: WarrenDesktopSidebarHostIdentity? = nil
     /// Whether the Host panel is open. The window root presents it, hanging
@@ -24,29 +21,22 @@ struct WarrenDesktopSidebarHeader: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @FocusState private var searchFocused: Bool
     @State private var isHostRowHovered = false
 
     init(
-        chromeMode: WarrenDesktopChromeMode,
         updateStatus: WarrenDesktopUpdateStatus,
         onUpdateAction: @escaping () -> Void,
         onToggle: @escaping () -> Void,
         onCommandPalette: @escaping () -> Void,
-        showsActiveOnly: Bool = false,
-        onToggleActiveOnly: @escaping () -> Void = {},
         host: WarrenDesktopSidebarHostIdentity? = nil,
         isHostPickerPresented: Bool = false,
         isPublicAccessOn: Bool = false,
         onToggleHostPicker: (() -> Void)? = nil
     ) {
-        self.chromeMode = chromeMode
         self.updateStatus = updateStatus
         self.onUpdateAction = onUpdateAction
         self.onToggle = onToggle
         self.onCommandPalette = onCommandPalette
-        self.showsActiveOnly = showsActiveOnly
-        self.onToggleActiveOnly = onToggleActiveOnly
         self.host = host
         self.isHostPickerPresented = isHostPickerPresented
         self.isPublicAccessOn = isPublicAccessOn
@@ -54,18 +44,8 @@ struct WarrenDesktopSidebarHeader: View {
     }
 
     var body: some View {
-        Group {
-            if chromeMode == .workspace {
-                workspaceHeader
-            } else {
-                expandedDashboardHeader
-            }
-        }
-        .background(
-            chromeMode == .workspace
-                ? WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).workbenchCardFill
-                : .clear
-        )
+        workspaceHeader
+            .background(WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).workbenchCardFill)
     }
 
     /// The top of the sidebar card: the window's traffic lights, then the Host
@@ -171,13 +151,15 @@ struct WarrenDesktopSidebarHeader: View {
                 action: { if !isHostPickerPresented { onToggleHostPicker?() } }
             )
 
-            headerButton(
+            // The shared chrome button, so search wears the same weight,
+            // hover and keyboard focus ring as every other chrome control.
+            WarrenDesktopChromeButton(
                 systemImage: "magnifyingglass",
                 label: "Search",
-                hint: "Search projects, sessions and commands (⌘K)",
-                action: onCommandPalette
+                hint: "Search projects, sessions and commands",
+                action: onCommandPalette,
+                shortcut: "⌘K"
             )
-            .focused($searchFocused)
         }
         // The button's own 8pt inset keeps the tile on the rows' 16pt line.
         .padding(.leading, 8)
@@ -189,7 +171,7 @@ struct WarrenDesktopSidebarHeader: View {
     /// corner, shown only while Public Access is on.
     private func publicAccessGlobe(tokens: WarrenColorTokens) -> some View {
         Image(systemName: "globe")
-            .font(.system(size: 13, weight: .regular))
+            .font(.system(size: WarrenLayoutMetrics.chromeIconSize, weight: .medium))
             .foregroundStyle(tokens.treeQuietText)
             .overlay(alignment: .bottomTrailing) {
                 Circle()
@@ -205,62 +187,15 @@ struct WarrenDesktopSidebarHeader: View {
             .accessibilityHidden(true)
     }
 
-    /// The Host's tile: a laptop for this Mac, a server for anything else,
-    /// with the connection's state as a dot on its corner.
+    /// The Host's tile, the same lettered square the collapsed rail's Host
+    /// button and the foot's Host stack draw, with its reachability on the
+    /// corner.
     private func hostTile(tokens: WarrenColorTokens) -> some View {
-        let size = WarrenDesktopSidebarMetrics.hostTileSize
-        return Image(systemName: host?.isLocal == false ? "server.rack" : "display")
-            .font(.system(size: 13, weight: .regular))
-            .foregroundStyle(tokens.foreground.opacity(0.8))
-            .frame(width: size, height: size)
-            .background(
-                tokens.foreground.opacity(0.07),
-                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-            )
-            .overlay(alignment: .bottomTrailing) {
-                Circle()
-                    .fill(host.map { connectionColor($0.connectionTone, tokens: tokens) } ?? tokens.success)
-                    .frame(width: 8, height: 8)
-                    .padding(2)
-                    .background(tokens.workbenchCardFill, in: Circle())
-                    .offset(x: 4, y: 4)
-            }
-            .accessibilityHidden(true)
-    }
-
-    private func connectionColor(
-        _ tone: WarrenDesktopConnectionTone,
-        tokens: WarrenColorTokens
-    ) -> Color {
-        switch tone {
-        case .success: tokens.success
-        case .info: tokens.info
-        case .warning: tokens.warning
-        case .destructive: tokens.destructive
-        }
-    }
-
-    private func headerButton(
-        systemImage: String,
-        label: String,
-        hint: String,
-        tint: Color? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        return Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .regular))
-                .frame(width: 28, height: 28)
-                .contentShape(.rect)
-                .accessibilityHidden(true)
-        }
-        .buttonStyle(WarrenChromeButtonStyle())
-        .frame(width: 28, height: 28)
-        .foregroundStyle(tint ?? tokens.mutedForeground.opacity(0.85))
-        .warrenTooltip(hint)
-        .accessibilityLabel(label)
-        .accessibilityHint(hint)
+        WarrenDesktopHostInitialTile(
+            name: host?.name ?? "This Mac",
+            size: WarrenDesktopSidebarMetrics.hostTileSize,
+            reachability: host.map { WarrenDesktopHostReachability($0.connectionState) }
+        )
     }
 
     private func buildMarker(isCompact: Bool = false) -> some View {
@@ -270,31 +205,6 @@ struct WarrenDesktopSidebarHeader: View {
             isCompact: isCompact,
             onUpdateAction: onUpdateAction
         )
-    }
-
-    private var expandedDashboardHeader: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        return HStack(spacing: WarrenSpacing.xs) {
-            WarrenDesktopChromeButton(
-                systemImage: "sidebar.leading",
-                label: "Collapse sidebar",
-                hint: "Collapse the sidebar to icons",
-                action: onToggle,
-                shortcut: "⌘B"
-            )
-
-            WarrenDesktopChromeButton(
-                systemImage: showsActiveOnly ? "bolt.horizontal.fill" : "bolt.horizontal",
-                label: showsActiveOnly ? "Show all workspaces" : "Filter active workspaces",
-                hint: showsActiveOnly ? "Show all workspaces" : "Show only workspaces with active sessions",
-                action: onToggleActiveOnly,
-                tint: showsActiveOnly ? tokens.highlight : nil
-            )
-
-            Spacer(minLength: 0)
-        }
-        .frame(height: WarrenLayoutMetrics.sidebarHeaderRowHeight)
-        .padding(.horizontal, WarrenSpacing.compact)
     }
 }
 

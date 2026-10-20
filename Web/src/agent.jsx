@@ -14,7 +14,8 @@ import {
   validateAgentAttachment,
 } from "./agent.js";
 import { useFocusTrap } from "./components.jsx";
-import { composerChips, projectConversation, withStateEvents } from "./conversation.js";
+import { activityMarkWord } from "./activity.js";
+import { composerChips, projectConversation, reuseUnchangedTurns, withStateEvents } from "./conversation.js";
 import { ContextMeter, ConversationRoot, ModeIcon, PlanStrip, SelectorChip, Turn } from "./conversation.jsx";
 
 const PROVIDER_NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", pi: "Pi", qoder: "Qoder", antigravity: "Antigravity" };
@@ -82,7 +83,16 @@ export function AgentView({
     sessionIdentityRef.current = sessionIdentity;
     uploadGenerationRef.current += 1;
   }
-  const conversation = useMemo(() => projectConversation(withStateEvents(events, stateEvents)), [events, stateEvents]);
+  // Turns a batch did not touch keep their objects, so their memoized views
+  // skip the re-render. Reuse never crosses Sessions, whose turn IDs collide.
+  const previousTurnsRef = useRef({ session: null, turns: [] });
+  const conversation = useMemo(() => {
+    const projected = projectConversation(withStateEvents(events, stateEvents));
+    const previous = previousTurnsRef.current;
+    const turns = reuseUnchangedTurns(previous.session === sessionIdentity ? previous.turns : [], projected.turns);
+    previousTurnsRef.current = { session: sessionIdentity, turns };
+    return { ...projected, turns };
+  }, [events, stateEvents, sessionIdentity]);
   const turns = conversation.turns;
   const chips = useMemo(() => composerChips(conversation.config), [conversation.config]);
   const canConfigure = capabilities.includes("agent-config-v1");
@@ -147,11 +157,33 @@ export function AgentView({
     return () => clearTimeout(timer);
   }, [draft, endpointIdentity, session?.id]);
 
+  // The pagehide flush reads the draft through a ref, so typing does not
+  // re-register the listener on every keystroke.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   useEffect(() => {
-    const flush = () => saveAgentDraft(localStorage, endpointIdentity, session?.id, draft);
+    const flush = () => saveAgentDraft(localStorage, endpointIdentity, session?.id, draftRef.current);
     window.addEventListener("pagehide", flush);
     return () => window.removeEventListener("pagehide", flush);
-  }, [draft, endpointIdentity, session?.id]);
+  }, [endpointIdentity, session?.id]);
+
+  // The event count stops changing once the transcript reaches its cap, so
+  // following keys on the newest sequence as well.
+  const contentVersion = `${events.length}:${events.at(-1)?.sequence || 0}:${queueItems.length}`;
+  // Whether the reader is at the latest output, as of their last scroll.
+  // Measuring after new content lands would read a large batch as the
+  // reader having scrolled away.
+  const followsBottomRef = useRef(true);
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return undefined;
+    const update = () => {
+      followsBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 160;
+    };
+    update();
+    list.addEventListener("scroll", update, { passive: true });
+    return () => list.removeEventListener("scroll", update);
+  }, []);
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -169,7 +201,7 @@ export function AgentView({
       list.scrollTop = list.scrollHeight;
       pinToBottomRef.current = false;
     }
-  }, [events.length, queueItems.length, session?.id]);
+  }, [contentVersion, session?.id]);
 
   const loadEarlier = () => {
     // Older pages are inserted above the first existing message, so after
@@ -208,16 +240,15 @@ export function AgentView({
     }
   }, [events.length, hasMore, loadingMore]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const list = listRef.current;
     if (!list || pinToBottomRef.current) return;
     if (skipFollowRef.current) {
       skipFollowRef.current = false;
       return;
     }
-    const followsBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 160;
-    if (followsBottom) list.scrollTop = list.scrollHeight;
-  }, [events.length, queueItems.length]);
+    if (followsBottomRef.current) list.scrollTop = list.scrollHeight;
+  }, [contentVersion]);
 
   const addAttachments = files => {
     const values = Array.from(files || []).filter(file => file && typeof file.name === "string");
@@ -668,27 +699,28 @@ export function AgentView({
 }
 
 function AgentAttention({ attention, onOpenTerminal, onFocusComposer }) {
-  const kind = attention.kind;
-  // Only an explicit provider request renders a banner. A kind this client
-  // does not know stays on the base fallback instead of claiming attention.
-  const labels = {
-    input: ["text-bubble", "Question · Reply in the composer to continue."],
-    approval: ["shield-check", "Permission · Review the request in Terminal."],
+  const kind = String(attention.kind || "").toLowerCase();
+  // The title is the same word the sidebar dot's mark uses, so the banner names
+  // the request rather than restating that one exists. A kind this client does
+  // not know still wants a person: it gets the unspecified banner, which sends
+  // them to the Terminal where the provider's own prompt is visible.
+  const presentations = {
+    input: { mark: "inputNeeded", icon: "?", copy: "Question · Reply in the composer to continue." },
+    approval: { mark: "approvalNeeded", icon: "!", copy: "Permission · Review the request in Terminal." },
   };
-  const label = labels[kind];
-  if (!label) return null;
+  const presentation = presentations[kind]
+    || { mark: "attentionUnspecified", icon: "!", copy: "Review the session in Terminal to continue." };
   const reason = String(attention.reason || "").trim().toLowerCase();
-  const [icon, fallback] = label;
   const reasonLabel = {
     question: "Question · Reply in the composer to continue.",
     permission: "Permission · Review the request in Terminal.",
     approval: "Permission · Review the request in Terminal.",
-  }[reason] || fallback;
+  }[reason] || presentation.copy;
   return (
-    <div className={`agent-attention ${kind}`} role="status">
-      <span className="agent-attention-icon" aria-hidden="true">{icon === "shield-check" ? "✓" : icon === "text-bubble" ? "↵" : "!"}</span>
+    <div className={`agent-attention${presentations[kind] ? ` ${kind}` : ""}`} role="status">
+      <span className="agent-attention-icon" aria-hidden="true">{presentation.icon}</span>
       <span className="agent-attention-copy">
-        <strong>Needs attention</strong>
+        <strong>{activityMarkWord(presentation.mark)}</strong>
         <span>{reasonLabel}</span>
       </span>
       {kind === "input" && onFocusComposer && (

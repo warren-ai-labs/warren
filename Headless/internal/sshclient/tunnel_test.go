@@ -3,6 +3,7 @@ package sshclient
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"reflect"
 	"testing"
@@ -122,5 +123,64 @@ func TestKnownHostKeyAlgorithmCandidates(t *testing.T) {
 	}
 	if got := knownHostKeyAlgorithmCandidates(errors.New("not a known host error")); got != nil {
 		t.Fatalf("unexpected candidates for unrelated error: %#v", got)
+	}
+}
+
+type keepaliveSender struct {
+	block chan struct{}
+	err   error
+	sent  chan struct{}
+}
+
+func (sender *keepaliveSender) SendRequest(string, bool, []byte) (bool, []byte, error) {
+	if sender.sent != nil {
+		select {
+		case sender.sent <- struct{}{}:
+		default:
+		}
+	}
+	if sender.block != nil {
+		<-sender.block
+	}
+	return false, nil, sender.err
+}
+
+func TestKeepAliveGivesUpAfterConsecutiveSilentProbes(t *testing.T) {
+	sender := &keepaliveSender{block: make(chan struct{})}
+	defer close(sender.block)
+	result := make(chan bool, 1)
+	go func() { result <- keepAlive(make(chan struct{}), sender, 10*time.Millisecond, 3) }()
+	select {
+	case alive := <-result:
+		if alive {
+			t.Fatal("keepAlive reported a silent connection as alive")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("keepAlive never gave up on a silent connection")
+	}
+}
+
+func TestKeepAliveTreatsARejectedRequestAsAlive(t *testing.T) {
+	sender := &keepaliveSender{sent: make(chan struct{}, 1)}
+	done := make(chan struct{})
+	result := make(chan bool, 1)
+	go func() { result <- keepAlive(done, sender, 5*time.Millisecond, 2) }()
+	for range 5 {
+		select {
+		case <-sender.sent:
+		case <-time.After(2 * time.Second):
+			t.Fatal("keepAlive stopped probing")
+		}
+	}
+	close(done)
+	if alive := <-result; !alive {
+		t.Fatal("a replying connection was reported dead")
+	}
+}
+
+func TestKeepAliveStopsOnTransportError(t *testing.T) {
+	sender := &keepaliveSender{err: io.EOF}
+	if keepAlive(make(chan struct{}), sender, 5*time.Millisecond, 3) {
+		t.Fatal("a closed connection was reported alive")
 	}
 }

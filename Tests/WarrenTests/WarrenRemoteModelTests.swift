@@ -801,6 +801,40 @@ final class WarrenRemoteModelTests: XCTestCase {
         )
     }
 
+    /// An Agent status read straight from event JSON agrees with the decoder
+    /// it replaced, including which malformed shapes it rejects.
+    func testAgentStatusFromJSONMatchesDecoder() throws {
+        let payloads: [WarrenRemoteJSONValue] = [
+            .object(["activity": .string("working")]),
+            .object(["activity": .string("blocked"), "attention": .null]),
+            .object([
+                "activity": .string("blocked"),
+                "attention": .object([
+                    "kind": .string("permission"),
+                    "reason": .string("Run tests?"),
+                    "requestId": .string("r1"),
+                    "since": .null,
+                ]),
+            ]),
+            .object(["activity": .string("blocked"), "attention": .object(["kind": .string("permission")])]),
+            .object(["activity": .string("blocked"), "attention": .string("permission")]),
+            .object([
+                "activity": .string("blocked"),
+                "attention": .object(["kind": .string("k"), "reason": .string("r"), "requestId": .number(1)]),
+            ]),
+            .object(["activity": .number(1)]),
+            .object([:]),
+            .string("working"),
+        ]
+        for payload in payloads {
+            let decoded = try? JSONDecoder().decode(
+                RemoteRoster.AgentStatus.self,
+                from: JSONEncoder().encode(payload)
+            )
+            XCTAssertEqual(RemoteRoster.AgentStatus(json: payload), decoded, "\(payload)")
+        }
+    }
+
     func testRemoteRosterAppliesRevisionedEntityDelta() throws {
         let roster = try JSONDecoder().decode(
             RemoteRoster.self,

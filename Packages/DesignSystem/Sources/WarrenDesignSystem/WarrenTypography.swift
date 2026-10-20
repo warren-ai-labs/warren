@@ -33,10 +33,12 @@ public enum WarrenTypography {
     public static let tabTitle = Font.system(size: 12, weight: .regular)
     public static let paneHeader = Font.system(size: 12, weight: .medium)
     public static let badge = Font.system(size: 10, weight: .medium)
-    public static let emptyState = Font.system(size: 18, weight: .light)
-    /// Empty-state titles use the light text tier and a larger size so an
-    /// empty page reads as calm guidance instead of shouting chrome.
-    public static let emptyStateTitle = Font.system(size: 20, weight: .light)
+    /// Empty states stay regular: the kit never uses the light weight, which
+    /// thins out on paper. Size and a quiet color carry the calm instead.
+    public static let emptyState = Font.system(size: 18, weight: .regular)
+    /// Empty-state titles use a larger size than the body so an empty page
+    /// reads as calm guidance instead of shouting chrome.
+    public static let emptyStateTitle = Font.system(size: 20, weight: .regular)
     public static let screenTitle = Font.system(size: 18, weight: .medium)
     /// Superset settings page headings are `text-xl` in medium weight.
     public static let pageTitle = Font.system(size: 20, weight: .medium)
@@ -46,11 +48,13 @@ public enum WarrenTypography {
     public static let dialogAction = Font.system(size: 13, weight: .regular)
     public static let dialogCriticalAction = Font.system(size: 13, weight: .medium)
     public static let dialogMeta = Font.system(size: 11.5, weight: .regular)
-    /// Top-right chrome popovers (Web, endpoint, external IDE) share one calm
-    /// light text family so the controls read as one surface.
-    public static let popoverTitle = Font.system(size: 13, weight: .light)
-    public static let popoverItem = Font.system(size: 13, weight: .light)
-    public static let popoverMeta = Font.system(size: 12, weight: .light)
+    /// Top-right chrome popovers (Web, endpoint, external IDE) share one text
+    /// family so the controls read as one surface. Regular, like the
+    /// navigation tiers beside them: 12pt light grey text was hard to read on
+    /// paper, and the kit does not use the light weight.
+    public static let popoverTitle = Font.system(size: 13, weight: .regular)
+    public static let popoverItem = Font.system(size: 13, weight: .regular)
+    public static let popoverMeta = Font.system(size: 12, weight: .regular)
     public static let body = Font.system(size: 13, weight: .regular)
     public static let bodyEmphasis = Font.system(size: 13, weight: .medium)
     /// Superset `text-xs` descriptions and hints.

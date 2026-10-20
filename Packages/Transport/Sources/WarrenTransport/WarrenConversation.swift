@@ -340,29 +340,87 @@ public struct WarrenConversation: Equatable, Sendable {
 extension WarrenConversation {
     /// Projects canonical events, in sequence order, into a conversation.
     public static func project(_ events: [WarrenRemoteAgentEvent]) -> WarrenConversation {
-        var result = WarrenConversation()
-        var turnIndex: [String: Int] = [:]
-        var interactions: [String: (payload: [String: WarrenRemoteJSONValue], state: String, turn: String, order: UInt64)] = [:]
-        var interactionOrder: [String] = []
-        var compactions: Set<String> = []
+        var projector = Projector()
+        projector.fold(events.sorted(by: { $0.sequence < $1.sequence }))
+        return projector.conversation()
+    }
 
-        func turnPosition(_ event: WarrenRemoteAgentEvent) -> Int {
-            let explicit = event.turnID ?? event.turn.map(String.init) ?? ""
-            let key = explicit.isEmpty ? (result.turns.last?.id ?? "0") : explicit
-            if let index = turnIndex[key] { return index }
-            result.turns.append(Turn(id: key))
-            turnIndex[key] = result.turns.count - 1
-            return result.turns.count - 1
+    /// Folds a conversation forward as events arrive, so a streaming batch
+    /// costs what it adds rather than a re-projection of the whole history.
+    ///
+    /// `project` is the same fold run once from empty; a projector given the
+    /// same events in the same order produces the same conversation. Events
+    /// must arrive past the last folded sequence: `append` refuses a batch that
+    /// reaches back, and the caller re-projects from scratch.
+    public struct Projector: Sendable {
+        private var result = WarrenConversation()
+        private var turnIndex: [String: Int] = [:]
+        private var interactions: [String: (payload: [String: WarrenRemoteJSONValue], state: String, turn: String, order: UInt64)] = [:]
+        private var interactionOrder: [String] = []
+        private var compactions: Set<String> = []
+        /// Turns as last finished, parallel to `result.turns`; only the turns
+        /// an event touched since are finished again.
+        private var finished: [Turn] = []
+        private var dirty: Set<Int> = []
+        public private(set) var lastSequence: UInt64?
+
+        public init() {}
+
+        /// Folds `events` when every one lies past `lastSequence`; returns
+        /// false, folding nothing, when one reaches back.
+        public mutating func append(_ events: [WarrenRemoteAgentEvent]) -> Bool {
+            let ordered = events.sorted(by: { $0.sequence < $1.sequence })
+            if let lastSequence, let first = ordered.first, first.sequence <= lastSequence { return false }
+            fold(ordered)
+            return true
         }
 
-        for event in events.sorted(by: { $0.sequence < $1.sequence }) {
+        fileprivate mutating func fold(_ ordered: [WarrenRemoteAgentEvent]) {
+            for event in ordered { fold(event) }
+            if let last = ordered.last { lastSequence = max(lastSequence ?? 0, last.sequence) }
+        }
+
+        /// The conversation so far, finishing only the turns that changed.
+        public mutating func conversation() -> WarrenConversation {
+            for index in dirty {
+                var turn = result.turns[index]
+                WarrenConversation.finish(&turn)
+                finished[index] = turn
+            }
+            dirty.removeAll(keepingCapacity: true)
+            var value = result
+            value.turns = finished.filter { !$0.isEmpty }
+            value.decisions = interactionOrder.compactMap { id in
+                guard let record = interactions[id], record.state == "pending" else { return nil }
+                return WarrenConversation.decision(id: id, payload: record.payload)
+            }
+            return value
+        }
+
+        private mutating func turnPosition(_ event: WarrenRemoteAgentEvent) -> Int {
+            let explicit = event.turnID ?? event.turn.map(String.init) ?? ""
+            let key = explicit.isEmpty ? (result.turns.last?.id ?? "0") : explicit
+            let index: Int
+            if let existing = turnIndex[key] {
+                index = existing
+            } else {
+                result.turns.append(Turn(id: key))
+                finished.append(Turn(id: key))
+                index = result.turns.count - 1
+                turnIndex[key] = index
+            }
+            dirty.insert(index)
+            return index
+        }
+
+        private mutating func fold(_ event: WarrenRemoteAgentEvent) {
             let payload = event.payload ?? [:]
             let type = event.type.lowercased()
             switch type {
             case "turn.started":
                 let index = turnPosition(event)
                 result.turns[index].status = .running
-                result.turns[index].startedAt = date(event)
+                result.turns[index].startedAt = WarrenConversation.date(event)
             case "turn.completed", "turn.failed", "turn.cancelled", "turn.interrupted", "turn.aborted":
                 let index = turnPosition(event)
                 result.turns[index].status = switch type {
@@ -371,7 +429,7 @@ extension WarrenConversation {
                 case "turn.interrupted": .interrupted
                 default: .cancelled
                 }
-                result.turns[index].endedAt = date(event)
+                result.turns[index].endedAt = WarrenConversation.date(event)
             case "message.created", "message.delta", "message.completed":
                 let index = turnPosition(event)
                 let role = payload.string("role") ?? "assistant"
@@ -390,24 +448,24 @@ extension WarrenConversation {
                 } else if role == "system" {
                     if !content.isEmpty { result.turns[index].notices.append(content) }
                 } else {
-                    var messages = result.turns[index].messages
-                    if let position = messages.firstIndex(where: { $0.id == id }) {
+                    // Mutate in place: copying the array out and back would
+                    // copy the message's text on every delta.
+                    if let position = result.turns[index].messages.firstIndex(where: { $0.id == id }) {
                         if type == "message.delta" {
-                            messages[position].text += content
+                            result.turns[index].messages[position].text += content
                         } else if !content.isEmpty {
-                            messages[position].text = content
+                            result.turns[index].messages[position].text = content
                         }
-                        if type == "message.completed" { messages[position].complete = true }
+                        if type == "message.completed" { result.turns[index].messages[position].complete = true }
                     } else {
-                        messages.append(Message(id: id, text: content, complete: type == "message.completed", order: event.sequence))
+                        result.turns[index].messages.append(Message(id: id, text: content, complete: type == "message.completed", order: event.sequence))
                     }
-                    result.turns[index].messages = messages
                 }
             case "reasoning.delta":
                 let index = turnPosition(event)
                 result.turns[index].reasoning.text += payload.string("content") ?? ""
                 result.turns[index].reasoning.count += 1
-                let at = date(event)
+                let at = WarrenConversation.date(event)
                 if result.turns[index].reasoning.startedAt == nil { result.turns[index].reasoning.startedAt = at }
                 result.turns[index].reasoning.endedAt = at
             case "tool.started", "tool.updated", "tool.completed", "tool.failed":
@@ -416,7 +474,7 @@ extension WarrenConversation {
                 let position = result.turns[index].steps.firstIndex { $0.kind == .tool && $0.id == id }
                 var step = position.map { result.turns[index].steps[$0] }
                     ?? Step(id: id, kind: .tool, order: event.sequence)
-                Self.applyTool(type: type, payload: payload, to: &step)
+                WarrenConversation.applyTool(type: type, payload: payload, to: &step)
                 if let position {
                     result.turns[index].steps[position] = step
                 } else {
@@ -436,7 +494,8 @@ extension WarrenConversation {
                 if interactions[id] == nil { interactionOrder.append(id) }
                 interactions[id] = record
                 if record.state != "pending", let index = turnIndex[record.turn] {
-                    let step = Self.decisionStep(id: id, payload: record.payload, state: record.state, order: record.order)
+                    dirty.insert(index)
+                    let step = WarrenConversation.decisionStep(id: id, payload: record.payload, state: record.state, order: record.order)
                     if let position = result.turns[index].steps.firstIndex(where: { $0.kind == .decision && $0.id == id }) {
                         result.turns[index].steps[position] = step
                     } else {
@@ -453,7 +512,7 @@ extension WarrenConversation {
                     result.plan = Plan(entries: entries)
                 }
             case "config.updated":
-                if case let .array(items)? = payload["configOptions"] { result.config = Self.config(items) }
+                if case let .array(items)? = payload["configOptions"] { result.config = WarrenConversation.config(items) }
             case "context.updated":
                 result.context = Context(used: payload.int("used"), size: payload.int("size"))
             case "compaction.updated":
@@ -473,18 +532,10 @@ extension WarrenConversation {
                 break
             }
         }
-
-        for index in result.turns.indices { finish(&result.turns[index]) }
-        result.turns.removeAll { $0.isEmpty }
-        result.decisions = interactionOrder.compactMap { id in
-            guard let record = interactions[id], record.state == "pending" else { return nil }
-            return Self.decision(id: id, payload: record.payload)
-        }
-        return result
     }
 
     /// Merges one `tool.*` event into the step it reports on.
-    private static func applyTool(type: String, payload: [String: WarrenRemoteJSONValue], to step: inout Step) {
+    fileprivate static func applyTool(type: String, payload: [String: WarrenRemoteJSONValue], to step: inout Step) {
         if let value = payload.string("toolKind"), !value.isEmpty { step.toolKind = value }
         if let value = payload.string("toolName"), !value.isEmpty { step.title = value }
         if let value = payload.string("toolDetail"), !value.isEmpty { step.detail = value }
@@ -563,7 +614,7 @@ extension WarrenConversation {
         return steps
     }
 
-    private static func finish(_ turn: inout Turn) {
+    fileprivate static func finish(_ turn: inout Turn) {
         let lastStep = turn.steps.map(\.order).max() ?? 0
         let visible = turn.messages.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let answer = visible.filter { $0.order > lastStep }
@@ -574,7 +625,7 @@ extension WarrenConversation {
         turn.summary = summarize(turn.steps)
     }
 
-    private static func decisionStep(id: String, payload: [String: WarrenRemoteJSONValue], state: String, order: UInt64) -> Step {
+    fileprivate static func decisionStep(id: String, payload: [String: WarrenRemoteJSONValue], state: String, order: UInt64) -> Step {
         var choiceID = ""
         if case let .object(response)? = payload["response"] {
             choiceID = response.string("decision") ?? response.string("value") ?? ""
@@ -593,7 +644,7 @@ extension WarrenConversation {
         return step
     }
 
-    private static func decision(id: String, payload: [String: WarrenRemoteJSONValue]) -> Decision {
+    fileprivate static func decision(id: String, payload: [String: WarrenRemoteJSONValue]) -> Decision {
         Decision(
             id: id,
             version: UInt64(max(1, payload.int("version"))),
@@ -619,7 +670,7 @@ extension WarrenConversation {
         return title == "Permission" ? "" : title
     }
 
-    private static func config(_ items: [WarrenRemoteJSONValue]) -> [ConfigOption] {
+    fileprivate static func config(_ items: [WarrenRemoteJSONValue]) -> [ConfigOption] {
         items.compactMap { item in
             guard case let .object(option) = item, let id = option.string("id"), !id.isEmpty else { return nil }
             var choices: [ConfigOption.Choice] = []
@@ -823,7 +874,7 @@ extension WarrenConversation {
         return formatter
     }()
 
-    private static func date(_ event: WarrenRemoteAgentEvent) -> Date? {
+    fileprivate static func date(_ event: WarrenRemoteAgentEvent) -> Date? {
         guard let value = event.occurredAt ?? event.recordedAt, !value.isEmpty else { return nil }
         return fractionalDate.date(from: value) ?? plainDate.date(from: value)
     }
