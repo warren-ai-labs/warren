@@ -643,6 +643,23 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     .accessibilityHidden(true)
                 }
             }
+
+            // An in-app update replaces the application bundle and restarts
+            // Warren. The window is not navigated anywhere for it: the shell
+            // stays exactly as it is behind a slight dim and one compact
+            // capsule says why it has stopped taking input. A failed install
+            // fades it back out, leaving the window the user was working in.
+            Group {
+                if updateStatus == .updating {
+                    WarrenDesktopUpdateHUD()
+                        .transition(.opacity)
+                        .zIndex(WarrenPresentationLayer.modal)
+                }
+            }
+            .animation(
+                WarrenDesktopLoadingReveal.animation(reduceMotion: reduceMotion),
+                value: updateStatus
+            )
         }
         .animation(sidebarPeekAnimation, value: sidebarPeek.isPeeking)
         .frame(
@@ -2562,18 +2579,46 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     /// Selects the arrangement this window renders, or steps to the next one.
+    ///
+    /// Entering an arrangement also enters its active Session. Writing only
+    /// the drawn group left the keyboard in the arrangement that had just been
+    /// parked: no Tab changed, so nothing asked the Session's input to take
+    /// focus, and typing went nowhere.
     private func selectPaneGroup(id: PaneGroupID?, step: Int = 0, in presentation: Presentation) {
         guard let scope = currentScopeKey(presentation: presentation) else { return }
         let groups = hostPaneGroups(for: presentation)
         guard !groups.isEmpty else { return }
+        let target: PaneGroup?
         if let id {
-            activePaneGroupIDs[scope] = id.description
-            return
+            target = groups.first { $0.id == id }
+        } else {
+            let current = hostPaneGroup(for: presentation)?.id
+            let index = groups.firstIndex { $0.id == current } ?? -1
+            let next = ((index + step) % groups.count + groups.count) % groups.count
+            target = groups[next]
         }
-        let current = hostPaneGroup(for: presentation)?.id
-        let index = groups.firstIndex { $0.id == current } ?? -1
-        let next = ((index + step) % groups.count + groups.count) % groups.count
-        activePaneGroupIDs[scope] = groups[next].id.description
+        guard let target else { return }
+        if activePaneGroupIDs[scope] != target.id.description {
+            activePaneGroupIDs[scope] = target.id.description
+            // Cache the group now on screen, as `showPaneGroup` does, so the
+            // scope's local layout describes the arrangement being drawn
+            // rather than the one it replaced.
+            adoptHostPaneGroups(projection.paneGroups)
+        }
+        let tree = WarrenDesktopPaneGroupMapping.tree(from: target)
+        guard let tabID = WarrenDesktopPaneGroupEntry.tabID(
+            in: tree,
+            selectedTabID: navigation.selectedTabID,
+            rememberedPaneID: activePaneIDs[scope]
+        ) else { return }
+        if let item = tree.item(forTabID: tabID) {
+            restoreZoom(unlessShowing: item.id, scope: scope)
+            restoreFold(ifFolded: item.id, scope: scope)
+            activePaneIDs[scope] = item.id
+        }
+        // Dispatch even when the Tab is already selected: the arrangement
+        // changed, so this is how the newly drawn pane asks for the keyboard.
+        dispatch(.selectTab(tabID))
     }
 
     private func paneOwner(for presentation: Presentation) -> WarrenDesktopPaneOwner? {
@@ -3967,6 +4012,29 @@ enum WarrenDesktopTabSelector {
     static func tabID(in tabs: [ClientTab], number: Int) -> String? {
         guard number >= 1, tabs.indices.contains(number - 1) else { return nil }
         return tabs[number - 1].id
+    }
+}
+
+/// Which Session entering an arrangement should make active.
+///
+/// A group step has no Tab of its own, so the choice follows the same
+/// precedence the panel uses for a visited Tab: the current selection when the
+/// arrangement holds it, then the pane the user last worked in, then the
+/// arrangement's first pane. Entering a group must still land somewhere rather
+/// than leaving the keyboard in the arrangement that was just parked.
+enum WarrenDesktopPaneGroupEntry {
+    static func tabID(
+        in tree: SplitLayoutTree,
+        selectedTabID: String?,
+        rememberedPaneID: String?
+    ) -> String? {
+        if let selectedTabID, tree.contains(tabID: selectedTabID) {
+            return selectedTabID
+        }
+        if let rememberedPaneID, let item = tree.item(for: rememberedPaneID) {
+            return item.tabID
+        }
+        return tree.leaves.first?.tabID
     }
 }
 

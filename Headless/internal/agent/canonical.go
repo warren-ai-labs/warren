@@ -267,6 +267,20 @@ func isInterruptionContext(content string) bool {
 	return strings.HasPrefix(lower, "[request interrupted") || strings.Contains(lower, "<turn_aborted>")
 }
 
+// isInterruptionNoticeRow reports whether an event is a row a provider notice
+// can arrive on. Codex writes an aborted turn as a synthetic user message,
+// Claude and Qoder as a user notice, and Antigravity as a system-injected user
+// input. Model output never carries one: an Agent that quotes the marker, or
+// greps for it and prints it, must not interrupt its own turn.
+func isInterruptionNoticeRow(eventType string) bool {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case "user", "system", "system_instructions":
+		return true
+	default:
+		return false
+	}
+}
+
 // compactionSummaryText removes provider wrapper tags while preserving the
 // actual context text. The wrapper is transport markup, not useful content for
 // a collapsed summary card.
@@ -363,7 +377,7 @@ func canonicalizeAgentEvent(e *api.AgentEvent) {
 	if e == nil {
 		return
 	}
-	if isInterruptionContext(e.Content) {
+	if isInterruptionNoticeRow(e.Type) && isInterruptionContext(e.Content) {
 		e.Type = "system"
 		e.Role = "system"
 		e.StopReason = "interrupted"

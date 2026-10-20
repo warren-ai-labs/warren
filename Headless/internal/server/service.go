@@ -165,6 +165,7 @@ type Service struct {
 	metadataCache    *metadataCache
 	mergeOnce        sync.Once
 	mergeCache       *mergeStateCache
+	mergeBases       *mergeBaseCache
 	mergeWake        chan struct{}
 	mergeDirty       atomic.Bool
 	mergeLastRefresh atomic.Int64
@@ -193,6 +194,12 @@ type Service struct {
 	peerOutputs  map[*wsPeer]map[string]*peerOutputStream
 	agentPeers   map[string]map[*wsPeer]struct{}
 	focusedPeers map[string]*wsPeer
+	// focusDemands records, per session and oldest first, the peers that still
+	// want the input lease. A peer stops wanting it when it blurs the session
+	// or disconnects. The list is what lets a lease return to its previous
+	// holder when the peer that took it goes away, without keeping the last
+	// claimer from winning while it is connected.
+	focusDemands map[string][]*wsPeer
 	// resizePeers is the authoritative per-session viewport owner. It is
 	// deliberately separate from focusedPeers/controlPeers: a split window
 	// shows several sessions at once, and a passive pane must be able to size
@@ -456,6 +463,9 @@ func (s *Service) lazyInitLocked() {
 	if s.focusedPeers == nil {
 		s.focusedPeers = map[string]*wsPeer{}
 	}
+	if s.focusDemands == nil {
+		s.focusDemands = map[string][]*wsPeer{}
+	}
 	if s.resizePeers == nil {
 		s.resizePeers = map[string]*wsPeer{}
 	}
@@ -537,6 +547,9 @@ func (s *Service) initMergeState() {
 	s.mergeOnce.Do(func() {
 		if s.mergeCache == nil {
 			s.mergeCache = &mergeStateCache{}
+		}
+		if s.mergeBases == nil {
+			s.mergeBases = &mergeBaseCache{}
 		}
 		if s.mergeWake == nil {
 			s.mergeWake = make(chan struct{}, 1)

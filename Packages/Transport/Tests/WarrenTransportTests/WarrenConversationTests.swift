@@ -186,7 +186,92 @@ final class WarrenConversationTests: XCTestCase {
             event("message.completed", ["role": .string("assistant"), "content": .string("done")]),
             event("turn.completed"),
         ]
-        XCTAssertEqual(WarrenConversation.project(events).turns.last?.notices, ["Context compacted"])
+        XCTAssertEqual(WarrenConversation.project(events).turns.last?.notices, [
+            .init(id: "compaction-c1", text: "Context compacted"),
+        ])
+    }
+
+    func testLocalCommandNoticesAreUnwrappedFromMarkup() {
+        // Rows journaled before the parser unwrapped Claude's local-command
+        // envelopes still arrive raw; the projection must not draw the tags.
+        let events = [
+            event("turn.started"),
+            event("message.created", [
+                "role": .string("system"),
+                "messageId": .string("m1"),
+                "content": .string("<command-name>/resume</command-name>\n            <command-message>resume</command-message>\n            <command-args></command-args>"),
+            ]),
+            event("message.created", [
+                "role": .string("system"),
+                "messageId": .string("m2"),
+                "content": .string("<local-command-stdout>Resume cancelled</local-command-stdout>"),
+            ]),
+            event("message.created", [
+                "role": .string("system"),
+                "messageId": .string("m3"),
+                "content": .string("<local-command-stdout></local-command-stdout>"),
+            ]),
+            event("message.created", [
+                "role": .string("system"),
+                "messageId": .string("m4"),
+                "content": .string("<local-command-caveat>The command below was run directly in Claude Code.</local-command-caveat>"),
+            ]),
+            event("turn.completed"),
+        ]
+        let notices = WarrenConversation.project(events).turns.last?.notices ?? []
+        XCTAssertEqual(notices.map(\.kind), [.command, .output])
+        XCTAssertEqual(notices.first?.command, "/resume")
+        XCTAssertEqual(notices.first?.args, "")
+        XCTAssertFalse(notices.contains { $0.text.contains("<") || $0.text.contains(">") })
+        XCTAssertEqual(notices.last?.text, "Resume cancelled")
+    }
+
+    func testLocalCommandNoticeCarriesStructuredArguments() {
+        let events = [
+            event("message.created", [
+                "role": .string("system"),
+                "messageId": .string("m1"),
+                "content": .string("/review-mr 12"),
+                "localCommand": .object(["kind": .string("command"), "name": .string("/review-mr"), "args": .string("12")]),
+            ]),
+            event("message.created", [
+                "role": .string("system"),
+                "messageId": .string("m2"),
+                "content": .string("kept as-is"),
+                "localCommand": .object(["kind": .string("output")]),
+            ]),
+        ]
+        let notices = WarrenConversation.project(events).turns.last?.notices ?? []
+        XCTAssertEqual(notices.count, 2)
+        XCTAssertEqual(notices.first?.kind, .command)
+        XCTAssertEqual(notices.first?.command, "/review-mr")
+        XCTAssertEqual(notices.first?.args, "12")
+        XCTAssertEqual(notices.last?.kind, .output)
+        XCTAssertEqual(notices.last?.text, "kept as-is")
+    }
+
+    func testUserRoleLocalCommandIsANoticeNotAPrompt() {
+        // Older journals kept the invocation under the user role; it is still
+        // provider markup, so it must not become the person's prompt bubble.
+        let events = [
+            event("message.created", ["role": .string("user"), "messageId": .string("u1"),
+                                     "content": .string("<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>")]),
+            event("message.created", ["role": .string("user"), "messageId": .string("u2"),
+                                     "content": .string("<local-command-caveat>The command below was run directly in Claude Code.</local-command-caveat>")]),
+            event("message.created", ["role": .string("user"), "messageId": .string("u3"), "content": .string("the real prompt")]),
+        ]
+        let turn = WarrenConversation.project(events).turns.first
+        XCTAssertEqual(turn?.prompt, "the real prompt")
+        XCTAssertEqual(turn?.notices.map(\.command), ["/clear"])
+    }
+
+    func testUnknownSystemMarkupStaysVisible() {
+        let raw = "<unexpected>text</unexpected>"
+        let events = [event("message.created", ["role": .string("system"), "content": .string(raw)])]
+        let notices = WarrenConversation.project(events).turns.last?.notices ?? []
+        XCTAssertEqual(notices.count, 1)
+        XCTAssertEqual(notices.first?.kind, .note)
+        XCTAssertEqual(notices.first?.text, raw)
     }
 
     func testSkillStepNamesTheSkillWithoutItsPluginPrefix() {

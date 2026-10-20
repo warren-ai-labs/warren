@@ -123,6 +123,81 @@ export function reuseUnchangedTurns(previous = [], turns = []) {
   });
 }
 
+// Claude Code records a local slash command and its output as markup envelopes
+// in system-role rows. Rows journaled before the parser unwrapped them still
+// arrive raw, so the projection unwraps them here too. Anything it does not
+// recognize keeps its text rather than disappearing.
+function commandLine(name, args) {
+  return args ? `${name} ${args}` : name;
+}
+
+// Splits a value made only of <tag>inner</tag> elements, in any order and
+// separated by whitespace. Returns null as soon as anything outside a tag
+// appears, so a partially understood envelope is left as-is.
+function tagFields(value) {
+  const fields = {};
+  let rest = value.trim();
+  while (rest) {
+    if (!rest.startsWith("<")) return null;
+    const open = rest.indexOf(">");
+    if (open < 0) return null;
+    const tag = rest.slice(1, open);
+    if (!tag || /[\s/]/.test(tag)) return null;
+    const closing = `</${tag}>`;
+    const end = rest.indexOf(closing, open + 1);
+    if (end < 0) return null;
+    fields[tag] = rest.slice(open + 1, end);
+    rest = rest.slice(end + closing.length).trim();
+  }
+  return fields;
+}
+
+function legacyLocalCommand(content) {
+  if (!content.trim().startsWith("<")) return null;
+  const fields = tagFields(content);
+  if (!fields || !Object.keys(fields).length) return null;
+  const only = allowed => Object.keys(fields).every(key => allowed.includes(key));
+  if (fields["local-command-stdout"] != null && only(["local-command-stdout", "command-stdout", "local-command-caveat"])) {
+    return { kind: "output", text: fields["local-command-stdout"] || fields["command-stdout"] || "" };
+  }
+  if (fields["command-name"] != null && only(["command-name", "command-message", "command-args", "local-command-caveat"])) {
+    const name = fields["command-name"].trim();
+    if (!name) return null;
+    const args = (fields["command-args"] || "").trim();
+    return { kind: "command", name, args };
+  }
+  if (only(["local-command-caveat"])) return { kind: "caveat" };
+  return null;
+}
+
+// The quiet row a local command envelope projects to. Null means the row is
+// ordinary conversation text, so the caller keeps it as-is.
+function localCommandNotice(id, payload, content) {
+  const command = payload.localCommand && typeof payload.localCommand === "object" ? payload.localCommand : null;
+  const kind = text(command?.kind).toLowerCase();
+  if (kind === "command") {
+    const name = text(command.name).trim();
+    if (name) {
+      const args = text(command.args).trim();
+      return { notice: { id, text: commandLine(name, args), kind, command: name, args } };
+    }
+  }
+  if (kind === "output") {
+    const summary = content.trim();
+    return { hidden: true, notice: summary ? { id, text: summary, kind } : null };
+  }
+  const legacy = legacyLocalCommand(content);
+  if (legacy?.kind === "caveat") return { hidden: true };
+  if (legacy?.kind === "output") {
+    const summary = legacy.text.trim();
+    return { hidden: true, notice: summary ? { id, text: summary, kind: "output" } : null };
+  }
+  if (legacy?.kind === "command") {
+    return { notice: { id, text: commandLine(legacy.name, legacy.args), kind: "command", command: legacy.name, args: legacy.args } };
+  }
+  return null;
+}
+
 /// Projects canonical events into a conversation.
 export function projectConversation(events = []) {
   const turns = [];
@@ -182,11 +257,24 @@ export function projectConversation(events = []) {
         const id = text(payload.messageId || event.id);
         const content = text(payload.content);
         if (role === "user") {
+          // A legacy local-command row was journaled under the user role. It is
+          // provider markup, not a prompt, so it becomes a quiet notice or
+          // disappears entirely when it is only the caveat.
+          const local = localCommandNotice(id, payload, content);
+          if (local) {
+            if (local.notice) turn.notices.push(local.notice);
+            break;
+          }
           if (!turn.user) turn.user = { id, text: "", attachments: [], causedBy: text(event.causedBy) };
           turn.user.text = type === "message.delta" ? turn.user.text + content : (content || turn.user.text);
           if (Array.isArray(payload.attachments)) turn.user.attachments = payload.attachments;
         } else if (role === "system") {
-          if (content) turn.notices.push({ id, text: content });
+          const local = localCommandNotice(id, payload, content);
+          if (local) {
+            if (local.notice) turn.notices.push(local.notice);
+          } else if (content) {
+            turn.notices.push({ id, text: content });
+          }
         } else {
           const message = applyMessage(turn.messages, id, type, content);
           // Narration is assistant text that began before a later step; the

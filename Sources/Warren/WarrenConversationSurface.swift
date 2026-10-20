@@ -1,4 +1,5 @@
 import AppKit
+import GhosttyAdapter
 import SwiftUI
 import WarrenDesktop
 import WarrenDesignSystem
@@ -139,15 +140,27 @@ struct WarrenConversationActions {
 
 struct WarrenConversationSurface: View {
     let sessionID: TerminalSessionID
-    let model: WarrenRemoteApplicationModel
+    /// Observed so the activation token read in `body` is current. Without the
+    /// subscription SwiftUI can skip this view's body — its stored properties do
+    /// not change when the model publishes — and the request would never reach
+    /// the composer.
+    @ObservedObject var model: WarrenRemoteApplicationModel
+    /// Whether this pane is the one the user is entering. The composer only
+    /// consumes an activation token while it is true, so a Session in a
+    /// passive split pane, or one covered by an overlay, does not take the
+    /// keyboard from what the user is doing.
+    var wantsInputFocus: Bool = false
 
     var body: some View {
         WarrenConversationView(
+            sessionID: sessionID,
             feed: model.conversationFeed(for: sessionID),
             providerName: providerName,
             root: model.projection.session(id: sessionID)?.workingDirectory,
             branch: workspaceBranch,
-            actions: actions
+            actions: actions,
+            focusRequest: model.conversationFocusTokens[sessionID] ?? 0,
+            wantsInputFocus: wantsInputFocus
         )
     }
 
@@ -282,11 +295,18 @@ private enum ConversationLeading {
 }
 
 struct WarrenConversationView: View {
+    /// Named only so a focus claim can be attributed in the diagnostics log.
+    var sessionID: TerminalSessionID? = nil
     @ObservedObject var feed: WarrenConversationFeed
     let providerName: String
     let root: String?
     var branch: String? = nil
     let actions: WarrenConversationActions
+    /// Moves once per activation. The composer focuses when it sees a new
+    /// value, which is what lets an activation issued before the pane existed
+    /// still land once it mounts.
+    var focusRequest: UInt = 0
+    var wantsInputFocus: Bool = false
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -556,9 +576,12 @@ struct WarrenConversationView: View {
                         .allowsHitTesting(false)
                 }
                 WarrenConversationTextView(
+                    sessionID: sessionID,
                     text: $draft,
                     height: $textHeight,
                     isEditable: true,
+                    focusRequest: focusRequest,
+                    wantsInputFocus: wantsInputFocus,
                     onSubmit: submitDraft,
                     onEscape: handleEscape,
                     onSelectOption: selectDecisionOption,
@@ -1017,7 +1040,24 @@ private struct WarrenConversationTurnView: View, Equatable {
                 WarrenConversationMarkdown(text: answer, style: .answer, streaming: running && !turn.answerComplete)
             }
             ForEach(Array(turn.notices.enumerated()), id: \.offset) { _, notice in
-                Text(notice).font(WarrenTypography.caption).foregroundStyle(palette.ink3)
+                switch notice.kind {
+                case .command:
+                    // A slash command the person ran, as one quiet mono line.
+                    (Text(notice.command).font(WarrenTypography.monoSmall)
+                        + Text(notice.args.isEmpty ? "" : " \(notice.args)").font(WarrenTypography.caption))
+                        .foregroundStyle(palette.ink3)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                case .output:
+                    Text(notice.text)
+                        .font(WarrenTypography.caption)
+                        .foregroundStyle(palette.ink3)
+                        .lineLimit(4)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                case .note:
+                    Text(notice.text).font(WarrenTypography.caption).foregroundStyle(palette.ink3)
+                }
             }
             ForEach(Array(turn.errors.enumerated()), id: \.offset) { _, error in
                 HStack(alignment: .top, spacing: 8) {
@@ -2861,9 +2901,12 @@ private struct WarrenDecisionButtonStyle: ButtonStyle {
 /// Escape runs the composer's own escape chain, and the number keys choose a
 /// decision while the field is empty.
 private struct WarrenConversationTextView: NSViewRepresentable {
+    let sessionID: TerminalSessionID?
     @Binding var text: String
     @Binding var height: CGFloat
     let isEditable: Bool
+    let focusRequest: UInt
+    let wantsInputFocus: Bool
     let onSubmit: () -> Void
     let onEscape: () -> Void
     let onSelectOption: (Int) -> Bool
@@ -2896,7 +2939,6 @@ private struct WarrenConversationTextView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.documentView = textView
-        DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
         return scrollView
     }
 
@@ -2909,11 +2951,46 @@ private struct WarrenConversationTextView: NSViewRepresentable {
         }
         textView.isEditable = isEditable
         textView.apply(self)
+        // The composer is the Session's input, so entering the Session is what
+        // focuses it. Mounting is not enough: the pane can be re-created by a
+        // layout turn, and that must not pull the keyboard out of the editor or
+        // the palette. The token is issued by the activation path instead.
+        if context.coordinator.lastFocusRequest != focusRequest {
+            TerminalDiagnostics.log("conversation_focus_seen", [
+                "session": sessionID?.description ?? "nil",
+                "token": String(focusRequest),
+                "wantsInputFocus": wantsInputFocus ? "true" : "false",
+            ])
+        }
+        if wantsInputFocus,
+           context.coordinator.lastFocusRequest != focusRequest {
+            let token = focusRequest
+            DispatchQueue.main.async { [weak textView, weak coordinator = context.coordinator] in
+                guard let textView, let coordinator,
+                      coordinator.lastFocusRequest != token,
+                      let window = textView.window,
+                      window.isKeyWindow else { return }
+                // Consume the token only once the window can own the keyboard;
+                // a request made while the app is inactive is retried by the
+                // next update instead of being silently dropped.
+                coordinator.lastFocusRequest = token
+                guard window.firstResponder !== textView else { return }
+                guard window.makeFirstResponder(textView) else { return }
+                TerminalDiagnostics.log("conversation_focus_claim", [
+                    "session": sessionID?.description ?? "nil",
+                    "token": String(token),
+                ])
+            }
+        }
     }
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: WarrenConversationTextView
+        /// The activation token the composer has already answered. Starts at
+        /// zero so a request issued before this view existed is consumed on
+        /// its first update.
+        fileprivate var lastFocusRequest: UInt = 0
         init(_ parent: WarrenConversationTextView) { self.parent = parent }
 
         func textDidChange(_ notification: Notification) {

@@ -136,9 +136,14 @@ struct WarrenDesktopTaskRow: View {
     }
 
     private func taskIcon(tokens: WarrenColorTokens) -> some View {
+        // At 14pt the symbol draws a 12pt square, centred in the 18pt slot,
+        // so 3pt of blank slot sat between it and the name. Shifting it to the
+        // slot's trailing edge keeps the small glyph and puts the name the
+        // same distance from it as a project's name is from its avatar.
         Image(systemName: "checkmark.square")
             .font(.system(size: 14, weight: .regular))
             .foregroundStyle(tokens.treeGroupIcon)
+            .offset(x: 3)
             .frame(
                 width: WarrenDesktopSidebarMetrics.groupIconSize,
                 height: WarrenDesktopSidebarMetrics.groupIconSize
@@ -153,7 +158,7 @@ struct WarrenDesktopTaskRow: View {
             .frame(width: 18, height: 18)
             .contentShape(.rect)
             .warrenMenuButton(taskAddActions)
-            .focusable()
+            .modifier(WarrenDesktopTaskAddFocus(isFocused: isAddFocused, ring: tokens.focusRing))
             .disabled(isInteractionDisabled)
             .opacity(showsAddMenu ? 1 : 0)
             // Hidden, it gives its width back to the name, so a resting row shows
@@ -211,5 +216,33 @@ struct WarrenDesktopTaskRow: View {
 
     private var workspaceCountText: String {
         "\(workspaceCount) \(workspaceCount == 1 ? "workspace" : "workspaces")"
+    }
+}
+
+/// Keyboard focus for the task row's "+", matching the project row's button.
+///
+/// A plain `focusable()` made the "+" a click-focus target, so when a click
+/// elsewhere left the keyboard without an owner it landed here, kept the "+"
+/// shown, and drew the system's blue ring around it. Taking focus only the way
+/// a button does (Full Keyboard Access) and drawing Warren's own ring keeps it
+/// reachable by keyboard without catching focus a click let go of.
+private struct WarrenDesktopTaskAddFocus: ViewModifier {
+    let isFocused: Bool
+    let ring: Color
+
+    func body(content: Content) -> some View {
+        if #available(macOS 14.0, *) {
+            content
+                .focusable(interactions: .activate)
+                .focusEffectDisabled()
+                .overlay {
+                    RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
+                        .strokeBorder(ring, lineWidth: 1)
+                        .opacity(isFocused ? 1 : 0)
+                        .allowsHitTesting(false)
+                }
+        } else {
+            content.focusable()
+        }
     }
 }

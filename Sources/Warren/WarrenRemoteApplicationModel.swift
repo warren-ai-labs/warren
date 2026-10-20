@@ -357,6 +357,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// The open decisions of this Host's Conversation Sessions, for the
     /// approval tray.
     @Published private(set) var pendingDecisions: [TerminalSessionID: WarrenDesktopPendingDecision] = [:]
+    /// The activation token each Conversation composer has to consume.
+    ///
+    /// A token only moves when the user enters the Session, so a token issued
+    /// before the pane exists still focuses the composer once it mounts. It is
+    /// published because the token, not the mount, is what makes the pane
+    /// claim the keyboard.
+    @Published private(set) var conversationFocusTokens: [TerminalSessionID: UInt] = [:]
+    private var nextConversationFocusToken: UInt = 0
     private var agentSubscriptionTasks: [String: Task<Void, Never>] = [:]
     /// ACP Sessions own no terminal (RFC 0023): no surface, no subscribe, no
     /// resize. The Conversation surface renders them from their Agent stream.
@@ -2009,6 +2017,21 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return feed
     }
 
+    /// Moves the Session's activation token so its composer claims the
+    /// keyboard.
+    ///
+    /// The composer is an AppKit text view inside the pane, so the token is
+    /// the only delivery mechanism that survives SwiftUI re-creating the
+    /// surface, and it keeps a remount from stealing focus on its own.
+    func requestConversationFocus(_ sessionID: TerminalSessionID) {
+        nextConversationFocusToken &+= 1
+        conversationFocusTokens[sessionID] = nextConversationFocusToken
+        TerminalDiagnostics.log("conversation_focus_request", [
+            "session": sessionID.description,
+            "token": String(nextConversationFocusToken),
+        ])
+    }
+
     /// Loads a feed's history from the local replica once its stream is known.
     /// A feed created before the roster names its stream is seeded again when
     /// the stream appears; merging is idempotent by sequence.
@@ -2462,7 +2485,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                         in: self.projection
                     )
                 )
-                await self.presentSelectedSession()
+                await self.presentSelectedSession(activatingInput: true)
             } catch {
                 self?.present(error)
             }
@@ -2567,7 +2590,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     in: projection
                 )
             )
-            Task { await presentSelectedSession() }
+            Task { await presentSelectedSession(activatingInput: true) }
             return
         }
 
@@ -2602,7 +2625,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         if projection.tabs(in: workspace.id).isEmpty {
             createSession(workspaceID: workspace.id, request: .shell)
         } else {
-            Task { await presentSelectedSession() }
+            Task { await presentSelectedSession(activatingInput: true) }
         }
     }
 
@@ -3157,7 +3180,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         )
         switch action {
         case .selectProject, .selectWorkspace, .openWorkspace, .selectTab, .restoreNavigation:
-            Task { await presentSelectedSession() }
+            // Every one of these is the user entering a Session or the
+            // Workspace that holds it, including the Settings window closing
+            // on to the Session it was opened over.
+            Task { await presentSelectedSession(activatingInput: true) }
         case .openSession(let id):
             selectSession(id)
         case .deleteSession(let id):
@@ -3197,6 +3223,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             deleteWorkspace(id, removeLocalWorktree: removeLocalWorktree)
         case .renameSession(let id, let title):
             request("session.rename", params: ["id": id.description, "title": title])
+        case .regenerateSessionTitle(let id):
+            // The Host writes the name as a rename, so the new title arrives
+            // with the roster; only a failure has anything to say here.
+            request("session.title.regenerate", params: ["id": id.description])
         case .setTaskPinned(let id, let pinned):
             request("task.pin", params: ["id": id.description, "pinned": String(pinned)])
         case .setProjectPinned(let id, let pinned):
@@ -5675,6 +5705,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 acknowledgedActivity: nextAcknowledgments[id],
                 currentStep: stepLine,
                 resultSentence: value.resultSentence,
+                titleRegeneratable: value.titleRegeneratable ?? false,
                 primaryLine: primaryLine,
                 lastActivity: lastActivityBySessionID[id],
                 plan: plan,
@@ -6035,7 +6066,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         conversationSessionIDs.contains(sessionID)
     }
 
-    private func presentSelectedSession() async {
+    /// Presents the Session the navigation selects.
+    ///
+    /// `activatingInput` marks the calls that come from the user entering a
+    /// Session — a row, a Tab, the palette, a shortcut, a fresh Session, or the
+    /// Settings window closing. Those are the calls that have to leave the
+    /// keyboard in the Session's own input instead of on the control that was
+    /// just used. Roster-driven restoration stays passive so a reconnect does
+    /// not take focus away from whatever the user is doing.
+    private func presentSelectedSession(activatingInput: Bool = false) async {
         guard let tabID = navigation.selectedTabID,
               let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID else { return }
         // A browser Session is presented by the browser region, not here. Leaving
@@ -6043,10 +6082,19 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         // Session on screen beside the viewer.
         guard !isConversationSession(sessionID) else {
             // The Conversation surface owns the pane and its keyboard focus.
+            if activatingInput {
+                surfaceManager.cancelPendingInputFocus()
+            }
             relinquishTerminalFocus()
+            if activatingInput {
+                requestConversationFocus(sessionID)
+            }
             return
         }
         guard !isBrowserSession(sessionID) else {
+            if activatingInput {
+                surfaceManager.cancelPendingInputFocus()
+            }
             TerminalDiagnostics.log("present_skipped_browser", [
                 "session": sessionID.description,
             ])
@@ -6056,6 +6104,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             // is not looking at.
             relinquishTerminalFocus()
             return
+        }
+        // Retained before the attach so every path below — promotion, a cold
+        // subscribe, or the retry after a pane appears late — claims the
+        // keyboard with the user's instruction rather than as a layout turn.
+        if activatingInput {
+            surfaceManager.requestInputFocus(for: sessionID)
         }
         // A retained surface is the source of truth across ordinary navigation:
         // reparent it and swap the control lease. Re-subscribe only after a
@@ -6418,7 +6472,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 in: projection
             )
         )
-        Task { await presentSelectedSession() }
+        Task { await presentSelectedSession(activatingInput: true) }
     }
 
     private func moveTab(_ tabID: String, before destinationTabID: String?) {

@@ -486,7 +486,22 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        presentMainWindowIfNeeded()
+        // Activation restores the window that had the keyboard, and AppKit
+        // finishes doing that after this callback. Re-fronting the workspace
+        // window here took the keyboard from Settings, so the menu bar and the
+        // key equivalents served a window the user had behind the one they
+        // were working in. Ask once activation has settled, and only take the
+        // foreground when no window of ours did.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let keyWindow = NSApp.keyWindow, keyWindow !== self.window {
+                if let window = self.window {
+                    self.ensureWindowIsOnVisibleScreen(window)
+                }
+                return
+            }
+            self.presentMainWindowIfNeeded()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -547,10 +562,29 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
 
     @objc private func postCommand(_ sender: NSMenuItem) {
         guard let rawValue = sender.representedObject as? String else { return }
-        NotificationCenter.default.post(name: Notification.Name(rawValue), object: nil)
+        let command = Notification.Name(rawValue)
+        // Validation greys these items out; the guard keeps a menu that was
+        // validated for another window, or a key equivalent that skipped
+        // validation, from acting on the panes behind the window in front.
+        guard WarrenMenuScope.shouldPost(command, workspace: window, key: NSApp.keyWindow) else {
+            return
+        }
+        NotificationCenter.default.post(name: command, object: nil)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        // ⌘W follows the key window: a Pane here, the window itself elsewhere.
+        // The title is set here so the View menu never claims to close a Pane
+        // it cannot see.
+        if menuItem.action == #selector(closeKeyWindow(_:)) {
+            menuItem.title = isWorkspaceWindowKey ? "Close Pane" : "Close Window"
+            return true
+        }
+        // Pane, tab and Session commands belong to the workspace window, so a
+        // Settings window in front has nothing for them to act on.
+        if !isWorkspaceWindowKey, isWorkspaceCommand(menuItem) {
+            return false
+        }
         guard WarrenEmbeddedEditorFocus.contains(window?.firstResponder) else { return true }
         if menuItem.action == #selector(selectTabNumber(_:)) {
             return true
@@ -570,6 +604,20 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         return menuItem.action != #selector(postCommand(_:))
     }
 
+    /// Whether the key window is the workspace window, or a sheet or popover
+    /// attached to it, so its commands have somewhere to act.
+    private var isWorkspaceWindowKey: Bool {
+        WarrenMenuScope.isWorkspaceWindowKey(workspace: window, key: NSApp.keyWindow)
+    }
+
+    private func isWorkspaceCommand(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(selectTabNumber(_:)) {
+            return true
+        }
+        guard let rawValue = menuItem.representedObject as? String else { return false }
+        return WarrenMenuScope.isWorkspaceCommand(Notification.Name(rawValue))
+    }
+
     private func applyEndpointCapabilities(_ capabilities: WarrenDesktopEndpointCapabilities) {
         let isVisible = capabilities.canCopyLocalWebURL
         copyLocalWebURLMenuItem?.isHidden = !isVisible
@@ -577,11 +625,22 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
     @objc private func toggleFullScreen(_ sender: NSMenuItem) {
-        window?.toggleFullScreen(nil)
+        (NSApp.keyWindow ?? window)?.toggleFullScreen(nil)
+    }
+
+    /// ⌘W. The workspace window closes the selected Pane; any other window
+    /// closes itself, which is what the shortcut means in Xcode and Safari.
+    @objc private func closeKeyWindow(_ sender: NSMenuItem) {
+        guard isWorkspaceWindowKey else {
+            NSApp.keyWindow?.performClose(nil)
+            return
+        }
+        NotificationCenter.default.post(name: WarrenDesktopCommand.closePane, object: nil)
     }
 
     @objc private func selectTabNumber(_ sender: NSMenuItem) {
-        guard let index = (sender.representedObject as? NSNumber)?.intValue else { return }
+        guard isWorkspaceWindowKey,
+              let index = (sender.representedObject as? NSNumber)?.intValue else { return }
         NotificationCenter.default.post(
             name: WarrenDesktopCommand.selectTab,
             object: nil,
@@ -790,14 +849,15 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         splitBelowItem.keyEquivalentModifierMask = [.command, .shift]
         splitBelowItem.representedObject = WarrenDesktopCommand.splitBelow.rawValue
 
+        // ⌘W closes a Pane in the workspace window and the window itself
+        // everywhere else; validation sets the title that matches.
         let closePaneItem = viewMenu.addItem(
             withTitle: "Close Pane",
-            action: #selector(WarrenAppDelegate.postCommand(_:)),
+            action: #selector(WarrenAppDelegate.closeKeyWindow(_:)),
             keyEquivalent: "w"
         )
         closePaneItem.target = target
         closePaneItem.keyEquivalentModifierMask = [.command]
-        closePaneItem.representedObject = WarrenDesktopCommand.closePane.rawValue
 
         let maximizePaneItem = viewMenu.addItem(
             withTitle: "Maximize Pane",
@@ -870,6 +930,59 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         installCLI.target = target
         toolsMenuItem.submenu = toolsMenu
         return mainMenu
+    }
+}
+
+/// Which menu commands belong to the workspace window.
+///
+/// A Settings window is key while the user is in it, and the menu bar serves
+/// that window: pane, tab and Session commands have nothing to act on then, so
+/// they are disabled and their shortcuts do nothing. Commands that reach the
+/// app or the key window itself — Settings…, Quit, the Edit menu, full screen,
+/// copying a Web URL — are unchanged.
+@MainActor
+enum WarrenMenuScope {
+    static let workspaceCommands: Set<Notification.Name> = [
+        WarrenDesktopCommand.newSession,
+        WarrenDesktopCommand.nextTab,
+        WarrenDesktopCommand.previousTab,
+        WarrenDesktopCommand.selectTab,
+        WarrenDesktopCommand.commandPalette,
+        WarrenDesktopCommand.findInTerminal,
+        WarrenDesktopCommand.toggleSidebar,
+        WarrenDesktopCommand.peekSidebar,
+        WarrenDesktopCommand.toggleInspector,
+        WarrenDesktopCommand.splitRight,
+        WarrenDesktopCommand.splitBelow,
+        WarrenDesktopCommand.closePane,
+        WarrenDesktopCommand.maximizePane,
+        WarrenDesktopCommand.otherPane,
+        WarrenDesktopCommand.nextPaneGroup,
+        WarrenDesktopCommand.previousPaneGroup,
+    ]
+
+    static func isWorkspaceCommand(_ command: Notification.Name) -> Bool {
+        workspaceCommands.contains(command)
+    }
+
+    /// Whether a menu command may reach its observers. The workspace commands
+    /// only do while the workspace window owns the keyboard, so a click that
+    /// skipped menu validation cannot close a Pane behind another window.
+    static func shouldPost(
+        _ command: Notification.Name,
+        workspace: NSWindow?,
+        key: NSWindow?
+    ) -> Bool {
+        guard isWorkspaceCommand(command) else { return true }
+        return isWorkspaceWindowKey(workspace: workspace, key: key)
+    }
+
+    /// Whether `key` belongs to the workspace window: it is that window, or a
+    /// sheet or popover attached to it. No key window at all means the app is
+    /// inactive, where no key equivalent can arrive from another app's window.
+    static func isWorkspaceWindowKey(workspace: NSWindow?, key: NSWindow?) -> Bool {
+        guard let workspace, let key else { return true }
+        return key === workspace || key.sheetParent === workspace || key.parent === workspace
     }
 }
 

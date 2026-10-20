@@ -749,6 +749,19 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, map[string]bool{"renamed": true})
+	case "session.title.regenerate":
+		// An explicit rename from the conversation. The new title reaches every
+		// client through the roster, like any other rename; the result carries
+		// it so the caller can read what the Host chose.
+		id := stringParam(params, "id")
+		if id == "" {
+			return errors.New("session ID is required")
+		}
+		titleValue, err := p.server.Service.RegenerateSessionTitle(ctx, id)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]string{"title": titleValue})
 	case "session.pin":
 		if err := p.server.Service.SetSessionPinned(stringParam(params, "id"), boolParam(params, "pinned")); err != nil {
 			return err
@@ -850,13 +863,25 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		p.server.Service.registerPeer(session.ID, p)
 		attachmentID := p.ensureAttachment(session.ID)
 		if claimControl {
-			if _, focusErr := p.server.Service.focusPeerLocked(ctx, p, session, true, columns, rows, sizeSpecified, false); focusErr != nil {
+			_, displaced, focusErr := p.server.Service.focusPeerLocked(ctx, p, session, true, columns, rows, sizeSpecified, false)
+			if focusErr != nil {
 				lock.Unlock()
 				resume()
 				p.server.Service.detachPeer(p, session.ID)
 				return focusErr
 			}
 			p.claimControl(session)
+			if displaced != nil {
+				// A passive observer or another window is taking the keyboard for
+				// this session. The previous holder must learn that its lease is
+				// gone, otherwise it keeps typing into a Host that refuses it.
+				p.server.Service.logInfo("focus: lease taken",
+					"session", session.ID,
+					"method", "session.subscribe",
+					"attachmentId", attachmentID,
+				)
+				_ = displaced.enqueueFocusTaken(session.ID, attachmentID)
+			}
 		}
 		markStep("registerAndClaim")
 		if err := ctx.Err(); err != nil {
@@ -883,7 +908,19 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			lock.Unlock()
 			resume()
 			p.server.Service.detachPeer(p, session.ID)
-			return err
+			// The acknowledgement for this command is already on the wire, so
+			// returning the error would write it against a request id the
+			// client has retired, and the client would keep waiting for the
+			// recovery markers that just failed to be produced. Report it on
+			// the session channel instead; the client cancels its staged
+			// recovery and attaches again from a clean boundary.
+			p.logInfo("subscribe: recovery failed",
+				"session", session.ID,
+				"method", "session.subscribe",
+				"error", err,
+			)
+			_ = p.enqueueRecoveryFailed(session.ID, err.Error())
+			return nil
 		}
 		markStep("attachOutputLocked")
 		lock.Unlock()

@@ -907,6 +907,10 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         /// The Host's one-line account of the last completed turn, when it
         /// asked a model for one. Absent on a Host with no title endpoint.
         public let resultSentence: String?
+        /// Whether the Host can name this Session from its conversation on
+        /// request now. Absent on a Host that cannot, which is also what an
+        /// older Host reports.
+        public let titleRegeneratable: Bool?
         public let kind: String
         public let agentProvider: String?
         public let agentHandler: String?
@@ -939,6 +943,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             title: String = "",
             customTitle: String? = nil,
             resultSentence: String? = nil,
+            titleRegeneratable: Bool? = nil,
             kind: String = "shell",
             agentProvider: String? = nil,
             agentHandler: String? = nil,
@@ -967,6 +972,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.title = title
             self.customTitle = customTitle
             self.resultSentence = resultSentence
+            self.titleRegeneratable = titleRegeneratable
             self.kind = kind
             self.agentProvider = agentProvider
             self.agentHandler = agentHandler
@@ -1061,7 +1067,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         private enum CodingKeys: String, CodingKey {
             case id
             case workspaceID = "workspace"
-            case title, customTitle, resultSentence, kind, agentProvider, agentHandler, command, commandLine, process, directory, shell, runtime, runtimeKind
+            case title, customTitle, resultSentence, titleRegeneratable, kind, agentProvider, agentHandler, command, commandLine, process, directory, shell, runtime, runtimeKind
             case lifecycle, epoch, sequence, pinned
             case agentSessionID = "agentSessionId"
             case agentExecutionID = "agentExecutionId"
@@ -1075,6 +1081,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             title = try values.decodeIfPresent(String.self, forKey: .title) ?? ""
             customTitle = try values.decodeIfPresent(String.self, forKey: .customTitle)
             resultSentence = try values.decodeIfPresent(String.self, forKey: .resultSentence)
+            titleRegeneratable = try values.decodeIfPresent(Bool.self, forKey: .titleRegeneratable)
             kind = try values.decodeIfPresent(String.self, forKey: .kind) ?? "shell"
             agentProvider = try values.decodeIfPresent(String.self, forKey: .agentProvider)
             agentHandler = try values.decodeIfPresent(String.self, forKey: .agentHandler)

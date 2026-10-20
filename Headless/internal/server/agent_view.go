@@ -1078,18 +1078,42 @@ func sendAgentMessageInput(ctx context.Context, runtime Runtime, sessionID, text
 	return sendTerminalSubmission(ctx, runtime, sessionID, text)
 }
 
-// interruptAgentTurnInput sends the terminal interrupt byte (Ctrl+C) and, for
-// send_now, types the replacement message after the turn is cancelled. It is
-// the PTY fallback for Hosts without a provider-native AgentController.
-func interruptAgentTurnInput(ctx context.Context, runtime Runtime, sessionID string, request api.AgentTurnInterruptRequest) error {
-	if request.Replacement == nil {
-		return interruptAgentTurnInputText(ctx, runtime, sessionID, "")
+// agentInterruptKey is the byte a provider's terminal reads as "stop this
+// turn". Ctrl+C is the default. pi and Codex need Escape: pi's Ctrl+C only
+// clears its editor, and twice within 500ms quits the process, while Codex's
+// Ctrl+C opens a Cancel/Background/Exit menu that then swallows the input that
+// follows it.
+func agentInterruptKey(provider string) []byte {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "pi", "codex":
+		return []byte{0x1b}
+	default:
+		return []byte{0x03}
 	}
-	return interruptAgentTurnInputText(ctx, runtime, sessionID, request.Replacement.Text)
 }
 
-func interruptAgentTurnInputText(ctx context.Context, runtime Runtime, sessionID, replacementText string) error {
-	if err := runtime.Input(ctx, sessionID, []byte{0x03}); err != nil {
+// agentSessionProvider resolves the provider whose terminal is being driven,
+// preferring the bound provider over the Session kind so a shell overlay is
+// interrupted the way its Agent CLI expects.
+func agentSessionProvider(session api.Session) string {
+	if provider := strings.ToLower(strings.TrimSpace(session.AgentProvider)); provider != "" {
+		return provider
+	}
+	return normalizeProviderKind(session.Kind)
+}
+
+// interruptAgentTurnInput sends the provider's interrupt key and, for send_now,
+// types the replacement message after the turn is cancelled. It is the PTY
+// fallback for Hosts without a provider-native AgentController.
+func interruptAgentTurnInput(ctx context.Context, runtime Runtime, sessionID string, request api.AgentTurnInterruptRequest, provider string) error {
+	if request.Replacement == nil {
+		return interruptAgentTurnInputText(ctx, runtime, sessionID, "", provider)
+	}
+	return interruptAgentTurnInputText(ctx, runtime, sessionID, request.Replacement.Text, provider)
+}
+
+func interruptAgentTurnInputText(ctx context.Context, runtime Runtime, sessionID, replacementText, provider string) error {
+	if err := runtime.Input(ctx, sessionID, agentInterruptKey(provider)); err != nil {
 		return err
 	}
 	if replacementText != "" {
@@ -2000,9 +2024,9 @@ func (s *Service) interruptAgentTurn(ctx context.Context, request api.AgentTurnI
 				s.finishAgentAction(actionKey, call, nil, textErr)
 				return api.AgentTurnInterruptResult{}, textErr
 			}
-			err = interruptAgentTurnInputText(ctx, runtime, session.Runtime, text)
+			err = interruptAgentTurnInputText(ctx, runtime, session.Runtime, text, agentSessionProvider(session))
 		} else {
-			err = interruptAgentTurnInput(ctx, runtime, session.Runtime, request)
+			err = interruptAgentTurnInput(ctx, runtime, session.Runtime, request, agentSessionProvider(session))
 		}
 		unlock()
 		if err != nil {

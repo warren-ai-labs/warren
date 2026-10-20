@@ -402,7 +402,7 @@ func (s *Service) reanchorAtomicOutput(
 	}
 	catchUpContext, cancelCatchUp := context.WithTimeout(ctx, s.commandTimeout())
 	catchUpStarted := time.Now()
-	err = s.catchUpOutputCursor(catchUpContext, session, outputSession, cursor)
+	catchUpSkipped, err := s.catchUpOutputCursor(catchUpContext, session, outputSession, cursor)
 	catchUpMS := time.Since(catchUpStarted).Milliseconds()
 	cancelCatchUp()
 	if err != nil {
@@ -454,8 +454,16 @@ func (s *Service) reanchorAtomicOutput(
 	if err := peer.enqueueSynced(session.ID, epoch, upper); err != nil {
 		return err
 	}
+	if catchUpSkipped {
+		// The ring could not be walked to the checkpoint, so the bytes between
+		// its last recorded position and the checkpoint are absent from the
+		// shared stream. Direct readers are unaffected (they start at the
+		// checkpoint), but a peer served from the shared ring would silently
+		// miss them. Re-anchoring is the in-protocol way to say so.
+		s.forcePeerReanchor(session.ID, s.sharedBroadcastPeers(session.ID))
+	}
 	// One line that names which phase owns the attach's latency: the ghostline
-	// state capture, the one-byte-at-a-time gap catch-up, the encode+enqueue, or
+	// state capture, the gap catch-up (or its skip), the encode+enqueue, or
 	// arming the direct reader. `attachOutputLocked` used to report only a
 	// single total, which cannot separate a slow snapshot from a slow reader.
 	s.logInfo("reanchor: phases",
@@ -463,6 +471,7 @@ func (s *Service) reanchorAtomicOutput(
 		"method", method,
 		"captureMs", captureMS,
 		"catchUpMs", catchUpMS,
+		"catchUpSkipped", catchUpSkipped,
 		"enqueueMs", enqueueMS,
 		"readerMs", readerMS,
 		"bytes", len(payload),
@@ -473,25 +482,34 @@ func (s *Service) reanchorAtomicOutput(
 }
 
 // catchUpOutputCursor records bytes that arrived after the shared reader was
-// stopped but before Ghostline captured its atomic state. The target cursor is
-// intentionally compared only for equality: Ghostline cursors are opaque to
-// Warren. Each read is bounded by the distance Ghostline reports to that
-// cursor, so it can never consume output produced after the checkpoint
-// boundary; at a generation boundary, where that distance is unknown, the read
-// falls back to a single byte. This path is limited to the short
-// attach/reanchor window; the normal shared reader remains buffered at 64 KiB.
+// stopped but before Ghostline captured its atomic state. Each read is bounded
+// by the distance Ghostline reports to the checkpoint cursor, so it can never
+// consume output produced after that boundary.
+//
+// When the two cursors are not comparable — a zero cursor, a generation change,
+// or a reversed pair — the gap cannot be walked at all: a byte read could never
+// prove it reached the checkpoint, and a session that keeps producing never
+// reaches EOF either. That pair used to degrade into one byte per round trip
+// until the command timeout failed the attach after its acknowledgement, which
+// left the pane black. Instead the checkpoint is treated as a fresh boundary:
+// the atomic state is the authoritative terminal image, and the ring continues
+// from the checkpoint exactly as a fresh attach after a restart does. The
+// caller is told the gap was skipped so it can re-anchor shared subscribers.
 func (s *Service) catchUpOutputCursor(
 	ctx context.Context,
 	session api.Session,
 	outputSession *outputSession,
 	target ghostline.Cursor,
-) error {
+) (bool, error) {
 	catchUpStarted := time.Now()
 	caughtUpBytes := 0
 	caughtUpRounds := 0
-	// Reading one byte per round trip made the gap's size the attach's
-	// latency, and the gap grows with output volume. Report what it actually
-	// had to cover so a regression is visible in the log.
+	outputSession.mu.Lock()
+	from := outputSession.outputCursor
+	outputSession.mu.Unlock()
+	_, distanceKnown := from.Distance(target)
+	// Report what the phase had to cover, and with which pair of cursors, so a
+	// regression is attributable instead of showing up as a bare duration.
 	defer func() {
 		if caughtUpBytes == 0 {
 			return
@@ -501,34 +519,51 @@ func (s *Service) catchUpOutputCursor(
 			"bytes", caughtUpBytes,
 			"rounds", caughtUpRounds,
 			"ms", time.Since(catchUpStarted).Milliseconds(),
+			"from", from.String(),
+			"target", target.String(),
+			"distanceKnown", distanceKnown,
 		)
 	}()
-	outputSession.mu.Lock()
-	from := outputSession.outputCursor
-	outputSession.mu.Unlock()
 	if from == target {
-		return nil
+		return false, nil
+	}
+	if !distanceKnown {
+		outputSession.mu.Lock()
+		outputSession.outputCursor = target
+		outputSession.hasOutputCursor = true
+		outputSession.mu.Unlock()
+		s.logWarn("reanchor: catchUpSkipped",
+			"session", session.ID,
+			"from", from.String(),
+			"target", target.String(),
+			"distanceKnown", false,
+			"reason", "cursors are not comparable",
+		)
+		return true, nil
 	}
 	runtime := s.cursorOutputRuntimeFor(session)
 	if runtime == nil {
-		return errors.New("ghostline cursor runtime is unavailable")
+		return false, errors.New("ghostline cursor runtime is unavailable")
 	}
 	reader, err := runtime.OpenOutput(ctx, session.Runtime, from)
 	if err != nil {
-		return fmt.Errorf("open ghostline recovery gap: %w", err)
+		return false, fmt.Errorf("open ghostline recovery gap: %w", err)
 	}
 	defer reader.Close()
 	buffer := make([]byte, catchUpBatchBytes)
 	for {
 		if reader.Cursor() == target {
-			return nil
+			return false, nil
 		}
 		if err := ctx.Err(); err != nil {
-			return err
+			return false, err
 		}
-		readBuffer, closed := catchUpReadBuffer(buffer, reader.Cursor(), target)
+		readBuffer, closed, known := catchUpReadBuffer(buffer, reader.Cursor(), target)
+		if !known {
+			return false, errors.New("ghostline recovery gap stopped being comparable")
+		}
 		if closed {
-			return nil
+			return false, nil
 		}
 		count, readErr := reader.Read(readBuffer)
 		if count > 0 {
@@ -537,20 +572,20 @@ func (s *Service) catchUpOutputCursor(
 			cursor := reader.Cursor()
 			s.recordOutputWithCursorMode(session.ID, readBuffer[:count], &cursor, false)
 			if cursor == target {
-				return nil
+				return false, nil
 			}
 		}
 		if readErr != nil {
 			if !errors.Is(readErr, io.EOF) {
-				return fmt.Errorf("read ghostline recovery gap: %w", readErr)
+				return false, fmt.Errorf("read ghostline recovery gap: %w", readErr)
 			}
 			if reader.Cursor() == target {
-				return nil
+				return false, nil
 			}
-			return fmt.Errorf("ghostline recovery gap ended before checkpoint cursor")
+			return false, fmt.Errorf("ghostline recovery gap ended before checkpoint cursor")
 		}
 		if count == 0 {
-			return io.ErrNoProgress
+			return false, io.ErrNoProgress
 		}
 	}
 }
@@ -562,26 +597,28 @@ const catchUpBatchBytes = 64 * 1024
 
 // catchUpReadBuffer sizes the next catch-up read so it cannot pass target.
 //
-// It returns closed when the gap is already covered. An unknown span (a zero
-// cursor, a generation boundary, or a reversed pair) can only be walked one
-// byte at a time: reading past the checkpoint would record bytes that the live
-// stream still delivers, duplicating them in the pane.
+// It returns closed when the gap is already covered, and known=false when the
+// two cursors are not comparable (a zero cursor, a generation boundary, or a
+// reversed pair). A caller must treat an unknown span as unrecoverable rather
+// than read it one byte at a time: the span can never be proven to reach the
+// checkpoint, and reading past it would duplicate bytes the live stream still
+// delivers.
 func catchUpReadBuffer(
 	buffer []byte,
 	from ghostline.Cursor,
 	target ghostline.Cursor,
-) ([]byte, bool) {
+) (next []byte, closed bool, known bool) {
 	gap, known := from.Distance(target)
 	if !known {
-		return buffer[:1], false
+		return nil, false, false
 	}
 	if gap == 0 {
-		return nil, true
+		return nil, true, true
 	}
 	if gap < uint64(len(buffer)) {
-		return buffer[:gap], false
+		return buffer[:gap], false, true
 	}
-	return buffer, false
+	return buffer, false, true
 }
 
 func (s *Service) PingOutput(sessionID string) {

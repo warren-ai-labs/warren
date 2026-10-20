@@ -74,6 +74,34 @@ func TestCreateWorkspaceWithoutTaskKeepsExistingBehavior(t *testing.T) {
 	}
 }
 
+func TestCreateWorkspaceRecordsBranchBase(t *testing.T) {
+	service := newTaskWorkspaceService(t)
+	project := addTaskWorkspaceProject(t, service, filepath.Join(t.TempDir(), "repository"))
+	head := gitOutput(project.Path, "rev-parse", "HEAD")
+
+	workspace, err := service.CreateWorkspace(project.ID, "feature/recorded-base", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspace.BaseCommit != head {
+		t.Fatalf("workspace base = %q, want %q", workspace.BaseCommit, head)
+	}
+	if tip := gitOutput(workspace.Path, "rev-parse", "HEAD"); tip != head {
+		t.Fatalf("created branch tip = %q, want the recorded base %q", tip, head)
+	}
+
+	// A branch that already existed is not a branch Warren created, so it has
+	// no recorded base.
+	runTaskWorkspaceGit(t, project.Path, "branch", "feature/existing")
+	existing, err := service.CreateWorkspace(project.ID, "feature/existing", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if existing.BaseCommit != "" {
+		t.Fatalf("existing branch base = %q, want empty", existing.BaseCommit)
+	}
+}
+
 func TestCreateTaskWorkspaceRunsConfiguredSetupScriptWithWorkspaceContext(t *testing.T) {
 	service := newTaskWorkspaceService(t)
 	project := addTaskWorkspaceProject(t, service, filepath.Join(t.TempDir(), "repository"))
