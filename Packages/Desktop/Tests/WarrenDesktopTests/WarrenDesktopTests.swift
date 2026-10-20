@@ -3189,6 +3189,7 @@ final class WarrenDesktopTests: XCTestCase {
         let workspaceID = fixture.groups[0].workspaces[0].id
         let taskID = TaskID()
         let sessionID = fixture.sessions[0].id
+        let token = UUID()
 
         actions(.addProject)
         actions(.importSuperset)
@@ -3198,7 +3199,7 @@ final class WarrenDesktopTests: XCTestCase {
         actions(.openSession(sessionID))
         actions(.deleteSession(sessionID))
         actions(.moveSession(sessionID, to: .workspace(workspaceID)))
-        actions(.requestNewSession(workspaceID))
+        actions(.requestNewSession(workspaceID, token: token))
         actions(.launchSession(workspaceID, .claude))
         actions(.selectTab("tab-main"))
         actions(.restoreNavigation(WarrenDesktopNavigationState(
@@ -3220,7 +3221,7 @@ final class WarrenDesktopTests: XCTestCase {
                 .openSession(sessionID),
                 .deleteSession(sessionID),
                 .moveSession(sessionID, to: .workspace(workspaceID)),
-                .requestNewSession(workspaceID),
+                .requestNewSession(workspaceID, token: token),
                 .launchSession(workspaceID, .claude),
                 .selectTab("tab-main"),
                 .restoreNavigation(WarrenDesktopNavigationState(

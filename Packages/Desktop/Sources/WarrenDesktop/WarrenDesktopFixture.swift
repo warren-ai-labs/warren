@@ -1289,7 +1289,10 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     case clearSelectedTab
     case moveTab(String, before: String?)
     case moveSession(TerminalSessionID, to: WarrenDesktopSessionMoveDestination)
-    case requestNewSession(WorkspaceID)
+    /// Creates a Shell Session. The token names this request so a caller can
+    /// tell the Session it produced from any other Session that appears in
+    /// the meantime; the model reports the created Session under it.
+    case requestNewSession(WorkspaceID, token: UUID)
     case launchSession(WorkspaceID, TerminalSessionLaunchRequest)
     case restoreNavigation(WarrenDesktopNavigationState)
     case toggleSidebar

@@ -20,6 +20,7 @@ final class PaneGroupFlowHost: ObservableObject {
     @Published private(set) var projection: WarrenDesktopProjection
     @Published var navigation: WarrenDesktopNavigationState
     @Published var creating: Set<WorkspaceID> = []
+    @Published private(set) var createdByToken: [UUID: TerminalSessionID] = [:]
     private(set) var sessions: [WarrenDesktopSession] = []
     private(set) var groups: [PaneGroup] = []
     private(set) var commits: [PaneNode] = []
@@ -30,6 +31,11 @@ final class PaneGroupFlowHost: ObservableObject {
     /// created Session. The real roster gives no ordering between the two.
     var echoDelay: TimeInterval = 0.05
     var sessionDelay: TimeInterval = 0.05
+    /// A Session another actor creates in the same Workspace while a create
+    /// request is in flight. It reaches the roster, and is selected, before
+    /// the requested Session does.
+    private(set) var unrelated: WarrenDesktopSession?
+    var createsUnrelatedSessionDuringRequest = false
 
     init(sessionCount: Int, splitAll: Bool, splitCount: Int? = nil) {
         project = Project(hostID: host.id, name: "Project", rootPath: "/tmp/project")
@@ -78,13 +84,28 @@ final class PaneGroupFlowHost: ObservableObject {
     func send(_ action: WarrenDesktopAction) {
         actions.append(action)
         switch action {
-        case .requestNewSession(let workspaceID):
-            // The model marks the Workspace as creating, the roster publishes
-            // the Session, and only then does the model clear the mark and
-            // select the new Tab — the order `createSession` runs in.
+        case .requestNewSession(let workspaceID, let token):
+            // The model marks the Workspace as creating, reports the created
+            // Session under the request's token, the roster publishes it, and
+            // only then does the model clear the mark and select the new Tab —
+            // the order `createSession` runs in.
             creating.insert(workspaceID)
             let created = Self.session(workspaceID: workspaceID, title: "New")
+            if createsUnrelatedSessionDuringRequest {
+                let other = Self.session(workspaceID: workspaceID, title: "Other")
+                unrelated = other
+                DispatchQueue.main.asyncAfter(deadline: .now() + sessionDelay / 2) {
+                    self.sessions.append(other)
+                    self.publish()
+                    self.navigation = WarrenDesktopNavigationReducer.reduce(
+                        self.navigation,
+                        action: .selectTab(self.tabID(other.id)),
+                        in: self.projection
+                    )
+                }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + sessionDelay) {
+                self.createdByToken[token] = created.id
                 self.sessions.append(created)
                 self.publish()
             }
@@ -206,6 +227,7 @@ private struct PaneGroupFlowSurface: View {
 
 private struct PaneGroupFlowRoot: View {
     @ObservedObject var host: PaneGroupFlowHost
+    var onVisible: (Set<TerminalSessionID>) -> Void = { _ in }
 
     var body: some View {
         WarrenDesktopRoot(
@@ -213,6 +235,8 @@ private struct PaneGroupFlowRoot: View {
             navigation: host.navigation,
             actions: WarrenDesktopActions(send: { host.send($0) }),
             creatingSessionWorkspaceIDs: host.creating,
+            createdSessionIDsByToken: host.createdByToken,
+            onActiveScreenSessionsChanged: onVisible,
             onCommitPaneTree: { host.commit(owner: $0, tree: $1, target: $2) },
             persistenceEnabled: false
         ) { context in
@@ -223,8 +247,11 @@ private struct PaneGroupFlowRoot: View {
 
 @MainActor
 final class WarrenDesktopPaneGroupFlowTests: XCTestCase {
-    private func mount(_ host: PaneGroupFlowHost) -> NSHostingView<PaneGroupFlowRoot> {
-        let view = NSHostingView(rootView: PaneGroupFlowRoot(host: host))
+    private func mount(
+        _ host: PaneGroupFlowHost,
+        onVisible: @escaping (Set<TerminalSessionID>) -> Void = { _ in }
+    ) -> NSHostingView<PaneGroupFlowRoot> {
+        let view = NSHostingView(rootView: PaneGroupFlowRoot(host: host, onVisible: onVisible))
         view.frame = NSRect(x: 0, y: 0, width: 1_280, height: 800)
         settle(view)
         return view
@@ -310,5 +337,80 @@ final class WarrenDesktopPaneGroupFlowTests: XCTestCase {
         XCTAssertEqual(after.count, 3, "commits: \(host.commits)")
         XCTAssertEqual(Array(after.prefix(2)), before)
         XCTAssertEqual(host.rejected, 0)
+    }
+
+    /// A Session another actor creates while the split's own Session is
+    /// starting is new to the scope too, and reaches the roster — selected —
+    /// first. The split must take the Session its request created; the other
+    /// one stays a Tab of its own.
+    func testSplitTakesItsOwnSessionWhenAnUnrelatedOneArrivesFirst() {
+        let host = PaneGroupFlowHost(sessionCount: 2, splitAll: true)
+        host.sessionDelay = 0.3
+        host.createsUnrelatedSessionDuringRequest = true
+        let view = mount(host)
+        let before = sessionIDs(host.groupTree)
+
+        NotificationCenter.default.post(name: WarrenDesktopCommand.splitRight, object: nil)
+        settle(view, seconds: 1.2)
+
+        guard let unrelated = host.unrelated,
+              let created = host.createdByToken.values.first else {
+            return XCTFail("actions: \(host.actions)")
+        }
+        let after = sessionIDs(host.groupTree)
+        XCTAssertEqual(after, before + [created], "commits: \(host.commits) actions: \(host.actions)")
+        XCTAssertFalse(after.contains(unrelated.id))
+        XCTAssertTrue(host.projection.tabs.contains { $0.sessionID == unrelated.id })
+        XCTAssertEqual(host.rejected, 0)
+    }
+
+    /// The Host creates a new arrangement and gives it its shape in one roster
+    /// update. Adopting that update has to switch the window to the new group:
+    /// otherwise the window keeps naming the first group while drawing the new
+    /// one's tree, and the next edit in the new group overwrites the first.
+    func testEditingANewArrangementLeavesTheFirstOneIntact() {
+        let host = PaneGroupFlowHost(sessionCount: 3, splitAll: true, splitCount: 2)
+        let view = mount(host)
+        let first = sessionIDs(host.groupTree)
+        XCTAssertEqual(first.count, 2)
+
+        NotificationCenter.default.post(name: WarrenDesktopCommand.splitRight, object: nil)
+        settle(view, seconds: 0.8)
+        XCTAssertEqual(host.groups.count, 2, "commits: \(host.commits) actions: \(host.actions)")
+        let second = sessionIDs(host.groups.last?.tree)
+        XCTAssertEqual(second.count, 2)
+
+        NotificationCenter.default.post(name: WarrenDesktopCommand.closePane, object: nil)
+        settle(view, seconds: 0.8)
+
+        XCTAssertEqual(sessionIDs(host.groupTree), first, "commits: \(host.commits) actions: \(host.actions)")
+        XCTAssertEqual(host.groups.count, 2)
+        XCTAssertEqual(sessionIDs(host.groups.last?.tree), [second[0]])
+        XCTAssertEqual(host.rejected, 0)
+    }
+
+    /// Opening a Session of a background arrangement from outside the bar —
+    /// the sidebar or the command palette select its Tab directly — has to
+    /// bring that arrangement back on screen. Drawing the Session alone over
+    /// the newer group made the first arrangement look dissolved.
+    func testSelectingASessionOfABackgroundArrangementShowsThatArrangement() {
+        let host = PaneGroupFlowHost(sessionCount: 3, splitAll: true, splitCount: 2)
+        var visible: Set<TerminalSessionID> = []
+        let view = mount(host, onVisible: { visible = $0 })
+        let first = sessionIDs(host.groupTree)
+
+        NotificationCenter.default.post(name: WarrenDesktopCommand.splitRight, object: nil)
+        settle(view, seconds: 0.8)
+        XCTAssertEqual(host.groups.count, 2, "commits: \(host.commits) actions: \(host.actions)")
+        let second = sessionIDs(host.groups.last?.tree)
+        XCTAssertEqual(visible, Set(second))
+
+        host.send(.selectTab(host.tabID(first[1])))
+        settle(view)
+
+        XCTAssertEqual(visible, Set(first))
+        XCTAssertEqual(sessionIDs(host.groupTree), first)
+        XCTAssertEqual(sessionIDs(host.groups.last?.tree), second)
+        XCTAssertEqual(host.commits.count, 1, "selecting a Session writes no arrangement")
     }
 }

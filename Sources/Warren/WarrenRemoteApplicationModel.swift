@@ -255,6 +255,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// connection spinner; it is not a transport or failure state.
     @Published private(set) var isMigratingRuntimeSessions = false
     @Published private(set) var creatingSessionWorkspaceIDs: Set<WorkspaceID> = []
+    /// The Session each tokened create request produced. Entries are small and
+    /// only cleared with the connection, so a late reader still finds its own.
+    @Published private(set) var createdSessionIDsByToken: [UUID: TerminalSessionID] = [:]
     @Published private(set) var deletingProjectIDs: Set<ProjectID> = []
     @Published private(set) var deletingWorkspaceIDs: Set<WorkspaceID> = []
     @Published private(set) var attachingSessionID: TerminalSessionID?
@@ -731,6 +734,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         activityAcknowledgments = WarrenDesktopActivityAcknowledgments()
         lastReportedScreenSessions.removeAll()
         creatingSessionWorkspaceIDs.removeAll()
+        createdSessionIDsByToken.removeAll()
         clearDeletionState()
         resetAttachmentState()
         webStatus = WarrenDesktopWebStatus()
@@ -2409,7 +2413,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         return projection.session(id: sessionID)?.state.isActive == true
     }
 
-    func createSession(workspaceID: WorkspaceID, request launch: TerminalSessionLaunchRequest) {
+    func createSession(
+        workspaceID: WorkspaceID,
+        request launch: TerminalSessionLaunchRequest,
+        token: UUID? = nil
+    ) {
         guard let wire,
               let workspace = projection.workspace(id: workspaceID),
               !creatingSessionWorkspaceIDs.contains(workspaceID),
@@ -2429,6 +2437,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     throw NSError(domain: "WarrenRemote", code: 10, userInfo: [
                         NSLocalizedDescriptionKey: "The daemon returned an invalid Session ID.",
                     ])
+                }
+                // Published before the roster refresh so the requester can match
+                // the Session whichever of the two reaches it first.
+                if let token {
+                    self?.createdSessionIDsByToken[token] = sessionID
                 }
 
                 // The create response is authoritative, but the projection is

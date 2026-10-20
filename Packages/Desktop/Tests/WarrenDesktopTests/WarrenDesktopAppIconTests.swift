@@ -57,6 +57,67 @@ final class WarrenDesktopAppIconTests: XCTestCase {
         XCTAssertEqual(WarrenDesktopAppIcon.resolve(session), .program(.rust))
     }
 
+    /// An Agent starts its own session late: until its first message, the Host
+    /// has no provider to bind and reports the shell. The command line still
+    /// names the CLI, so the tile wears the Agent's mark instead of Node's.
+    func testAnUnboundAgentIsNamedByItsCommandLine() {
+        func session(process: String, commandLine: String) -> WarrenDesktopSession {
+            WarrenDesktopSession(
+                id: TerminalSessionID(),
+                workspaceID: WorkspaceID(),
+                title: "fish",
+                runtimeProcess: process,
+                runtimeCommandLine: commandLine
+            )
+        }
+        XCTAssertEqual(
+            WarrenDesktopAppIcon.resolve(session(
+                process: "node",
+                commandLine: "node /opt/homebrew/bin/codex --dangerously-bypass-approvals-and-sandbox"
+            )),
+            .agent(.codex)
+        )
+        XCTAssertEqual(
+            WarrenDesktopAppIcon.resolve(session(
+                process: "codex",
+                commandLine: "codex --dangerously-bypass-hook-trust"
+            )),
+            .agent(.codex)
+        )
+        XCTAssertEqual(
+            WarrenDesktopAppIcon.resolve(session(
+                process: "node",
+                commandLine: "node /usr/local/lib/node_modules/@openai/codex/bin/codex.js --version"
+            )),
+            .agent(.codex)
+        )
+        XCTAssertEqual(
+            WarrenDesktopAppIcon.resolve(session(process: "node", commandLine: "node /opt/homebrew/bin/claude")),
+            .agent(.claude)
+        )
+        XCTAssertEqual(
+            WarrenDesktopAppIcon.resolve(session(process: "agy", commandLine: "agy")),
+            .agent(.antigravity)
+        )
+        XCTAssertEqual(
+            WarrenDesktopAppIcon.resolve(session(process: "trae-cli", commandLine: "trae-cli interactive")),
+            .agent(.trae)
+        )
+    }
+
+    /// The Agent rule stays on the Agent's own executables: an interpreter
+    /// running something else keeps its program's mark.
+    func testAnInterpreterRunningAnotherScriptIsStillThatProgram() {
+        let session = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: WorkspaceID(),
+            title: "zsh",
+            runtimeProcess: "node",
+            runtimeCommandLine: "node server.js"
+        )
+        XCTAssertEqual(WarrenDesktopAppIcon.resolve(session), .program(.node))
+    }
+
     func testEveryProgramShipsValidArtwork() throws {
         for program in WarrenDesktopProgram.allCases {
             let image = try XCTUnwrap(

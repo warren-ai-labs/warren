@@ -208,6 +208,7 @@ struct WarrenCompositionRoot: View {
             webStatus: remoteModel.webStatus,
             isMigratingRuntimeSessions: remoteModel.isMigratingRuntimeSessions,
             creatingSessionWorkspaceIDs: remoteModel.creatingSessionWorkspaceIDs,
+            createdSessionIDsByToken: remoteModel.createdSessionIDsByToken,
             deletingProjectIDs: remoteModel.deletingProjectIDs,
             deletingWorkspaceIDs: remoteModel.deletingWorkspaceIDs,
             notices: remoteModel.notices,
@@ -742,8 +743,8 @@ struct WarrenCompositionRoot: View {
             presentWorktreeImport(for: projectID)
         } else if case .setProjectAutoImportGitWorktrees(let projectID, let enabled) = action {
             remoteModel.setProjectAutoImportGitWorktrees(projectID, enabled: enabled)
-        } else if case .requestNewSession(let workspaceID) = action {
-            remoteModel.createSession(workspaceID: workspaceID, request: .shell)
+        } else if case .requestNewSession(let workspaceID, let token) = action {
+            remoteModel.createSession(workspaceID: workspaceID, request: .shell, token: token)
         } else {
             let workspaceID = WarrenDesktopAutomaticSessionPolicy.workspaceID(
                 for: action,
