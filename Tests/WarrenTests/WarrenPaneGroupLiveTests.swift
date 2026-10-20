@@ -25,13 +25,14 @@ final class WarrenPaneGroupLiveTests: XCTestCase {
                 projection: model.projection,
                 navigation: model.navigation,
                 actions: WarrenDesktopActions { action in
-                    if case .requestNewSession(let workspaceID) = action {
-                        model.createSession(workspaceID: workspaceID, request: .shell)
+                    if case .requestNewSession(let workspaceID, let token) = action {
+                        model.createSession(workspaceID: workspaceID, request: .shell, token: token)
                     } else {
                         model.perform(action)
                     }
                 },
                 creatingSessionWorkspaceIDs: model.creatingSessionWorkspaceIDs,
+                createdSessionIDsByToken: model.createdSessionIDsByToken,
                 onCommitPaneTree: { model.commitPaneTree(owner: $0, tree: $1, target: $2) },
                 onPaneDiagnostic: { print("diag \($0) \($1.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " "))") },
                 persistenceEnabled: false

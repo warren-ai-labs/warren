@@ -21,6 +21,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     public let webStatus: WarrenDesktopWebStatus
     public let isMigratingRuntimeSessions: Bool
     public let creatingSessionWorkspaceIDs: Set<WorkspaceID>
+    /// The Session each `requestNewSession` produced, keyed by its token.
+    public let createdSessionIDsByToken: [UUID: TerminalSessionID]
     public let deletingProjectIDs: Set<ProjectID>
     public let deletingWorkspaceIDs: Set<WorkspaceID>
     public let notices: [WarrenDesktopNotice]
@@ -278,12 +280,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         /// exist in that layout at all. Keeping the Tab ID here lets the
         /// completion rebuild the pane it was asked about.
         let targetTabID: String
-        /// Every Tab the scope already had when the request was made.
+        /// Names the `requestNewSession` this split dispatched.
         ///
-        /// The Session this request creates is the only one that can be missing
-        /// from it, which is what identifies that Session when it arrives —
-        /// including a Tab that was on screen without being in the layout.
-        let existingTabIDs: Set<String>
+        /// The model reports the Session that request created under this
+        /// token, which is the only thing that identifies it: any actor can
+        /// create a Session in the scope while this one is starting.
+        let token: UUID
         let axis: SplitAxis
         /// Whether this request opens a new arrangement instead of extending
         /// the scope's current one.
@@ -303,6 +305,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         webStatus: WarrenDesktopWebStatus = .init(),
         isMigratingRuntimeSessions: Bool = false,
         creatingSessionWorkspaceIDs: Set<WorkspaceID> = [],
+        createdSessionIDsByToken: [UUID: TerminalSessionID] = [:],
         deletingProjectIDs: Set<ProjectID> = [],
         deletingWorkspaceIDs: Set<WorkspaceID> = [],
         notices: [WarrenDesktopNotice] = [],
@@ -384,6 +387,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.webStatus = webStatus
         self.isMigratingRuntimeSessions = isMigratingRuntimeSessions
         self.creatingSessionWorkspaceIDs = creatingSessionWorkspaceIDs
+        self.createdSessionIDsByToken = createdSessionIDsByToken
         self.deletingProjectIDs = deletingProjectIDs
         self.deletingWorkspaceIDs = deletingWorkspaceIDs
         self.notices = notices
@@ -802,17 +806,26 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             // the drawing.
             alignTabOrderWithLayout()
         }
-        .onChange(of: projection.paneGroups) { _ in
+        .onChange(of: projection.paneGroups) { paneGroups in
             // The Host is the authority: adopting its arrangements after every
             // roster change is what makes a second client's edit, or a
             // reconciliation on the Host, visible here.
-            adoptHostPaneGroups()
+            //
+            // The new value is passed in because `projection` still reads the
+            // previous roster inside this callback. Reading it there missed a
+            // group created and shaped in one roster update, so the window kept
+            // rendering the old arrangement under the new one's tree and the
+            // next edit was written to the old group.
+            adoptHostPaneGroups(paneGroups)
         }
         .onChange(of: projection.tabs) { _ in
             reconcilePendingSplitMutations()
             reconcilePersistedSplitTree()
         }
-        .onChange(of: navigation) { _ in
+        .onChange(of: navigation) { navigation in
+            // The new value is passed in: `navigation` still reads the previous
+            // selection inside this callback.
+            showPaneGroup(containing: navigation.selectedTabID)
             reconcilePendingSplitMutations()
             reconcilePersistedSplitTree()
             releaseFoldOfSelectedPane()
@@ -820,6 +833,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         .onChange(of: creatingSessionWorkspaceIDs) { _ in
             reconcilePendingSplitMutations()
             reconcilePersistedSplitTree()
+        }
+        .onChange(of: createdSessionIDsByToken) { _ in
+            reconcilePendingSplitMutations()
         }
         .onAppear {
             sidebarPeek.setCollapsed(sidebarState.isCollapsed)
@@ -833,7 +849,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             onActiveScreenSessionsChanged(activeVisibleSessions)
             // Adopt the Host's arrangements once at mount, so a restored split
             // is on screen before the next roster change arrives.
-            adoptHostPaneGroups()
+            adoptHostPaneGroups(projection.paneGroups)
             // The monitor only forwards a command notification. Resolving the
             // current presentation in `.onReceive` avoids retaining the tab
             // and scope captured by the first SwiftUI appearance.
@@ -2127,7 +2143,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     private func addSession(in presentation: Presentation) {
         if let workspace = presentation.workspace {
-            dispatch(.requestNewSession(workspace.id))
+            dispatch(.requestNewSession(workspace.id, token: UUID()))
         }
     }
 
@@ -2636,10 +2652,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     /// Adopts the Host's arrangements after a roster change, so a summary of
     /// every scope that gained, changed, or lost a group is reflected locally.
-    private func adoptHostPaneGroups() {
+    private func adoptHostPaneGroups(_ paneGroups: [PaneGroup]) {
         let endpointPrefix = "endpoint-\(selectedEndpointID)-"
         var groupsByScope: [String: [PaneGroup]] = [:]
-        for group in projection.paneGroups {
+        for group in paneGroups {
             guard let scope = paneGroupScopeKey(for: group) else { continue }
             groupsByScope[scope, default: []].append(group)
         }
@@ -2821,17 +2837,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         // selects that arrangement: compact mode lists every arrangement's
         // panes, and a Tab from a background one has to swap the screen to the
         // arrangement it lives in rather than visit it alone.
-        if let group = hostPaneGroups(for: presentation).first(where: {
+        if hostPaneGroups(for: presentation).contains(where: {
             WarrenDesktopPaneGroupMapping.tree(from: $0).contains(tabID: tabID)
         }) {
-            if activePaneGroupIDs[scope] != group.id.description {
-                activePaneGroupIDs[scope] = group.id.description
-            }
-            if let item = WarrenDesktopPaneGroupMapping.tree(from: group).item(forTabID: tabID) {
-                restoreZoom(unlessShowing: item.id, scope: scope)
-                restoreFold(ifFolded: item.id, scope: scope)
-                activePaneIDs[scope] = item.id
-            }
+            showPaneGroup(containing: tabID)
             selectTab(tabID, in: presentation)
             return
         }
@@ -2840,6 +2849,33 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         // the split; the next action that reshapes the panel — a split, a drop,
         // a maximized pane — is what retires it.
         selectTab(tabID, in: presentation)
+    }
+
+    /// Renders the arrangement that holds a Tab, so a Session selected from
+    /// anywhere — the bar, the sidebar, the command palette — shows the group
+    /// it belongs to instead of being visited alone over another group.
+    ///
+    /// The group is looked up across the roster rather than in the current
+    /// presentation, which may still describe the previous selection when this
+    /// runs from a navigation change. A Tab in no arrangement is left alone:
+    /// that is a visit, and the stored layout survives it.
+    private func showPaneGroup(containing tabID: String?) {
+        guard let tabID,
+              let group = projection.paneGroups.first(where: {
+                  WarrenDesktopPaneGroupMapping.tree(from: $0).contains(tabID: tabID)
+              }),
+              let scope = paneGroupScopeKey(for: group) else { return }
+        if activePaneGroupIDs[scope] != group.id.description {
+            activePaneGroupIDs[scope] = group.id.description
+            // Cache the group now on screen, so the scope's local layout
+            // describes it rather than the group it replaced.
+            adoptHostPaneGroups(projection.paneGroups)
+        }
+        if let item = WarrenDesktopPaneGroupMapping.tree(from: group).item(forTabID: tabID) {
+            restoreZoom(unlessShowing: item.id, scope: scope)
+            restoreFold(ifFolded: item.id, scope: scope)
+            activePaneIDs[scope] = item.id
+        }
     }
 
     private func handleSelectPane(_ paneID: String, in presentation: Presentation, tree: SplitLayoutTree) {
@@ -2982,10 +3018,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
         activePaneIDs[scope] = targetPaneID
 
+        let token = UUID()
         pendingSplits[scope] = PendingSplit(
             targetPaneID: targetPaneID,
             targetTabID: targetTab.id,
-            existingTabIDs: Set(presentation.tabs.map(\.id)),
+            token: token,
             axis: axis,
             createsNewGroup: startsNewGroup
         )
@@ -2993,7 +3030,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             pendingNewGroupVisitTabIDs[scope] = openedTab.id
         }
         if let workspace = presentation.workspace {
-            dispatch(.requestNewSession(workspace.id))
+            dispatch(.requestNewSession(workspace.id, token: token))
         } else {
             pendingSplits.removeValue(forKey: scope)
             pendingNewGroupVisitTabIDs.removeValue(forKey: scope)
@@ -3429,30 +3466,19 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 ])
                 continue
             }
-            // The Session this request created is the scope's only new Tab.
-            // Its selection is preferred but not required: waiting for the
-            // selection to arrive delayed the split behind a render pass that
-            // could be seconds late, and the Session's pane is what its terminal
-            // attach is waiting for. A request that is answered late must not
-            // leave the panel without the pane it asked for.
-            let arrivals = presentation.tabs.filter {
-                !pending.existingTabIDs.contains($0.id) && $0.sessionID != nil
-            }
-            guard let newTab = arrivals.first(where: { $0.id == navigation.selectedTabID })
-                ?? arrivals.first else {
-                // The roster has not published the Session yet. Keep the pending
-                // intent; a failed request is released by the timeout below.
+            // The Session this request created is the one the model reported
+            // under its token; any other Session that appeared in the scope
+            // meanwhile belongs to another actor. The pane lands as soon as that
+            // Session is in the roster: waiting for its selection delayed the
+            // split behind a render pass that could be seconds late, and the
+            // Session's pane is what its terminal attach is waiting for.
+            guard let createdSessionID = createdSessionIDsByToken[pending.token],
+                  let newTab = presentation.tabs.first(where: { $0.sessionID == createdSessionID }) else {
+                // The create has not answered, or the roster has not published
+                // the Session yet. Keep the pending intent; a failed request is
+                // released by the timeout below.
                 continue
             }
-            // More than one arrival means this request cannot be told apart from
-            // a Tab that appeared for another reason, so which one it consumed
-            // has to be recorded.
-            paneDiagnostic("pane_split_arrivals", scope: scope, [
-                "arrivals": arrivals.map { Self.diagnosticTabs([$0.id]) }.joined(separator: ","),
-                "picked": Self.diagnosticTab(newTab.id),
-                "selected": Self.diagnosticTab(navigation.selectedTabID),
-                "target": Self.diagnosticTab(pending.targetTabID),
-            ])
             let newTree = tree.split(
                 targetPaneID: targetPaneID,
                 newTabID: newTab.id,

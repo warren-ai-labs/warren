@@ -509,7 +509,7 @@ struct WarrenDesktopSidebarHostRows: View {
                             },
                             onDoubleClick: {
                                 if workspaceDisplayMode.isRich, canWrite {
-                                    onAction(.requestNewSession(workspace.id))
+                                    onAction(.requestNewSession(workspace.id, token: UUID()))
                                 } else {
                                     onOpenWorkspace(host.workspaceReference(workspace.id))
                                 }
@@ -755,7 +755,7 @@ struct WarrenDesktopSidebarHostRows: View {
                 {
                     // The same gesture the Workspace row would have taken.
                     if canWrite {
-                        onAction(.requestNewSession(workspace.id))
+                        onAction(.requestNewSession(workspace.id, token: UUID()))
                     } else {
                         onOpenWorkspace(host.workspaceReference(workspace.id))
                     }
@@ -839,7 +839,7 @@ struct WarrenDesktopSidebarHostRows: View {
                 // A background Host stays read-only, so its double-click keeps
                 // opening instead of creating; see the current-Host tree.
                 if workspaceDisplayMode.isRich, canWrite {
-                    onAction(.requestNewSession(workspace.id))
+                    onAction(.requestNewSession(workspace.id, token: UUID()))
                 } else {
                     onOpenWorkspace(host.workspaceReference(workspace.id))
                 }

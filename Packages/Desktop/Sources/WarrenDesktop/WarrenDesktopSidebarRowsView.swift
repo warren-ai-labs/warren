@@ -642,7 +642,7 @@ struct WarrenDesktopSidebarRows: View {
                             onSelect: { select(.workspace(workspace.id)) },
                             onDoubleClick: {
                                 onAction(workspaceDisplayMode.isRich
-                                    ? .requestNewSession(workspace.id)
+                                    ? .requestNewSession(workspace.id, token: UUID())
                                     : .openWorkspace(workspace.id))
                             }
                         )
@@ -1132,7 +1132,7 @@ struct WarrenDesktopSidebarRows: View {
                     )
                 } ?? [],
                 onDoubleClick: soloWorkspace.map { workspace in
-                    { onAction(.requestNewSession(workspace.id)) }
+                    { onAction(.requestNewSession(workspace.id, token: UUID())) }
                 }
             )
         }
@@ -1234,7 +1234,7 @@ struct WarrenDesktopSidebarRows: View {
                     // gesture the add control gives every scope. Compact mode
                     // keeps the switch-driven open it has always had.
                     onAction(workspaceDisplayMode.isRich
-                        ? .requestNewSession(workspace.id)
+                        ? .requestNewSession(workspace.id, token: UUID())
                         : .openWorkspace(workspace.id))
                 },
                 onRename: {

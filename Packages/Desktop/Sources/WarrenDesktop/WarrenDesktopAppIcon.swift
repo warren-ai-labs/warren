@@ -6,9 +6,11 @@ import WarrenDomain
 /// What a Session's icon shows.
 ///
 /// An Agent is named by the Session's presented kind, because the Host binds
-/// the provider even when it was started inside a shell. Anything else is
-/// named by the foreground process the Host probes, so `bun run dev` shows
-/// Bun and `cargo test` shows Rust while the shell waits behind them.
+/// the provider even when it was started inside a shell. A shell that runs an
+/// Agent CLI the Host has not bound yet is named by that CLI, so an Agent that
+/// has not started a thread still wears its own mark. Anything else is named by
+/// the foreground process the Host probes, so `bun run dev` shows Bun and
+/// `cargo test` shows Rust while the shell waits behind them.
 ///
 /// Agent marks are LobeHub's (MIT); program marks are Simple Icons' (CC0).
 enum WarrenDesktopAppIcon: Hashable, Sendable {
@@ -40,6 +42,17 @@ enum WarrenDesktopAppIcon: Hashable, Sendable {
         case .claude, .codex, .opencode, .pi, .qoder, .antigravity, .trae:
             return .agent(session.presentedKind)
         case .shell, .custom:
+            // An Agent CLI starts its own session late: Codex reports a thread
+            // only once its first message is sent, and until then the Host has
+            // no provider to bind and sees a shell running an interpreter. The
+            // command line already names the CLI the person launched, so that
+            // is what the tile draws.
+            if let kind = agentKind(
+                process: session.runtimeProcess,
+                commandLine: session.runtimeCommandLine
+            ) {
+                return .agent(kind)
+            }
             if let program = WarrenDesktopProgram.resolve(
                 process: session.runtimeProcess,
                 commandLine: session.runtimeCommandLine
@@ -50,6 +63,53 @@ enum WarrenDesktopAppIcon: Hashable, Sendable {
             // blank tile.
             return .program(WarrenDesktopProgram.shell(launchedAs: session.title))
         }
+    }
+
+    /// The Agent a foreground command line names, for a Session the Host has not
+    /// bound a provider to.
+    ///
+    /// Several Agents are installed behind an interpreter -- npm's Codex is
+    /// `node /opt/homebrew/bin/codex` -- so a launcher's first argument names
+    /// the CLI as often as the process does.
+    static func agentKind(process: String, commandLine: String) -> TerminalSessionKind? {
+        let words = commandLine.split(separator: " ").map(String.init)
+        var candidates: [String] = []
+        if let launched = words.first {
+            let name = WarrenDesktopProgram.executableName(launched)
+            candidates.append(name)
+            if WarrenDesktopProgram.interpreterNames.contains(name), words.count > 1 {
+                candidates.append(cliName(words[1]))
+            }
+        }
+        candidates.append(WarrenDesktopProgram.executableName(process))
+        for candidate in candidates {
+            if let kind = agentExecutables[candidate] { return kind }
+        }
+        return nil
+    }
+
+    /// The executable each Agent ships, including the names its CLI also answers
+    /// to. Everything else keeps its program's mark.
+    private static let agentExecutables: [String: TerminalSessionKind] = [
+        "claude": .claude,
+        "codex": .codex,
+        "opencode": .opencode,
+        "pi": .pi,
+        "qoder": .qoder,
+        "agy": .antigravity,
+        "antigravity": .antigravity,
+        "trae-cli": .trae,
+        "trae": .trae,
+    ]
+
+    /// The name an interpreter launcher runs, without the extension a JavaScript
+    /// entry point usually carries.
+    private static func cliName(_ raw: String) -> String {
+        let name = WarrenDesktopProgram.executableName(raw)
+        for suffix in [".js", ".mjs", ".cjs"] where name.hasSuffix(suffix) {
+            return String(name.dropLast(suffix.count))
+        }
+        return name
     }
 
     /// The tile behind the mark: the brand's own colour.
@@ -144,12 +204,15 @@ enum WarrenDesktopProgram: String, CaseIterable, Hashable, Sendable {
         }
     }
 
-    private static func executableName(_ raw: String) -> String {
+    static func executableName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let last = trimmed.split(separator: "/").last.map(String.init) ?? trimmed
         // Login shells report themselves as `-zsh`.
         return last.hasPrefix("-") ? String(last.dropFirst()).lowercased() : last.lowercased()
     }
+
+    /// The interpreters an Agent CLI is launched through rather than with.
+    static let interpreterNames: Set<String> = ["node", "bun", "deno", "python", "python3"]
 
     private static let byExecutable: [String: Self] = [
         "node": .node, "tsx": .node, "ts-node": .node,
