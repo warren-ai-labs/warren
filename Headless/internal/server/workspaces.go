@@ -151,10 +151,18 @@ func (s *Service) createWorkspace(
 		return api.WorkspaceCreateResult{}, err
 	}
 	branchCreated := false
+	baseCommit := ""
 	args := []string{"-C", project.Path, "worktree", "add", path, branch}
 	if exec.Command("git", "-C", project.Path, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() != nil {
 		branchCreated = true
+		// Resolve the start point to an OID first so the branch is created from
+		// exactly the commit Warren records. `worktree add -b` without a start
+		// point reads HEAD, which could move before the record is saved.
+		baseCommit = gitOutput(project.Path, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
 		args = []string{"-C", project.Path, "worktree", "add", "-b", branch, path}
+		if baseCommit != "" {
+			args = append(args, baseCommit)
+		}
 	}
 	if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 		return api.WorkspaceCreateResult{}, fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(output)), err)
@@ -175,6 +183,7 @@ func (s *Service) createWorkspace(
 		ID: id, ProjectID: projectID, TaskID: taskID, Name: name, Path: path,
 		Branch: branch, Kind: "worktree", ManagedWorktree: true,
 		CreationRequestID: requestID, CreationRequestHash: requestHash, CreatedAt: time.Now().UTC(),
+		BaseCommit: baseCommit,
 	}
 	if replay, found, err := s.insertWorkspaceForCreation(&workspace); err != nil {
 		return api.WorkspaceCreateResult{}, rollbackManagedWorktree(err, project.Path, path, branch, branchCreated)

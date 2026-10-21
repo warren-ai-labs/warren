@@ -363,6 +363,10 @@ type piParser struct {
 	// a usage call key. pi record ids are only eight hex characters and unique
 	// within one session, which is too narrow to identify a call on its own.
 	piSessionKey string
+	// piBoundary is the turn boundary the record being parsed ended. Parse
+	// applies it after the record's own events so the boundary cannot be
+	// undone by a tool call carried on the same message.
+	piBoundary api.AgentTurnStatus
 }
 
 func newPiParser(contentLimit int) *piParser {
@@ -373,7 +377,57 @@ func newPiParser(contentLimit int) *piParser {
 }
 
 func (p *piParser) Parse(line []byte) []api.AgentEvent {
-	return p.observe(p.parsePi(line))
+	events := p.observe(p.parsePi(line))
+	p.applyPiBoundary()
+	return events
+}
+
+// piTerminalBoundary maps the stop reason of a message that ended the turn onto
+// the boundary the tracker applies. pi writes `aborted` when the user stopped the
+// turn and `error` when the provider call failed, whether the message carries
+// content or not. A stop that cancels a running tool surfaces as an error on the
+// follow-up message instead, so its own abort wording is mapped back.
+func piTerminalBoundary(stopReason, errorMessage string) api.AgentTurnStatus {
+	switch strings.ToLower(strings.TrimSpace(stopReason)) {
+	case "aborted":
+		return api.AgentTurnInterrupted
+	case "error":
+		if piAbortedErrorMessage(errorMessage) {
+			return api.AgentTurnInterrupted
+		}
+		return api.AgentTurnFailed
+	default:
+		return ""
+	}
+}
+
+// piAbortedErrorMessage reports the messages pi writes when the user stopped the
+// turn: the abort signal's own wording, and the retry notice pi adds when a
+// stop interrupted its automatic retries. Matching those exact messages keeps a
+// genuine provider failure a failure.
+func piAbortedErrorMessage(message string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(message))
+	switch trimmed {
+	case "operation aborted", "this operation was aborted":
+		return true
+	default:
+		return strings.HasPrefix(trimmed, "aborted after ")
+	}
+}
+
+// applyPiBoundary closes the turn the parsed record ended. It runs after the
+// record's events are observed because pi attaches the stop reason to the same
+// message that may still carry tool calls: a turn ended by an interrupt must not
+// be left working by a tool call observed afterwards.
+func (p *piParser) applyPiBoundary() {
+	boundary := p.piBoundary
+	p.piBoundary = ""
+	switch boundary {
+	case api.AgentTurnInterrupted:
+		p.tracker.TurnInterrupted()
+	case api.AgentTurnFailed:
+		p.tracker.TurnFailed()
+	}
 }
 
 func (p *piParser) parse(line []byte) []api.AgentEvent {
@@ -554,6 +608,12 @@ func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model st
 	// per block: across local pi sessions 10361 messages produced 20540 such
 	// events, inflating token totals by 1.910x.
 	messageUsage := p.piUsageOnce(record.ID, message.Usage)
+	// Every non-successful ending arrives on the assistant message itself:
+	// pressing Esc writes stopReason aborted, and a provider failure (a rejected
+	// request, a timeout, or an exhausted retry) writes stopReason error. Those
+	// records usually carry neither content nor usage, so the turn boundary must
+	// not depend on a projected event existing.
+	p.piBoundary = piTerminalBoundary(message.StopReason, message.ErrorMessage)
 	var blocks []piContentBlock
 	if json.Unmarshal(message.Content, &blocks) != nil {
 		content := p.content(message.Content)
@@ -660,14 +720,11 @@ func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model st
 			events = append(events, event)
 		}
 	}
-	if len(events) == 0 {
-		if messageUsage == nil {
-			return nil
-		}
+	if len(events) == 0 && messageUsage != nil {
 		// Every block was unrenderable, but the call still consumed tokens. A
 		// bare usage event keeps that spend countable, which is the same shape
 		// Codex uses for its own token_count records.
-		return []api.AgentEvent{{
+		events = append(events, api.AgentEvent{
 			Provider:  piProvider,
 			ID:        record.ID,
 			Type:      "usage",
@@ -675,9 +732,11 @@ func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model st
 			Model:     model,
 			Usage:     messageUsage,
 			Timestamp: timestamp,
-		}}
+		})
 	}
-	events[0].Usage = messageUsage
+	if len(events) > 0 {
+		events[0].Usage = messageUsage
+	}
 	// The stop reason belongs on the assistant text boundary. When a turn
 	// ends with tool calls only, the tracker keeps the turn open until the
 	// next assistant text or tool output resolves it.
@@ -685,7 +744,10 @@ func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model st
 		events[textIndex].StopReason = piStopReason(message.StopReason)
 	}
 	if message.StopReason == "error" && message.ErrorMessage != "" {
-		events = append(events, api.AgentEvent{
+		// The ended call is reported even when pi recorded no content for it: the
+		// provider's own message is the only evidence. A stop is a notice the way
+		// Claude's is, not a failure, so it must not fail the turn it ended.
+		event := api.AgentEvent{
 			Provider:  piProvider,
 			ID:        record.ID,
 			Type:      "error",
@@ -693,11 +755,14 @@ func (p *piParser) parsePiAssistant(record piRecord, message piMessage, model st
 			Error:     p.clip(message.ErrorMessage),
 			Model:     model,
 			Timestamp: timestamp,
-		})
-	} else if message.StopReason == "aborted" {
-		// An interrupted turn is an intentional return to idle, matching the
-		// explicit abort Codex emits through its own event stream.
-		p.tracker.TurnInterrupted()
+		}
+		if p.piBoundary == api.AgentTurnInterrupted {
+			event.Type = "system"
+			event.Role = "system"
+			event.Error = ""
+			event.StopReason = "interrupted"
+		}
+		events = append(events, event)
 	}
 	return events
 }

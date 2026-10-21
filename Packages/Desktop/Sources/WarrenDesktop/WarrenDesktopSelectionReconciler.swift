@@ -224,7 +224,7 @@ public enum WarrenDesktopNavigationReducer {
              .requestProjectSetupScript,
              .renameTask, .renameProject, .renameWorkspace,
              .attachWorkspaceToTask, .detachWorkspaceFromTask, .deleteTask,
-             .renameSession,
+             .renameSession, .regenerateSessionTitle,
              .setTaskPinned, .setProjectPinned, .setWorkspacePinned, .setSessionPinned,
              .dismissActivity,
              .moveTab, .moveSession, .moveProject, .moveWorkspace,

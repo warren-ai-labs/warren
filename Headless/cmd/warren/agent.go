@@ -36,6 +36,8 @@ func agentCommand(args []string) error {
 		return agentReadCommand(args[1:])
 	case "wait":
 		return agentWaitCommand(args[1:])
+	case "cancel":
+		return agentCancelCommand(args[1:])
 	case "attach":
 		return agentAttachCommand(args[1:])
 	case "remove", "delete", "rename", "pin", "move":
@@ -157,7 +159,7 @@ func agentCreateCommand(args []string) error {
 		if readyErr != nil {
 			return fmt.Errorf("agent %s created with initial prompt but transcript was not ready: %w", session.ID, readyErr)
 		}
-		after, current := agentWaitCursor(subscription.Execution)
+		after, current := agentInitialPromptCursor(subscription.Execution)
 		waitResult, err := waitAgentTurnResultForInitialPrompt(c, session.ID, subscription.Execution, after, current, waitTimeout)
 		if err != nil {
 			return err
@@ -428,7 +430,7 @@ func agentAttachCommand(args []string) error {
 		return err
 	}
 	defer c.Close()
-	session, err := subscribeTerminal(ctx, c, id)
+	session, err := subscribeTerminal(ctx, c, id, false)
 	if err != nil {
 		return err
 	}
@@ -872,6 +874,93 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
+func agentCancelCommand(args []string) error {
+	help, present, err := validateStrictFlags(args, agentCancelValueFlags, agentCancelBooleanFlags)
+	if err != nil {
+		return newUsageError(err.Error(), agentCancelUsageText())
+	}
+	if help {
+		fmt.Print(agentCancelUsageText())
+		return nil
+	}
+	if present["timeout"] && !present["wait"] {
+		return newUsageError("--timeout requires --wait", agentCancelUsageText())
+	}
+	params := parseFlags(args)
+	positions := positionals(params)
+	var id string
+	if boolValue(params, "current") {
+		if len(positions) > 0 {
+			return newUsageError("--current cannot be combined with AGENT_ID", agentCancelUsageText())
+		}
+		id, err = currentSessionID()
+		if err != nil {
+			return err
+		}
+	} else {
+		if len(positions) == 0 {
+			return newUsageError("missing AGENT_ID", agentCancelUsageText())
+		}
+		if len(positions) > 1 {
+			return newUsageError("agent cancel accepts exactly one AGENT_ID", agentCancelUsageText())
+		}
+		id = positions[0]
+	}
+	var waitTimeout time.Duration
+	if boolValue(params, "wait") {
+		waitTimeout, err = agentWaitTimeout(params)
+		if err != nil {
+			return newUsageError(err.Error(), agentCancelUsageText())
+		}
+	}
+	ctx, c, err := connect()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	// Cancelling is a Host-side interrupt, not PTY input, so the observer
+	// subscription must not take the input lease from whoever is typing.
+	session, err := c.SubscribePassive(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !isAgentSession(session) {
+		return fmt.Errorf("session is not a Codex, Claude, OpenCode, Pi, Qoder, or Antigravity agent: %s", session.ID)
+	}
+	subscription, err := waitForAgentSubscription(ctx, c, id, agentStartupTimeout)
+	if err != nil {
+		return err
+	}
+	snapshot := subscription.Execution
+	turn := executionTurn(snapshot)
+	if turn.ID == 0 || turn.Status != api.AgentTurnStarted {
+		// Nothing is running. Cancelling stays a no-op instead of an error so a
+		// caller that retries after the turn ended is not punished for it.
+		return printValue(api.AgentTurnInterruptResult{Accepted: false, Session: id, Status: "idle"})
+	}
+	// The Host owns the provider-specific interrupt: the CLI never writes PTY
+	// bytes, so a TUI that needs Escape and a driver that needs a protocol
+	// request are both handled on the Host side.
+	if _, err := c.CancelAgentTurn(ctx, api.AgentTurnCancelCommand{
+		AgentCommand: api.AgentCommand{CommandID: store.NewID(), ExecutionID: snapshot.ID},
+		TurnID:       strconv.FormatUint(turn.ID, 10),
+		Reason:       "cancel",
+	}); err != nil {
+		return err
+	}
+	result := api.AgentTurnInterruptResult{Accepted: true, Session: id, Turn: turn.ID, Status: string(api.AgentTurnCancelled)}
+	if !boolValue(params, "wait") {
+		return printValue(result)
+	}
+	// Pinning the wait to the turn being cancelled keeps a newer turn from
+	// answering for it; --wait reports any terminal status as the outcome.
+	waitResult, err := waitAgentTurnResult(c, id, snapshot, turn.ID, turn.ID, waitTimeout)
+	if err != nil {
+		return err
+	}
+	return printValue(waitResult)
+}
+
 func agentWaitCommand(args []string) error {
 	help, err := validateAgentWaitArgs(args)
 	if err != nil {
@@ -909,7 +998,8 @@ func agentWaitCommand(args []string) error {
 		return err
 	}
 	defer c.Close()
-	session, err := c.Subscribe(ctx, positions[0])
+	// Waiting observes the turn; it must not claim the terminal's input lease.
+	session, err := c.SubscribePassive(ctx, positions[0])
 	if err != nil {
 		return err
 	}
@@ -925,18 +1015,28 @@ func agentWaitCommand(args []string) error {
 	return waitAndPrintAgentTurn(c, session.ID, snapshot, after, current, timeout)
 }
 
+// agentWaitCursor pins a wait to the turn that is running when it begins. A
+// turn that is already terminal is history, not this wait's target: a watcher
+// rebind re-announces past turn boundaries while a Desktop or Web peer is
+// attached, and treating that replay as the answer would report a finished
+// turn while the Agent is still working on the next one.
 func agentWaitCursor(snapshot api.AgentExecution) (after, current uint64) {
-	after = executionTurn(snapshot).ID
-	if executionTurn(snapshot).Status == api.AgentTurnStarted {
-		return after, executionTurn(snapshot).ID
+	turn := executionTurn(snapshot)
+	if turn.Status == api.AgentTurnStarted {
+		return turn.ID, turn.ID
 	}
-	if after > 0 {
-		// A turn may complete after the read-only subscription is registered
-		// but before this snapshot arrives. Its live terminal message is queued;
-		// allow exactly that latest turn while historical replay stays silent.
+	return turn.ID, 0
+}
+
+// agentInitialPromptCursor is agentWaitCursor for the prompt agent create sent.
+// That turn can finish before the read-only subscription is registered, and its
+// terminal snapshot is then the only evidence of it.
+func agentInitialPromptCursor(snapshot api.AgentExecution) (after, current uint64) {
+	after, current = agentWaitCursor(snapshot)
+	if current == 0 && after > 0 {
 		after--
 	}
-	return after, 0
+	return after, current
 }
 
 func validateAgentWaitArgs(args []string) (bool, error) {
@@ -1131,6 +1231,12 @@ var agentCreateBooleanFlags = map[string]bool{
 }
 
 var agentSendValueFlags = map[string]bool{"timeout": true}
+
+var agentCancelValueFlags = map[string]bool{"timeout": true}
+
+var agentCancelBooleanFlags = map[string]bool{
+	"current": true, "wait": true, "help": true,
+}
 
 var agentSendBooleanFlags = map[string]bool{
 	"current": true, "wait": true, "help": true,

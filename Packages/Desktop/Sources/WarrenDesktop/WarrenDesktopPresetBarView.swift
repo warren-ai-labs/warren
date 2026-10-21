@@ -151,7 +151,7 @@ struct WarrenDesktopPresetBar: View {
     private func scopeAccessory(palette: WarrenDesktopMenuPalette) -> some View {
         if isBusy && pendingPresetID == nil {
             HStack(spacing: 5) {
-                WarrenBrailleSpinner(size: 11, accessibilityLabel: "Starting session")
+                WarrenLoadingIndicator(size: 11, accessibilityLabel: "Starting session")
                 Text("Starting…")
             }
             .font(.system(size: 11.5))
@@ -262,7 +262,7 @@ struct WarrenDesktopPresetBar: View {
                 // A starting row trades it for the spinner, as the menu spec
                 // draws a loading row.
                 if isPending {
-                    WarrenBrailleSpinner(size: 12, accessibilityLabel: "Starting \(preset.title)")
+                    WarrenLoadingIndicator(size: 12, accessibilityLabel: "Starting \(preset.title)")
                         .frame(width: WarrenDesktopMenuMetrics.iconSize, height: WarrenDesktopMenuMetrics.iconSize)
                 } else {
                     WarrenDesktopSessionKindBadge(kind: preset.request.kind, size: WarrenDesktopMenuMetrics.iconSize)

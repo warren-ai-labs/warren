@@ -185,6 +185,7 @@ struct WarrenCompositionRoot: View {
             projection: activeProjection,
             navigation: activeNavigation,
             updateStatus: updateStatus,
+            hostMaintenanceMessage: remoteModel.maintenanceMessage,
             onUpdateAction: {
                 NotificationCenter.default.post(
                     name: WarrenUpdateNotification.installRequested,
@@ -370,9 +371,13 @@ struct WarrenCompositionRoot: View {
                     guard selectedEndpointCapabilities.canUseEmbeddedBrowser else { return nil }
                     return AnyView(WarrenBrowserSurface(sessionID: sessionID, model: remoteModel))
                 },
-                conversationSurface: { sessionID in
+                conversationSurface: { sessionID, wantsInputFocus in
                     guard remoteModel.isConversationSession(sessionID) else { return nil }
-                    return AnyView(WarrenConversationSurface(sessionID: sessionID, model: remoteModel))
+                    return AnyView(WarrenConversationSurface(
+                        sessionID: sessionID,
+                        model: remoteModel,
+                        wantsInputFocus: wantsInputFocus
+                    ))
                 },
                 searchPresented: Binding(
                     get: {
@@ -407,7 +412,7 @@ struct WarrenCompositionRoot: View {
                     tokens.modalScrim
                         .ignoresSafeArea()
                     VStack(spacing: WarrenSpacing.compact) {
-                        WarrenBrailleSpinner(
+                        WarrenLoadingIndicator(
                             size: 22,
                             accessibilityLabel: "Reading Superset"
                         )
@@ -1737,8 +1742,9 @@ private struct WarrenTerminalSurfaceView: View {
     /// selected Host cannot run one.
     let browserSurface: @MainActor (String) -> AnyView?
     /// Builds the Conversation surface for an ACP Session, or `nil` for a
-    /// Session that has a terminal (RFC 0023).
-    let conversationSurface: @MainActor (TerminalSessionID) -> AnyView?
+    /// Session that has a terminal (RFC 0023). The flag is the pane's
+    /// keyboard intent; an inactive or overlaid pane must not take focus.
+    let conversationSurface: @MainActor (TerminalSessionID, Bool) -> AnyView?
     @Binding var searchPresented: Bool
     @State private var searchQuery = ""
     @FocusState private var searchFieldFocused: Bool
@@ -1761,7 +1767,10 @@ private struct WarrenTerminalSurfaceView: View {
            let viewer = browserSurface(sessionID.description) {
             viewer
         } else if let sessionID = context.tab.sessionID,
-                  let conversation = conversationSurface(sessionID) {
+                  let conversation = conversationSurface(
+                      sessionID,
+                      context.wantsTerminalFocus
+                  ) {
             // An ACP Session has no terminal: the conversation is the pane.
             conversation
         } else {
@@ -1806,17 +1815,6 @@ private struct WarrenTerminalSurfaceView: View {
                 .padding(WarrenSpacing.compact)
             }
         }
-        .overlay(alignment: .top) {
-            if let maintenanceMessage {
-                WarrenTerminalStatusPill(
-                    title: "Updating Warren…",
-                    detail: maintenanceMessage == "Warren is updating" ? nil : maintenanceMessage,
-                    lingeringDetail: "Your Sessions pick up where they were once it is back."
-                )
-                .padding(.top, WarrenSpacing.small)
-                .transition(.opacity.combined(with: .offset(y: -6)))
-            }
-        }
         .onChange(of: searchPresented) { presented in
             if presented {
                 searchQuery = activeSurface?.readSelection() ?? ""
@@ -1849,7 +1847,10 @@ private struct WarrenTerminalSurfaceView: View {
                 for: WarrenDesktopCommand.settingsDismissed
             )
         ) { _ in
-            surfaceManager.requestFocusForActiveSurface()
+            // Returning the keyboard to the Session is the activation path's
+            // job: closing Settings restores the navigation it covered, which
+            // reaches `presentSelectedSession(activatingInput: true)`. Only the
+            // presentation can still be deferred here.
             if let sessionID = context.tab.sessionID {
                 surfaceManager.requestPresent(sessionID)
             }
@@ -1897,8 +1898,8 @@ private struct WarrenTerminalLoadingOverlay: View {
     }
 }
 
-/// The small floating status that sits over a terminal while it connects,
-/// reconnects or waits out a Warren update.
+/// The small floating status that sits over a terminal while it connects or
+/// reconnects. An update has the window's own notice instead.
 ///
 /// Both used to be bare capsules of their own making: one on the status
 /// surface without a border, one on the popover surface with a rule and a
@@ -1927,7 +1928,7 @@ private struct WarrenTerminalStatusPill: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         HStack(alignment: shownDetail == nil ? .center : .top, spacing: 9) {
-            WarrenBrailleSpinner(size: 13, accessibilityLabel: title)
+            WarrenLoadingIndicator(size: 13, accessibilityLabel: title)
                 .frame(width: 16, height: 16)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -1950,7 +1951,9 @@ private struct WarrenTerminalStatusPill: View {
         .padding(.leading, 11)
         .padding(.trailing, 14)
         .padding(.vertical, shownDetail == nil ? 8 : 9)
-        .background(shape.fill(tokens.popoverSurface))
+        // The card sits over live terminal text, so it takes the opaque
+        // surface even when the window is glass.
+        .background(shape.fill(WarrenColorTokens.resolved(for: colorScheme).popoverSurface))
         .overlay(shape.strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
         .shadow(color: tokens.elevationShadow, radius: 14, y: 6)
         .padding(.horizontal, WarrenSpacing.small)
@@ -1973,12 +1976,9 @@ private struct WarrenEmptyWorkspacePanel: View {
             mark: .symbol("terminal"),
             title: "Start a session",
             message: "Open a Shell or an Agent from + in the top bar.",
-            hints: [
-                .init(keys: "⌘T", label: "New shell"),
-                .init(keys: "⌘X", label: "Next tab"),
-                .init(keys: "⇧⌘X", label: "Previous tab"),
-                .init(keys: "⌘W", label: "Close pane"),
-            ]
+            // Only what starts a Session: tab and pane shortcuts have
+            // nothing to act on until one is open.
+            hints: [.init(keys: "⌘T", label: "New shell")]
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel("No open sessions")

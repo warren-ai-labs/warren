@@ -84,6 +84,11 @@ type Workspace struct {
 	Pinned         bool      `json:"pinned,omitempty"`
 	Order          int       `json:"order,omitempty"`
 	CreatedAt      time.Time `json:"createdAt"`
+	// BaseCommit is the commit the branch was created from when Warren created
+	// the branch itself. It tells a branch with no commits of its own apart
+	// from one whose work was already merged. Imported worktrees and branches
+	// that already existed leave it empty.
+	BaseCommit string `json:"baseCommit,omitempty"`
 	// MergeState is the live merge projection of the workspace branch against
 	// the project's default branch. It is overlaid on roster snapshots only
 	// and is never persisted with the workspace record.
@@ -127,7 +132,7 @@ type Session struct {
 	// draws it as a resting Agent row's second line and falls back to the
 	// turn's counts when it is empty, because the sentence needs a model call.
 	ResultSentence string `json:"resultSentence,omitempty"`
-	Kind        string `json:"kind"`
+	Kind           string `json:"kind"`
 	// AgentHandler selects the transport implementation inside an agent
 	// family (for example tui or acp). It is optional so legacy Sessions keep
 	// the provider's default handler.
@@ -197,6 +202,12 @@ type Session struct {
 	// `screen.panes`.
 	ScreenPosition  int `json:"screenPosition,omitempty"`
 	ScreenPaneCount int `json:"screenPaneCount,omitempty"`
+	// TitleRegeneratable reports whether the Host can name this Session from
+	// its conversation on request right now: the Agent has recorded a user and
+	// an assistant text, and a title endpoint is configured. It is live
+	// projection data, overlaid on roster snapshots only and never persisted;
+	// it lets a client disable the action instead of letting it fail.
+	TitleRegeneratable bool `json:"titleRegeneratable,omitempty"`
 }
 
 // SessionShell is the OSC 133 semantic prompt state the Host projects for one
@@ -596,6 +607,11 @@ type Response struct {
 	Error   string `json:"error,omitempty"`
 	Code    string `json:"code,omitempty"`
 	Details any    `json:"details,omitempty"`
+	// Session and AttachmentID name the terminal a refused DENB input frame
+	// was aimed at. Input frames carry no request id, so without them the
+	// client cannot attribute the refusal.
+	Session      string `json:"session,omitempty"`
+	AttachmentID string `json:"attachmentId,omitempty"`
 }
 
 // GitPanel is the aggregated Git projection for one workspace.

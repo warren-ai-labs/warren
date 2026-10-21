@@ -1415,11 +1415,13 @@ func TestAgentWaitCursorJoinsRunningOrJustCompletedTurn(t *testing.T) {
 	if after != 4 || current != 4 {
 		t.Fatalf("running cursor = after %d current %d, want 4 and 4", after, current)
 	}
+	// A terminal turn is history: the wait targets the turn after it. Accepting
+	// turn 4 again let a replayed boundary end a wait for the work still to come.
 	after, current = agentWaitCursor(api.AgentExecution{
 		ActiveTurn: &api.AgentTurn{ID: 4, Status: api.AgentTurnCompleted},
 	})
-	if after != 3 || current != 0 {
-		t.Fatalf("completed cursor = after %d current %d, want 3 and 0", after, current)
+	if after != 4 || current != 0 {
+		t.Fatalf("completed cursor = after %d current %d, want 4 and 0", after, current)
 	}
 	after, current = agentWaitCursor(api.AgentExecution{
 		ActiveTurn: &api.AgentTurn{Status: api.AgentTurnIdle},

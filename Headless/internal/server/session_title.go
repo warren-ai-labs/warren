@@ -52,13 +52,20 @@ func (s *Service) titleAutomatic() bool {
 	return s.Settings.OpenAITitleEnabled
 }
 
+// titleEndpointConfigured reports whether the Host can ask its title endpoint
+// for a name at all: a base URL and a key are stored.
+func (s *Service) titleEndpointConfigured() bool {
+	return strings.TrimSpace(s.Settings.OpenAIBaseURL) != "" &&
+		strings.TrimSpace(s.Settings.OpenAIKey) != ""
+}
+
 // titleGenerationConfigured reports whether the Host's own title request is
 // possible. An agent CLI that names its own conversation does not need it, so
-// this is deliberately narrower than titleAutomatic.
+// this is deliberately narrower than titleAutomatic. A user who asks for a new
+// title by hand consults titleEndpointConfigured instead: the switch governs
+// automatic naming only.
 func (s *Service) titleGenerationConfigured() bool {
-	return s.titleAutomatic() &&
-		strings.TrimSpace(s.Settings.OpenAIBaseURL) != "" &&
-		strings.TrimSpace(s.Settings.OpenAIKey) != ""
+	return s.titleAutomatic() && s.titleEndpointConfigured()
 }
 
 func (s *Service) titleConfig() sessiontitle.Config {

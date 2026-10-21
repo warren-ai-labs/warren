@@ -419,9 +419,7 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 			return
 		}
 		if messageType == websocket.BinaryMessage {
-			if err := peer.input(request.Context(), data); err != nil {
-				_ = peer.writeError("", err)
-			}
+			writeInputFailure(peer, peer.input(request.Context(), data))
 			continue
 		}
 		var command api.Envelope

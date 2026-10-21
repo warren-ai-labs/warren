@@ -49,70 +49,55 @@ struct WarrenDesktopSidebarEmptyState: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
-            if isStarter {
-                // The first-run case gets a mark of its own: it is the one
-                // empty state that is a beginning rather than a problem.
-                Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(tokens.treeSecondaryText)
-                    .frame(width: 30, height: 30)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(tokens.treeRowHover)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(tokens.cardBorder, lineWidth: 1)
-                    )
-                    .padding(.bottom, WarrenSpacing.compact)
-                    .accessibilityHidden(true)
-            }
-
-            HStack(spacing: 6) {
-                if isWarning {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .accessibilityHidden(true)
-                }
-                Text(title)
-                    .font(isStarter ? Font.system(size: 13, weight: .medium) : WarrenTypography.navigationItem)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .foregroundStyle(titleColor(tokens))
-
-            if let detail {
-                Text(detail)
-                    .font(WarrenTypography.navigationMeta)
-                    .foregroundStyle(detailColor(tokens))
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let action {
-                Button(action: action.perform) {
-                    HStack(spacing: 5) {
-                        if let symbol = action.systemImage {
-                            Image(systemName: symbol)
-                                .font(.system(size: 9.5, weight: .semibold))
-                        }
-                        Text(action.label)
-                            .font(.system(size: 12, weight: .medium))
+            if case .noProjects = reason {
+                starterRow(tokens: tokens)
+            } else {
+                HStack(spacing: 6) {
+                    if isWarning {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                            .accessibilityHidden(true)
                     }
+                    Text(title)
+                        .font(WarrenTypography.navigationItem)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .buttonStyle(WarrenDesktopSidebarEmptyActionStyle(isFocused: isActionFocused))
-                .focused($isActionFocused)
-                .padding(.top, WarrenSpacing.compact)
-                .warrenSemanticElement(
-                    id: "\(semanticIDPrefix).\(action.semanticID)",
-                    role: .button,
-                    label: action.label,
-                    action: action.perform
-                )
+                .foregroundStyle(titleColor(tokens))
+
+                if let detail {
+                    Text(detail)
+                        .font(WarrenTypography.navigationMeta)
+                        .foregroundStyle(detailColor(tokens))
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let action {
+                    Button(action: action.perform) {
+                        HStack(spacing: 5) {
+                            if let symbol = action.systemImage {
+                                Image(systemName: symbol)
+                                    .font(.system(size: 9.5, weight: .semibold))
+                            }
+                            Text(action.label)
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                    }
+                    .buttonStyle(WarrenDesktopSidebarEmptyActionStyle(isFocused: isActionFocused))
+                    .focused($isActionFocused)
+                    .padding(.top, WarrenSpacing.compact)
+                    .warrenSemanticElement(
+                        id: "\(semanticIDPrefix).\(action.semanticID)",
+                        role: .button,
+                        label: action.label,
+                        action: action.perform
+                    )
+                }
             }
         }
         .padding(.leading, leadingInset)
         .padding(.trailing, WarrenSpacing.medium)
-        .padding(.vertical, isStarter ? WarrenSpacing.standard : WarrenSpacing.compact)
+        .padding(.vertical, WarrenSpacing.compact)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
@@ -124,7 +109,7 @@ struct WarrenDesktopSidebarEmptyState: View {
     }
 
     /// Whether this is the Host's first run: no projects, and a way to add one.
-    private var isStarter: Bool {
+    private var canStartProject: Bool {
         if case .noProjects(let canAddProject, _) = reason { return canAddProject }
         return false
     }
@@ -132,9 +117,52 @@ struct WarrenDesktopSidebarEmptyState: View {
     // MARK: Content
 
     private var leadingInset: CGFloat {
-        isNestedUnderHost
+        // The starter row is a beginning rather than a message about one, so
+        // it sits in the tree's own text column, where the first project's
+        // title will land, not on the section label's edge.
+        if case .noProjects = reason {
+            return WarrenDesktopSidebarMetrics.rowHorizontalPadding
+                + WarrenDesktopSidebarMetrics.groupIconSize
+                + WarrenDesktopSidebarMetrics.groupIconSpacing
+        }
+        return isNestedUnderHost
             ? WarrenDesktopSidebarIndent.hostEmptyState
             : WarrenDesktopSidebarIndent.host
+    }
+
+    /// The first run: one quiet line, then the way forward as plain text. No
+    /// tile, no weight, no box — the section header already offers the same
+    /// action, and nothing here is wrong yet.
+    private func starterRow(tokens: WarrenColorTokens) -> some View {
+        VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+            Text(title)
+                .font(WarrenTypography.navigationItem)
+                .foregroundStyle(tokens.mutedForeground)
+
+            if canStartProject, let onAddProject {
+                Button(action: onAddProject) {
+                    Text("Add Project…")
+                        .font(WarrenTypography.navigationItem)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(tokens.primary)
+                .warrenFocusRing(isActionFocused, cornerRadius: WarrenRadius.xs)
+                .focused($isActionFocused)
+                .warrenSemanticElement(
+                    id: "\(semanticIDPrefix).add-project",
+                    role: .button,
+                    label: "Add Project",
+                    action: onAddProject
+                )
+            } else if let detail {
+                // A Host this window cannot write to has no button, so the CLI
+                // stays the way forward.
+                Text(detail)
+                    .font(WarrenTypography.navigationMeta)
+                    .foregroundStyle(tokens.mutedForeground.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private var title: String {
@@ -159,10 +187,10 @@ struct WarrenDesktopSidebarEmptyState: View {
                 ? "\(hidden) workspace\(hidden == 1 ? "" : "s") hidden by the active filter"
                 : "No workspace has a running session"
         case .noProjects(let canAddProject, let hostName):
+            // The button says what there is to do; only a Host without it
+            // needs a line of its own.
             if canAddProject {
-                // The sidebar takes no folder drops, so the copy names only
-                // the path that exists.
-                "Add a Git repository to list its worktrees and Sessions here."
+                nil
             } else if let hostName, !hostName.isEmpty {
                 "Add one from the CLI on \(hostName)"
             } else {
@@ -195,14 +223,9 @@ struct WarrenDesktopSidebarEmptyState: View {
                 semanticID: "show-all",
                 perform: onShowAll
             )
-        case .noProjects(let canAddProject, _):
-            guard canAddProject, let onAddProject else { return nil }
-            return Action(
-                label: "Add Project…",
-                semanticID: "add-project",
-                systemImage: "plus",
-                perform: onAddProject
-            )
+        case .noProjects:
+            // Drawn as part of `starterRow`, not as a boxed action.
+            return nil
         }
     }
 

@@ -8,12 +8,13 @@ Warren is a **headless-first workbench that stays running on your machine**. Ter
 
 ## Watch
 
-[<img src="docs/warren-promo-poster.jpg" width="800" alt="Play the 100-second Warren film">](https://warrenai.xyz/warren-promo.mp4)
+[<img src="docs/warren-promo-poster.jpg" width="800" alt="Play the Warren film">](https://warrenai.xyz/warren-promo.mp4)
 
-A 100-second tour, recorded in the real apps: agents side by side, four agents
-messaging each other in one pane, chat or terminal, quitting and coming back, a
-question from the phone, two Hosts in one sidebar, the Inspector, and a browser
-an agent drives.
+A tour, recorded in the real apps: hovering the tree and switching Tabs,
+splitting the stage from the top bar, agents working while the sidebar says
+what they are doing, folding the sidebar away, switching Host, the Inspector's
+changes, a browser an agent drives, and the same session in the browser and on
+the phone.
 
 ## Screenshots
 
@@ -21,17 +22,13 @@ an agent drives.
 
 ### Web
 
-| Terminal | Agent |
-| --- | --- |
-| <img src="docs/warren-web-terminal.png" width="440" alt="Warren web terminal"> | <img src="docs/warren-web-agent.png" width="440" alt="Warren web agent"> |
+<img src="docs/warren-web-agent.png" width="800" alt="Warren in the browser">
 
 ### Mobile *(Coming Soon)*
 
 *The native iOS companion client is in active development and coming soon.*
 
-| Terminal | Agent |
-| --- | --- |
-| <img src="docs/warren-mobile-terminal.png" width="320" alt="Warren mobile terminal"> | <img src="docs/warren-mobile-agent.png" width="320" alt="Warren mobile agent"> |
+<img src="docs/warren-mobile-agent.png" width="320" alt="Warren on the phone">
 
 ## Why Warren
 

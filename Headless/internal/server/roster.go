@@ -135,6 +135,7 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 			session.AgentProvider = provider
 		}
 		session.AgentCapabilities = s.agentCapabilitiesForSession(session.ID, *session)
+		session.TitleRegeneratable = s.sessionTitleRegeneratable(session.ID)
 		if handler := s.agentHandlerForSession(session.ID); handler != "" {
 			session.AgentHandler = handler
 		}
