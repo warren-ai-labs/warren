@@ -59,61 +59,9 @@ final class WarrenDesignSystemTests: XCTestCase {
         XCTAssertLessThan(WarrenMotion.feedbackDuration, WarrenMotion.overlayDuration)
     }
 
-    func testLoadingTriangleBallsStayInsideTheFrameAndCycleThroughTheCorners() {
-        let size: CGFloat = 24
-        for index in 0..<3 {
-            for step in 0..<60 {
-                let ball = WarrenLoadingBalls.ball(style: .triangle, index: index, size: size, phase: Double(step) / 60)
-                XCTAssertLessThanOrEqual(abs(ball.center.x) + ball.diameter / 2, size / 2 + 0.001)
-                XCTAssertLessThanOrEqual(abs(ball.center.y) + ball.diameter / 2, size / 2 + 0.001)
-            }
-            // Every third of a lap the balls rest on a corner, one ball per corner.
-            let start = WarrenLoadingBalls.ball(style: .triangle, index: index, size: size, phase: 0).center
-            let next = WarrenLoadingBalls.ball(style: .triangle, index: (index + 1) % 3, size: size, phase: 0).center
-            let third = WarrenLoadingBalls.ball(style: .triangle, index: index, size: size, phase: 1.0 / 3).center
-            XCTAssertEqual(third.x, next.x, accuracy: 0.001)
-            XCTAssertEqual(third.y, next.y, accuracy: 0.001)
-            XCTAssertNotEqual(start, next)
-        }
-    }
-
-    func testLoadingCycleStaysInsideTheFrameAndNeverJumps() {
-        let size: CGFloat = 18
-        let steps = 2_000
-        for index in 0..<3 {
-            var previous = WarrenLoadingBalls.ball(style: .cycle, index: index, size: size, phase: 0)
-            for step in 1...steps {
-                let ball = WarrenLoadingBalls.ball(style: .cycle, index: index, size: size, phase: Double(step) / Double(steps))
-                let radius = ball.diameter * ball.scale / 2
-                XCTAssertLessThanOrEqual(abs(ball.center.x) + radius, size / 2 + 0.001)
-                XCTAssertLessThanOrEqual(abs(ball.center.y) + radius, size / 2 + 0.001)
-                // Continuous: one step of 2.8ms never moves a ball far or
-                // flips its strength, including across state changes.
-                XCTAssertLessThan(hypot(ball.center.x - previous.center.x, ball.center.y - previous.center.y), 0.2)
-                XCTAssertLessThan(abs(ball.opacity - previous.opacity), 0.02)
-                previous = ball
-            }
-            // The lap returns every ball to the row it started in.
-            let start = WarrenLoadingBalls.ball(style: .cycle, index: index, size: size, phase: 0)
-            XCTAssertEqual(previous.center.x, start.center.x, accuracy: 0.001)
-            XCTAssertEqual(previous.center.y, start.center.y, accuracy: 0.001)
-        }
-    }
-
-    func testLoadingCycleVisitsRowWaveAndTriangle() {
-        let size: CGFloat = 18
-        let period = WarrenLoadingCycle.period
-        func centers(at seconds: TimeInterval) -> [CGPoint] {
-            (0..<3).map { WarrenLoadingBalls.ball(style: .cycle, index: $0, size: size, phase: seconds / period).center }
-        }
-        // Pulse: all in one row.
-        XCTAssertTrue(centers(at: 0.7).allSatisfy { $0.y == 0 })
-        // Wave: some ball has left the row.
-        XCTAssertTrue(centers(at: WarrenLoadingCycle.pulse + 0.7).contains { $0.y < -1 })
-        // Triangle: one ball sits above the other two.
-        let triangle = centers(at: WarrenLoadingCycle.pulse + WarrenLoadingCycle.wave + WarrenLoadingCycle.gather)
-        XCTAssertEqual(triangle.filter { $0.y < 0 }.count, 1)
-        XCTAssertEqual(triangle.filter { $0.y > 0 }.count, 2)
+    func testBrailleSpinnerFrameDurationFormsAnEightStepCycle() {
+        XCTAssertEqual(WarrenMotion.spinnerFrameDuration, 0.09)
+        XCTAssertEqual(WarrenMotion.spinnerFrameDuration * 8, 0.72, accuracy: 0.0001)
     }
 
     #if os(macOS)

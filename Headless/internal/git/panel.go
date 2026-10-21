@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -25,6 +26,20 @@ func MainBranch(ctx context.Context, dir string) string {
 		}
 	}
 	return ""
+}
+
+// IsMerged reports whether HEAD is an ancestor of ref, i.e. every commit on
+// the current branch is already reachable from the main line.
+func IsMerged(ctx context.Context, dir, ref string) (bool, error) {
+	output, err := run(ctx, dir, "rev-list", "--count", ref+"..HEAD")
+	if err != nil {
+		return false, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(output))
+	if err != nil {
+		return false, err
+	}
+	return count == 0, nil
 }
 
 // OperationState reports an in-progress git operation by inspecting the

@@ -82,10 +82,6 @@ private enum WarrenRemoteSocketEvent: Sendable {
     case anchor(WarrenRemoteOutputAnchor)
     case terminalResized(WarrenRemoteTerminalResize)
     case agentEvents(streamID: String, executionID: String, events: [WarrenRemoteAgentEvent])
-    case recoveryFailed(sessionID: String, reason: String)
-    case focusTaken(sessionID: String, attachmentID: String?)
-    case focusGranted(sessionID: String, attachmentID: String?)
-    case inputRejected(sessionID: String?, attachmentID: String?, message: String)
     case maintenance(message: String?)
     case disconnected(reason: String)
 }
@@ -827,17 +823,6 @@ private actor WarrenRemoteSocket {
             supportsOutputAck = capabilities.contains(WarrenRemoteCapability.outputAck)
             _ = continuation?.yield(.welcome(version: version, capabilities: capabilities))
         case "response":
-            // A refused DENB input frame is answered without a request id: the
-            // frame never had one. Attribute it to its Session instead of
-            // dropping an anonymous error.
-            if object["ok"] as? Bool == false, object["code"] as? String == "input_rejected" {
-                _ = continuation?.yield(.inputRejected(
-                    sessionID: object["session"] as? String,
-                    attachmentID: object["attachmentId"] as? String,
-                    message: object["error"] as? String ?? "Input rejected"
-                ))
-                return
-            }
             guard let id = object["id"] as? String else { return }
             if object["ok"] as? Bool == true {
                 let value = object["result"] ?? NSNull()
@@ -965,24 +950,6 @@ private actor WarrenRemoteSocket {
                 streamID: streamID,
                 executionID: executionID,
                 events: events
-            ))
-        case "recoveryFailed":
-            guard let sessionID = object["session"] as? String else { return }
-            _ = continuation?.yield(.recoveryFailed(
-                sessionID: sessionID,
-                reason: object["reason"] as? String ?? "recovery failed"
-            ))
-        case "focusTaken":
-            guard let sessionID = object["session"] as? String else { return }
-            _ = continuation?.yield(.focusTaken(
-                sessionID: sessionID,
-                attachmentID: object["attachmentId"] as? String
-            ))
-        case "focusGranted":
-            guard let sessionID = object["session"] as? String else { return }
-            _ = continuation?.yield(.focusGranted(
-                sessionID: sessionID,
-                attachmentID: object["attachmentId"] as? String
             ))
         case "maintenance":
             _ = continuation?.yield(.maintenance(message: object["message"] as? String))
@@ -2517,14 +2484,6 @@ public actor WarrenRemoteClient {
             emit(.terminalResized(resize))
         case .agentEvents(let streamID, let executionID, let events):
             emit(.agentEvents(streamID: streamID, executionID: executionID, events: events))
-        case .recoveryFailed(let sessionID, let reason):
-            emit(.recoveryFailed(sessionID: sessionID, reason: reason))
-        case .focusTaken(let sessionID, let attachmentID):
-            emit(.focusTaken(sessionID: sessionID, attachmentID: attachmentID))
-        case .focusGranted(let sessionID, let attachmentID):
-            emit(.focusGranted(sessionID: sessionID, attachmentID: attachmentID))
-        case .inputRejected(let sessionID, let attachmentID, let message):
-            emit(.inputRejected(sessionID: sessionID, attachmentID: attachmentID, message: message))
         case .maintenance(let message): emit(.maintenance(message: message))
         case .disconnected(let reason): emit(.disconnected(reason: reason))
         }

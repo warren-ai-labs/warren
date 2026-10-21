@@ -17,10 +17,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     public let projection: WarrenDesktopProjection
     public let navigation: WarrenDesktopNavigationState
     public let updateStatus: WarrenDesktopUpdateStatus
-    /// Set while the Host restarts for an update. It shares the window's one
-    /// update notice with the in-app update rather than each terminal drawing
-    /// its own.
-    public let hostMaintenanceMessage: String?
     public let onUpdateAction: () -> Void
     public let webStatus: WarrenDesktopWebStatus
     public let isMigratingRuntimeSessions: Bool
@@ -296,24 +292,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let createsNewGroup: Bool
     }
 
-    private var isUpdating: Bool {
-        updateStatus == .updating || hostMaintenanceMessage != nil
-    }
-
-    /// The Host's own wording when it gives more than the generic notice.
-    private var updateHUDDetail: String? {
-        guard updateStatus != .updating,
-              let hostMaintenanceMessage,
-              hostMaintenanceMessage != "Warren is updating"
-        else { return nil }
-        return hostMaintenanceMessage
-    }
-
     public init(
         projection: WarrenDesktopProjection,
         navigation: WarrenDesktopNavigationState? = nil,
         updateStatus: WarrenDesktopUpdateStatus = .none,
-        hostMaintenanceMessage: String? = nil,
         onUpdateAction: @escaping () -> Void = {},
         actions: WarrenDesktopActions = WarrenDesktopActions(),
         onCreateTask: @escaping @MainActor (WarrenDesktopTaskCreationRequest) async throws -> TaskID = { _ in
@@ -401,7 +383,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.projection = projection
         self.navigation = navigation ?? WarrenDesktopNavigationReducer.initial(for: projection)
         self.updateStatus = updateStatus
-        self.hostMaintenanceMessage = hostMaintenanceMessage
         self.onUpdateAction = onUpdateAction
         self.webStatus = webStatus
         self.isMigratingRuntimeSessions = isMigratingRuntimeSessions
@@ -662,24 +643,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     .accessibilityHidden(true)
                 }
             }
-
-            // An in-app update replaces the application bundle and restarts
-            // Warren; a Host update restarts the Host under it. Neither
-            // navigates the window anywhere: the shell stays exactly as it is
-            // behind a slight dim and one card says why it has stopped taking
-            // input. There is one per window, never one per terminal. A failed
-            // install fades it back out, leaving the window as it was.
-            Group {
-                if isUpdating {
-                    WarrenDesktopUpdateHUD(detail: updateHUDDetail)
-                        .transition(.opacity)
-                        .zIndex(WarrenPresentationLayer.modal)
-                }
-            }
-            .animation(
-                WarrenDesktopLoadingReveal.animation(reduceMotion: reduceMotion),
-                value: isUpdating
-            )
         }
         .animation(sidebarPeekAnimation, value: sidebarPeek.isPeeking)
         .frame(
@@ -2599,46 +2562,18 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     /// Selects the arrangement this window renders, or steps to the next one.
-    ///
-    /// Entering an arrangement also enters its active Session. Writing only
-    /// the drawn group left the keyboard in the arrangement that had just been
-    /// parked: no Tab changed, so nothing asked the Session's input to take
-    /// focus, and typing went nowhere.
     private func selectPaneGroup(id: PaneGroupID?, step: Int = 0, in presentation: Presentation) {
         guard let scope = currentScopeKey(presentation: presentation) else { return }
         let groups = hostPaneGroups(for: presentation)
         guard !groups.isEmpty else { return }
-        let target: PaneGroup?
         if let id {
-            target = groups.first { $0.id == id }
-        } else {
-            let current = hostPaneGroup(for: presentation)?.id
-            let index = groups.firstIndex { $0.id == current } ?? -1
-            let next = ((index + step) % groups.count + groups.count) % groups.count
-            target = groups[next]
+            activePaneGroupIDs[scope] = id.description
+            return
         }
-        guard let target else { return }
-        if activePaneGroupIDs[scope] != target.id.description {
-            activePaneGroupIDs[scope] = target.id.description
-            // Cache the group now on screen, as `showPaneGroup` does, so the
-            // scope's local layout describes the arrangement being drawn
-            // rather than the one it replaced.
-            adoptHostPaneGroups(projection.paneGroups)
-        }
-        let tree = WarrenDesktopPaneGroupMapping.tree(from: target)
-        guard let tabID = WarrenDesktopPaneGroupEntry.tabID(
-            in: tree,
-            selectedTabID: navigation.selectedTabID,
-            rememberedPaneID: activePaneIDs[scope]
-        ) else { return }
-        if let item = tree.item(forTabID: tabID) {
-            restoreZoom(unlessShowing: item.id, scope: scope)
-            restoreFold(ifFolded: item.id, scope: scope)
-            activePaneIDs[scope] = item.id
-        }
-        // Dispatch even when the Tab is already selected: the arrangement
-        // changed, so this is how the newly drawn pane asks for the keyboard.
-        dispatch(.selectTab(tabID))
+        let current = hostPaneGroup(for: presentation)?.id
+        let index = groups.firstIndex { $0.id == current } ?? -1
+        let next = ((index + step) % groups.count + groups.count) % groups.count
+        activePaneGroupIDs[scope] = groups[next].id.description
     }
 
     private func paneOwner(for presentation: Presentation) -> WarrenDesktopPaneOwner? {
@@ -4032,29 +3967,6 @@ enum WarrenDesktopTabSelector {
     static func tabID(in tabs: [ClientTab], number: Int) -> String? {
         guard number >= 1, tabs.indices.contains(number - 1) else { return nil }
         return tabs[number - 1].id
-    }
-}
-
-/// Which Session entering an arrangement should make active.
-///
-/// A group step has no Tab of its own, so the choice follows the same
-/// precedence the panel uses for a visited Tab: the current selection when the
-/// arrangement holds it, then the pane the user last worked in, then the
-/// arrangement's first pane. Entering a group must still land somewhere rather
-/// than leaving the keyboard in the arrangement that was just parked.
-enum WarrenDesktopPaneGroupEntry {
-    static func tabID(
-        in tree: SplitLayoutTree,
-        selectedTabID: String?,
-        rememberedPaneID: String?
-    ) -> String? {
-        if let selectedTabID, tree.contains(tabID: selectedTabID) {
-            return selectedTabID
-        }
-        if let rememberedPaneID, let item = tree.item(for: rememberedPaneID) {
-            return item.tabID
-        }
-        return tree.leaves.first?.tabID
     }
 }
 

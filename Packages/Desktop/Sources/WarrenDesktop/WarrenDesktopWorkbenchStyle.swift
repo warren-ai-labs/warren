@@ -445,10 +445,6 @@ struct WarrenDesktopHostInitialTile: View {
 }
 
 /// A project's lettered avatar in a stable identity colour.
-///
-/// The tile is a wash of that colour with the letter in it. A Session's app
-/// icon is a solid tile with a white mark, so solid reads as a program and
-/// the tinted tile as the container it lives in.
 struct WarrenDesktopProjectAvatar: View {
     let name: String
     let identity: String
@@ -459,13 +455,12 @@ struct WarrenDesktopProjectAvatar: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let tint = Self.tint(for: identity, in: tokens)
         Text(String(name.prefix(1)).uppercased())
             .font(.system(size: size * 0.56, weight: .bold))
-            .foregroundStyle(tint)
+            .foregroundStyle(Color.white)
             .frame(width: size, height: size)
             .background(
-                tint.opacity(colorScheme == .dark ? 0.18 : 0.14),
+                Self.tint(for: identity, in: tokens),
                 in: RoundedRectangle(cornerRadius: size * 5 / 18, style: .continuous)
             )
             .accessibilityHidden(true)

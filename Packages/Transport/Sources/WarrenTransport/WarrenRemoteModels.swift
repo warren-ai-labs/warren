@@ -907,10 +907,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         /// The Host's one-line account of the last completed turn, when it
         /// asked a model for one. Absent on a Host with no title endpoint.
         public let resultSentence: String?
-        /// Whether the Host can name this Session from its conversation on
-        /// request now. Absent on a Host that cannot, which is also what an
-        /// older Host reports.
-        public let titleRegeneratable: Bool?
         public let kind: String
         public let agentProvider: String?
         public let agentHandler: String?
@@ -943,7 +939,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             title: String = "",
             customTitle: String? = nil,
             resultSentence: String? = nil,
-            titleRegeneratable: Bool? = nil,
             kind: String = "shell",
             agentProvider: String? = nil,
             agentHandler: String? = nil,
@@ -972,7 +967,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.title = title
             self.customTitle = customTitle
             self.resultSentence = resultSentence
-            self.titleRegeneratable = titleRegeneratable
             self.kind = kind
             self.agentProvider = agentProvider
             self.agentHandler = agentHandler
@@ -1067,7 +1061,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         private enum CodingKeys: String, CodingKey {
             case id
             case workspaceID = "workspace"
-            case title, customTitle, resultSentence, titleRegeneratable, kind, agentProvider, agentHandler, command, commandLine, process, directory, shell, runtime, runtimeKind
+            case title, customTitle, resultSentence, kind, agentProvider, agentHandler, command, commandLine, process, directory, shell, runtime, runtimeKind
             case lifecycle, epoch, sequence, pinned
             case agentSessionID = "agentSessionId"
             case agentExecutionID = "agentExecutionId"
@@ -1081,7 +1075,6 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             title = try values.decodeIfPresent(String.self, forKey: .title) ?? ""
             customTitle = try values.decodeIfPresent(String.self, forKey: .customTitle)
             resultSentence = try values.decodeIfPresent(String.self, forKey: .resultSentence)
-            titleRegeneratable = try values.decodeIfPresent(Bool.self, forKey: .titleRegeneratable)
             kind = try values.decodeIfPresent(String.self, forKey: .kind) ?? "shell"
             agentProvider = try values.decodeIfPresent(String.self, forKey: .agentProvider)
             agentHandler = try values.decodeIfPresent(String.self, forKey: .agentHandler)
@@ -2388,19 +2381,6 @@ public enum WarrenRemoteEvent: Sendable {
     /// output that precedes it; apply it by sequence, never on arrival.
     case terminalResized(WarrenRemoteTerminalResize)
     case agentEvents(streamID: String, executionID: String, events: [WarrenRemoteAgentEvent])
-    /// The Host acknowledged a terminal subscription and then could not produce
-    /// its recovery payload, so no `attached`/`synced` markers follow. The
-    /// client must cancel its staged recovery and subscribe again.
-    case recoveryFailed(sessionID: String, reason: String)
-    /// Another peer took this Session's input control lease. Input this client
-    /// sends from now on is refused until it claims the lease again.
-    case focusTaken(sessionID: String, attachmentID: String?)
-    /// The Host returned this Session's input control lease to this client
-    /// because the peer that had taken it disconnected.
-    case focusGranted(sessionID: String, attachmentID: String?)
-    /// A DENB input frame was refused. The frame carries no request id, so the
-    /// Host names the Session and attachment it was aimed at.
-    case inputRejected(sessionID: String?, attachmentID: String?, message: String)
     case maintenance(message: String?)
     case disconnected(reason: String)
     /// Relay answered, but the Host is not there. Separate from `disconnected`

@@ -14,10 +14,7 @@ func TestCatchUpReadBufferSizesTheReadToTheReportedSpan(t *testing.T) {
 	buffer := make([]byte, catchUpBatchBytes)
 
 	// 2842 bytes was the measured gap that cost 2842 round trips and 1.4s.
-	got, closed, known := catchUpReadBuffer(buffer, testCursor(100), testCursor(100+2842))
-	if !known {
-		t.Fatal("a forward span must be comparable")
-	}
+	got, closed := catchUpReadBuffer(buffer, testCursor(100), testCursor(100+2842))
 	if closed {
 		t.Fatal("a forward span must not report the gap as closed")
 	}
@@ -26,23 +23,19 @@ func TestCatchUpReadBufferSizesTheReadToTheReportedSpan(t *testing.T) {
 	}
 
 	// A span larger than the buffer is capped by the buffer.
-	got, closed, known = catchUpReadBuffer(buffer, testCursor(0), testCursor(10*catchUpBatchBytes))
-	if !known || closed || len(got) != catchUpBatchBytes {
-		t.Fatalf("large span read buffer = %d (closed=%v known=%v), want %d", len(got), closed, known, catchUpBatchBytes)
+	got, closed = catchUpReadBuffer(buffer, testCursor(0), testCursor(10*catchUpBatchBytes))
+	if closed || len(got) != catchUpBatchBytes {
+		t.Fatalf("large span read buffer = %d (closed=%v), want %d", len(got), closed, catchUpBatchBytes)
 	}
 
 	// A covered gap closes the loop before another read.
-	got, closed, known = catchUpReadBuffer(buffer, testCursor(7), testCursor(7))
-	if !known || !closed || got != nil {
-		t.Fatalf("covered gap = %d bytes (closed=%v known=%v), want closed with no buffer", len(got), closed, known)
+	got, closed = catchUpReadBuffer(buffer, testCursor(7), testCursor(7))
+	if !closed || got != nil {
+		t.Fatalf("covered gap = %d bytes (closed=%v), want closed with no buffer", len(got), closed)
 	}
 }
 
-// An incomparable pair cannot be walked: the caller must treat it as an
-// unrecoverable gap and re-anchor instead of reading it one byte per round
-// trip, which used to burn the whole command timeout and fail the attach after
-// it had already been acknowledged.
-func TestCatchUpReadBufferReportsAnUncomparableSpanInsteadOfOneByteAtATime(t *testing.T) {
+func TestCatchUpReadBufferFallsBackToOneByteWhenTheSpanIsUnknown(t *testing.T) {
 	buffer := make([]byte, catchUpBatchBytes)
 
 	otherGeneration, err := ghostline.ParseCursor("v1:2:5")
@@ -59,12 +52,12 @@ func TestCatchUpReadBufferReportsAnUncomparableSpanInsteadOfOneByteAtATime(t *te
 		"generation change": {testCursor(10), otherGeneration},
 	}
 	for name, tc := range cases {
-		got, closed, known := catchUpReadBuffer(buffer, tc.from, tc.to)
-		if known {
-			t.Fatalf("%s: incomparable span reported as comparable", name)
+		got, closed := catchUpReadBuffer(buffer, tc.from, tc.to)
+		if closed {
+			t.Fatalf("%s: unknown span must not report the gap as closed", name)
 		}
-		if closed || got != nil {
-			t.Fatalf("%s: read buffer = %d bytes (closed=%v), want no read", name, len(got), closed)
+		if len(got) != 1 {
+			t.Fatalf("%s: read buffer = %d bytes, want 1", name, len(got))
 		}
 	}
 }

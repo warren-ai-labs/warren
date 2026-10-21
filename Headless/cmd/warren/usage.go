@@ -125,7 +125,6 @@ func agentUsageText() string {
   warren agent send AGENT_ID [TEXT...] [--current] [--wait] [--timeout DURATION]
   warren agent read AGENT_ID [--current] [--recent N | --all] [--tools] [--tool-output] [--include TYPE,...] [--filter TYPE,...] [--chars N | --full] [--text-only]
   warren agent wait AGENT_ID [--timeout DURATION] [--current]
-  warren agent cancel AGENT_ID [--current] [--wait] [--timeout DURATION]
   warren agent attach AGENT_ID [--current]
   warren agent remove AGENT_ID [--force] [--current] [--dry-run]
   warren agent rename AGENT_ID --title TITLE [--current]
@@ -199,18 +198,6 @@ are limited to 2000 characters. --tools adds tool-call summaries;
 matching activities (up to 100000). --text-only prints user and assistant
 text. --full returns the complete canonical event history and cannot be combined
 with projection flags.
-`
-}
-
-func agentCancelUsageText() string {
-	return `Usage:
-  warren agent cancel AGENT_ID [--current] [--wait] [--timeout DURATION]
-
-Stop the Agent's running turn. The Host interrupts the provider, so a terminal
-TUI and an ACP driver are both driven the way the provider expects; the CLI
-never writes terminal bytes. Exits 0 with {"accepted":false,"status":"idle"}
-when no turn is running. --wait then waits for the turn to end and prints its
-result, which may be cancelled, interrupted, completed, or failed.
 `
 }
 

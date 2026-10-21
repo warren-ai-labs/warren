@@ -106,7 +106,7 @@ struct WarrenWorkspaceCreatorView: View {
         } footer: {
             HStack(spacing: 8) {
                 if coordinator.isSubmitting {
-                    WarrenLoadingIndicator(size: 16, accessibilityLabel: "Creating workspace")
+                    WarrenBrailleSpinner(size: 16, accessibilityLabel: "Creating workspace")
                     Text("Creating workspace…")
                         .font(WarrenTypography.dialogBody)
                         .foregroundStyle(tokens.mutedForeground)

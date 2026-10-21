@@ -14,44 +14,27 @@ import (
 	"github.com/abcdlsj/warren/Headless/internal/store"
 )
 
-// inputRejection is a refused DENB input frame. The frame carries no request
-// id, so the response has to name the terminal it was aimed at; otherwise the
-// client cannot attribute the refusal to a session and drops it.
-type inputRejection struct {
-	sessionID    string
-	attachmentID string
-	err          error
-}
-
-func (e *inputRejection) Error() string { return e.err.Error() }
-
-func (e *inputRejection) Unwrap() error { return e.err }
-
 func (p *wsPeer) input(ctx context.Context, data []byte) error {
+	attached, err := p.controlledSession()
+	if err != nil {
+		return err
+	}
+	if !p.server.Service.isFocused(p, attached.ID) {
+		return fmt.Errorf("focused control lease required")
+	}
 	metadata, payload, err := output.DecodeInput(data)
 	if err != nil {
 		return fmt.Errorf("DENB input required: %w", err)
 	}
-	reject := func(sessionID, attachmentID string, reason error) error {
-		return &inputRejection{sessionID: sessionID, attachmentID: attachmentID, err: reason}
-	}
-	attached, err := p.controlledSession()
-	if err != nil {
-		return reject(metadata.SessionID, metadata.AttachmentID, err)
-	}
-	if !p.server.Service.isFocused(p, attached.ID) {
-		return reject(attached.ID, metadata.AttachmentID, fmt.Errorf("focused control lease required"))
-	}
 	if metadata.Version != api.Version {
-		return reject(attached.ID, metadata.AttachmentID,
-			fmt.Errorf("input protocol version mismatch: got %s, want %s", metadata.Version, api.Version))
+		return fmt.Errorf("input protocol version mismatch: got %s, want %s", metadata.Version, api.Version)
 	}
 	if metadata.SessionID != attached.ID {
-		return reject(attached.ID, metadata.AttachmentID, fmt.Errorf("input session mismatch"))
+		return fmt.Errorf("input session mismatch")
 	}
 	attachmentID := p.attachmentID(attached.ID)
 	if attachmentID == "" || metadata.AttachmentID == "" || metadata.AttachmentID != attachmentID {
-		return reject(attached.ID, attachmentID, fmt.Errorf("input attachment mismatch"))
+		return fmt.Errorf("input attachment mismatch")
 	}
 	if isACPSession(attached) {
 		return errSessionHasNoTerminal

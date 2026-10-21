@@ -1341,9 +1341,6 @@ struct WarrenDesktopSidebarRows: View {
                 onDismissActivity: session.activityMark.map { mark in
                     { onAction(.dismissActivity(session.id, mark.activityState)) }
                 },
-                onRegenerateTitle: {
-                    onAction(.regenerateSessionTitle(session.id))
-                },
                 onSplitDrop: onSplitDropSession,
                 isSubagentsExpanded: isExpanded,
                 isSubagentsDoneExpanded: tree.expandedSubagentDoneSessionIDs.contains(session.id),
@@ -1544,9 +1541,6 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     var onEnd: (() -> Void)? = nil
     /// Retires the Session's activity mark, as the same entry on its Tab does.
     var onDismissActivity: (() -> Void)? = nil
-    /// Names the Session again from its conversation. Offered for an Agent
-    /// Session only: a shell has no conversation to read.
-    var onRegenerateTitle: (() -> Void)? = nil
     /// Drops this Session onto a pane.
     ///
     /// The same handler the Tab strip uses, so a Session reaches a pane by
@@ -1576,7 +1570,6 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         onTogglePin: (() -> Void)? = nil,
         onEnd: (() -> Void)? = nil,
         onDismissActivity: (() -> Void)? = nil,
-        onRegenerateTitle: (() -> Void)? = nil,
         onSplitDrop: ((String, String, SplitDropTarget) -> Void)? = nil,
         isSubagentsExpanded: Bool = false,
         isSubagentsDoneExpanded: Bool = false,
@@ -1593,7 +1586,6 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         self.onTogglePin = onTogglePin
         self.onEnd = onEnd
         self.onDismissActivity = onDismissActivity
-        self.onRegenerateTitle = onRegenerateTitle
         self.onSplitDrop = onSplitDrop
         self.isSubagentsExpanded = isSubagentsExpanded
         self.isSubagentsDoneExpanded = isSubagentsDoneExpanded
@@ -2325,10 +2317,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             onRename: onRename,
             onEnd: onEnd,
             hasActivity: session.activityMark != nil,
-            onDismissActivity: onDismissActivity,
-            showsRegenerateTitle: session.isAgentSession,
-            canRegenerateTitle: session.titleRegeneratable,
-            onRegenerateTitle: onRegenerateTitle
+            onDismissActivity: onDismissActivity
         )
     }
 
@@ -2345,15 +2334,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         onRename: (() -> Void)?,
         onEnd: (() -> Void)?,
         hasActivity: Bool = false,
-        onDismissActivity: (() -> Void)? = nil,
-        // Whether the row offers the action at all: a shell Session has no
-        // conversation, so it never shows it.
-        showsRegenerateTitle: Bool = false,
-        // Whether the Host is ready to name the conversation again. The item
-        // stays listed while it cannot run, muted, because the menu's shape
-        // must not depend on how far the conversation has got.
-        canRegenerateTitle: Bool = true,
-        onRegenerateTitle: (() -> Void)? = nil
+        onDismissActivity: (() -> Void)? = nil
     ) -> [WarrenDesktopContextMenuAction] {
         var actions: [WarrenDesktopContextMenuAction] = []
         if let onTogglePin {
@@ -2367,13 +2348,6 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         }
         if let onRename {
             actions.append(.button(title: "Rename Session", action: onRename))
-        }
-        if showsRegenerateTitle, let onRegenerateTitle {
-            actions.append(.button(
-                title: "Regenerate Title",
-                isEnabled: canRegenerateTitle,
-                action: onRegenerateTitle
-            ))
         }
         if let onEnd {
             if !actions.isEmpty {
@@ -2504,10 +2478,6 @@ struct WarrenDesktopFadingLine<Content: View>: View {
                     }
                 )
                 .frame(width: width, alignment: alignment)
-                // A `GeometryReader` pins its content to its top-leading corner.
-                // A single line given a taller slot — a Tab, a pill, a row's
-                // band — belongs on that slot's middle, not its top edge.
-                .frame(height: proxy.size.height, alignment: alignment)
                 .clipped()
                 .mask(alignment: alignment) {
                     if overflows {

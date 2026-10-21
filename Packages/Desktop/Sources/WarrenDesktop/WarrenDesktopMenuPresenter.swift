@@ -550,16 +550,13 @@ struct WarrenDesktopActionMenu: View {
 
     private enum Entry {
         case divider
-        case button(String, Bool, Bool, () -> Void)
+        case button(String, Bool, () -> Void)
         case check(String, Bool, () -> Void)
         case menu(String, [WarrenDesktopContextMenuAction])
 
         var isSelectable: Bool {
-            switch self {
-            case .divider: return false
-            case .button(_, _, let isEnabled, _): return isEnabled
-            default: return true
-            }
+            if case .divider = self { return false }
+            return true
         }
 
         var opensPage: Bool {
@@ -622,15 +619,8 @@ struct WarrenDesktopActionMenu: View {
                 switch entry {
                 case .divider:
                     WarrenDesktopMenuDivider()
-                case .button(let title, let destructive, let isEnabled, let action):
-                    row(
-                        title: title,
-                        isChecked: unchecked,
-                        opensPage: false,
-                        danger: destructive,
-                        isEnabled: isEnabled,
-                        index: index
-                    ) {
+                case .button(let title, let destructive, let action):
+                    row(title: title, isChecked: unchecked, opensPage: false, danger: destructive, index: index) {
                         action()
                         onDismiss()
                     }
@@ -653,7 +643,6 @@ struct WarrenDesktopActionMenu: View {
         isChecked: Bool? = nil,
         opensPage: Bool,
         danger: Bool,
-        isEnabled: Bool = true,
         index: Int,
         action: @escaping () -> Void
     ) -> some View {
@@ -665,7 +654,7 @@ struct WarrenDesktopActionMenu: View {
                 }
                 Text(title)
                     .font(.system(size: 13))
-                    .foregroundStyle(rowText(danger: danger, isEnabled: isEnabled, palette: palette))
+                    .foregroundStyle(danger ? palette.dangerText : palette.rowText)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if opensPage {
@@ -676,19 +665,10 @@ struct WarrenDesktopActionMenu: View {
             .frame(maxWidth: .infinity, minHeight: WarrenDesktopMenuMetrics.rowHeight, alignment: .leading)
             .contentShape(.rect)
         }
-        .buttonStyle(WarrenDesktopMenuRowStyle(danger: danger, forceHover: isEnabled && hot == index))
-        // A muted row never takes the highlight: it cannot be run, so it must
-        // not look like the row a Return would choose.
-        .disabled(!isEnabled)
+        .buttonStyle(WarrenDesktopMenuRowStyle(danger: danger, forceHover: hot == index))
         .onHover { inside in
-            guard isEnabled else { return }
             hot = inside ? index : (hot == index ? -1 : hot)
         }
-    }
-
-    private func rowText(danger: Bool, isEnabled: Bool, palette: WarrenDesktopMenuPalette) -> Color {
-        guard isEnabled else { return palette.meta }
-        return danger ? palette.dangerText : palette.rowText
     }
 
     // MARK: Keyboard
@@ -744,8 +724,7 @@ struct WarrenDesktopActionMenu: View {
         switch entries[index] {
         case .divider:
             break
-        case .button(_, _, let isEnabled, let action):
-            guard isEnabled else { return }
+        case .button(_, _, let action):
             action()
             onDismiss()
         case .check(_, _, let action):
@@ -771,10 +750,10 @@ struct WarrenDesktopActionMenu: View {
             switch action {
             case .divider:
                 pendingDivider = !entries.isEmpty
-            case .button(let title, let destructive, let isEnabled, let run):
+            case .button(let title, let destructive, let run):
                 if pendingDivider { entries.append(.divider) }
                 pendingDivider = false
-                entries.append(.button(title, destructive, isEnabled, run))
+                entries.append(.button(title, destructive, run))
             case .check(let title, let isOn, let run):
                 if pendingDivider { entries.append(.divider) }
                 pendingDivider = false

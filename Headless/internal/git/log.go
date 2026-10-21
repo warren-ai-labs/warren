@@ -42,19 +42,7 @@ func Log(ctx context.Context, dir string, limit int) ([]Commit, error) {
 // LogRange returns every commit reachable from HEAD but not from ref, i.e.
 // the current branch's changes that are not yet merged into ref's line.
 func LogRange(ctx context.Context, dir, ref string) ([]Commit, error) {
-	return LogRangeFrom(ctx, dir, ref, "")
-}
-
-// LogRangeFrom lists the commits the branch added since base. A known base is
-// the branch's creation point, so the list holds exactly the branch's own
-// commits even when part of it was already merged; an empty base falls back
-// to everything after ref's merge-base.
-func LogRangeFrom(ctx context.Context, dir, ref, base string) ([]Commit, error) {
-	revision := ref + "..HEAD"
-	if base != "" {
-		revision = base + "..HEAD"
-	}
-	args := []string{"-c", "core.quotepath=false", "log", "-M", "-n", strconv.Itoa(unmergedLogLimit), revision}
+	args := []string{"-c", "core.quotepath=false", "log", "-M", "-n", strconv.Itoa(unmergedLogLimit), ref + "..HEAD"}
 	return logRange(ctx, dir, args)
 }
 

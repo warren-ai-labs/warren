@@ -680,58 +680,6 @@ final class WarrenRemoteClientTests: XCTestCase {
         consuming.cancel()
     }
 
-    /// The Host reports an acknowledged attach whose recovery payload failed, a
-    /// lease transfer, and a refused input frame on the Session channel. Each
-    /// must become a typed event; an anonymous drop is what made the black pane
-    /// and the muted keyboard undiagnosable.
-    func testRecoveryAndFocusEventsAndInputRefusalsAreDecoded() async throws {
-        let (client, task, consuming, recorder) = try await connectedClient()
-        let session = sessionUUID.uuidString.lowercased()
-        await task.enqueue(.text("{\"t\":\"recoveryFailed\",\"session\":\"\(session)\",\"reason\":\"cursors are not comparable\"}"))
-        await task.enqueue(.text("{\"t\":\"focusTaken\",\"session\":\"\(session)\",\"attachmentId\":\"attachment-b\"}"))
-        await task.enqueue(.text("{\"t\":\"focusGranted\",\"session\":\"\(session)\",\"attachmentId\":\"attachment-a\"}"))
-        // A refused DENB input frame has no request id: the Host answers with an
-        // error response that carries the session instead.
-        await task.enqueue(.text("{\"t\":\"response\",\"ok\":false,\"code\":\"input_rejected\",\"error\":\"focused control lease required\",\"session\":\"\(session)\",\"attachmentId\":\"attachment-a\"}"))
-
-        try await waitUntil {
-            await recorder.contains { event in
-                if case .recoveryFailed(let id, let reason) = event {
-                    return id == session && reason == "cursors are not comparable"
-                }
-                return false
-            }
-        }
-        try await waitUntil {
-            await recorder.contains { event in
-                if case .focusTaken(let id, let attachment) = event {
-                    return id == session && attachment == "attachment-b"
-                }
-                return false
-            }
-        }
-        try await waitUntil {
-            await recorder.contains { event in
-                if case .focusGranted(let id, let attachment) = event {
-                    return id == session && attachment == "attachment-a"
-                }
-                return false
-            }
-        }
-        try await waitUntil {
-            await recorder.contains { event in
-                if case .inputRejected(let id, let attachment, let message) = event {
-                    return id == session
-                        && attachment == "attachment-a"
-                        && message == "focused control lease required"
-                }
-                return false
-            }
-        }
-        await client.stop()
-        consuming.cancel()
-    }
-
     /// A browser Session has no PTY, so its screencast still is its own binary
     /// kind and its own event rather than terminal output (RFC 0022 §7.3).
     func testBrowserFrameEmitsATypedEventRatherThanTerminalOutput() async throws {

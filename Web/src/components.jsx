@@ -361,33 +361,11 @@ export function MergedBadge({ tabs = [] }) {
   );
 }
 
-/**
- * The tile each Session kind wears, matching the Desktop's app icons: the
- * brand's mark in white on a tile of the brand's colour. Marks drawn in more
- * than one colour keep their artwork on a near-black tile instead.
- */
-const SESSION_TILES = {
-  claude: { asset: "preset-claude.svg", tile: "#D97757", white: true },
-  // The white variant, so its inner counter-shape stays a hole under the mask.
-  codex: { asset: "preset-codex-white.svg", tile: "#5B6CF0", white: true },
-  opencode: { asset: "preset-opencode.svg", tile: "#26221F", white: true },
-  pi: { asset: "preset-pi.svg", tile: "#26221F", white: true },
-  qoder: { asset: "preset-qoder.svg", tile: "#26221F", white: false },
-  antigravity: { asset: "preset-antigravity.svg", tile: "#26221F", white: false },
-  trae: { asset: "preset-trae.svg", tile: "#26221F", white: false },
-  browser: { asset: "preset-browser.svg", tile: "#3B78C4", white: true },
-  // A Shell is drawn as the zsh it runs in, as on the Desktop.
-  shell: { asset: "program-zsh.svg", tile: "#F15A24", white: true },
-};
-
 function SessionPresetIcon({ kind }) {
-  const spec = SESSION_TILES[kind] || SESSION_TILES.shell;
-  const url = webAssetURL(spec.asset);
+  const asset = kind === "codex" ? "preset-codex-white.svg" : `preset-${kind}.svg`;
   return (
-    <span className={`preset-brand-icon preset-brand-icon-${kind}`} style={{ background: spec.tile }} aria-hidden="true">
-      {spec.white
-        ? <span className="preset-brand-glyph" style={{ maskImage: `url("${url}")`, WebkitMaskImage: `url("${url}")` }} />
-        : <img src={url} alt="" />}
+    <span className={`preset-brand-icon preset-brand-icon-${kind}`} aria-hidden="true">
+      <img src={webAssetURL(asset)} alt="" />
     </span>
   );
 }
@@ -2401,8 +2379,8 @@ function Highlighted({ text, ranges }) {
 export function Loading({ message }) {
   return (
     <span className="terminal-loading">
-      <span className="loading-dots" aria-hidden="true">
-        <i /><i /><i />
+      <span className="braille-spinner" aria-hidden="true">
+        <i /><i /><i /><i /><i /><i /><i /><i />
       </span>
       {message}
     </span>

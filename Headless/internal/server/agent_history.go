@@ -21,9 +21,6 @@ func (s *Service) setAgentStatus(sessionID string, status api.AgentStatus, force
 }
 
 func (s *Service) setAgentStatusForHandle(sessionID string, expected AgentHandle, status api.AgentStatus, force bool) {
-	// Commit needs the journal. Opening it here, before the projection lock,
-	// keeps the one-time cold open off the roster's path.
-	s.prepareAgentJournal()
 	if expected != nil {
 		lock := s.agentLock(sessionID)
 		lock.Lock()

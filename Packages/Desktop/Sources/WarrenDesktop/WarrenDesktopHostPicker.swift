@@ -153,7 +153,7 @@ struct WarrenDesktopHostRefreshButton: View {
                 // it is frame-limited, and it follows Reduce Motion as the
                 // setting changes instead of reading it once on appear.
                 if isChecking {
-                    WarrenLoadingIndicator(size: 12, accessibilityLabel: "Checking hosts")
+                    WarrenBrailleSpinner(size: 12, accessibilityLabel: "Checking hosts")
                 } else {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 11, weight: .medium))

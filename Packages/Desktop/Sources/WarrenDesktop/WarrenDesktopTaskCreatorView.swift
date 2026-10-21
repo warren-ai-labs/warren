@@ -240,7 +240,7 @@ struct WarrenDesktopTaskCreatorView: View {
         } footer: {
             HStack(spacing: 8) {
                 if coordinator.isSubmitting {
-                    WarrenLoadingIndicator(size: 16, accessibilityLabel: "Creating task")
+                    WarrenBrailleSpinner(size: 16, accessibilityLabel: "Creating task")
                     Text("Creating task…")
                         .font(WarrenTypography.dialogBody)
                         .foregroundStyle(tokens.mutedForeground)

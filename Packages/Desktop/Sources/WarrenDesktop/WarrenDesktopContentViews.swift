@@ -104,29 +104,10 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var primaryButtonFocused: Bool
-
-    /// Still waiting on the Host with nothing else to show.
-    ///
-    /// The launch holds this card's ground and then crossfades into whatever
-    /// the Host answers with, so a connect that beats the reveal delay never
-    /// draws a loading state at all.
-    private var holdsForHost: Bool {
-        workspace == nil && tab == nil && connectionState.isSettling
-    }
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        content(tokens: tokens)
-            .animation(
-                WarrenDesktopLoadingReveal.animation(reduceMotion: reduceMotion),
-                value: holdsForHost
-            )
-    }
-
-    @ViewBuilder
-    private func content(tokens: WarrenColorTokens) -> some View {
         if let workspace {
             let resolvedTab = tab ?? ClientTab(
                 id: "workspace-empty-\(workspace.id.rawValue.uuidString)",
@@ -166,26 +147,17 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                     session: session
                 )
             )
-            .transition(.opacity)
-        } else if holdsForHost {
-            WarrenDesktopConnectingStage(
-                title: Self.connectingTitle(
-                    hostName: hostName,
-                    isReconnecting: connectionState == .reconnecting,
-                    migratingRuntimeSessions: isMigratingRuntimeSessions
-                )
-            )
-            .warrenCard()
-            .transition(.opacity)
+        } else if workspace == nil, tab == nil,
+                  connectionState == .connecting || connectionState == .reconnecting {
+            connectionLoadingState(tokens: tokens)
+                .warrenCard()
         } else if workspace == nil, tab == nil,
                   connectionState == .disconnected || connectionState == .failed {
             connectionUnavailableState(tokens: tokens)
                 .warrenCard()
-                .transition(.opacity)
         } else if workspace == nil, tab == nil, !hasProjects {
             emptyWelcome(tokens: tokens)
                 .warrenCard()
-                .transition(.opacity)
         } else {
             WarrenDesktopEmptyStage(
                 mark: .symbol("sidebar.left"),
@@ -194,33 +166,16 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
             )
             .warrenCard()
             .accessibilityLabel("No workspace selected")
-            .transition(.opacity)
         }
-    }
-
-    /// The one line the launch state reads.
-    ///
-    /// It names the Host rather than repeating the sidebar chip's verb: the
-    /// chip already says the connection is being made, so this says to what.
-    static func connectingTitle(
-        hostName: String,
-        isReconnecting: Bool,
-        migratingRuntimeSessions: Bool
-    ) -> String {
-        if migratingRuntimeSessions {
-            return "Migrating runtime sessions…"
-        }
-        return isReconnecting
-            ? "Reconnecting to \(hostName)"
-            : "Connecting to \(hostName)"
     }
 
     private func emptyWelcome(tokens: WarrenColorTokens) -> some View {
         let canStart = endpointCapabilities.canAddProject || endpointCapabilities.canImportSuperset
         return WarrenDesktopEmptyStage(
+            mark: .symbol("folder.badge.plus"),
             title: canStart ? "Open a project to begin" : "No projects yet",
             message: canStart
-                ? "Add a Git repository to start working in it."
+                ? "A project is a Git repository. Warren lists its worktrees and keeps a Session's terminals with them."
                 : "Add a project from the remote CLI on \(hostName)."
         ) {
             if endpointCapabilities.canAddProject {
@@ -238,19 +193,11 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                 )
             }
             if endpointCapabilities.canImportSuperset {
-                // The second way in stays plain text, so the card has one
-                // control that asks to be pressed and one that does not.
                 Button(action: onImportSuperset) {
                     Text("Import from Superset")
                         .font(WarrenTypography.body)
-                        // Plain text still needs the height of the button
-                        // beside it, so the two share a baseline and a hit
-                        // target of the same size.
-                        .frame(minHeight: WarrenLayoutMetrics.compactControlHeight)
-                        .contentShape(.rect)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(tokens.mutedForeground)
+                .buttonStyle(WarrenSecondaryButtonStyle())
                 .warrenSemanticElement(
                     id: "onboarding.import-superset",
                     role: .button,
@@ -259,6 +206,20 @@ struct WarrenDesktopWorkspaceContent<TerminalSurface: View>: View {
                 )
             }
         }
+    }
+
+    private func connectionLoadingState(tokens: WarrenColorTokens) -> some View {
+        let presentation = WarrenDesktopConnectionPresentation(
+            connectionState,
+            migratingRuntimeSessions: isMigratingRuntimeSessions
+        )
+        return WarrenDesktopEmptyStage(
+            mark: .progress,
+            title: presentation.label,
+            message: "Waiting for projects and Sessions from \(hostName)."
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(presentation.label) Waiting for projects and sessions")
     }
 
     private func connectionUnavailableState(tokens: WarrenColorTokens) -> some View {

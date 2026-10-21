@@ -39,7 +39,7 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
             Group {
             if isLoading {
                 HStack(spacing: WarrenSpacing.compact) {
-                    WarrenLoadingIndicator(size: 18, accessibilityLabel: "Loading worktrees")
+                    WarrenBrailleSpinner(size: 18, accessibilityLabel: "Loading worktrees")
                     Text("Reading Git worktrees…")
                         .font(WarrenTypography.dialogBody)
                         .foregroundStyle(tokens.mutedForeground)
