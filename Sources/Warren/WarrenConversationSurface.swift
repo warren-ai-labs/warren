@@ -2825,7 +2825,7 @@ private struct WarrenConversationDecisionDock: View {
                 // answer shows where it was given, whether by click or key.
                 ZStack {
                     if chosen {
-                        WarrenBrailleSpinner(size: 10, accessibilityLabel: "Answering")
+                        WarrenLoadingIndicator(size: 10, accessibilityLabel: "Answering")
                     } else {
                         Text(key).font(.system(size: key.count > 1 ? 10 : 11, design: .monospaced))
                     }

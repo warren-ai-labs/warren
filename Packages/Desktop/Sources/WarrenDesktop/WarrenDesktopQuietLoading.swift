@@ -66,7 +66,7 @@ struct WarrenDesktopQuietLoadingMark: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: 8) {
-            WarrenBrailleSpinner(size: 13, accessibilityLabel: title)
+            WarrenLoadingIndicator(size: 13, accessibilityLabel: title)
             Text(title)
                 .font(.system(size: 12.5))
                 .foregroundStyle(tokens.mutedForeground)
@@ -98,23 +98,39 @@ struct WarrenDesktopConnectingStage: View {
     }
 }
 
-/// The in-app update's loading state: the window stays as it is behind a
-/// slight dim, with a compact capsule saying why it is not taking input.
+/// The update's loading state, for the app and the Host alike: the window
+/// stays as it is behind a slight dim, with one card saying why it is not
+/// taking input.
 ///
-/// The update replaces the application bundle and restarts Warren, so there is
-/// no page to navigate to and nothing to explain at length. Dimming the one
-/// window it owns is the whole of the takeover.
+/// The update replaces the application bundle or restarts the Host, so there
+/// is no page to navigate to and nothing to explain at length. The card is
+/// opaque even on a glass window: over a dimmed, busy window a translucent card
+/// left its own words unreadable. Its mark is the triangle, the one place the
+/// loading indicator takes that form.
 struct WarrenDesktopUpdateHUD: View {
     /// The line the tree exposes to the UI probes.
     static let elementID = "loading.update-restart"
     static let title = "Updating Warren…"
+    static let lingeringDetail = "Your Sessions pick up where they were once it is back."
+
+    /// A more specific line from the Host, when it gives one.
+    var detail: String? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isLingering = false
+
+    private static let lingerDelay: Duration = .seconds(4)
+
+    private var shownDetail: String? {
+        isLingering ? Self.lingeringDetail : detail
+    }
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        let surface = WarrenColorTokens.resolved(for: colorScheme).popoverSurface
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
         WarrenDesktopDelayedReveal {
             ZStack {
                 // A third of the modal scrim: enough to say the window is
@@ -122,23 +138,37 @@ struct WarrenDesktopUpdateHUD: View {
                 tokens.modalScrim
                     .opacity(0.35)
                     .ignoresSafeArea()
-                HStack(spacing: 9) {
-                    WarrenBrailleSpinner(size: 13, accessibilityLabel: Self.title)
-                    Text(Self.title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(tokens.foreground.opacity(0.92))
+                VStack(spacing: 12) {
+                    WarrenLoadingIndicator(.triangle, size: 22, accessibilityLabel: Self.title)
+                    VStack(spacing: 4) {
+                        Text(Self.title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(tokens.foreground)
+                        if let shownDetail {
+                            Text(shownDetail)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(tokens.mutedForeground)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(maxWidth: 240)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(shape.fill(tokens.popoverSurface))
+                .padding(.horizontal, 22)
+                .padding(.top, 20)
+                .padding(.bottom, 18)
+                .frame(minWidth: 200)
+                .background(shape.fill(surface))
                 .overlay(shape.strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
-                // The dim is deliberately slight, so the capsule carries the
+                // The dim is deliberately slight, so the card carries the
                 // lift itself rather than borrowing it from a dark backdrop.
                 .shadow(
                     color: .black.opacity(colorScheme == .light ? 0.18 : 0.45),
                     radius: 18,
                     y: 8
                 )
+                .animation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion), value: isLingering)
                 .warrenSemanticElement(
                     id: Self.elementID,
                     role: .text,
@@ -148,6 +178,11 @@ struct WarrenDesktopUpdateHUD: View {
                 .accessibilityLabel(Self.title)
                 .accessibilityAddTraits(.updatesFrequently)
             }
+        }
+        .task {
+            try? await Task.sleep(for: Self.lingerDelay)
+            guard !Task.isCancelled else { return }
+            isLingering = true
         }
     }
 }

@@ -1352,23 +1352,38 @@ button:disabled {
   cursor: pointer;
 }
 
+/* A Session's app icon, as on the Desktop: the mark at 62% of a tile in the
+   brand's colour, 27% corners, and a faint rim so a near-black tile keeps its
+   edge on a dark card. */
 .preset-brand-icon {
   display: grid;
   place-items: center;
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
+  border-radius: 27%;
+  box-shadow: inset 0 0 0 0.5px rgb(255 255 255 / 0.1);
+}
+
+.preset-brand-icon img,
+.preset-brand-glyph {
+  display: block;
+  width: 62%;
+  height: 62%;
 }
 
 .preset-brand-icon img {
-  display: block;
-  width: 100%;
-  height: 100%;
   object-fit: contain;
-  opacity: 0.9;
-  outline: var(--outline-image);
-  outline-offset: -1px;
-  border-radius: 3px;
+}
+
+.preset-brand-glyph {
+  background: #fff;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
 }
 
 .preset.pending {
@@ -4215,39 +4230,33 @@ button:disabled {
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
-.braille-spinner {
-  display: grid;
-  grid-template-columns: repeat(2, 2.5px);
-  grid-template-rows: repeat(4, 2.5px);
-  gap: 1.75px;
-  width: 6.75px;
-  height: 15.25px;
+/* Warren's loading mark: three small dots in one neutral colour, a soft
+   pulse running through them left to right. Same colour and cadence as the
+   native WarrenLoadingIndicator, and never the accent. */
+.loading-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 14px;
   flex: none;
 }
 
-.braille-spinner i {
-  width: 2.5px;
-  height: 2.5px;
+.loading-dots i {
+  width: 3px;
+  height: 3px;
   border-radius: var(--radius-circle);
-  background: var(--color-text-primary);
-  opacity: 0.18;
-  animation: braille-spin 0.72s steps(1, end) infinite;
+  background: #c7c7c7;
+  animation: loading-dot-pulse 1.4s ease-in-out infinite;
 }
 
-.braille-spinner i:nth-child(1) { grid-area: 1 / 1; animation-delay: 0s; }
-.braille-spinner i:nth-child(2) { grid-area: 1 / 2; animation-delay: -0.09s; }
-.braille-spinner i:nth-child(3) { grid-area: 2 / 2; animation-delay: -0.18s; }
-.braille-spinner i:nth-child(4) { grid-area: 3 / 2; animation-delay: -0.27s; }
-.braille-spinner i:nth-child(5) { grid-area: 4 / 2; animation-delay: -0.36s; }
-.braille-spinner i:nth-child(6) { grid-area: 4 / 1; animation-delay: -0.45s; }
-.braille-spinner i:nth-child(7) { grid-area: 3 / 1; animation-delay: -0.54s; }
-.braille-spinner i:nth-child(8) { grid-area: 2 / 1; animation-delay: -0.63s; }
+.loading-dots i:nth-child(2) { animation-delay: 0.23s; }
+.loading-dots i:nth-child(3) { animation-delay: 0.47s; }
 
-/* With motion reduced the dots cannot chase, so they hold a static, clearly
-   visible glyph instead of eight dots frozen at their resting dimness. */
+/* With motion reduced the dots hold still at full strength. */
 @media (prefers-reduced-motion: reduce) {
-  .braille-spinner i {
-    opacity: 0.6;
+  .loading-dots i {
+    animation: none;
+    opacity: 0.7;
   }
 }
 
@@ -4264,13 +4273,9 @@ button:disabled {
   letter-spacing: 0.04em;
 }
 
-@keyframes braille-spin {
-  0% {
-    opacity: 1;
-  }
-  12.5% {
-    opacity: 0.18;
-  }
+@keyframes loading-dot-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
 }
 
 .mobile-keys {

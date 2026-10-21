@@ -135,17 +135,18 @@ struct WarrenDesktopTaskRow: View {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// The drawn width of `checkmark.square` at 14pt.
+    static let taskIconWidth: CGFloat = 12
+
     private func taskIcon(tokens: WarrenColorTokens) -> some View {
-        // At 14pt the symbol draws a 12pt square, centred in the 18pt slot,
-        // so 3pt of blank slot sat between it and the name. Shifting it to the
-        // slot's trailing edge keeps the small glyph and puts the name the
-        // same distance from it as a project's name is from its avatar.
+        // At 14pt the symbol draws a 12pt square inside a 16pt image box. The
+        // slot is the drawn square's width, so its left edge lines up with a
+        // project avatar's and the name keeps the same gap after it.
         Image(systemName: "checkmark.square")
             .font(.system(size: 14, weight: .regular))
             .foregroundStyle(tokens.treeGroupIcon)
-            .offset(x: 3)
             .frame(
-                width: WarrenDesktopSidebarMetrics.groupIconSize,
+                width: Self.taskIconWidth,
                 height: WarrenDesktopSidebarMetrics.groupIconSize
             )
             .accessibilityHidden(true)

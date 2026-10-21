@@ -248,8 +248,8 @@ public struct WarrenDesktopWebPanel: View {
     }
 
     /// The Host panel's Public Access page. The outer surface owns the
-    /// title, close affordance and elevation, so the panel draws only its
-    /// status row and content, with no second border or close button.
+    /// title, back affordance and elevation, so the panel draws only its
+    /// addresses and the Public Access row, with no second border or title.
     public var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let addresses = presentedAddresses
@@ -260,9 +260,14 @@ public struct WarrenDesktopWebPanel: View {
         }
     }
 
+    /// Names what the rows below are, with the Web server's state beside it,
+    /// so the state is never a lone word at the edge of an empty row.
     private func header(tokens: WarrenColorTokens) -> some View {
         HStack(spacing: WarrenSpacing.small) {
-            Spacer()
+            Text("Web addresses")
+                .font(WarrenTypography.popoverMeta)
+                .foregroundStyle(tokens.mutedForeground)
+            Spacer(minLength: WarrenSpacing.small)
             WarrenStatusIndicator(
                 color: status.isRunning ? tokens.success : tokens.mutedForeground,
                 accessibilityLabel: status.isRunning ? "Web is running" : "Web is stopped"
@@ -313,10 +318,8 @@ public struct WarrenDesktopWebPanel: View {
             WarrenDesktopChromeDivider()
                 .padding(.vertical, WarrenSpacing.xs)
 
-            if status.secureURL == nil {
-                publicAccessSetupHint(tokens: tokens)
-            }
-
+            // One row: its button already opens Settings when Public Access
+            // is not set up, so no separate setup hint repeats it.
             WarrenDesktopWebPublicAccessRow(
                 isActive: status.secureURL != nil,
                 isAuthenticated: status.publicAccessAuthenticated,
@@ -342,23 +345,6 @@ public struct WarrenDesktopWebPanel: View {
             }
         }
         .padding(WarrenSpacing.medium)
-    }
-
-    private func publicAccessSetupHint(tokens: WarrenColorTokens) -> some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-            Text(WarrenPublicAccessCopy.title)
-                .font(WarrenTypography.popoverItem)
-                .foregroundStyle(tokens.foreground)
-            Text("Configure Public Access in Settings.")
-                .font(WarrenTypography.popoverMeta)
-                .foregroundStyle(tokens.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-            if let onOpenSettings {
-                Button("Open Settings", action: onOpenSettings)
-                    .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.popoverItem))
-                    .accessibilityIdentifier("public-access.open-settings")
-            }
-        }
     }
 
     private func unavailableContent(tokens: WarrenColorTokens) -> some View {
@@ -463,13 +449,14 @@ private struct WarrenDesktopWebPublicAccessRow: View {
                 .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(isActive ? tokens.info : tokens.mutedForeground)
                 .accessibilityHidden(true)
+            // The button's title already says the state (Start, Disable,
+            // Working…), and the globe takes the info colour while it is on,
+            // so no separate On/Off label competes with it for the row.
             Text(WarrenPublicAccessCopy.title)
                 .font(WarrenTypography.popoverItem)
                 .foregroundStyle(tokens.foreground)
-            Spacer(minLength: 0)
-            Text(isBusy ? "Working…" : (isActive ? "On" : "Off"))
-                .font(WarrenTypography.popoverMeta)
-                .foregroundStyle(isActive ? tokens.info : tokens.mutedForeground)
+                .lineLimit(1)
+            Spacer(minLength: WarrenSpacing.small)
             WarrenDesktopWebCommandButton(
                 title: isBusy
                     ? "Working…"
@@ -515,6 +502,8 @@ private struct WarrenDesktopWebCommandButton: View {
             Text(title)
                 .font(WarrenTypography.popoverItem)
                 .foregroundStyle(isEmphasized ? tokens.info : tokens.mutedForeground)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, WarrenSpacing.compact)
                 .frame(minHeight: WarrenLayoutMetrics.compactControlHeight)
                 .background(

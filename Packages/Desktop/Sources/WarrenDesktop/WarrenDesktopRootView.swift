@@ -17,6 +17,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     public let projection: WarrenDesktopProjection
     public let navigation: WarrenDesktopNavigationState
     public let updateStatus: WarrenDesktopUpdateStatus
+    /// Set while the Host restarts for an update. It shares the window's one
+    /// update notice with the in-app update rather than each terminal drawing
+    /// its own.
+    public let hostMaintenanceMessage: String?
     public let onUpdateAction: () -> Void
     public let webStatus: WarrenDesktopWebStatus
     public let isMigratingRuntimeSessions: Bool
@@ -292,10 +296,24 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let createsNewGroup: Bool
     }
 
+    private var isUpdating: Bool {
+        updateStatus == .updating || hostMaintenanceMessage != nil
+    }
+
+    /// The Host's own wording when it gives more than the generic notice.
+    private var updateHUDDetail: String? {
+        guard updateStatus != .updating,
+              let hostMaintenanceMessage,
+              hostMaintenanceMessage != "Warren is updating"
+        else { return nil }
+        return hostMaintenanceMessage
+    }
+
     public init(
         projection: WarrenDesktopProjection,
         navigation: WarrenDesktopNavigationState? = nil,
         updateStatus: WarrenDesktopUpdateStatus = .none,
+        hostMaintenanceMessage: String? = nil,
         onUpdateAction: @escaping () -> Void = {},
         actions: WarrenDesktopActions = WarrenDesktopActions(),
         onCreateTask: @escaping @MainActor (WarrenDesktopTaskCreationRequest) async throws -> TaskID = { _ in
@@ -383,6 +401,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.projection = projection
         self.navigation = navigation ?? WarrenDesktopNavigationReducer.initial(for: projection)
         self.updateStatus = updateStatus
+        self.hostMaintenanceMessage = hostMaintenanceMessage
         self.onUpdateAction = onUpdateAction
         self.webStatus = webStatus
         self.isMigratingRuntimeSessions = isMigratingRuntimeSessions
@@ -645,20 +664,21 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             }
 
             // An in-app update replaces the application bundle and restarts
-            // Warren. The window is not navigated anywhere for it: the shell
-            // stays exactly as it is behind a slight dim and one compact
-            // capsule says why it has stopped taking input. A failed install
-            // fades it back out, leaving the window the user was working in.
+            // Warren; a Host update restarts the Host under it. Neither
+            // navigates the window anywhere: the shell stays exactly as it is
+            // behind a slight dim and one card says why it has stopped taking
+            // input. There is one per window, never one per terminal. A failed
+            // install fades it back out, leaving the window as it was.
             Group {
-                if updateStatus == .updating {
-                    WarrenDesktopUpdateHUD()
+                if isUpdating {
+                    WarrenDesktopUpdateHUD(detail: updateHUDDetail)
                         .transition(.opacity)
                         .zIndex(WarrenPresentationLayer.modal)
                 }
             }
             .animation(
                 WarrenDesktopLoadingReveal.animation(reduceMotion: reduceMotion),
-                value: updateStatus
+                value: isUpdating
             )
         }
         .animation(sidebarPeekAnimation, value: sidebarPeek.isPeeking)

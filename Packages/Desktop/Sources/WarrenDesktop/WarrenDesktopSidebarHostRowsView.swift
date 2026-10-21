@@ -1570,7 +1570,7 @@ private struct WarrenDesktopSidebarHostHeader: View {
         case .attached:
             EmptyView()
         case .connecting, .reconnecting:
-            WarrenBrailleSpinner(size: 10, accessibilityLabel: presentation.label)
+            WarrenLoadingIndicator(size: 10, accessibilityLabel: presentation.label)
         case .failed, .disconnected:
             Text(presentation.label)
                 .font(WarrenTypography.navigationMeta)
