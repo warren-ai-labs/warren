@@ -311,7 +311,13 @@ export const Turn = memo(function Turn({ turn, live, waiting, onOpenSession, ses
       <Reasoning reasoning={reasoning} running={running} />
       <WorkTrail turn={turn} running={running} waiting={waiting} onOpenSession={onOpenSession} sessionExists={sessionExists} />
       {answer && <Markdown text={answer} streaming={running} />}
-      {turn.notices.map(notice => <p key={notice.id} className="conversation-notice">{notice.text}</p>)}
+      {turn.notices.map(notice => notice.kind === "command" ? (
+        <p key={notice.id} className="conversation-notice conversation-command">
+          <code>{notice.command}</code>{notice.args ? ` ${notice.args}` : ""}
+        </p>
+      ) : (
+        <p key={notice.id} className={notice.kind === "output" ? "conversation-notice conversation-notice-output" : "conversation-notice"}>{notice.text}</p>
+      ))}
       {turn.errors.map(error => <p key={error.id} className="conversation-error" role="alert">{error.text}</p>)}
       {!running && turn.status === "cancelled" && !turn.errors.length && <p className="conversation-notice">Stopped.</p>}
       <FilesChanged files={turn.files} />

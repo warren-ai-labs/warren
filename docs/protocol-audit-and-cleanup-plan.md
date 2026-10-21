@@ -222,9 +222,17 @@ Output subscription and input/resize control are separate concepts in the
 current design:
 
 - `session.subscribe` registers an output subscription and may optionally claim
-  the control lease with `claim: true`;
+  the control lease with `claim: true`; observation-only callers (`warren
+  session read`, `warren agent wait/attach/cancel`) subscribe passively,
+  and only commands that type into the PTY (`session send`, `agent send`) claim
+  it; its acknowledgement precedes the
+  recovery payload, so a payload failure afterwards is reported as a
+  session-scoped `recoveryFailed` event rather than an error on the retired
+  command id;
 - `session.focus` promotes or releases the input control lease without
-  creating a second output subscription;
+  creating a second output subscription; a transfer is announced to the
+  displaced peer as `focusTaken`, and a lease returned when the taker
+  disconnects is announced as `focusGranted`;
 - viewport ownership is arbitrated separately from input: the focused peer owns
   the shared PTY size, an output subscriber may adopt it while it is unowned,
   and adopting it never grants input control;

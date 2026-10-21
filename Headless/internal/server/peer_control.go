@@ -12,6 +12,7 @@ func (s *Service) detachPeer(peer *wsPeer, sessionID string) {
 	s.lazyInit()
 	s.stopPeerCursorOutput(peer, sessionID, false)
 	peer.removeOutput(sessionID)
+	var restored *wsPeer
 	s.outputMu.Lock()
 	if peers := s.peers[sessionID]; peers != nil {
 		delete(peers, peer)
@@ -21,6 +22,12 @@ func (s *Service) detachPeer(peer *wsPeer, sessionID string) {
 	}
 	if s.focusedPeers[sessionID] == peer {
 		delete(s.focusedPeers, sessionID)
+		// The peer that held the keyboard left. Hand the lease back to the
+		// most recent attached peer that still wants it, so a short-lived
+		// observer (a CLI read, a second window) cannot leave the client that
+		// is actually on screen unable to type. The recipient is told, since
+		// its own idea of who owns the lease is now stale.
+		restored = s.restoreFocusLocked(sessionID)
 	}
 	if s.controlPeers[sessionID] == peer {
 		delete(s.controlPeers, sessionID)
@@ -28,7 +35,72 @@ func (s *Service) detachPeer(peer *wsPeer, sessionID string) {
 	if s.resizePeers[sessionID] == peer {
 		delete(s.resizePeers, sessionID)
 	}
+	s.forgetFocusDemandLocked(sessionID, peer)
 	s.outputMu.Unlock()
+	if restored != nil {
+		s.logInfo("focus: lease restored", "session", sessionID)
+		_ = restored.enqueueFocusGranted(sessionID, restored.attachmentID(sessionID))
+	}
+}
+
+// restoreFocusLocked hands the session's input lease back to the most recent
+// peer that still wants it and is still attached. It returns that peer so the
+// caller can notify it after releasing the lock.
+func (s *Service) restoreFocusLocked(sessionID string) *wsPeer {
+	demands := s.focusDemands[sessionID]
+	for index := len(demands) - 1; index >= 0; index-- {
+		candidate := demands[index]
+		if candidate == nil {
+			continue
+		}
+		if _, attached := s.peers[sessionID][candidate]; !attached {
+			continue
+		}
+		s.focusDemands[sessionID] = append([]*wsPeer(nil), demands[:index+1]...)
+		s.focusedPeers[sessionID] = candidate
+		s.controlPeers[sessionID] = candidate
+		s.resizePeers[sessionID] = candidate
+		return candidate
+	}
+	delete(s.focusDemands, sessionID)
+	return nil
+}
+
+// noteFocusDemandLocked records that peer wants the session's input lease.
+func (s *Service) noteFocusDemandLocked(sessionID string, peer *wsPeer) {
+	if peer == nil {
+		return
+	}
+	demands := s.focusDemands[sessionID]
+	for index, existing := range demands {
+		if existing == peer {
+			if index == len(demands)-1 {
+				return
+			}
+			demands = append(demands[:index], demands[index+1:]...)
+			break
+		}
+	}
+	s.focusDemands[sessionID] = append(demands, peer)
+}
+
+// forgetFocusDemandLocked removes a peer's claim of interest in the lease.
+func (s *Service) forgetFocusDemandLocked(sessionID string, peer *wsPeer) {
+	demands := s.focusDemands[sessionID]
+	if len(demands) == 0 {
+		return
+	}
+	retained := demands[:0]
+	for _, existing := range demands {
+		if existing != peer {
+			retained = append(retained, existing)
+		}
+	}
+	if len(retained) == 0 {
+		delete(s.focusDemands, sessionID)
+		return
+	}
+	s.focusDemands[sessionID] = retained
 }
 
 func (s *Service) registerAgentPeer(sessionID string, peer *wsPeer) {
@@ -97,14 +169,14 @@ func (s *Service) focusPeerLocked(
 	columns, rows int,
 	resizeSpecified bool,
 	deferResize bool,
-) (resized bool, err error) {
+) (resized bool, displaced *wsPeer, err error) {
 	s.lazyInit()
 	s.outputMu.Lock()
 	_, registered := s.peers[session.ID][peer]
 	owner := s.focusedPeers[session.ID]
 	s.outputMu.Unlock()
 	if !registered {
-		return false, nil
+		return false, nil, nil
 	}
 	if !focused {
 		s.outputMu.Lock()
@@ -121,13 +193,14 @@ func (s *Service) focusPeerLocked(
 		if s.resizePeers[session.ID] == peer {
 			delete(s.resizePeers, session.ID)
 		}
+		s.forgetFocusDemandLocked(session.ID, peer)
 		s.outputMu.Unlock()
-		return false, nil
+		return false, nil, nil
 	}
 	if resizeSpecified && !deferResize {
 		resized, err = s.resizeRuntime(ctx, session, columns, rows)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 	}
 	s.outputMu.Lock()
@@ -135,13 +208,20 @@ func (s *Service) focusPeerLocked(
 	// focus back to a socket that has already been removed from the roster.
 	if _, stillRegistered := s.peers[session.ID][peer]; !stillRegistered {
 		s.outputMu.Unlock()
-		return false, nil
+		return false, nil, nil
 	}
+	previous := s.focusedPeers[session.ID]
 	s.focusedPeers[session.ID] = peer
 	s.controlPeers[session.ID] = peer
 	// Focus owns the viewport, so the keyboard target is also the pane whose
 	// size the shared runtime follows while it stays focused.
 	s.resizePeers[session.ID] = peer
+	s.noteFocusDemandLocked(session.ID, peer)
+	if previous != nil && previous != peer {
+		if _, stillAttached := s.peers[session.ID][previous]; stillAttached {
+			displaced = previous
+		}
+	}
 	s.outputMu.Unlock()
 	if resizeSpecified && deferResize {
 		// The lease is already granted, so the focus reply never waits on a
@@ -152,7 +232,7 @@ func (s *Service) focusPeerLocked(
 			resized = true
 		}
 	}
-	return resized, nil
+	return resized, displaced, nil
 }
 
 // resizeFocusedLocked arbitrates the shared runtime size independently of the
@@ -213,9 +293,19 @@ func (s *Service) focusPeer(
 	resizeSpecified bool,
 	deferResize bool,
 ) (bool, bool, error) {
-	resized, err := s.focusPeerLocked(ctx, peer, session, focused, columns, rows, resizeSpecified, deferResize)
+	resized, displaced, err := s.focusPeerLocked(ctx, peer, session, focused, columns, rows, resizeSpecified, deferResize)
 	if err != nil {
 		return false, false, err
+	}
+	if displaced != nil {
+		// The displaced peer still thinks it owns the keyboard. Tell it, so it
+		// stops treating its lease as confirmed and can re-claim when it is
+		// asked to type again.
+		s.logInfo("focus: lease taken",
+			"session", session.ID,
+			"attachmentId", peer.attachmentID(session.ID),
+		)
+		_ = displaced.enqueueFocusTaken(session.ID, peer.attachmentID(session.ID))
 	}
 	return s.isFocused(peer, session.ID), resized, nil
 }
@@ -296,6 +386,7 @@ func (s *Service) stopOutput(sessionID string, notify bool) {
 	delete(s.peers, sessionID)
 	delete(s.agentPeers, sessionID)
 	delete(s.focusedPeers, sessionID)
+	delete(s.focusDemands, sessionID)
 	delete(s.controlPeers, sessionID)
 	delete(s.resizePeers, sessionID)
 	delete(s.runtimeSizes, sessionID)

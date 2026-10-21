@@ -2748,7 +2748,7 @@ struct WarrenEmbeddedEditorSurface: View {
 
     private func progress(_ label: String, tokens: WarrenColorTokens) -> some View {
         VStack(spacing: WarrenSpacing.compact) {
-            WarrenBrailleSpinner(size: 20, accessibilityLabel: label)
+            WarrenLoadingIndicator(size: 20, accessibilityLabel: label)
             Text(label)
                 .font(WarrenTypography.body)
                 .foregroundStyle(tokens.mutedForeground)

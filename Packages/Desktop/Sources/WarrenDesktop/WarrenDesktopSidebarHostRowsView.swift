@@ -630,6 +630,11 @@ struct WarrenDesktopSidebarHostRows: View {
                         { onAction(.dismissActivity(session.id, mark.activityState)) }
                     }
                     : nil,
+                // A regeneration asks the Host that owns the Session, so it
+                // follows the same read-only rule as every other mutation.
+                onRegenerateTitle: canMutate(host)
+                    ? { onAction(.regenerateSessionTitle(session.id)) }
+                    : nil,
                 onSplitDrop: host.endpointID == activeEndpointID
                     ? onSplitDropSession
                     : nil
@@ -1565,7 +1570,7 @@ private struct WarrenDesktopSidebarHostHeader: View {
         case .attached:
             EmptyView()
         case .connecting, .reconnecting:
-            WarrenBrailleSpinner(size: 10, accessibilityLabel: presentation.label)
+            WarrenLoadingIndicator(size: 10, accessibilityLabel: presentation.label)
         case .failed, .disconnected:
             Text(presentation.label)
                 .font(WarrenTypography.navigationMeta)

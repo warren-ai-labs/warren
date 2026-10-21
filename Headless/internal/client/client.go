@@ -301,15 +301,31 @@ func (c *Client) Roster(ctx context.Context) (api.State, error) {
 	return value, err
 }
 
+// Subscribe attaches to a Session's terminal and claims the input control
+// lease. Only a command that is about to type into the PTY or resize it may do
+// this: the claim is the Host's permission for input, and taking it away from
+// the client that is actually on screen silently mutes that client.
 func (c *Client) Subscribe(ctx context.Context, sessionID string) (api.Session, error) {
+	return c.subscribe(ctx, sessionID, true)
+}
+
+// SubscribePassive attaches to a Session's terminal without taking the input
+// control lease. Observation commands (read, wait, follow) use it so watching a
+// Session never steals typing from the desktop or another client.
+func (c *Client) SubscribePassive(ctx context.Context, sessionID string) (api.Session, error) {
+	return c.subscribe(ctx, sessionID, false)
+}
+
+func (c *Client) subscribe(ctx context.Context, sessionID string, claim bool) (api.Session, error) {
 	var result struct {
 		Subscribed   bool   `json:"subscribed"`
 		AttachmentID string `json:"attachmentId"`
 	}
-	if err := c.Request(ctx, "session.subscribe", map[string]any{
-		"id":    sessionID,
-		"claim": true,
-	}, &result); err != nil {
+	params := map[string]any{"id": sessionID}
+	if claim {
+		params["claim"] = true
+	}
+	if err := c.Request(ctx, "session.subscribe", params, &result); err != nil {
 		return api.Session{}, err
 	}
 	if !result.Subscribed || strings.TrimSpace(result.AttachmentID) == "" {
@@ -323,11 +339,15 @@ func (c *Client) Subscribe(ctx context.Context, sessionID string) (api.Session, 
 		if session.ID != sessionID {
 			continue
 		}
-		c.mu.Lock()
-		c.inputSessionID = sessionID
-		c.attachmentID = result.AttachmentID
-		c.inputSequence = 0
-		c.mu.Unlock()
+		if claim {
+			// Input framing is only valid for the peer that holds the lease, so
+			// a passive subscription must not arm it.
+			c.mu.Lock()
+			c.inputSessionID = sessionID
+			c.attachmentID = result.AttachmentID
+			c.inputSequence = 0
+			c.mu.Unlock()
+		}
 		return session, nil
 	}
 	return api.Session{}, fmt.Errorf("session not found: %s", sessionID)

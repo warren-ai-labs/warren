@@ -143,6 +143,17 @@ public struct TerminalPresentationIntent: Equatable, Sendable {
     }
 }
 
+/// Why a Session is asking AppKit for the keyboard.
+///
+/// Reconciliation runs on layout, roster, and attach turns, so it must never
+/// take the keyboard away from a SwiftUI control the user is working in.
+/// Activation is the user's own instruction — a click, a menu command, a
+/// palette result — that says where the next keystroke should go.
+enum TerminalFocusOrigin: String, Sendable {
+    case reconciliation
+    case userActivation
+}
+
 public struct TerminalSurfaceManagerSnapshot: Equatable, Sendable {
     public let activeSessionID: TerminalSessionID?
     public let activeSessionIDs: Set<TerminalSessionID>
@@ -193,6 +204,10 @@ public final class TerminalSurfaceManager {
         /// loop; a successful present resets it.
         var presentWatchdogStreak = 0
         var recoveryPhase: RecoveryPresentationPhase = .ready
+        /// A present request arrived while the recovery gate was closed. The
+        /// gate used to drop it silently, so the pane stayed black until an
+        /// unrelated reconciliation; `endRecovery`/`cancelRecovery` replay it.
+        var presentDeferredByRecovery = false
         /// The grid this pane's host fits, last reported through
         /// `onViewportGridChanged`.
         var reportedViewportGrid: TerminalSize?
@@ -212,10 +227,16 @@ public final class TerminalSurfaceManager {
         /// `displayVisible == true` would make `schedulePresent` skip the
         /// output-boundary wait and draw the old grid once more.
         var waitsForRecoveryBoundary = false
-        /// Whether the manager has already reported AppKit focus for this
-        /// mounted surface. Geometry-only reconciliations must not re-claim
-        /// the daemon control lease on every SwiftUI update.
+        /// Whether the Host has confirmed that this mounted surface owns the
+        /// daemon's input control lease. Only an accepted focus report sets it:
+        /// AppKit giving the pane the keyboard says where a keystroke goes, not
+        /// who the Host will accept it from. Geometry-only reconciliations must
+        /// not re-claim the lease on every SwiftUI update.
         var focusReported = false
+        /// A focus report is in flight. Kept apart from `focusReported`, which
+        /// stays false until the Host answers, so a slow round trip does not
+        /// turn every reconciliation into another claim.
+        var focusReportPending = false
         /// A host can disappear through both SwiftUI dismantling and the
         /// manager's next reconciliation pass. Keep demotion idempotent so a
         /// single pane does not emit duplicate blur callbacks in that race.
@@ -275,6 +296,9 @@ public final class TerminalSurfaceManager {
     private enum ReconcileReason: String {
         /// A new intent from SwiftUI: tab/session selection or focus intent.
         case intent
+        /// The user activated a Session and its input must take the keyboard
+        /// as soon as the pane it lives in can accept it.
+        case inputFocus
         /// Viewport size changed (window resize, sidebar toggle, pane chrome).
         case geometry
         case surfaceInserted
@@ -316,6 +340,11 @@ public final class TerminalSurfaceManager {
     private var pendingWindowBlurTask: Task<Void, Never>?
     private var onFocused: (TerminalSessionID, TerminalSize?) -> Void = { _, _ in }
     private var onBlurred: (TerminalSessionID) -> Void = { _ in }
+    /// The Session the user just asked to activate. It survives until its
+    /// surface can claim the keyboard, because the selection and the attach
+    /// that makes the claim possible happen on different main-loop turns.
+    /// A newer activation replaces it, and the surface's removal clears it.
+    private var pendingInputFocusSessionID: TerminalSessionID?
     private var resizeDebounceTask: Task<Void, Never>?
     private var resizingUntil: ContinuousClock.Instant?
     /// Test-only observation point for the one-shot redraw. The production
@@ -629,6 +658,9 @@ public final class TerminalSurfaceManager {
 
     public func remove(_ sessionID: TerminalSessionID) {
         pendingHostGrids.removeValue(forKey: sessionID)
+        if pendingInputFocusSessionID == sessionID {
+            pendingInputFocusSessionID = nil
+        }
         policy.remove(sessionID)
         dispose(sessionID)
     }
@@ -661,6 +693,7 @@ public final class TerminalSurfaceManager {
             viewportSize: .zero,
             wantsTerminalFocus: false
         )
+        pendingInputFocusSessionID = nil
         let ms = Int(Date().timeIntervalSince(start) * 1000)
         TerminalDiagnostics.log("surface_shutdown_end", ["duration_ms": String(ms), "pending": String(pendingDisposals.count)])
     }
@@ -860,6 +893,7 @@ public final class TerminalSurfaceManager {
         guard let sessionID = latestIntent.activeSessionID,
               let entry = entries[sessionID] else { return }
         entry.focusReported = false
+        entry.focusReportPending = false
     }
 
     /// Deferred by one hop because AppKit has not yet installed this view as the
@@ -882,6 +916,7 @@ public final class TerminalSurfaceManager {
             guard let self,
                   let entry = self.entries[sessionID],
                   !entry.focusReported,
+                  !entry.focusReportPending,
                   self.ownsTerminalFocus(sessionID) else { return }
             self.focus(
                 sessionID,
@@ -890,6 +925,24 @@ public final class TerminalSurfaceManager {
                 trigger: "focusReturn"
             )
         }
+    }
+
+    /// Claims the keyboard for a Session the user just entered.
+    ///
+    /// The claim cannot be made in the activating call itself: the selection
+    /// has to reach SwiftUI, the pane has to attach, and AppKit may still be
+    /// settling the responder behind the click or the dismissed overlay. The
+    /// request is therefore retained per Session and consumed by the first
+    /// reconciliation that can actually install the first responder.
+    public func requestInputFocus(for sessionID: TerminalSessionID) {
+        pendingInputFocusSessionID = sessionID
+        scheduleReconciliation(.inputFocus)
+    }
+
+    /// Drops a pending activation when the Session that replaced it owns its
+    /// own input (the Conversation composer or the browser viewer).
+    public func cancelPendingInputFocus() {
+        pendingInputFocusSessionID = nil
     }
 
     public func requestFocusForActiveSurface(trigger: String = "explicit_request") {
@@ -918,6 +971,9 @@ public final class TerminalSurfaceManager {
             return
         }
         if entry.recoveryPhase == .recovering {
+            // Keep the request: the gate closes and reopens around a recovery
+            // payload, and the caller has no other chance to ask for a draw.
+            entry.presentDeferredByRecovery = true
             TerminalDiagnostics.log("present_request_deferred", [
                 "session": sessionID.description,
                 "reason": "recovery_gate",
@@ -1093,6 +1149,7 @@ public final class TerminalSurfaceManager {
             && !entry.view.isHidden
             && entry.view.alphaValue > 0
         entry.focusReported = false
+        entry.focusReportPending = false
         cancelPresentation(for: entry)
         if entry.preserveDisplayDuringRecovery {
             // Keep the last completed frame on screen. The native renderer is
@@ -1119,6 +1176,9 @@ public final class TerminalSurfaceManager {
         entry.preserveDisplayDuringRecovery = false
         entry.skipNextWarmPromotionRedraw = false
         entry.recoveryPhase = .ready
+        // This path always schedules the present it owes, either directly or
+        // through the reconciliation that activates the surface.
+        entry.presentDeferredByRecovery = false
         if isActive(sessionID),
            let host = activeHost(sessionID) {
             if preservingDisplay {
@@ -1179,6 +1239,18 @@ public final class TerminalSurfaceManager {
         } else {
             setDisplayVisible(false, for: entry)
             prepareHiddenRendering(for: entry)
+        }
+        // A present requested behind the gate belongs to a state this cancel
+        // just left. Nothing else would replay it: the surface stays attached
+        // and subscribed, so a later tab switch takes the promotion path that
+        // never asks for a draw of its own.
+        if entry.presentDeferredByRecovery {
+            entry.presentDeferredByRecovery = false
+            TerminalDiagnostics.log("present_deferred_replayed", [
+                "session": sessionID.description,
+                "reason": "recovery_cancelled",
+            ])
+            requestPresent(sessionID)
         }
     }
 
@@ -1500,6 +1572,7 @@ public final class TerminalSurfaceManager {
         entry.skipNextWarmPromotionRedraw = false
         entry.warmPromotionPending = wasDisplayedWarmSurface && !skipPostRevealRedraw
         entry.focusReported = false
+        entry.focusReportPending = false
         // Do not capture viewport text synchronously on MainActor: `captureReattachAnchor`
         // previously called `ghostty_surface_read_text` under `terminalCallLock`,
         // which blocks if the background drain is inside `ghostty_surface_write_buffer`.
@@ -1571,7 +1644,8 @@ public final class TerminalSurfaceManager {
         _ sessionID: TerminalSessionID,
         generation: UInt64,
         forceReport: Bool = false,
-        trigger: String
+        trigger: String,
+        origin requestedOrigin: TerminalFocusOrigin = .reconciliation
     ) {
         guard let host = activeHost(sessionID),
               let window = host.window,
@@ -1580,15 +1654,23 @@ public final class TerminalSurfaceManager {
               window.isKeyWindow else { return }
         let currentResponder = window.firstResponder
         let wasFirstResponder = currentResponder === entry.view
+        // A pending activation upgrades whatever path reaches the claim: the
+        // attach that follows the selection runs as a reconciliation and has
+        // to carry the user's instruction with it.
+        let origin: TerminalFocusOrigin = pendingInputFocusSessionID == sessionID
+            ? .userActivation
+            : requestedOrigin
         guard wasFirstResponder
             || Self.canClaimFocus(
                 from: currentResponder,
                 in: window,
-                for: entry.view
+                for: entry.view,
+                origin: origin
             ) else {
             TerminalDiagnostics.logAsync("terminal_focus_claim_skipped", [
                 "session": sessionID.description,
                 "trigger": trigger,
+                "origin": origin.rawValue,
                 "previous": Self.responderDescription(currentResponder),
                 "wantsTerminalFocus": latestIntent.wantsTerminalFocus ? "true" : "false",
             ])
@@ -1603,6 +1685,7 @@ public final class TerminalSurfaceManager {
             TerminalDiagnostics.logAsync("terminal_focus_claim", [
                 "session": sessionID.description,
                 "trigger": trigger,
+                "origin": origin.rawValue,
                 "previous": Self.responderDescription(currentResponder),
                 "wantsTerminalFocus": latestIntent.wantsTerminalFocus ? "true" : "false",
             ])
@@ -1616,10 +1699,66 @@ public final class TerminalSurfaceManager {
             return
         }
         entry.view.setFocusLossReportingSuppressed(false)
-        if forceReport || !wasFirstResponder || !entry.focusReported {
-            entry.focusReported = true
+        if pendingInputFocusSessionID == sessionID {
+            pendingInputFocusSessionID = nil
+        }
+        if forceReport || !wasFirstResponder
+            || (!entry.focusReported && !entry.focusReportPending) {
+            // AppKit now sends keystrokes here. The Host has not agreed yet:
+            // `noteFocusReportOutcome` sets `focusReported` only when it does.
+            entry.focusReportPending = true
+            entry.focusReported = false
             (focusCallbacks[sessionID] ?? onFocused)(sessionID, viewportGrid(for: entry))
         }
+    }
+
+    /// Records the Host's answer to a focus report.
+    ///
+    /// Until this lands the pane owns the keyboard but not the daemon's input
+    /// lease, and every keystroke would be refused. A rejection (or a report
+    /// the client could not send) clears the latch so the next focus turn
+    /// reports again.
+    public func noteFocusReportOutcome(_ sessionID: TerminalSessionID, accepted: Bool) {
+        guard let entry = entries[sessionID] else { return }
+        entry.focusReportPending = false
+        entry.focusReported = accepted
+    }
+
+    /// Records that another peer took the Session's input lease.
+    ///
+    /// The Host moved the lease; the pane's own view may still be the first
+    /// responder. If the user's keyboard is still in this pane, ask for the
+    /// lease back once — a background pane stays quiet and waits for the next
+    /// activation.
+    public func noteFocusLeaseTaken(_ sessionID: TerminalSessionID) {
+        guard let entry = entries[sessionID] else { return }
+        entry.focusReportPending = false
+        entry.focusReported = false
+        guard ownsTerminalFocus(sessionID) else {
+            TerminalDiagnostics.logAsync("terminal_focus_lease_taken", [
+                "session": sessionID.description,
+                "reclaimed": "false",
+            ])
+            return
+        }
+        TerminalDiagnostics.logAsync("terminal_focus_lease_taken", [
+            "session": sessionID.description,
+            "reclaimed": "true",
+        ])
+        focus(
+            sessionID,
+            generation: transitionGeneration,
+            forceReport: true,
+            trigger: "leaseTaken"
+        )
+    }
+
+    /// Records that the Host handed the Session's input lease back to this
+    /// client after the peer that had taken it disconnected.
+    public func noteFocusLeaseGranted(_ sessionID: TerminalSessionID) {
+        guard let entry = entries[sessionID] else { return }
+        entry.focusReportPending = false
+        entry.focusReported = true
     }
 
     /// Identifies a first responder without retaining it or reading AppKit
@@ -1636,7 +1775,8 @@ public final class TerminalSurfaceManager {
     private static func canClaimFocus(
         from responder: NSResponder?,
         in window: NSWindow,
-        for terminalView: AppTerminalView
+        for terminalView: AppTerminalView,
+        origin: TerminalFocusOrigin
     ) -> Bool {
         guard let responder else { return true }
         if responder === window || responder === terminalView {
@@ -1646,10 +1786,29 @@ public final class TerminalSurfaceManager {
         if responderView.isDescendant(of: terminalView) {
             return true
         }
+        return allowsFocusTransfer(from: responderView, in: window, origin: origin)
+    }
+
+    /// The part of the focus guard that decides about a view outside the
+    /// terminal: a control of this window, or a sibling terminal. Split out so
+    /// the origin rule can be pinned without a live terminal surface.
+    static func allowsFocusTransfer(
+        from view: NSView,
+        in window: NSWindow,
+        origin: TerminalFocusOrigin
+    ) -> Bool {
+        // The user chose this Session. Taking the keyboard from the control
+        // that was mid-activation — the command palette's field, the tab or
+        // row that was clicked, the "+" that launched the Session — is the
+        // point of the activation, not a disturbance. The view must still
+        // belong to this key window: another window's editor keeps its own
+        // keyboard. Reconciliation never takes this path.
+        guard view.window === window else { return false }
+        if origin == .userActivation { return true }
         // All terminal views are hosted in the same window and use the
         // AppKit terminal view class; permitting that peer transfer preserves
         // split-pane focus cycling without stealing focus from SwiftUI chrome.
-        return responderView is AppTerminalView && responderView.window === window
+        return view is AppTerminalView
     }
 
     private func schedulePresent(

@@ -148,7 +148,7 @@ func TestInterruptAgentTurnInputSendsInterruptAndReplacement(t *testing.T) {
 		Reason:      "send_now",
 		Replacement: &api.AgentMessageSendRequest{Session: "sess", ClientMessageID: "m1", Text: "rewrite it"},
 	}
-	if err := interruptAgentTurnInput(context.Background(), runtime, "sess", request); err != nil {
+	if err := interruptAgentTurnInput(context.Background(), runtime, "sess", request, "claude"); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := runtime.Capture(context.Background(), "sess")
@@ -166,7 +166,7 @@ func TestInterruptAgentTurnInputCancelOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := api.AgentTurnInterruptRequest{Session: "sess", Turn: 1, Reason: "cancel"}
-	if err := interruptAgentTurnInput(context.Background(), runtime, "sess", request); err != nil {
+	if err := interruptAgentTurnInput(context.Background(), runtime, "sess", request, "claude"); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := runtime.Capture(context.Background(), "sess")
@@ -1713,5 +1713,50 @@ func TestLongerEchoDoesNotClaimShorterMessage(t *testing.T) {
 	service.agentsMu.Unlock()
 	if pending != 2 {
 		t.Fatalf("pending correlations = %d, want 2 retained", pending)
+	}
+}
+
+// Each provider's terminal must be stopped with the key it reads as "stop".
+// pi's Ctrl+C only clears its editor (twice within 500ms quits the process) and
+// Codex's Ctrl+C opens a menu that then swallows following input.
+func TestAgentInterruptKeyFollowsTheProvider(t *testing.T) {
+	tests := map[string]byte{
+		"pi":          0x1b,
+		"codex":       0x1b,
+		"claude":      0x03,
+		"opencode":    0x03,
+		"qoder":       0x03,
+		"antigravity": 0x03,
+	}
+	for provider, want := range tests {
+		key := agentInterruptKey(provider)
+		if len(key) != 1 || key[0] != want {
+			t.Fatalf("agentInterruptKey(%q) = %v, want %#x", provider, key, want)
+		}
+	}
+	// A shell overlay bound to an Agent reports the Session kind as shell, so
+	// the bound provider has to win.
+	if got := agentSessionProvider(api.Session{Kind: "shell", AgentProvider: "pi"}); got != "pi" {
+		t.Fatalf("shell overlay provider = %q, want pi", got)
+	}
+	if got := agentSessionProvider(api.Session{Kind: "codex"}); got != "codex" {
+		t.Fatalf("provider session = %q, want codex", got)
+	}
+}
+
+func TestAgentInterruptUsesTheProviderKey(t *testing.T) {
+	for provider, want := range map[string]byte{"pi": 0x1b, "claude": 0x03} {
+		runtime := newMemoryRuntime(t)
+		if err := runtime.Create(context.Background(), "sess", "", "", nil); err != nil {
+			t.Fatal(err)
+		}
+		request := api.AgentTurnInterruptRequest{Session: "sess", Turn: 1, Reason: "cancel"}
+		if err := interruptAgentTurnInput(context.Background(), runtime, "sess", request, provider); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := runtime.Capture(context.Background(), "sess")
+		if !bytes.Contains(data, []byte{want}) {
+			t.Fatalf("%s interrupt input = %q, want %#x", provider, data, want)
+		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
+	"github.com/abcdlsj/warren/Headless/internal/git"
 )
 
 const (
@@ -35,6 +36,7 @@ type mergeCacheEntry struct {
 	state      api.MergeState
 	branchOID  string
 	targetOIDs string
+	base       string
 }
 
 // mergeStateCache holds the latest merge projection per workspace. It is
@@ -78,6 +80,31 @@ func (c *mergeStateCache) replace(next map[string]mergeCacheEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.values = next
+}
+
+// mergeBaseCache remembers the creation point resolved from a branch's
+// reflog. The oldest entry of a branch reflog cannot change while the branch
+// exists, so a resolution never expires; an unknown base is cached too, so a
+// repository without reflogs does not pay for the lookup on every refresh.
+type mergeBaseCache struct {
+	mu     sync.RWMutex
+	values map[string]string
+}
+
+func (c *mergeBaseCache) get(key string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	base, ok := c.values[key]
+	return base, ok
+}
+
+func (c *mergeBaseCache) set(key, base string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.values == nil {
+		c.values = make(map[string]string)
+	}
+	c.values[key] = base
 }
 
 // mergeLoop refreshes the merge projection on every tick and after wake
@@ -275,13 +302,17 @@ func (s *Service) checkWorkspaceMerge(ctx context.Context, prep *mergeProject, w
 	localTarget := prep.refs["refs/heads/"+prep.defaultName]
 	originTarget := prep.refs["refs/remotes/origin/"+prep.defaultName]
 	targetOIDs := localTarget + "|" + originTarget
+	base := workspace.BaseCommit
+	if base == "" {
+		base = s.mergeBaseFor(ctx, prep.repo, workspace.Branch)
+	}
 	if entry, ok := s.mergeCache.entry(workspace.ID); ok &&
-		entry.branchOID == branchOID && entry.targetOIDs == targetOIDs {
+		entry.branchOID == branchOID && entry.targetOIDs == targetOIDs && entry.base == base {
 		return entry, true
 	}
 	gitCtx, cancel := context.WithTimeout(ctx, mergeCommandTimeout)
 	defer cancel()
-	state, known := mergeStateForTargets(gitCtx, prep, branchRef)
+	state, known := mergeStateForTargets(gitCtx, prep, branchRef, base)
 	if !known {
 		return mergeCacheEntry{}, false
 	}
@@ -289,7 +320,22 @@ func (s *Service) checkWorkspaceMerge(ctx context.Context, prep *mergeProject, w
 		state:      state,
 		branchOID:  branchOID,
 		targetOIDs: targetOIDs,
+		base:       base,
 	}, true
+}
+
+// mergeBaseFor resolves a workspace branch's creation point from its reflog
+// when Warren did not record one, and caches the result for later refreshes.
+func (s *Service) mergeBaseFor(ctx context.Context, repo, branch string) string {
+	key := repo + "\x00" + branch
+	if base, ok := s.mergeBases.get(key); ok {
+		return base
+	}
+	gitCtx, cancel := context.WithTimeout(ctx, mergeCommandTimeout)
+	defer cancel()
+	base, _ := git.BranchBase(gitCtx, repo, branch)
+	s.mergeBases.set(key, base)
+	return base
 }
 
 // prepareMergeProject gathers everything one refresh needs for a repository:
@@ -327,15 +373,17 @@ func prepareMergeProject(ctx context.Context, repo string) *mergeProject {
 }
 
 // mergeStateForTargets reports whether the branch carries no changes that are
-// missing from the default branch. Squash and rebase merges are recognized
+// missing from the default branch, and whether that could be determined. A
+// branch with no commits of its own is never merged, even though it has no
+// diff against the default branch. Squash and rebase merges are recognized
 // even though the original commits are not ancestors of main: instead of
-// comparing history, every path the branch changed since it diverged is
-// compared against the default branch, so the branch only counts as merged
-// when the default branch already contains identical content for those
-// paths. Both the local and remote-tracking default refs are checked: a
-// local merge that was not pushed yet and a remote merge that was not
-// fetched yet are both recognized.
-func mergeStateForTargets(ctx context.Context, prep *mergeProject, branchRef string) (api.MergeState, bool) {
+// comparing history, every path the branch changed since its base is compared
+// against the default branch, so the branch only counts as merged when the
+// default branch already contains identical content for those paths. Both the
+// local and remote-tracking default refs are checked: a local merge that was
+// not pushed yet and a remote merge that was not fetched yet are both
+// recognized.
+func mergeStateForTargets(ctx context.Context, prep *mergeProject, branchRef, base string) (api.MergeState, bool) {
 	checked := false
 	for _, target := range []string{
 		"refs/heads/" + prep.defaultName,
@@ -344,7 +392,7 @@ func mergeStateForTargets(ctx context.Context, prep *mergeProject, branchRef str
 		if prep.refs[target] == "" {
 			continue
 		}
-		merged, known := branchChangesIncluded(ctx, prep.repo, target, branchRef)
+		merged, known := git.MergedIntoTarget(ctx, prep.repo, target, branchRef, base)
 		if known && merged {
 			return api.MergeStateMerged, true
 		}
@@ -423,43 +471,4 @@ func worktreePathKey(path string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Clean(absolute)
-}
-
-// branchChangesIncluded compares only the paths the branch changed since it
-// diverged from target. An empty path list means the branch has no unique
-// work at all (it is an ancestor of target), which counts as merged.
-func branchChangesIncluded(ctx context.Context, repo, target, branch string) (merged, known bool) {
-	mergeBaseOutput, err := exec.CommandContext(ctx, "git", "-C", repo,
-		"merge-base", target, branch).Output()
-	if err != nil {
-		return false, false
-	}
-	mergeBase := strings.TrimSpace(string(mergeBaseOutput))
-	if mergeBase == "" {
-		return false, false
-	}
-	pathsOutput, err := exec.CommandContext(ctx, "git", "-C", repo,
-		"diff", "--name-only", "-z", "--no-renames", mergeBase, branch).Output()
-	if err != nil {
-		return false, false
-	}
-	var paths []string
-	for _, path := range strings.Split(strings.TrimRight(string(pathsOutput), "\x00"), "\x00") {
-		if path != "" {
-			paths = append(paths, path)
-		}
-	}
-	if len(paths) == 0 {
-		return true, true
-	}
-	args := append([]string{"--literal-pathspecs", "-C", repo,
-		"diff", "--quiet", branch, target, "--"}, paths...)
-	err = exec.CommandContext(ctx, "git", args...).Run()
-	if err == nil {
-		return true, true
-	}
-	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-		return false, true
-	}
-	return false, false
 }

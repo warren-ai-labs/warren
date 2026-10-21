@@ -20,10 +20,10 @@ func (s *Service) GitPanel(ctx context.Context, workspaceID string, fetch, force
 		if panel, ok := cache.Get(workspaceID); ok {
 			switch cache.Revalidation(workspaceID, panelRevalidateAfter, panelLocalRevalidateAfter) {
 			case panelRevalidateFull:
-				go s.revalidatePanel(workspaceID, workspace.Path)
+				go s.revalidatePanel(workspace)
 				panel.Refreshing = true
 			case panelRevalidateLocal:
-				go s.revalidatePanelLocally(workspaceID, workspace.Path)
+				go s.revalidatePanelLocally(workspace)
 			}
 			return panel, nil
 		}
@@ -35,7 +35,7 @@ func (s *Service) GitPanel(ctx context.Context, workspaceID string, fetch, force
 	loadContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), panelLoadTimeout)
 	defer cancel()
 	panel, err := s.panelLoad.Do(workspaceID, func() (api.GitPanel, error) {
-		return s.loadGitPanel(loadContext, workspaceID, workspace.Path, fetch, true)
+		return s.loadGitPanel(loadContext, workspace, fetch, true)
 	})
 	if err != nil {
 		return api.GitPanel{}, err
@@ -52,39 +52,40 @@ func (s *Service) panelCacheFor() *panelCache {
 	return s.panelCache
 }
 
-func (s *Service) revalidatePanel(workspaceID, path string) {
+func (s *Service) revalidatePanel(workspace api.Workspace) {
 	ctx, cancel := context.WithTimeout(context.Background(), panelRevalidateTimeout)
 	defer cancel()
 	cache := s.panelCacheFor()
-	version := cache.Version(workspaceID)
-	panel, err := s.loadGitPanel(ctx, workspaceID, path, true, true)
+	version := cache.Version(workspace.ID)
+	panel, err := s.loadGitPanel(ctx, workspace, true, true)
 	if err == nil {
-		cache.SetIfVersion(workspaceID, panel, version)
+		cache.SetIfVersion(workspace.ID, panel, version)
 	}
-	cache.FinishRevalidate(workspaceID)
+	cache.FinishRevalidate(workspace.ID)
 }
 
 // revalidatePanelLocally re-reads what changes without Warren's help (the
 // working tree, commits, branches) and keeps the cached remote part.
-func (s *Service) revalidatePanelLocally(workspaceID, path string) {
+func (s *Service) revalidatePanelLocally(workspace api.Workspace) {
 	ctx, cancel := context.WithTimeout(context.Background(), panelRevalidateTimeout)
 	defer cancel()
 	cache := s.panelCacheFor()
-	version := cache.Version(workspaceID)
-	panel, err := s.loadGitPanel(ctx, workspaceID, path, false, false)
+	version := cache.Version(workspace.ID)
+	panel, err := s.loadGitPanel(ctx, workspace, false, false)
 	if err == nil {
-		cache.SetLocalIfVersion(workspaceID, panel, version)
+		cache.SetLocalIfVersion(workspace.ID, panel, version)
 	}
-	cache.FinishRevalidate(workspaceID)
+	cache.FinishRevalidate(workspace.ID)
 }
 
 func (s *Service) invalidatePanelCache(workspaceID string) {
 	s.panelCacheFor().Remove(workspaceID)
 }
 
-func (s *Service) loadGitPanel(ctx context.Context, workspaceID, path string, fetch, remote bool) (api.GitPanel, error) {
+func (s *Service) loadGitPanel(ctx context.Context, workspace api.Workspace, fetch, remote bool) (api.GitPanel, error) {
+	path := workspace.Path
 	if fetch {
-		unlock := s.lockGitMutation(workspaceID)
+		unlock := s.lockGitMutation(workspace.ID)
 		defer unlock()
 		// Refresh the remote refs before comparing against origin/main. A
 		// failed fetch (offline, no remote) must not block the panel; the
@@ -106,7 +107,7 @@ func (s *Service) loadGitPanel(ctx context.Context, workspaceID, path string, fe
 	}
 	remoteURL, _ := git.RemoteURL(ctx, path)
 	panel := api.GitPanel{
-		WorkspaceID: workspaceID,
+		WorkspaceID: workspace.ID,
 		Branch:      status.Branch,
 		Upstream:    status.Upstream,
 		Ahead:       status.Ahead,
@@ -127,12 +128,29 @@ func (s *Service) loadGitPanel(ctx context.Context, workspaceID, path string, fe
 		}
 	}
 	if mainBranch != "" {
-		if merged, err := git.IsMerged(ctx, path, mainBranch); err == nil {
-			panel.Merged = merged
-		}
-		if !panel.Merged {
-			if unmerged, err := git.LogRange(ctx, path, mainBranch); err == nil {
-				panel.UnmergedCommits = apiGitCommits(unmerged)
+		// The default branch itself has nothing to merge into; keep showing it
+		// as merged so the panel never labels its own history "not in main".
+		if status.Branch == strings.TrimPrefix(mainBranch, "refs/remotes/origin/") {
+			panel.Merged = true
+		} else {
+			// A recorded base belongs to the workspace's own branch; a worktree
+			// switched elsewhere by hand must not reuse it.
+			base := ""
+			if workspace.Branch == status.Branch {
+				base = workspace.BaseCommit
+			}
+			if base == "" {
+				base, _ = git.BranchBase(ctx, path, status.Branch)
+			}
+			// The sidebar badge, `workspace list` and this panel must agree, so
+			// the merge decision is shared with the Host's merge projection.
+			if merged, known := git.MergedIntoTarget(ctx, path, mainBranch, status.Branch, base); known {
+				panel.Merged = merged
+			}
+			if !panel.Merged {
+				if unmerged, err := git.LogRangeFrom(ctx, path, mainBranch, base); err == nil {
+					panel.UnmergedCommits = apiGitCommits(unmerged)
+				}
 			}
 		}
 		if ahead, _, err := git.AheadBehind(ctx, path, mainBranch); err == nil {
@@ -178,6 +196,9 @@ func (s *Service) GitCheckout(ctx context.Context, workspaceID, branch string, c
 		for i := range value.Workspaces {
 			if value.Workspaces[i].ID == workspaceID {
 				value.Workspaces[i].Branch = current
+				// The recorded base describes the previous branch; the new
+				// branch's creation point comes from its own reflog instead.
+				value.Workspaces[i].BaseCommit = ""
 				return nil
 			}
 		}

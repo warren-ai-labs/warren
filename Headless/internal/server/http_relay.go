@@ -227,7 +227,9 @@ func (s *HTTPServer) HandleRelayControl(
 	}
 
 	if value.Kind == relay.FrameBinary {
-		return peer.input(ctx, value.Payload)
+		err := peer.input(ctx, value.Payload)
+		writeInputFailure(peer, err)
+		return err
 	}
 	var command api.Envelope
 	if err := json.Unmarshal(value.Payload, &command); err != nil {

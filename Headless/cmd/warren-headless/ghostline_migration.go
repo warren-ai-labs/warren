@@ -76,8 +76,7 @@ func ensureGhostlineClientWithStore(socketPath, outputDir string, probeForegroun
 		versionHandoffRequired = force || storedVersion != warrenVersion
 	}
 	if !ghostlineSocketReady(socketPath) {
-		client, err := startGhostline(config, socketPath, v1GhostlineSpawn(config))
-		if err != nil {
+		if _, err := startGhostline(config, socketPath, v1GhostlineSpawn(config)); err != nil {
 			return nil, err
 		}
 		if versionHandoffRequired {
@@ -85,7 +84,10 @@ func ensureGhostlineClientWithStore(socketPath, outputDir string, probeForegroun
 				return nil, fmt.Errorf("record Warren version: %w", err)
 			}
 		}
-		return client, nil
+		// The daemon supervisor owns every later restart. Returning the
+		// library's managed client here would let its one-shot retry rebind the
+		// stale stable path before the supervisor can route a fresh target.
+		return checkedGhostlineClient(socketPath, "after fresh start")
 	}
 
 	// A package version change (including an empty value from a schema-2 state)
