@@ -1798,6 +1798,9 @@ func (s *Service) recordAgentInteractionTerminal(request api.AgentInteractionRes
 	if projection, found := s.canonicalInteraction(request.Session, request.RequestID); found && (projection.state == "resolved" || projection.state == "expired") {
 		return
 	}
+	// Commit needs the journal. Opening it here, before the projection lock,
+	// keeps the one-time cold open off the roster's path.
+	s.prepareAgentJournal()
 	s.agentsMu.Lock()
 	entry, ok := s.agents[request.Session]
 	if !ok || entry == nil {

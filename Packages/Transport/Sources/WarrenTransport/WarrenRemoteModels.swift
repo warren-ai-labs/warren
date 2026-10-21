@@ -2388,6 +2388,19 @@ public enum WarrenRemoteEvent: Sendable {
     /// output that precedes it; apply it by sequence, never on arrival.
     case terminalResized(WarrenRemoteTerminalResize)
     case agentEvents(streamID: String, executionID: String, events: [WarrenRemoteAgentEvent])
+    /// The Host acknowledged a terminal subscription and then could not produce
+    /// its recovery payload, so no `attached`/`synced` markers follow. The
+    /// client must cancel its staged recovery and subscribe again.
+    case recoveryFailed(sessionID: String, reason: String)
+    /// Another peer took this Session's input control lease. Input this client
+    /// sends from now on is refused until it claims the lease again.
+    case focusTaken(sessionID: String, attachmentID: String?)
+    /// The Host returned this Session's input control lease to this client
+    /// because the peer that had taken it disconnected.
+    case focusGranted(sessionID: String, attachmentID: String?)
+    /// A DENB input frame was refused. The frame carries no request id, so the
+    /// Host names the Session and attachment it was aimed at.
+    case inputRejected(sessionID: String?, attachmentID: String?, message: String)
     case maintenance(message: String?)
     case disconnected(reason: String)
     /// Relay answered, but the Host is not there. Separate from `disconnected`

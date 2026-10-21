@@ -13,6 +13,12 @@ All notable changes to Warren are documented here.
 
 ### Fixed
 
+- Serve the first roster right after a Host restart instead of waiting for the
+  Agent journal. The first Agent commit opened the journal while holding the
+  Agent projection lock every roster snapshot reads, so a cold start -- worst of
+  all one that handed Ghostline over while the previous daemon still held the
+  journal -- blocked every client until the open finished (about 5s, the SQLite
+  busy timeout, in a reported log).
 - Report a workspace branch as merged only when it has commits of its own and
   the default branch contains them. A freshly created branch still pointed at
   main, or at an older commit of it, no longer shows as MERGED in the sidebar,

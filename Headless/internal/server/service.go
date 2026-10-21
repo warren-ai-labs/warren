@@ -540,6 +540,18 @@ func (s *Service) agentStore() *store.AgentEventStore {
 	return s.AgentStore
 }
 
+// prepareAgentJournal opens the journal before a caller takes the Agent
+// projection lock. Every journal commit holds agentsMu for its Session, and a
+// roster snapshot reads each Session's projection under that same lock, so
+// opening the journal inside the commit put the whole one-time cold open --
+// which takes seconds on a large journal, and also reconciles pending commands
+// -- on the path of the first roster after a Host restart. Opening it first
+// leaves only the bounded append under the lock, and keeps the open lazy: a
+// Host without Agent traffic never pays for it.
+func (s *Service) prepareAgentJournal() {
+	s.agentStore()
+}
+
 // initMergeState initializes the merge projection fields exactly once. Every
 // reader and writer enters through it so lazy initialization can never race
 // with roster snapshots or the background merge loop.

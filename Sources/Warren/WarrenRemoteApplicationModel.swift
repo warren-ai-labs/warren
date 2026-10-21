@@ -432,6 +432,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var recoveryRetryTasks: [TerminalSessionID: Task<Void, Never>] = [:]
     private var recoveryRetryGenerations: [TerminalSessionID: UInt64] = [:]
     private var failedAtomicRecoverySessions: Set<TerminalSessionID> = []
+    /// Consecutive `recoveryFailed` events per Session. A failed payload is
+    /// retried a bounded number of times and the streak resets only when a
+    /// payload installs, so a Host that keeps failing cannot spin.
+    private var recoveryFailureStreak = RecoveryFailureStreak()
+    private var recoveryFailureTasks: [TerminalSessionID: Task<Void, Never>] = [:]
     /// Surfaces retained across a transient transport drop and waiting for a
     /// fresh daemon-side output subscription.
     private var pendingRetainedSurfaceRebinds: Set<TerminalSessionID> = []
@@ -1117,6 +1122,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         outputAnchors = outputAnchors.filter { retainedSurfaceIDs.contains($0.key) }
         suppressFramedAnchorUpdates.removeAll()
         noteOutputSubscriptionsCleared(reason: "resetAttachmentState")
+        for task in recoveryFailureTasks.values {
+            task.cancel()
+        }
+        recoveryFailureTasks.removeAll()
+        recoveryFailureStreak.clearAll()
         backgroundAttachTokens.removeAll()
         installedAtomicStateAnchors.removeAll()
         cancelAllAtomicRecoveryRetries()
@@ -1163,6 +1173,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         outputAnchors.removeAll()
         suppressFramedAnchorUpdates.removeAll()
         noteOutputSubscriptionsCleared(reason: "shutdownAllMountedSurfaces")
+        for task in recoveryFailureTasks.values {
+            task.cancel()
+        }
+        recoveryFailureTasks.removeAll()
+        recoveryFailureStreak.clearAll()
         backgroundAttachTokens.removeAll()
         installedAtomicStateAnchors.removeAll()
         cancelAllAtomicRecoveryRetries()
@@ -1175,6 +1190,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     private func removeMountedSurface(sessionID: TerminalSessionID) {
         surfaceManager.remove(sessionID)
+        recoveryFailureStreak.clear(sessionID)
+        recoveryFailureTasks.removeValue(forKey: sessionID)?.cancel()
         outputAnchors.removeValue(forKey: sessionID)
         suppressFramedAnchorUpdates.remove(sessionID)
         installedAtomicStateAnchors.removeValue(forKey: sessionID)
@@ -1211,6 +1228,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// atomic state, and installing that repaints the pane). These events name
     /// the call site on both sides so that chain is traceable without guessing.
     private func noteOutputSubscriptionAdded(_ sessionID: TerminalSessionID, reason: String) {
+        // Deliberately leaves the recovery-failure streak alone: this is only
+        // the acknowledgement of a subscribe, and the Host sends it before it
+        // builds the recovery payload. Clearing the streak here made a Host
+        // that kept failing look freshly attached on every retry, so the
+        // bounded retry never exhausted and the pane never showed an error.
         guard !outputSubscriptions.contains(sessionID) else { return }
         outputSubscriptions.insert(sessionID)
         TerminalDiagnostics.log("output_subscription_added", [
@@ -3532,7 +3554,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     ) {
         guard let wire,
               selectedSessionID == sessionID,
-              attachedSessionID == sessionID else { return }
+              attachedSessionID == sessionID else {
+            // The report never left. The pane may own the keyboard, but the
+            // Host was told nothing, so the latch must not stay closed.
+            if focused {
+                surfaceManager.noteFocusReportOutcome(sessionID, accepted: false)
+            }
+            return
+        }
         let sizeLabel = focused
             ? size.map { "\($0.columns)x\($0.rows)" } ?? "nil"
             : "nil"
@@ -3568,6 +3597,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 ])
                 self.focusClaimInFlight = false
                 if focused {
+                    // Only the Host's answer closes the latch. AppKit gave the
+                    // pane the keyboard; the Host decides whether a keystroke
+                    // is accepted from this client.
+                    self.surfaceManager.noteFocusReportOutcome(
+                        sessionID,
+                        accepted: result.focused
+                    )
                     self.focusedSessionID = result.focused ? sessionID : nil
                     if let pending = self.pendingFocusResizeSize {
                         self.pendingFocusResizeSize = nil
@@ -3577,12 +3613,16 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     self.focusedSessionID = nil
                 }
             } catch is CancellationError {
+                // A newer report owns the latch and will record its own answer.
                 return
             } catch {
                 guard self.focusClaimGeneration == generation,
                       self.selectedSessionID == sessionID,
                       self.attachedSessionID == sessionID else { return }
                 self.focusClaimInFlight = false
+                if focused {
+                    self.surfaceManager.noteFocusReportOutcome(sessionID, accepted: false)
+                }
                 self.present(error)
             }
         }
@@ -4243,6 +4283,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 )
                 self.pendingAtomicRecoveries.removeValue(forKey: sessionID)
                 self.installedAtomicStateAnchors[sessionID] = anchor
+                self.noteRecoveryPayloadInstalled(sessionID)
                 TerminalDiagnostics.log("atomic_recovery_installed", [
                     "session": sessionID.description,
                     "epoch": String(pending.epoch),
@@ -4303,6 +4344,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let anchor = TerminalOutputAnchor(epoch: epoch, sequence: sequence)
         pendingAtomicRecoveries.removeValue(forKey: sessionID)
         installedAtomicStateAnchors[sessionID] = anchor
+        noteRecoveryPayloadInstalled(sessionID)
         TerminalDiagnostics.log("atomic_recovery_installed", [
             "session": sessionID.description,
             "epoch": String(epoch),
@@ -4377,7 +4419,14 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 isMigratingRuntimeSessions = false
                 cancelTransientConnectionIssue()
                 clearMaintenance()
-                publishProjectionIfChanged(projection.withConnectionState(.attached))
+                // The handshake comes before the roster, and a Host that has
+                // just started can take seconds to build its first one. Until
+                // that roster lands the empty projection is not a fact: calling
+                // it attached drew "Add Project" over a Host full of projects.
+                // A reconnect already holds the last roster, so it attaches now.
+                if currentRoster != nil {
+                    publishProjectionIfChanged(projection.withConnectionState(.attached))
+                }
             case .reconnecting, .connecting:
                 if isLocalEndpoint {
                     refreshLocalRuntimeMigrationStatus()
@@ -4486,6 +4535,45 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 epoch: resize.epoch,
                 sequence: resize.sequence
             )
+        case .recoveryFailed(let sessionIDString, let reason):
+            guard let sessionID = TerminalSessionID(uuidString: sessionIDString) else { return }
+            handleRecoveryFailed(sessionID, reason: reason)
+        case .focusTaken(let sessionIDString, _):
+            guard let sessionID = TerminalSessionID(uuidString: sessionIDString) else { return }
+            TerminalDiagnostics.log("focus_taken", [
+                "session": sessionID.description,
+                "selected": selectedSessionID == sessionID ? "true" : "false",
+            ])
+            surfaceManager.noteFocusLeaseTaken(sessionID)
+            if focusedSessionID == sessionID {
+                // The Host says another peer holds the lease. Keep the resize
+                // routing honest until either the re-claim lands or the event
+                // for a hand-back arrives.
+                focusedSessionID = nil
+            }
+        case .focusGranted(let sessionIDString, _):
+            guard let sessionID = TerminalSessionID(uuidString: sessionIDString) else { return }
+            TerminalDiagnostics.log("focus_granted", [
+                "session": sessionID.description,
+                "selected": selectedSessionID == sessionID ? "true" : "false",
+            ])
+            surfaceManager.noteFocusLeaseGranted(sessionID)
+            if selectedSessionID == sessionID, attachedSessionID == sessionID {
+                focusedSessionID = sessionID
+                if let pending = pendingFocusResizeSize {
+                    pendingFocusResizeSize = nil
+                    resize(columns: pending.columns, rows: pending.rows)
+                }
+            }
+        case .inputRejected(let sessionIDString, let attachmentID, let message):
+            // The Host refused a keystroke. Until we claimed it silently
+            // vanished; make it traceable and attribute it to its Session.
+            TerminalDiagnostics.log("input_rejected", [
+                "session": sessionIDString ?? "nil",
+                "attachment": attachmentID ?? "nil",
+                "error": message,
+                "selected": sessionIDString == selectedSessionID?.description ? "true" : "false",
+            ])
         case .maintenance(let message):
             consumeMaintenance(message)
         case .disconnected(let reason):
@@ -6207,6 +6295,85 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             size: pendingSize,
             reason: "promote"
         )
+    }
+
+    /// Ends a recovery-failure streak once a payload actually installed.
+    ///
+    /// Installing the snapshot is the first moment the Host has proved it can
+    /// produce a recovery payload; a subscribe acknowledgement cannot. The
+    /// retry that follows a failure is cancelled here for the same reason —
+    /// the pane is drawing again, so nothing is waiting to re-attach.
+    private func noteRecoveryPayloadInstalled(_ sessionID: TerminalSessionID) {
+        recoveryFailureStreak.noteInstalled(sessionID)
+        recoveryFailureTasks.removeValue(forKey: sessionID)?.cancel()
+    }
+
+    /// Recovers an attach whose recovery payload the Host failed to produce.
+    ///
+    /// `session.subscribe` is acknowledged before that payload, so the client
+    /// has already marked the attach complete and is waiting for markers that
+    /// will never come. Cancel the staged recovery, drop the stale
+    /// subscription, and attach again from a clean boundary. Bounded, because
+    /// a Host that keeps failing must end in a visible error rather than a
+    /// reconnect loop.
+    private func handleRecoveryFailed(_ sessionID: TerminalSessionID, reason: String) {
+        let attempt = recoveryFailureStreak.noteFailure(sessionID)
+        TerminalDiagnostics.log("recovery_failed", [
+            "session": sessionID.description,
+            "reason": reason,
+            "attempt": String(attempt),
+        ])
+        // The Host detached this subscription when the payload failed, so the
+        // client's copy is stale either way.
+        surfaceManager.cancelRecovery(for: sessionID)
+        noteOutputSubscriptionDropped(sessionID, reason: "recoveryFailed")
+        clearAtomicRecoveryState(for: sessionID)
+        reconnectPreservedSessions.remove(sessionID)
+        if attachedSessionID == sessionID {
+            attachedSessionID = nil
+        }
+        if selectedSessionID == sessionID {
+            focusedSessionID = nil
+            focusClaimInFlight = false
+            focusClaimGeneration += 1
+            focusTask?.cancel()
+            focusTask = nil
+            // Nothing can accept these bytes until the re-attach lands.
+            inputRouter.discard(for: sessionID)
+        }
+        guard selectedSessionID == sessionID else {
+            // A background surface re-attaches when it is selected; the stale
+            // subscription is gone, so that path takes the cold attach.
+            return
+        }
+        guard let delay = RecoveryFailureRetry.delay(afterAttempt: attempt) else {
+            recoveryFailureStreak.clear(sessionID)
+            TerminalDiagnostics.log("recovery_retries_exhausted", [
+                "session": sessionID.description,
+                "reason": reason,
+            ])
+            present(NSError(
+                domain: "WarrenRemote",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Terminal recovery failed: " + reason]
+            ))
+            return
+        }
+        recoveryFailureTasks[sessionID]?.cancel()
+        recoveryFailureTasks[sessionID] = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled, self.selectedSessionID == sessionID else { return }
+            self.recoveryFailureTasks[sessionID] = nil
+            TerminalDiagnostics.log("recovery_retry", [
+                "session": sessionID.description,
+                "attempt": String(attempt),
+            ])
+            await self.attachSelectedSession()
+        }
     }
 
     /// Recovers the selected Session after its promotion stalled.
