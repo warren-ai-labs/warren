@@ -459,7 +459,11 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
         case .credentialsRejected(let detail):
             connection.state = .failed
             connection.lastError = Self.boundedError(detail)
-        case .welcome, .output, .atomicState, .browserFrame, .anchor, .terminalResized, .agentEvents, .maintenance:
+        case .welcome, .output, .atomicState, .browserFrame, .anchor, .terminalResized,
+             .agentEvents, .recoveryFailed, .focusTaken, .focusGranted, .inputRejected,
+             .maintenance:
+            // Terminal-scoped events belong to the model that owns the panes;
+            // this sidebar mirror only tracks connection and roster state.
             break
         }
         rebuildProjection()
@@ -591,7 +595,9 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
             }
             return fresh
         }
-        guard let known = lastKnownHosts[fresh.endpointID] else { return fresh }
+        guard let known = lastKnownHosts[fresh.endpointID] else {
+            return Self.connectingUntilRoster(fresh)
+        }
         return WarrenDesktopSidebarHostProjection(
             endpointID: fresh.endpointID,
             endpointLabel: fresh.endpointLabel,
@@ -604,6 +610,22 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
             workspaceActivitySummaries: known.workspaceActivitySummaries,
             activeSessionsByWorkspaceID: known.activeSessionsByWorkspaceID,
             activeWorkspaceIDs: known.activeWorkspaceIDs,
+            lastError: fresh.lastError
+        )
+    }
+
+    /// A Host attached but still without its first roster, with nothing
+    /// retained to show instead. An empty tree here would read as a Host with
+    /// no projects and offer "Add Project", so it stays connecting until the
+    /// roster says what is there.
+    nonisolated static func connectingUntilRoster(
+        _ fresh: WarrenDesktopSidebarHostProjection
+    ) -> WarrenDesktopSidebarHostProjection {
+        guard fresh.connectionState == .attached, fresh.host == nil else { return fresh }
+        return WarrenDesktopSidebarHostProjection(
+            endpointID: fresh.endpointID,
+            endpointLabel: fresh.endpointLabel,
+            connectionState: .connecting,
             lastError: fresh.lastError
         )
     }

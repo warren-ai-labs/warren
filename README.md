@@ -8,9 +8,9 @@ Warren is a **headless-first workbench that stays running on your machine**. Ter
 
 ## Watch
 
-[<img src="docs/warren-promo-poster.jpg" width="800" alt="Play the 100-second Warren film">](https://warrenai.xyz/warren-promo.mp4)
+[<img src="docs/warren-promo-poster.jpg" width="800" alt="Play the Warren film">](https://warrenai.xyz/warren-promo.mp4)
 
-A 100-second tour, recorded in the real apps: agents side by side, four agents
+A tour, recorded in the real apps: agents side by side, four agents
 messaging each other in one pane, chat or terminal, quitting and coming back, a
 question from the phone, two Hosts in one sidebar, the Inspector, and a browser
 an agent drives.
