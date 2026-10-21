@@ -3,12 +3,12 @@ import { FitAddon, init, Terminal } from "ghostty-web";
 import { useI18n } from "./i18n.jsx";
 
 const theme = {
-  background: "#0e0e0e",
+  background: "#151110",
   foreground: "#eae8e6",
   cursor: "#e07850",
-  cursorAccent: "#0e0e0e",
+  cursorAccent: "#151110",
   selectionBackground: "rgba(224, 120, 80, 0.28)",
-  black: "#0e0e0e",
+  black: "#151110",
   red: "#dc6b6b",
   green: "#7ec699",
   yellow: "#e5c07b",
@@ -300,26 +300,42 @@ export default function TerminalDemo() {
   }, []);
 
   return (
-    <figure>
-      <div className="pane terminal" onClick={() => termRef.current?.focus()}>
-        <div className="pane-head">
-          <span className="pane-title">{t("terminal.title")}</span>
-          <span className="pane-path">~/workspace/warren</span>
-          <span className="pane-tag">Ghostty WASM</span>
+    <section id="demo" className="section terminal">
+      <div className="section-head">
+        <p className="kicker">{t("terminal.kicker")}</p>
+        <h2>{t("terminal.title")}</h2>
+        <p className="section-lede">{t("terminal.lede")}</p>
+      </div>
+      <div className="terminal-frame" onClick={() => termRef.current?.focus()}>
+        <div className="terminal-bar">
+          <span className="terminal-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="terminal-title">warren@mac-studio — ghostline · ghostty-wasm</span>
+          <span className="terminal-badge">{t("terminal.badge")}</span>
         </div>
         <div className="terminal-screen" ref={hostRef}>
           {status !== "ready" && (
             <div className="terminal-loading">
-              {status === "error" ? t("terminal.error") : t("terminal.loading")}
+              {status === "error"
+                ? "ghostty-wasm failed to load"
+                : "loading ghostty-wasm…"}
             </div>
           )}
         </div>
       </div>
-      <figcaption>
-        {t("terminal.captionA")}
-        <code>help</code>
-        {t("terminal.captionB")}
-      </figcaption>
-    </figure>
+      <div className="terminal-hint">
+        <span className="terminal-hint-item">
+          <span className="status-dot" aria-hidden="true" />
+          {t("terminal.hint")}
+        </span>
+        <span className="terminal-hint-sep" aria-hidden="true">
+          ·
+        </span>
+        <span className="terminal-hint-item">{t("terminal.engineNote")}</span>
+      </div>
+    </section>
   );
 }

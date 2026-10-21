@@ -1352,38 +1352,23 @@ button:disabled {
   cursor: pointer;
 }
 
-/* A Session's app icon, as on the Desktop: the mark at 62% of a tile in the
-   brand's colour, 27% corners, and a faint rim so a near-black tile keeps its
-   edge on a dark card. */
 .preset-brand-icon {
   display: grid;
   place-items: center;
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
-  border-radius: 27%;
-  box-shadow: inset 0 0 0 0.5px rgb(255 255 255 / 0.1);
-}
-
-.preset-brand-icon img,
-.preset-brand-glyph {
-  display: block;
-  width: 62%;
-  height: 62%;
 }
 
 .preset-brand-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
-}
-
-.preset-brand-glyph {
-  background: #fff;
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
+  opacity: 0.9;
+  outline: var(--outline-image);
+  outline-offset: -1px;
+  border-radius: 3px;
 }
 
 .preset.pending {
@@ -4230,85 +4215,40 @@ button:disabled {
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
-/* Warren's loading mark, matching the native WarrenLoadingIndicator cycle:
-   three grey balls pulse in a row, rise and fall as a wave, gather into a
-   triangle for one lap, then spread back into the row. 7.05s per cycle, the
-   same timeline as the native WarrenLoadingCycle. Never the accent. */
-.loading-dots {
-  position: relative;
-  display: inline-block;
-  width: 16px;
-  height: 16px;
+.braille-spinner {
+  display: grid;
+  grid-template-columns: repeat(2, 2.5px);
+  grid-template-rows: repeat(4, 2.5px);
+  gap: 1.75px;
+  width: 6.75px;
+  height: 15.25px;
   flex: none;
 }
 
-.loading-dots i {
-  position: absolute;
-  left: 6px;
-  top: 6px;
-  width: 4px;
-  height: 4px;
+.braille-spinner i {
+  width: 2.5px;
+  height: 2.5px;
   border-radius: var(--radius-circle);
-  background: #c7c7c7;
-  opacity: 0.5;
-  animation: 7.05s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  background: var(--color-text-primary);
+  opacity: 0.18;
+  animation: braille-spin 0.72s steps(1, end) infinite;
 }
 
-.loading-dots i:nth-child(1) { animation-name: loading-cycle-1; }
-.loading-dots i:nth-child(2) { animation-name: loading-cycle-2; }
-.loading-dots i:nth-child(3) { animation-name: loading-cycle-3; }
+.braille-spinner i:nth-child(1) { grid-area: 1 / 1; animation-delay: 0s; }
+.braille-spinner i:nth-child(2) { grid-area: 1 / 2; animation-delay: -0.09s; }
+.braille-spinner i:nth-child(3) { grid-area: 2 / 2; animation-delay: -0.18s; }
+.braille-spinner i:nth-child(4) { grid-area: 3 / 2; animation-delay: -0.27s; }
+.braille-spinner i:nth-child(5) { grid-area: 4 / 2; animation-delay: -0.36s; }
+.braille-spinner i:nth-child(6) { grid-area: 4 / 1; animation-delay: -0.45s; }
+.braille-spinner i:nth-child(7) { grid-area: 3 / 1; animation-delay: -0.54s; }
+.braille-spinner i:nth-child(8) { grid-area: 2 / 1; animation-delay: -0.63s; }
 
-/* Rest positions: left -5.5px, centre 0, right 5.5px. Triangle corners:
-   top (0, -5.2px), bottom-right (6px, 5.2px), bottom-left (-6px, 5.2px).
-   The left ball gathers bottom-left, the middle one rises to the top, the
-   right one takes bottom-right, so no paths cross. */
-@keyframes loading-cycle-1 {
-  0%, 2%    { transform: translate(-5.5px, 0) scale(1); opacity: 0.5; }
-  9%        { transform: translate(-5.5px, 0) scale(1.25); opacity: 1; }
-  17%, 26%  { transform: translate(-5.5px, 0) scale(1); opacity: 0.5; }
-  33%       { transform: translate(-5.5px, -3.85px); opacity: 1; }
-  41%, 49.6% { transform: translate(-5.5px, 0); opacity: 0.5; }
-  58.9%     { transform: translate(-6px, 5.2px); opacity: 0.85; }
-  69.5%     { transform: translate(0, -5.2px); opacity: 0.85; }
-  80.2%     { transform: translate(6px, 5.2px); opacity: 0.85; }
-  90.8%     { transform: translate(-6px, 5.2px); opacity: 0.85; }
-  100%      { transform: translate(-5.5px, 0); opacity: 0.5; }
-}
-
-@keyframes loading-cycle-2 {
-  0%, 7%    { transform: translate(0, 0) scale(1); opacity: 0.5; }
-  14%       { transform: translate(0, 0) scale(1.25); opacity: 1; }
-  22%, 31%  { transform: translate(0, 0) scale(1); opacity: 0.5; }
-  38%       { transform: translate(0, -3.85px); opacity: 1; }
-  46%, 49.6% { transform: translate(0, 0); opacity: 0.5; }
-  58.9%     { transform: translate(0, -5.2px); opacity: 0.85; }
-  69.5%     { transform: translate(6px, 5.2px); opacity: 0.85; }
-  80.2%     { transform: translate(-6px, 5.2px); opacity: 0.85; }
-  90.8%     { transform: translate(0, -5.2px); opacity: 0.85; }
-  100%      { transform: translate(0, 0); opacity: 0.5; }
-}
-
-@keyframes loading-cycle-3 {
-  0%, 12%   { transform: translate(5.5px, 0) scale(1); opacity: 0.5; }
-  19%       { transform: translate(5.5px, 0) scale(1.25); opacity: 1; }
-  24.8%, 36% { transform: translate(5.5px, 0) scale(1); opacity: 0.5; }
-  43%       { transform: translate(5.5px, -3.85px); opacity: 1; }
-  49.6%     { transform: translate(5.5px, 0); opacity: 0.5; }
-  58.9%     { transform: translate(6px, 5.2px); opacity: 0.85; }
-  69.5%     { transform: translate(-6px, 5.2px); opacity: 0.85; }
-  80.2%     { transform: translate(0, -5.2px); opacity: 0.85; }
-  90.8%     { transform: translate(6px, 5.2px); opacity: 0.85; }
-  100%      { transform: translate(5.5px, 0); opacity: 0.5; }
-}
-
-/* With motion reduced the balls hold still in their row. */
+/* With motion reduced the dots cannot chase, so they hold a static, clearly
+   visible glyph instead of eight dots frozen at their resting dimness. */
 @media (prefers-reduced-motion: reduce) {
-  .loading-dots i {
-    animation: none;
-    opacity: 0.7;
+  .braille-spinner i {
+    opacity: 0.6;
   }
-  .loading-dots i:nth-child(1) { transform: translateX(-5.5px); }
-  .loading-dots i:nth-child(3) { transform: translateX(5.5px); }
 }
 
 .agent-interrupted-tag {
@@ -4322,6 +4262,15 @@ button:disabled {
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+@keyframes braille-spin {
+  0% {
+    opacity: 1;
+  }
+  12.5% {
+    opacity: 0.18;
+  }
 }
 
 .mobile-keys {
@@ -6930,21 +6879,6 @@ button:disabled {
   margin: 0;
   color: var(--color-text-tertiary);
   font-size: var(--text-sm);
-}
-
-/* A slash command a person ran in the Agent's terminal: one mono line, never
-   a prompt bubble. */
-.conversation-command code {
-  font-family: var(--font-mono);
-}
-
-/* Command output reads as a short, muted quotation: folded after four lines. */
-.conversation-notice-output {
-  white-space: pre-wrap;
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 .conversation-error {

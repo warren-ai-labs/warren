@@ -459,9 +459,6 @@ func (s *Service) recordAgentEventsForHandle(sessionID string, expected AgentHan
 	if len(events) == 0 {
 		return
 	}
-	// Commit needs the journal. Opening it here, before the projection lock,
-	// keeps the one-time cold open off the roster's path.
-	s.prepareAgentJournal()
 	if expected != nil {
 		lock := s.agentLock(sessionID)
 		lock.Lock()
@@ -632,9 +629,6 @@ func (s *Service) recordAgentTurnsForHandle(sessionID string, expected AgentHand
 	if len(turns) == 0 {
 		return
 	}
-	// Commit needs the journal. Opening it here, before the projection lock,
-	// keeps the one-time cold open off the roster's path.
-	s.prepareAgentJournal()
 	if expected != nil {
 		lock := s.agentLock(sessionID)
 		lock.Lock()

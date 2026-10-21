@@ -470,7 +470,7 @@ private struct WarrenInspectorBranchCard: View {
                     } label: {
                         HStack(spacing: WarrenSpacing.small) {
                             if inspector.action == "pr" {
-                                WarrenLoadingIndicator(size: 10, accessibilityLabel: "Creating pull request")
+                                WarrenBrailleSpinner(size: 10, accessibilityLabel: "Creating pull request")
                             } else {
                                 Image(systemName: "arrow.triangle.pull").font(.system(size: 10.5))
                             }
@@ -563,7 +563,7 @@ private struct WarrenInspectorBranchCard: View {
         Button(action: perform) {
             HStack(spacing: 3) {
                 if inspector.action == name {
-                    WarrenLoadingIndicator(size: 10, accessibilityLabel: title)
+                    WarrenBrailleSpinner(size: 10, accessibilityLabel: title)
                 } else {
                     Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
                 }
@@ -648,7 +648,7 @@ private struct WarrenInspectorCommitBox: View {
                 } label: {
                     HStack(spacing: 4) {
                         if inspector.action == "commit" {
-                            WarrenLoadingIndicator(size: 10, accessibilityLabel: "Committing")
+                            WarrenBrailleSpinner(size: 10, accessibilityLabel: "Committing")
                         }
                         Text("Commit")
                     }

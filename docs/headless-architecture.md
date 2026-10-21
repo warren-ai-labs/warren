@@ -128,15 +128,7 @@ display set uses the legacy `PROJECTS` tree without a Host header or tint.
 ## Current Limitations
 
 - The Host Ring is bounded. An evicted or stale anchor reanchors from Ghostline
-  state; it never guesses across a missing interval. When the ring cursor and
-  the checkpoint cursor cannot be ordered (a zero cursor, an output generation
-  change, or a reversed pair), the gap is not walked at all: the checkpoint
-  becomes a fresh boundary and shared-ring subscribers are force-reanchored.
-- `session.subscribe` is acknowledged before its recovery payload is produced so
-  the client can claim the control lease immediately. If that payload then
-  fails, the Host emits a session-scoped `recoveryFailed` event and never an
-  error on the already-retired command id; the client cancels its staged
-  recovery and subscribes again.
+  state; it never guesses across a missing interval.
 - Headless Go's `/v1/ws` exposes one request/response control protocol.
   `session.subscribe` creates an output subscription and carries the
   `epoch/sequence` recovery anchor; `session.focus` claims or releases the
@@ -146,11 +138,6 @@ display set uses the legacy `PROJECTS` tree without a Host header or tint.
   passive split pane tracks its own pane without stealing another client's
   typing. Background `session.resize` requests that lose the arbitration are
   safe no-ops, and `session.unsubscribe` releases the subscription and focus.
-  The last claimer wins while it is connected, but a lease change is announced:
-  a peer whose lease was taken receives `focusTaken`, and a peer that gets the
-  lease back after the taker disconnects receives `focusGranted`. The lease
-  returns only to a peer that is still attached and has not blurred the
-  session, so a short-lived observer cannot mute the client that is on screen.
   Control messages and DENB output frames match the daemon protocol used by
   Desktop, iOS, Web, and CLI clients.
 - Desktop discovers servers from the CLI config file and refreshes the endpoint catalog in the background, so CLI changes appear without restarting.

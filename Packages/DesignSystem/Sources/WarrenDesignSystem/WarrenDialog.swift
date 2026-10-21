@@ -22,8 +22,8 @@ public enum WarrenDialogWidth: Sendable {
 ///
 /// Every blocking flow draws inside it, so the ground, padding, title block and
 /// footer stay identical between the rename prompt, a delete confirmation and a
-/// form. It sits in the middle of the window, keeping at least `windowMargin`
-/// from every edge, so a short confirmation does not read as pinned high.
+/// form. It hangs from the content's top rather than centring, because a form
+/// that grows should grow downward with its first field staying at eye level.
 public struct WarrenDialog<Content: View, Footer: View>: View {
     private let width: WarrenDialogWidth
     private let title: String
@@ -75,7 +75,8 @@ public struct WarrenDialog<Content: View, Footer: View>: View {
                     .frame(maxWidth: width.points)
                     .warrenPresentationSurface(role: .modal, cornerRadius: 12)
                     .padding(.horizontal, Self.windowMargin)
-                    .padding(.vertical, Self.windowMargin)
+                    .padding(.top, Self.topOffset(windowHeight: proxy.size.height))
+                    Spacer(minLength: Self.windowMargin)
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
             }
@@ -86,6 +87,12 @@ public struct WarrenDialog<Content: View, Footer: View>: View {
 extension WarrenDialog {
     /// The least room a dialog leaves between itself and the window's edges.
     static var windowMargin: CGFloat { 16 }
+
+    /// The dialog hangs 72pt from the top of a full-size window; a short
+    /// window gives that room to the dialog so its footer stays on screen.
+    static func topOffset(windowHeight: CGFloat) -> CGFloat {
+        min(72, max(windowMargin, windowHeight * 0.09))
+    }
 }
 
 /// The primary/destructive confirm button, so a caller does not have to branch

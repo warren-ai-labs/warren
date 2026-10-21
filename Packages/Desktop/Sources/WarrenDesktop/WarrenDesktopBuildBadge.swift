@@ -176,7 +176,7 @@ struct WarrenDesktopBuildBadge: View {
                     accessibilityLabel: "Update ready"
                 )
             case .updating:
-                WarrenLoadingIndicator(size: 10, accessibilityLabel: "Updating Warren")
+                WarrenBrailleSpinner(size: 10, accessibilityLabel: "Updating Warren")
             case .failed:
                 EmptyView()
             case .none:

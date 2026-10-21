@@ -94,10 +94,6 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         /// asked a model for one. Absent on a Host that has no title endpoint
         /// configured, and then a row keeps its counts.
         let resultSentence: String?
-        /// Whether the Host can name this Session from its conversation on
-        /// request now: it has the Agent text a title needs and a title
-        /// endpoint is configured.
-        var titleRegeneratable: Bool? = nil
         let kind: String
         /// The provider family the Host bound to a shell or custom Session.
         /// Dropping it made every Agent started inside a shell render as a

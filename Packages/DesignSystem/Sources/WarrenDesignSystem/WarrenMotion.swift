@@ -21,6 +21,7 @@ public enum WarrenMotion {
     /// The Agent-working cadence. Twice the standard period, because this state
     /// can last for minutes and only has to stay noticeable, not urgent.
     public static let quietActivityPulseDuration: TimeInterval = 2.4
+    public static let spinnerFrameDuration: TimeInterval = 0.09
     /// The selection plate as it slides between same-kind options. Slow enough
     /// to read as travel, damped enough not to bounce. Text colour settles
     /// faster so it never lags the plate.
@@ -260,61 +261,28 @@ private struct WarrenStatusPulseRing: View {
 }
 #endif
 
-/// Warren's single indeterminate loading mark: three small balls in one
-/// neutral colour.
-///
-/// `.cycle` is the mark for every wait the user is sitting through. It moves
-/// through three states and back: the balls in a row with a pulse running
-/// through them, the same row rising and falling as a wave, then the three
-/// gathering into a triangle and gliding round it once before they line up
-/// again. `.triangle` keeps them on the triangle the whole time; it is
-/// reserved for an update, the one wait that takes over the window.
-/// Neither takes the accent or any hue, so a spinner never reads as a status or
-/// a call to action.
-public struct WarrenLoadingIndicator: View {
-    public enum Style: Sendable {
-        case cycle
-        case triangle
-    }
-
-    private let style: Style
+/// Warren's single indeterminate loading mark: a 2x4 braille-style dot grid
+/// with one dot lighting up and travelling clockwise around the ring.
+/// Use it only where the user is actively waiting.
+public struct WarrenBrailleSpinner: View {
     private let size: CGFloat
     private let accessibilityLabel: String
-    private let colorOverride: Color?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
-    /// `color` is only for a mark on a filled control, where it takes the
-    /// control's foreground; everywhere else the neutral loading colour applies.
-    public init(
-        _ style: Style = .cycle,
-        size: CGFloat = 18,
-        color: Color? = nil,
-        accessibilityLabel: String = "Loading"
-    ) {
-        self.style = style
+    public init(size: CGFloat = 18, accessibilityLabel: String = "Loading") {
         self.size = size
-        self.colorOverride = color
         self.accessibilityLabel = accessibilityLabel
     }
 
     public var body: some View {
-        let color = colorOverride ?? WarrenLoadingPalette.color(for: colorScheme)
+        let color = WarrenColorTokens.resolved(for: colorScheme).highlight
         Group {
             if reduceMotion {
-                WarrenLoadingBalls(style: style, size: size, color: color, phase: nil)
+                WarrenBrailleField(size: size, color: color, activeDot: nil)
             } else {
-                TimelineView(.animation) { context in
-                    let period = style == .cycle ? WarrenMotion.loadingCyclePeriod : WarrenMotion.loadingTrianglePeriod
-                    let elapsed = context.date.timeIntervalSinceReferenceDate
-                    WarrenLoadingBalls(
-                        style: style,
-                        size: size,
-                        color: color,
-                        phase: elapsed.truncatingRemainder(dividingBy: period) / period
-                    )
-                }
+                WarrenSpinningBrailleField(size: size, color: color)
             }
         }
         .frame(width: size, height: size)
@@ -323,203 +291,55 @@ public struct WarrenLoadingIndicator: View {
     }
 }
 
-/// The loading colour: a soft graphite on light grounds and a soft silver on
-/// dark ones, so the mark sits a step below the text it accompanies.
-public enum WarrenLoadingPalette {
-    public static func color(for colorScheme: ColorScheme) -> Color {
-        colorScheme == .light ? Color(white: 0.36) : Color(white: 0.78)
-    }
-}
-
-extension WarrenMotion {
-    /// One pass through the cycle's three states: pulse, wave, triangle.
-    public static let loadingCyclePeriod: TimeInterval = WarrenLoadingCycle.period
-    /// One full lap of the triangle: each ball reaches the next corner in a third of it.
-    public static let loadingTrianglePeriod: TimeInterval = 3.6
-}
-
-/// One frame of the three balls. `phase` runs 0..<1 over a period; nil draws
-/// the still mark reduced motion asks for.
-struct WarrenLoadingBalls: View {
-    let style: WarrenLoadingIndicator.Style
+private struct WarrenSpinningBrailleField: View {
     let size: CGFloat
     let color: Color
-    let phase: Double?
 
     var body: some View {
-        ZStack {
-            ForEach(0..<3, id: \.self) { index in
-                let ball = Self.ball(style: style, index: index, size: size, phase: phase)
-                Circle()
-                    .fill(color)
-                    .frame(width: ball.diameter, height: ball.diameter)
-                    .scaleEffect(ball.scale)
-                    .opacity(ball.opacity)
-                    .offset(x: ball.center.x, y: ball.center.y)
-            }
+        TimelineView(.animation(minimumInterval: WarrenMotion.spinnerFrameDuration)) { context in
+            let elapsed = context.date.timeIntervalSinceReferenceDate
+            let step = Int(elapsed / WarrenMotion.spinnerFrameDuration) % WarrenBrailleField.dots.count
+            WarrenBrailleField(size: size, color: color, activeDot: step)
         }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
-    }
-
-    struct Ball: Equatable {
-        var center: CGPoint
-        var diameter: CGFloat
-        var scale: CGFloat
-        var opacity: Double
-    }
-
-    /// Where ball `index` sits at `phase`, as an offset from the frame's centre.
-    static func ball(style: WarrenLoadingIndicator.Style, index: Int, size: CGFloat, phase: Double?) -> Ball {
-        switch style {
-        case .cycle:
-            return WarrenLoadingCycle.ball(index: index, size: size, phase: phase)
-        case .triangle:
-            let diameter = max(2, size * 0.2)
-            let corners = triangleCorners(size: size, diameter: diameter)
-            guard let phase else {
-                return Ball(center: corners[index], diameter: diameter, scale: 1, opacity: 0.9)
-            }
-            // Each ball starts on its own corner and glides to the next one.
-            // The ease is smootherstep, so a move starts and settles with no
-            // jolt and the three rest together at the corners.
-            let progress = phase * 3
-            let leg = Int(progress) % 3
-            let t = progress - floor(progress)
-            let eased = t * t * t * (t * (6 * t - 15) + 10)
-            let from = corners[(index + leg) % 3]
-            let to = corners[(index + leg + 1) % 3]
-            let center = CGPoint(
-                x: from.x + (to.x - from.x) * eased,
-                y: from.y + (to.y - from.y) * eased
-            )
-            return Ball(center: center, diameter: diameter, scale: 1, opacity: 0.9)
-        }
-    }
-
-    /// Top, bottom-right and bottom-left corners of an equilateral triangle
-    /// that keeps every ball inside the frame.
-    static func triangleCorners(size: CGFloat, diameter: CGFloat) -> [CGPoint] {
-        let side = size - diameter
-        let height = side * sqrt(3) / 2
-        let top = -height / 2
-        return [
-            CGPoint(x: 0, y: top),
-            CGPoint(x: side / 2, y: top + height),
-            CGPoint(x: -side / 2, y: top + height),
-        ]
     }
 }
 
-/// The timeline of `WarrenLoadingIndicator.Style.cycle`.
-///
-/// Every state starts and ends with the balls at rest in the row (or, inside
-/// the triangle, on their corners), so one state hands over to the next with no
-/// jump. Each move eases with smootherstep and each pulse is a raised cosine,
-/// so nothing starts or stops with a jolt.
-enum WarrenLoadingCycle {
-    static let pulse: TimeInterval = 1.75
-    static let wave: TimeInterval = 1.75
-    static let gather: TimeInterval = 0.65
-    /// Three legs, so each ball comes back to the corner it gathered on.
-    static let lap: TimeInterval = 2.25
-    static let spread: TimeInterval = 0.65
-    static let period = pulse + wave + gather + lap + spread
+private struct WarrenBrailleField: View {
+    let size: CGFloat
+    let color: Color
+    let activeDot: Int?
 
-    /// Larger than the triangle's balls: in a row the cycle's mark sits inline
-    /// beside text, and three dots at a fifth of a small frame read as noise.
-    static let diameterRatio: CGFloat = 0.25
-    /// How large a ball grows at the top of its pulse.
-    static let pulseScale: CGFloat = 1.25
-    static let restOpacity = 0.5
-    static let triangleOpacity = 0.85
+    /// 2x4 grid in clockwise order, starting at the top-left.
+    fileprivate static let dots: [CGPoint] = [
+        CGPoint(x: 0, y: 0),
+        CGPoint(x: 1, y: 0),
+        CGPoint(x: 1, y: 1),
+        CGPoint(x: 1, y: 2),
+        CGPoint(x: 1, y: 3),
+        CGPoint(x: 0, y: 3),
+        CGPoint(x: 0, y: 2),
+        CGPoint(x: 0, y: 1),
+    ]
 
-    /// Which corner each ball of the row gathers on: the outer two take the
-    /// bottom corners on their own side and the middle one rises to the top,
-    /// so no two paths cross.
-    static let gatherCorner = [2, 0, 1]
-
-    static func ball(index: Int, size: CGFloat, phase: Double?) -> WarrenLoadingBalls.Ball {
-        let diameter = max(2.5, size * diameterRatio)
-        // The row leaves room for a ball at the top of its pulse.
-        let pitch = (size - diameter * pulseScale) / 2
-        let row = CGPoint(x: CGFloat(index - 1) * pitch, y: 0)
-        let corners = WarrenLoadingBalls.triangleCorners(size: size, diameter: diameter)
-        let home = corners[gatherCorner[index]]
-        guard let phase else {
-            return .init(center: row, diameter: diameter, scale: 1, opacity: 0.7)
+    var body: some View {
+        let dotSize = max(2, size * 0.15)
+        let gap = dotSize * 0.65
+        let restingOpacity = activeDot == nil ? 0.35 : 0.18
+        ZStack {
+            ForEach(Array(Self.dots.enumerated()), id: \.offset) { index, point in
+                Circle()
+                    .fill(color.opacity(activeDot == index ? 1 : restingOpacity))
+                    .frame(width: dotSize, height: dotSize)
+                    .offset(
+                        x: (point.x - 0.5) * (dotSize + gap),
+                        y: (point.y - 1.5) * (dotSize + gap)
+                    )
+            }
         }
-        var t = phase.truncatingRemainder(dividingBy: 1) * period
-        if t < 0 { t += period }
-
-        if t < pulse {
-            let lift = stagger(t / pulse, index: index)
-            return .init(
-                center: row,
-                diameter: diameter,
-                scale: 1 + (pulseScale - 1) * lift,
-                opacity: restOpacity + (1 - restOpacity) * lift
-            )
-        }
-        t -= pulse
-        if t < wave {
-            let lift = stagger(t / wave, index: index)
-            // Rises about a third of the frame, well inside it.
-            return .init(
-                center: CGPoint(x: row.x, y: -pitch * 0.7 * lift),
-                diameter: diameter,
-                scale: 1,
-                opacity: restOpacity + (1 - restOpacity) * lift
-            )
-        }
-        t -= wave
-        if t < gather {
-            let eased = smootherstep(t / gather)
-            return .init(
-                center: mix(row, home, eased),
-                diameter: diameter,
-                scale: 1,
-                opacity: restOpacity + (triangleOpacity - restOpacity) * eased
-            )
-        }
-        t -= gather
-        if t < lap {
-            let progress = t / lap * 3
-            let leg = min(2, Int(progress))
-            let eased = smootherstep(progress - Double(leg))
-            let start = (gatherCorner[index] + leg) % 3
-            return .init(
-                center: mix(corners[start], corners[(start + 1) % 3], eased),
-                diameter: diameter,
-                scale: 1,
-                opacity: triangleOpacity
-            )
-        }
-        t -= lap
-        let eased = smootherstep(min(1, t / spread))
-        return .init(
-            center: mix(home, row, eased),
-            diameter: diameter,
-            scale: 1,
-            opacity: triangleOpacity + (restOpacity - triangleOpacity) * eased
+        .frame(
+            width: dotSize * 2 + gap,
+            height: dotSize * 4 + gap * 3
         )
-    }
-
-    /// A raised-cosine bump for ball `index`: each ball's bump takes 60% of
-    /// the state and starts a fifth after the one before it, so all three are
-    /// at rest when the state begins and ends.
-    static func stagger(_ progress: Double, index: Int) -> Double {
-        let local = (progress - Double(index) * 0.2) / 0.6
-        guard local > 0, local < 1 else { return 0 }
-        return 0.5 - 0.5 * cos(2 * .pi * local)
-    }
-
-    static func smootherstep(_ t: Double) -> Double {
-        let t = max(0, min(1, t))
-        return t * t * t * (t * (6 * t - 15) + 10)
-    }
-
-    static func mix(_ a: CGPoint, _ b: CGPoint, _ t: Double) -> CGPoint {
-        CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
+        .accessibilityHidden(true)
     }
 }

@@ -310,31 +310,7 @@ func isWarrenRuntimeName(name string) bool {
 type runtimeListResult struct {
 	sessions map[string]bool
 	state    RuntimeProbeState
-	evidence string
 	err      error
-}
-
-// RuntimeServerProcess reports whether the process behind a runtime adapter is
-// known to be gone. An adapter that cannot inspect the process reports
-// known=false, which callers must treat as unknown rather than death.
-type RuntimeServerProcess interface {
-	ServerProcessAlive() (alive bool, known bool)
-}
-
-// runtimeListFailure classifies a failed list. A live pid keeps the outage
-// unknown, because a brief refusal while the server starts or hands off is not
-// evidence that its sessions died. A recorded pid that no longer answers is.
-func runtimeListFailure(adapter Runtime, err error) runtimeListResult {
-	result := runtimeListResult{state: RuntimeProbeUnknown, evidence: "list_failed", err: err}
-	checker, ok := adapter.(RuntimeServerProcess)
-	if !ok {
-		return result
-	}
-	if alive, known := checker.ServerProcessAlive(); known && !alive {
-		result.state = RuntimeProbeDead
-		result.evidence = "server_pid_gone"
-	}
-	return result
 }
 
 func (s *Service) runningSessions(ctx context.Context) func(api.Session) RuntimeProbeResult {
@@ -343,7 +319,7 @@ func (s *Service) runningSessions(ctx context.Context) func(api.Session) Runtime
 		if lister, ok := adapter.(RuntimeLister); ok {
 			sessions, err := lister.List(ctx)
 			if err != nil {
-				lists[kind] = runtimeListFailure(adapter, err)
+				lists[kind] = runtimeListResult{state: RuntimeProbeUnknown, err: err}
 				continue
 			}
 			lists[kind] = runtimeListResult{sessions: sessions, state: RuntimeProbeAlive}
@@ -353,7 +329,7 @@ func (s *Service) runningSessions(ctx context.Context) func(api.Session) Runtime
 		if lister, ok := s.Runtime.(RuntimeLister); ok {
 			sessions, err := lister.List(ctx)
 			if err != nil {
-				lists[""] = runtimeListFailure(s.Runtime, err)
+				lists[""] = runtimeListResult{state: RuntimeProbeUnknown, err: err}
 			} else {
 				lists[""] = runtimeListResult{sessions: sessions, state: RuntimeProbeAlive}
 			}
@@ -364,9 +340,6 @@ func (s *Service) runningSessions(ctx context.Context) func(api.Session) Runtime
 		if listed, ok := lists[kind]; ok {
 			if listed.state == RuntimeProbeUnknown {
 				return RuntimeProbeResult{State: RuntimeProbeUnknown, Evidence: "list_failed", Err: listed.err}
-			}
-			if listed.state == RuntimeProbeDead {
-				return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: listed.evidence, Err: listed.err}
 			}
 			if listed.sessions[session.Runtime] {
 				return RuntimeProbeResult{State: RuntimeProbeAlive, Evidence: "healthy_list"}
@@ -381,9 +354,6 @@ func (s *Service) runningSessions(ctx context.Context) func(api.Session) Runtime
 			if listed, ok := lists[""]; ok {
 				if listed.state == RuntimeProbeUnknown {
 					return RuntimeProbeResult{State: RuntimeProbeUnknown, Evidence: "list_failed", Err: listed.err}
-				}
-				if listed.state == RuntimeProbeDead {
-					return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: listed.evidence, Err: listed.err}
 				}
 				if listed.sessions[session.Runtime] {
 					return RuntimeProbeResult{State: RuntimeProbeAlive, Evidence: "healthy_legacy_list"}

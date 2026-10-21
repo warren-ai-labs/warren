@@ -386,7 +386,7 @@ struct WarrenDesktopWorkspaceRow: View {
 
     private func deletionStatus(tokens: WarrenColorTokens) -> some View {
         HStack(spacing: WarrenSpacing.xs) {
-            WarrenLoadingIndicator(size: 14, accessibilityLabel: "Deleting workspace")
+            WarrenBrailleSpinner(size: 14, accessibilityLabel: "Deleting workspace")
                 .accessibilityHidden(true)
             Text("Deleting…")
                 .font(WarrenTypography.navigationMeta)

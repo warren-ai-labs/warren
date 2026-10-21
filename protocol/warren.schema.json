@@ -192,9 +192,7 @@
             "result": { "type": "object", "additionalProperties": true },
             "error": { "type": "string" },
             "code": { "type": "string" },
-            "details": { "type": "object", "additionalProperties": true },
-            "session": { "type": "string", "description": "Present on an input rejection (code input_rejected): the terminal the refused DENB input frame was aimed at. DENB frames carry no request id, so this is how the client attributes the refusal." },
-            "attachmentId": { "type": "string", "description": "Present on an input rejection (code input_rejected): the attachment identity from the refused frame, or the one the Host expects when it differs." }
+            "details": { "type": "object", "additionalProperties": true }
           }
         }
       }
@@ -313,7 +311,6 @@
         { "method": "session.delete.preflight", "paramsRef": "{id: string}", "resultRef": "api.SessionDeletePreflight" },
         { "method": "session.current", "paramsRef": "free", "resultRef": "api.Session | null" },
         { "method": "session.rename", "paramsRef": "{id: string, title: string}", "resultRef": "void" },
-        { "method": "session.title.regenerate", "paramsRef": "{id: string}", "resultRef": "{title: string}" },
         { "method": "session.pin", "paramsRef": "{id: string, pinned: bool}", "resultRef": "void" },
         { "method": "session.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
         { "method": "session.move.preflight", "paramsRef": "{id: string}", "resultRef": "api.SessionMovePreflight" },
@@ -341,7 +338,7 @@
     },
     "serverEvents": {
       "type": "array",
-      "description": "Server-pushed event types. Events do not include a request id. Some carry terminal-session state (attached/synced/recoveryFailed/exited); Agent semantics use the canonical agent.events envelope. The roster event wraps the complete state under state; no migration-era fields are emitted.",
+      "description": "Server-pushed event types. Events do not include a request id. Some carry terminal-session state (attached/synced/exited); Agent semantics use the canonical agent.events envelope. The roster event wraps the complete state under state; no migration-era fields are emitted.",
       "items": {
         "type": "string",
         "enum": [
@@ -353,11 +350,8 @@
           "roster.delta",
           "attached",
           "synced",
-          "recoveryFailed",
           "resized",
           "exited",
-          "focusTaken",
-          "focusGranted",
           "agent.events",
           "pong"
         ]
@@ -396,21 +390,9 @@
           "fields": { "t": "synced", "session": "string", "epoch": "uint64", "sequence": "uint64" },
           "notes": "Replay catch-up is complete; the next binary frame will be the live stream at (epoch, sequence)."
         },
-        "recoveryFailed": {
-          "fields": { "t": "recoveryFailed", "session": "string", "reason": "string" },
-          "notes": "The session.subscribe acknowledgement was already sent, but the Host could not produce the recovery payload (atomic state and paired cursor) for it. The client must cancel any staged recovery for the session and subscribe again; no attached/synced markers follow this event. A failure before the acknowledgement is reported on the command response and never as this event."
-        },
         "resized": {
           "fields": { "t": "resized", "session": "string", "epoch": "uint64", "sequence": "uint64", "cols": "int", "rows": "int" },
           "notes": "Requires capability 'terminal-size-v1' and a sized attached event. Output from (epoch, sequence) on is produced for cols x rows. The event travels ahead of queued output, so clients apply it when their output position reaches sequence, never on arrival."
-        },
-        "focusTaken": {
-          "fields": { "t": "focusTaken", "session": "string", "attachmentId": "string?" },
-          "notes": "Another peer claimed this Session's input control lease. The recipient no longer owns it: input it sends is refused by the Host, and it must stop treating its lease as confirmed. attachmentId names the new owner's attachment."
-        },
-        "focusGranted": {
-          "fields": { "t": "focusGranted", "session": "string", "attachmentId": "string?" },
-          "notes": "The Host handed this Session's input control lease back to the recipient because the peer that had taken it disconnected and the recipient still wanted it. attachmentId is the recipient's own attachment."
         },
         "exited": {
           "fields": { "t": "exited", "session": "string" },

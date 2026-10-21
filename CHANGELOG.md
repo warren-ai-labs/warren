@@ -4,45 +4,6 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
-### Added
-
-- Stop an Agent's running turn from the CLI with `warren agent cancel
-  AGENT_ID [--current] [--wait]`. The Host drives the provider's own interrupt,
-  so a terminal Agent and a protocol-driven Agent are both stopped the way they
-  expect, and `--wait` reports the turn once it actually ends.
-
-### Fixed
-
-- Serve the first roster right after a Host restart instead of waiting for the
-  Agent journal. The first Agent commit opened the journal while holding the
-  Agent projection lock every roster snapshot reads, so a cold start -- worst of
-  all one that handed Ghostline over while the previous daemon still held the
-  journal -- blocked every client until the open finished (about 5s, the SQLite
-  busy timeout, in a reported log).
-- Report a workspace branch as merged only when it has commits of its own and
-  the default branch contains them. A freshly created branch still pointed at
-  main, or at an older commit of it, no longer shows as MERGED in the sidebar,
-  `workspace list`, or the Git panel; Warren records the commit each new branch
-  starts from and falls back to the branch's reflog for imported worktrees.
-- Stop a pi or Codex Agent with the key it reads as "stop the turn". Ctrl+C only
-  clears pi's composer and twice within half a second quits it, and Codex opens a
-  Cancel/Background/Exit menu on Ctrl+C; both now receive Escape.
-- End an Agent turn that pi reports as stopped. Pressing Esc, or a provider
-  error such as a rejected request or a timeout, used to leave the Agent
-  "working" with no turn boundary in its transcript, so the next prompt was
-  refused; the turn now ends and the Agent returns to idle or failed. An
-  OpenCode turn stopped by the user returns to idle instead of failed.
-- Read a pi turn stopped while a tool was running as stopped rather than failed.
-  pi reports that case as an error carrying the abort signal's own wording, so
-  stopping an Agent mid-command left it marked failed until the next prompt.
-- Keep an Agent working when it merely quotes an interruption marker. Codex's
-  `<turn_aborted>` and Claude's `[Request interrupted by user]` are provider
-  notices; the same text in an Agent's answer or in command output used to end
-  its turn, so an Agent explaining that code path appeared stopped.
-- Keep `warren agent wait` on the turn that is running. A wait that began while
-  the Agent was idle could return the turn that had already finished, so a
-  caller watching an Agent it had just created stopped as if the work were done.
-
 ## [0.32.0] - 2026-10-20
 
 > Minor release: Warren ships a drag-to-install disk image, and opening a newer
@@ -100,9 +61,6 @@ All notable changes to Warren are documented here.
   reconnecting it.
 - Reconnect a Host to Relay as soon as its Mac wakes instead of waiting out the
   rest of its backoff.
-- Keep a split group's title on the pill's centre line. A Tab title, a split
-  group's name and every other fading line now sit in the middle of the band
-  they are given instead of at its top edge.
 - Keep terminal output aligned while a split pane resizes. The Desktop changes a
   terminal's grid only at the output position where the Host reports the PTY
   actually resized, so text written for the old width is never drawn on the new

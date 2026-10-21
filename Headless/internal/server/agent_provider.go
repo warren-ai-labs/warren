@@ -1771,9 +1771,9 @@ func (handle *tuiAgentHandle) Interrupt(ctx context.Context, request api.AgentTu
 		if err != nil {
 			return err
 		}
-		return interruptAgentTurnInputText(ctx, runtime, handle.runtimeName, text, handle.provider)
+		return interruptAgentTurnInputText(ctx, runtime, handle.runtimeName, text)
 	}
-	return interruptAgentTurnInput(ctx, runtime, handle.runtimeName, request, handle.provider)
+	return interruptAgentTurnInput(ctx, runtime, handle.runtimeName, request)
 }
 
 func (handle *tuiAgentHandle) RespondInteraction(ctx context.Context, response api.AgentInteractionResponse) error {

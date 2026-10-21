@@ -28,10 +28,7 @@ public struct WarrenConversation: Equatable, Sendable {
         public var narration: [String] = []
         public var steps: [Step] = []
         public var reasoning = Reasoning()
-        /// Quiet protocol rows: a compaction note, or a local slash command a
-        /// person ran in the Agent's terminal together with its output. They
-        /// are muted lines, never conversation turns.
-        public var notices: [Notice] = []
+        public var notices: [String] = []
         public var errors: [String] = []
         public var status: TurnStatus = .running
         public var startedAt: Date?
@@ -59,30 +56,6 @@ public struct WarrenConversation: Equatable, Sendable {
 
     public enum TurnStatus: String, Equatable, Sendable {
         case running, completed, failed, cancelled, interrupted
-    }
-
-    /// One quiet line in a turn's transcript. `command` and `output` exist so a
-    /// surface can draw a slash command in a mono face instead of reading tags
-    /// out of prose; `note` is every other provider notice.
-    public struct Notice: Equatable, Sendable, Identifiable {
-        public enum Kind: String, Equatable, Sendable { case note, command, output }
-
-        public let id: String
-        public var kind: Kind = .note
-        /// The line's text for surfaces that draw it as prose.
-        public var text: String
-        /// The command a person ran, with its leading slash, for example `/resume`.
-        public var command: String = ""
-        /// The arguments the command was invoked with, on one line.
-        public var args: String = ""
-
-        public init(id: String, kind: Kind = .note, text: String, command: String = "", args: String = "") {
-            self.id = id
-            self.kind = kind
-            self.text = text
-            self.command = command
-            self.args = args
-        }
     }
 
     public struct Reasoning: Equatable, Sendable {
@@ -463,26 +436,17 @@ extension WarrenConversation {
                 let id = payload.string("messageId") ?? event.id
                 let content = payload.string("content") ?? ""
                 if role == "user" {
-                    switch WarrenConversation.localCommand(id: id, payload: payload, content: content) {
-                    case .none:
-                        let previous = result.turns[index].prompt ?? ""
-                        result.turns[index].prompt = type == "message.delta" ? previous + content : (content.isEmpty ? previous : content)
-                        result.turns[index].promptCausedBy = result.turns[index].promptCausedBy ?? event.causedBy
-                        if case let .array(items)? = payload["attachments"] {
-                            result.turns[index].promptAttachments = items.compactMap { item in
-                                if case let .object(value) = item { return value.string("name") }
-                                return nil
-                            }
+                    let previous = result.turns[index].prompt ?? ""
+                    result.turns[index].prompt = type == "message.delta" ? previous + content : (content.isEmpty ? previous : content)
+                    result.turns[index].promptCausedBy = result.turns[index].promptCausedBy ?? event.causedBy
+                    if case let .array(items)? = payload["attachments"] {
+                        result.turns[index].promptAttachments = items.compactMap { item in
+                            if case let .object(value) = item { return value.string("name") }
+                            return nil
                         }
-                    case .hidden:
-                        break
-                    case let .notice(notice):
-                        result.turns[index].notices.append(notice)
                     }
                 } else if role == "system" {
-                    if let notice = WarrenConversation.notice(id: id, payload: payload, content: content) {
-                        result.turns[index].notices.append(notice)
-                    }
+                    if !content.isEmpty { result.turns[index].notices.append(content) }
                 } else {
                     // Mutate in place: copying the array out and back would
                     // copy the message's text on every delta.
@@ -557,7 +521,7 @@ extension WarrenConversation {
                 let id = payload.string("compactionId") ?? event.id
                 if !compactions.contains(id) {
                     compactions.insert(id)
-                    result.turns[index].notices.append(Notice(id: "compaction-\(id)", text: "Context compacted"))
+                    result.turns[index].notices.append("Context compacted")
                 }
             case "error":
                 let index = turnPosition(event)
@@ -648,112 +612,6 @@ extension WarrenConversation {
             }
         }
         return steps
-    }
-
-    /// A system notice from a provider message row.
-    ///
-    /// Claude Code records a local slash command and its output as markup
-    /// envelopes. Rows journaled before the parser unwrapped them still arrive
-    /// raw, so the projection unwraps them here as a compatibility guard.
-    /// Markup it does not recognize keeps its text rather than disappearing.
-    fileprivate static func notice(id: String, payload: [String: WarrenRemoteJSONValue], content: String) -> Notice? {
-        switch localCommand(id: id, payload: payload, content: content) {
-        case let .notice(notice):
-            return notice
-        case .hidden:
-            return nil
-        case .none:
-            let summary = content.trimmingCharacters(in: .whitespacesAndNewlines)
-            return summary.isEmpty ? nil : Notice(id: id, text: content)
-        }
-    }
-
-    /// The quiet row a local command envelope projects to. `none` means the row
-    /// is ordinary conversation text, so the caller keeps it as-is.
-    fileprivate enum LocalCommand {
-        case none
-        case hidden
-        case notice(Notice)
-    }
-
-    fileprivate static func localCommand(id: String, payload: [String: WarrenRemoteJSONValue], content: String) -> LocalCommand {
-        if case let .object(command)? = payload["localCommand"] {
-            switch (command.string("kind") ?? "").lowercased() {
-            case "command":
-                let name = (command.string("name") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !name.isEmpty {
-                    let args = (command.string("args") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    return .notice(Notice(id: id, kind: .command, text: text(commandLine: name, args: args), command: name, args: args))
-                }
-            case "output":
-                let summary = content.trimmingCharacters(in: .whitespacesAndNewlines)
-                return summary.isEmpty ? .hidden : .notice(Notice(id: id, kind: .output, text: summary))
-            default:
-                break
-            }
-        }
-        if let legacy = legacyLocalCommand(content) {
-            switch legacy {
-            case .caveat:
-                return .hidden
-            case let .command(name, args):
-                return .notice(Notice(id: id, kind: .command, text: text(commandLine: name, args: args), command: name, args: args))
-            case let .output(summary):
-                let summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
-                return summary.isEmpty ? .hidden : .notice(Notice(id: id, kind: .output, text: summary))
-            }
-        }
-        return .none
-    }
-
-    private static func text(commandLine name: String, args: String) -> String {
-        args.isEmpty ? name : "\(name) \(args)"
-    }
-
-    /// A slash command envelope left in a transcript row raw: the invocation,
-    /// its output, or the caveat that precedes both. Only a value made of the
-    /// known tags is recognized; anything else returns nil and keeps its text.
-    private enum LegacyLocalCommand {
-        case caveat
-        case command(name: String, args: String)
-        case output(text: String)
-    }
-
-    private static func legacyLocalCommand(_ content: String) -> LegacyLocalCommand? {
-        let value = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard value.hasPrefix("<"), let fields = tagFields(value), !fields.isEmpty else { return nil }
-        func only(_ allowed: Set<String>) -> Bool { Set(fields.keys).isSubset(of: allowed) }
-        if let stdout = fields["local-command-stdout"],
-           only(["local-command-stdout", "command-stdout", "local-command-caveat"]) {
-            let summary = stdout.isEmpty ? (fields["command-stdout"] ?? "") : stdout
-            return .output(text: summary)
-        }
-        if let name = fields["command-name"],
-           only(["command-name", "command-message", "command-args", "local-command-caveat"]) {
-            let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty else { return nil }
-            return .command(name: name, args: (fields["command-args"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        if only(["local-command-caveat"]) { return .caveat }
-        return nil
-    }
-
-    /// Splits a value made only of `<tag>inner</tag>` elements, in any order
-    /// and separated by whitespace. Nil as soon as anything outside a tag
-    /// appears, so a partially understood envelope is left as-is.
-    private static func tagFields(_ value: String) -> [String: String]? {
-        var fields: [String: String] = [:]
-        var rest = value
-        while !rest.isEmpty {
-            guard rest.hasPrefix("<"), let open = rest.firstIndex(of: ">") else { return nil }
-            let tag = String(rest[rest.index(after: rest.startIndex)..<open])
-            guard !tag.isEmpty, !tag.contains(where: { $0.isWhitespace || $0 == "/" }) else { return nil }
-            let start = rest.index(after: open)
-            guard let end = rest.range(of: "</\(tag)>", range: start..<rest.endIndex) else { return nil }
-            fields[tag] = String(rest[start..<end.lowerBound])
-            rest = String(rest[end.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return fields
     }
 
     fileprivate static func finish(_ turn: inout Turn) {

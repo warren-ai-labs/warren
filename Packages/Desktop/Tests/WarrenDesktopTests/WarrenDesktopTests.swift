@@ -1070,11 +1070,10 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertEqual(
             localEmptyAction.frame.x - localHostHeader.frame.x,
             Double(
-                WarrenDesktopSidebarMetrics.groupIconSize
-                    + WarrenDesktopSidebarMetrics.groupIconSpacing
+                WarrenDesktopSidebarIndent.hostEmptyState
+                    - WarrenDesktopSidebarMetrics.rowHorizontalPadding
             ),
-            accuracy: 0.01,
-            "The starter row sits in the tree's text column, not on the Host heading's edge"
+            accuracy: 0.01
         )
         XCTAssertNil(initialSnapshot.node(id: localWorkspaceID))
         // Projects start open, so the other Host's copy is listed too.
@@ -5185,7 +5184,7 @@ final class WarrenDesktopTests: XCTestCase {
             onRename: {},
             onEnd: {}
         ).compactMap { action -> String? in
-            guard case .button(let title, _, _, _) = action else { return nil }
+            guard case .button(let title, _, _) = action else { return nil }
             return title
         }
         XCTAssertEqual(titles, ["Pin Session", "Rename Session", "End Session…"])
@@ -5206,7 +5205,7 @@ final class WarrenDesktopTests: XCTestCase {
             onRename: nil,
             onEnd: nil
         )
-        guard case .button(let pinTitle, _, _, _) = pinned.first else {
+        guard case .button(let pinTitle, _, _) = pinned.first else {
             return XCTFail("Expected a pin action")
         }
         XCTAssertEqual(pinTitle, "Unpin Session")
@@ -5221,70 +5220,13 @@ final class WarrenDesktopTests: XCTestCase {
             hasActivity: true,
             onDismissActivity: {}
         ).compactMap { action -> String? in
-            guard case .button(let title, _, _, _) = action else { return nil }
+            guard case .button(let title, _, _) = action else { return nil }
             return title
         }
         XCTAssertEqual(
             withActivity,
             ["Pin Session", "Dismiss Activity", "Rename Session", "End Session…"]
         )
-    }
-
-    /// A long conversation's first-turn title drifts, so an Agent Session can be
-    /// renamed from what it is about now. A shell has no conversation to read,
-    /// and the Host decides when the action can run: it knows whether the Agent
-    /// has exchanged a user and an assistant text and whether a title endpoint
-    /// is configured.
-    func testRegenerateTitleIsOfferedForAgentSessionsOnly() {
-        func regeneration(
-            shows: Bool,
-            can: Bool = true
-        ) -> WarrenDesktopContextMenuAction? {
-            WarrenDesktopWorkspaceSessionRow.contextMenuActions(
-                isPinned: false,
-                onTogglePin: {},
-                onRename: {},
-                onEnd: {},
-                showsRegenerateTitle: shows,
-                canRegenerateTitle: can,
-                onRegenerateTitle: {}
-            ).first { action in
-                guard case .button(let title, _, _, _) = action else { return false }
-                return title == "Regenerate Title"
-            }
-        }
-
-        XCTAssertNil(
-            regeneration(shows: false),
-            "A shell Session has no conversation, so it offers no regeneration"
-        )
-        guard case .button(let title, let destructive, let isEnabled, _) = regeneration(shows: true) else {
-            return XCTFail("An Agent Session offers a regeneration")
-        }
-        XCTAssertEqual(title, "Regenerate Title")
-        XCTAssertFalse(destructive, "Regenerating keeps the Session's name slot, it does not delete work")
-        XCTAssertTrue(isEnabled)
-
-        guard case .button(_, _, let unavailable, _) = regeneration(shows: true, can: false) else {
-            return XCTFail("The action stays listed while it cannot run")
-        }
-        XCTAssertFalse(unavailable, "The Host reports when it cannot name the conversation yet")
-
-        // It reads in the same group as the manual rename, after it: the user's
-        // own name and the Host's are the same kind of action.
-        let titles = WarrenDesktopWorkspaceSessionRow.contextMenuActions(
-            isPinned: false,
-            onTogglePin: {},
-            onRename: {},
-            onEnd: {},
-            showsRegenerateTitle: true,
-            canRegenerateTitle: false,
-            onRegenerateTitle: {}
-        ).compactMap { action -> String? in
-            guard case .button(let title, _, _, _) = action else { return nil }
-            return title
-        }
-        XCTAssertEqual(titles, ["Pin Session", "Rename Session", "Regenerate Title", "End Session…"])
     }
 
     /// A single pane gives the bar nothing to switch between, and its chip
@@ -5450,7 +5392,7 @@ final class WarrenDesktopTests: XCTestCase {
             onCloseOthers: { closedPanes += 1 },
             onCloseAll: { closedPanes += 1 }
         ).compactMap { action -> String? in
-            guard case .button(let title, _, _, let run) = action else { return nil }
+            guard case .button(let title, _, let run) = action else { return nil }
             run()
             return title
         }

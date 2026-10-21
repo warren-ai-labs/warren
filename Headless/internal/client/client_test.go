@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -179,20 +178,6 @@ func TestWaitAgentTurnHandlesCurrentAndNextTurns(t *testing.T) {
 			},
 			want: api.AgentTurn{ID: 4, Status: api.AgentTurnCancelled},
 		},
-		{
-			// A watcher rebind re-announces past boundaries while a peer is
-			// attached. The turn that was already terminal when the wait began
-			// cannot be its answer, or a wait for the running turn returns a
-			// finished one and the caller stops watching live work.
-			name:  "replayed terminal turn is history",
-			after: 3,
-			messages: []api.CanonicalAgentEventsMessage{
-				canonicalTurnBatch(3, "completed"),
-				canonicalTurnBatch(4, "started"),
-				canonicalTurnBatch(4, "completed"),
-			},
-			want: api.AgentTurn{ID: 4, Status: api.AgentTurnCompleted},
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -357,92 +342,4 @@ func canonicalExitBatch() api.CanonicalAgentEventsMessage {
 	batch.Events[0].Type = "status.changed"
 	batch.Events[0].Payload = map[string]any{"activity": "exited"}
 	return batch
-}
-
-// Observation commands must not claim the terminal's input lease: the claim is
-// the Host's permission for input, and taking it silently mutes whichever
-// client is actually typing into the Session. Only a command that will type may
-// ask for it.
-func TestObservationSubscribeDoesNotTakeTheInputLease(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	subscribes := make(chan map[string]any, 4)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		connection, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer connection.Close()
-		var auth map[string]any
-		if connection.ReadJSON(&auth) != nil {
-			return
-		}
-		if connection.WriteJSON(map[string]any{
-			"t": "welcome", "version": api.Version,
-			"host":          map[string]any{"id": store.NewID()},
-			"accessScopeId": "test-scope",
-		}) != nil {
-			return
-		}
-		for {
-			kind, data, err := connection.ReadMessage()
-			if err != nil {
-				return
-			}
-			if kind != websocket.TextMessage {
-				continue
-			}
-			var envelope struct {
-				ID     string         `json:"id"`
-				Method string         `json:"method"`
-				Params map[string]any `json:"params"`
-			}
-			if json.Unmarshal(data, &envelope) != nil {
-				return
-			}
-			switch envelope.Method {
-			case "session.subscribe":
-				subscribes <- envelope.Params
-				_ = connection.WriteJSON(map[string]any{
-					"t": "response", "id": envelope.ID, "ok": true,
-					"result": map[string]any{"subscribed": true, "attachmentId": "attachment-1"},
-				})
-			case "roster":
-				_ = connection.WriteJSON(map[string]any{
-					"t": "response", "id": envelope.ID, "ok": true,
-					"result": map[string]any{
-						"sessions": []map[string]any{{"id": "session-1", "lifecycle": "running"}},
-					},
-				})
-			}
-		}
-	}))
-	defer server.Close()
-
-	value, err := Dial(context.Background(), server.URL, "secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer value.Close()
-
-	if _, err := value.SubscribePassive(context.Background(), "session-1"); err != nil {
-		t.Fatalf("passive subscribe: %v", err)
-	}
-	passive := <-subscribes
-	if _, claimed := passive["claim"]; claimed {
-		t.Fatalf("observation claimed the input lease: %#v", passive)
-	}
-	if err := value.Input(context.Background(), []byte("x")); err == nil {
-		t.Fatal("a passive subscription armed input framing")
-	}
-
-	if _, err := value.Subscribe(context.Background(), "session-1"); err != nil {
-		t.Fatalf("claiming subscribe: %v", err)
-	}
-	claimed := <-subscribes
-	if claimed["claim"] != true {
-		t.Fatalf("send subscription did not claim the lease: %#v", claimed)
-	}
-	if err := value.Input(context.Background(), []byte("x")); err != nil {
-		t.Fatalf("claiming subscription did not arm input: %v", err)
-	}
 }

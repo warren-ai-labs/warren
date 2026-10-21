@@ -26,63 +26,6 @@ struct WarrenLatestValueSignal<Value: Sendable>: Sendable {
     }
 }
 
-/// Counts consecutive failed recovery payloads per Session.
-///
-/// The count is what makes the retry bounded, so what resets it matters. A
-/// `session.subscribe` acknowledgement is not evidence of recovery: the Host
-/// acknowledges before it produces the payload, so every retried attach would
-/// look like a fresh start and the streak would stay at one forever. Only a
-/// payload that actually installed clears the streak.
-struct RecoveryFailureStreak: Sendable {
-    private var counts: [TerminalSessionID: Int] = [:]
-
-    /// Records one failed recovery payload and returns the 1-based attempt.
-    mutating func noteFailure(_ sessionID: TerminalSessionID) -> Int {
-        let attempt = (counts[sessionID] ?? 0) + 1
-        counts[sessionID] = attempt
-        return attempt
-    }
-
-    /// Records a recovery payload that installed, which ends the streak.
-    mutating func noteInstalled(_ sessionID: TerminalSessionID) {
-        counts.removeValue(forKey: sessionID)
-    }
-
-    mutating func clear(_ sessionID: TerminalSessionID) {
-        counts.removeValue(forKey: sessionID)
-    }
-
-    mutating func clearAll() {
-        counts.removeAll()
-    }
-
-    /// The current attempt count, for tests and diagnostics.
-    func attempts(for sessionID: TerminalSessionID) -> Int {
-        counts[sessionID] ?? 0
-    }
-}
-
-/// The bounded retry policy for an attach whose recovery payload failed.
-///
-/// `session.subscribe` is acknowledged before the Host produces that payload, so
-/// the client is waiting on markers that will never arrive. Re-attaching from a
-/// clean boundary fixes it; a Host that keeps failing must end in a visible
-/// error, never in a reconnect loop. Pure so the policy is testable without a
-/// live connection.
-enum RecoveryFailureRetry {
-    static let maximumAttempts = 3
-
-    /// The delay before the retry that follows `attempt`, or nil when the
-    /// budget is spent. Attempts are 1-based.
-    static func delay(afterAttempt attempt: Int, base: Duration = .milliseconds(250)) -> Duration? {
-        guard attempt >= 1, attempt <= maximumAttempts else { return nil }
-        // 250 ms, 500 ms, 1 s: long enough for a busy Host to finish a failed
-        // recovery, short enough that the pane does not sit black.
-        let factor = Int64(1) << Int64(attempt - 1)
-        return base * factor
-    }
-}
-
 /// A completed Agent turn detected from the remote roster.
 ///
 /// The remote model publishes this transport-neutral event. Platform clients

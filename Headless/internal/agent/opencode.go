@@ -1504,14 +1504,11 @@ func openCodeEnvelopeFingerprint(envelope openCodeEnvelope) string {
 // openCodeMessageSnapshot is parser-local state used to turn mutable cache
 // snapshots into append-only normalized events.
 type openCodeMessageSnapshot struct {
-	Role   string
-	Finish string
-	Error  string
-	// ErrorName keeps the provider's error class (for example
-	// MessageAbortedError) so an interrupted turn is not reported as a failure.
-	ErrorName string
-	Summary   string
-	Parts     map[string]openCodePartSnapshot
+	Role    string
+	Finish  string
+	Error   string
+	Summary string
+	Parts   map[string]openCodePartSnapshot
 }
 
 type openCodePartSnapshot struct {
@@ -1576,7 +1573,6 @@ func (p *openCodeParser) parseOpenCode(line []byte) []api.AgentEvent {
 		}
 	}
 	current.Error = openCodeErrorContent(envelope.Error, p.contentLimit)
-	current.ErrorName = openCodeErrorName(envelope.Error)
 	model := envelope.ModelID
 	if envelope.ProviderID != "" && model != "" {
 		model = envelope.ProviderID + "/" + model
@@ -1799,14 +1795,7 @@ func (p *openCodeParser) parseOpenCode(line []byte) []api.AgentEvent {
 		events = append(events, api.AgentEvent{Provider: openCodeProvider, ID: messageKey, Type: userType, Role: userRole, Content: current.Summary, Timestamp: timestamp})
 	}
 	if current.Error != "" && (!existedOpenCodeError(previous) || previous.Error != current.Error) {
-		if openCodeInterruptedError(current.ErrorName) {
-			// OpenCode stores a stopped turn as an aborted assistant message with
-			// no finish value. The user ended it, so the Agent returns to idle
-			// instead of being marked failed.
-			events = append(events, api.AgentEvent{Provider: openCodeProvider, ID: messageKey, Type: "system", Role: "system", Content: "Interrupted", StopReason: "interrupted", Model: model, Timestamp: timestamp})
-		} else {
-			events = append(events, api.AgentEvent{Provider: openCodeProvider, ID: messageKey, Type: "error", Content: current.Error, Error: current.Error, Model: model, Timestamp: timestamp})
-		}
+		events = append(events, api.AgentEvent{Provider: openCodeProvider, ID: messageKey, Type: "error", Content: current.Error, Error: current.Error, Model: model, Timestamp: timestamp})
 	}
 	if envelope.Role == "assistant" {
 		if reason, terminal := openCodeFinishReason(envelope.Finish); terminal && previous.Finish != envelope.Finish {
@@ -1900,30 +1889,6 @@ func openCodeFinishReason(finish string) (string, bool) {
 		// OpenCode keeps tool-calls and unknown messages open while the
 		// processor either starts another step or retries the provider.
 		return "", false
-	}
-}
-
-func openCodeErrorName(raw json.RawMessage) string {
-	if len(raw) == 0 || string(raw) == "null" {
-		return ""
-	}
-	var value struct {
-		Name string `json:"name"`
-	}
-	if json.Unmarshal(raw, &value) != nil {
-		return ""
-	}
-	return strings.TrimSpace(value.Name)
-}
-
-// openCodeInterruptedError reports whether a provider error is the user stopping
-// the turn rather than a failure the Agent should surface as failed.
-func openCodeInterruptedError(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "messageabortederror", "abortederror":
-		return true
-	default:
-		return false
 	}
 }
 

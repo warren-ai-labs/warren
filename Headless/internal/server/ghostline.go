@@ -5,12 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/abcdlsj/ghostline"
@@ -22,9 +18,7 @@ import (
 // from the server on demand, so a daemon restart keeps managing sessions
 // owned by a detached ghostline serve process.
 type GhostlineRuntime struct {
-	clientMu sync.RWMutex
 	client   *ghostline.Client
-
 	mu       sync.Mutex
 	sessions map[string]*ghostline.Session
 }
@@ -33,44 +27,8 @@ func NewGhostlineRuntime(client *ghostline.Client) *GhostlineRuntime {
 	return &GhostlineRuntime{client: client, sessions: map[string]*ghostline.Session{}}
 }
 
-// ReplaceClient points the adapter at a new Ghostline server after the daemon
-// supervisor restarted it. Cached handles belong to the previous process
-// generation and are dropped so later calls adopt from the new server.
-func (r *GhostlineRuntime) ReplaceClient(client *ghostline.Client) {
-	if client == nil {
-		return
-	}
-	r.clientMu.Lock()
-	r.client = client
-	r.clientMu.Unlock()
-	r.mu.Lock()
-	r.sessions = map[string]*ghostline.Session{}
-	r.mu.Unlock()
-}
-
-func (r *GhostlineRuntime) clientForCall() *ghostline.Client {
-	r.clientMu.RLock()
-	defer r.clientMu.RUnlock()
-	return r.client
-}
-
-// ServerProcessAlive reports whether the process recorded beside the active
-// Ghostline socket still exists. known is false when no pid was recorded, and
-// callers must treat that as unknown rather than dead.
-func (r *GhostlineRuntime) ServerProcessAlive() (alive bool, known bool) {
-	client := r.clientForCall()
-	if client == nil {
-		return false, false
-	}
-	pid, ok := ghostlineRecordedPID(client.Socket())
-	if !ok {
-		return false, false
-	}
-	return ghostlineProcessAlive(pid), true
-}
-
 func (r *GhostlineRuntime) Check(ctx context.Context) error {
-	return r.clientForCall().Check(ctx)
+	return r.client.Check(ctx)
 }
 
 func (r *GhostlineRuntime) Create(ctx context.Context, name, directory, command string, env []string) error {
@@ -125,7 +83,7 @@ func (r *GhostlineRuntime) Create(ctx context.Context, name, directory, command 
 		process.Path = shell
 		process.Args = integration.Args
 	}
-	session, err := r.clientForCall().Start(ctx, ghostline.SessionOptions{
+	session, err := r.client.Start(ctx, ghostline.SessionOptions{
 		Name:    name,
 		Process: process,
 	})
@@ -173,7 +131,7 @@ func (r *GhostlineRuntime) session(ctx context.Context, name string) (*ghostline
 	if session != nil {
 		return session, nil
 	}
-	adopted, err := r.clientForCall().Get(ctx, name)
+	adopted, err := r.client.Get(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -196,18 +154,12 @@ func (r *GhostlineRuntime) Probe(ctx context.Context, name string) RuntimeProbeR
 		if errors.Is(err, ghostline.ErrSessionNotFound) {
 			return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: "session_not_found", Err: err}
 		}
-		if r.serverProcessGone() {
-			return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: "server_pid_gone", Err: err}
-		}
 		return RuntimeProbeResult{State: RuntimeProbeUnknown, Evidence: "session_get_failed", Err: err}
 	}
 	status, err := session.Status(ctx)
 	if err != nil {
 		if errors.Is(err, ghostline.ErrSessionNotFound) {
 			return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: "status_not_found", Err: err}
-		}
-		if r.serverProcessGone() {
-			return RuntimeProbeResult{State: RuntimeProbeDead, Evidence: "server_pid_gone", Err: err}
 		}
 		return RuntimeProbeResult{State: RuntimeProbeUnknown, Evidence: "session_status_failed", Err: err}
 	}
@@ -277,7 +229,7 @@ func (r *GhostlineRuntime) Kill(ctx context.Context, name string) error {
 }
 
 func (r *GhostlineRuntime) List(ctx context.Context) (map[string]bool, error) {
-	listed, err := r.clientForCall().List(ctx)
+	listed, err := r.client.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +244,7 @@ func (r *GhostlineRuntime) List(ctx context.Context) (map[string]bool, error) {
 }
 
 func (r *GhostlineRuntime) ListCreated(ctx context.Context) (map[string]time.Time, error) {
-	sessions, err := r.clientForCall().List(ctx)
+	sessions, err := r.client.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +366,7 @@ func (r *GhostlineRuntime) CreateProcess(ctx context.Context, name, directory st
 	if terminfoDir := runtime.BundledTerminfoDir(); terminfoDir != "" && !hasEnv(sessionEnv, "TERMINFO") {
 		sessionEnv = append(sessionEnv, "TERMINFO="+terminfoDir)
 	}
-	session, err := r.clientForCall().Start(ctx, ghostline.SessionOptions{
+	session, err := r.client.Start(ctx, ghostline.SessionOptions{
 		Name:    name,
 		Process: ghostline.ProcessSpec{Path: argv[0], Args: argv[1:], Directory: directory, Environment: sessionEnv},
 	})
@@ -478,46 +430,3 @@ func (r *GhostlineRuntime) TerminateProcess(ctx context.Context, name string) er
 }
 
 var _ ProcessRuntime = (*GhostlineRuntime)(nil)
-
-// serverProcessGone reports a recorded owner that no longer exists. A missing
-// pid stays unknown: the process may simply not have written it yet.
-func (r *GhostlineRuntime) serverProcessGone() bool {
-	alive, known := r.ServerProcessAlive()
-	return known && !alive
-}
-
-// ghostlineRecordedPID reads the pid written by the serve process for the
-// socket route. The stable path may be a symlink to a per-migration target,
-// including a dangling link left after the target was killed.
-func ghostlineRecordedPID(socket string) (int, bool) {
-	candidates := []string{socket + ".pid"}
-	if resolved, err := filepath.EvalSymlinks(socket); err == nil && resolved != socket {
-		candidates = append([]string{resolved + ".pid"}, candidates...)
-	} else if link, err := os.Readlink(socket); err == nil {
-		if !filepath.IsAbs(link) {
-			link = filepath.Join(filepath.Dir(socket), link)
-		}
-		candidates = append([]string{link + ".pid"}, candidates...)
-	}
-	candidates = append(candidates, filepath.Join(filepath.Dir(socket), "ghostline.pid"))
-	for _, candidate := range candidates {
-		data, err := os.ReadFile(candidate)
-		if err != nil {
-			continue
-		}
-		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-		if err != nil || pid <= 0 {
-			continue
-		}
-		return pid, true
-	}
-	return 0, false
-}
-
-func ghostlineProcessAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
-}

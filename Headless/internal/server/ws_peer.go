@@ -605,36 +605,6 @@ func (p *wsPeer) enqueueSynced(sessionID string, epoch, sequence uint64) error {
 	})
 }
 
-// enqueueFocusTaken tells a peer that another peer has taken the session's
-// input lease. The recipient must stop treating its own lease as confirmed;
-// input it sends now is refused by the Host.
-func (p *wsPeer) enqueueFocusTaken(sessionID, attachmentID string) error {
-	message := map[string]any{"t": "focusTaken", "session": sessionID}
-	if attachmentID != "" {
-		message["attachmentId"] = attachmentID
-	}
-	return p.writeJSON(message)
-}
-
-// enqueueFocusGranted tells a peer that the session's input lease was handed
-// back to it after the peer that had taken it disconnected.
-func (p *wsPeer) enqueueFocusGranted(sessionID, attachmentID string) error {
-	message := map[string]any{"t": "focusGranted", "session": sessionID}
-	if attachmentID != "" {
-		message["attachmentId"] = attachmentID
-	}
-	return p.writeJSON(message)
-}
-
-// enqueueRecoveryFailed reports that an already-acknowledged attach could not
-// produce its recovery payload. Without it the client keeps a surface gated on
-// a `synced` marker that will never arrive, which is an permanently black pane.
-func (p *wsPeer) enqueueRecoveryFailed(sessionID, reason string) error {
-	return p.writeJSON(map[string]any{
-		"t": "recoveryFailed", "session": sessionID, "reason": reason,
-	})
-}
-
 func (p *wsPeer) enqueueCanonicalAgentEvents(streamID, executionID string, events []api.CanonicalAgentEvent) error {
 	if len(events) == 0 {
 		return nil
@@ -656,35 +626,6 @@ func (p *wsPeer) writeResult(id string, result any) error {
 }
 func (p *wsPeer) writeError(id string, err error) error {
 	return p.writeJSON(api.Response{Type: "response", ID: id, OK: false, Error: err.Error()})
-}
-
-// writeInputFailure answers a refused input frame: with the session-scoped
-// rejection when the frame could be decoded, and with the generic envelope
-// otherwise.
-func writeInputFailure(peer *wsPeer, err error) {
-	if err == nil {
-		return
-	}
-	var rejection *inputRejection
-	if errors.As(err, &rejection) {
-		_ = peer.writeInputError(rejection)
-		return
-	}
-	_ = peer.writeError("", err)
-}
-
-// writeInputError answers a refused DENB input frame. It carries the session
-// and attachment the frame named so a client can attribute the refusal instead
-// of dropping an anonymous error.
-func (p *wsPeer) writeInputError(rejection *inputRejection) error {
-	return p.writeJSON(api.Response{
-		Type:         "response",
-		OK:           false,
-		Error:        rejection.Error(),
-		Code:         "input_rejected",
-		Session:      rejection.sessionID,
-		AttachmentID: rejection.attachmentID,
-	})
 }
 
 type canonicalProtocolError struct {

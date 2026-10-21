@@ -646,14 +646,11 @@ were the slow ones, and a 20 KB gap would have been ~10 s.
   when both cursors share an output generation and are ordered, and `false`
   otherwise (zero cursor, generation boundary, reversed pair). Released as
   v1.4.0 and pinned.
-- `catchUpReadBuffer` sizes each read from that span, capped at 64 KiB. The
-  safety property is unchanged: the read can never pass the checkpoint cursor.
-- An unknown span is no longer walked at all (see 015): the checkpoint is taken
-  as a fresh boundary, because a byte-at-a-time walk of a non-comparable pair
-  can never prove it reached the checkpoint and burns the whole command
-  timeout.
-- `reanchor: catchUp` keeps reporting bytes, rounds, milliseconds and the two
-  cursors, so the batching cannot silently regress into a byte walk.
+- `catchUpReadBuffer` sizes each read from that span, capped at 64 KiB, and
+  falls back to a single byte when the span is unknown. The safety property is
+  unchanged: the read can never pass the checkpoint cursor.
+- `reanchor: catchUp` keeps reporting bytes, rounds and milliseconds, so the
+  batching cannot silently regress into a byte walk.
 
 ### Engineering lesson
 
@@ -902,63 +899,3 @@ terminal's native scrollback.
 **A replay has two possible authors, and only one of them is ours.** Read the
 client's terminal events first: if none of them fire around the repaint, the
 bytes came from the program's own output and the fix belongs on that side.
-
-## 015 - A non-comparable catch-up cursor crawled for ten seconds and left the pane black
-
-### Symptom
-
-A cold attach of a busy Session sometimes produced a black terminal that
-survived every tab switch and only an app restart cleared. On the desktop,
-`attach_complete` was logged and then no `recovery_anchor` ever arrived.
-
-### What the logs said
-
-```
-16:26:03.545 attach_complete            session=01f4871e
-16:26:03.318 subscribe: begin           session=01f4871e size=144x51
-16:26:03.318 subscribe: step writeSubscribed
-16:26:13.600 reanchor: catchUp          session=01f4871e bytes=67251 rounds=67251 ms=10000
-```
-
-`rounds == bytes` means one byte per round trip, and `ms=10000` is exactly
-`commandTimeout`. An earlier instance (`15:08:03`, 5930 bytes) failed the same
-way. Every other catch-up in the log had `rounds=1`.
-
-### Root cause
-
-`catchUpOutputCursor` walks from the ring's recorded cursor to the checkpoint
-captured by `AtomicState`. When `Cursor.Distance` reports the pair as
-non-comparable — a zero cursor, a generation change, or a reversed pair —
-`catchUpReadBuffer` fell back to a one-byte buffer. The loop only exits on
-cursor equality, so such a pair can never converge while the session keeps
-producing; it burned the full 10 s deadline and returned an error.
-
-The failure landed after `session.subscribe` had already been acknowledged (the
-ack is written before `attachOutputLocked`), so the client had marked the attach
-complete and was waiting for a `synced` marker that never came. Its
-`recoveryPhase` stayed `.recovering`: `requestPresent` deferred on the recovery
-gate without rescheduling, the present watchdog skipped recovering surfaces, and
-re-selecting the tab took the retained-surface promotion path that never
-re-attaches. Only a new process (fresh entries) cleared it.
-
-### Fix
-
-- A non-comparable pair is no longer walked. The checkpoint is treated as a
-  fresh boundary: the ring cursor is reseeded at it and the atomic snapshot is
-  sent, exactly like a first attach after a daemon restart. `reanchor: phases`
-  reports `catchUpSkipped`, and `reanchor: catchUpSkipped` names both cursors and
-  `distanceKnown=false`.
-- Shared-ring subscribers of that Session are force-reanchored, so a gap the
-  ring could not record is never skipped silently. Direct readers are unaffected.
-- A failure after the acknowledgement is reported to the client as a
-  session-scoped `recoveryFailed` event instead of an error on a command id the
-  client has already retired.
-
-### Engineering lesson
-
-**An ordered pair of opaque cursors needs a "cannot be ordered" outcome, and the
-caller needs one too.** The distance API made the common case O(1) but left the
-unorderable case as an unbounded loop. A gap that cannot be proven should fail
-into the known-good path (a full snapshot) rather than walk toward a boundary it
-can never reach. Also: **an acknowledgement is a promise.** Anything that can
-fail after the ack must have another channel back to the caller.

@@ -167,11 +167,6 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     /// nil whenever the Host could not ask a model, which is why the counts
     /// stay as the fallback rather than as a footnote.
     public let resultSentence: String?
-    /// Whether the Host can name this Session from its conversation on
-    /// request right now. The Host knows both halves — the Agent has
-    /// recorded a user and an assistant text, and a title endpoint is
-    /// configured — so the row asks it rather than guessing.
-    public let titleRegeneratable: Bool
     /// The Session's plan and context, and this turn's action counts, folded
     /// on this client from the same event stream as `currentStep`. They are the
     /// sidebar's second line's numbers; see `secondLine`.
@@ -242,7 +237,6 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         acknowledgedActivity: AgentActivityState? = nil,
         currentStep: String? = nil,
         resultSentence: String? = nil,
-        titleRegeneratable: Bool = false,
         primaryLine: String? = nil,
         lastActivity: String? = nil,
         plan: WarrenDesktopPlanProgress? = nil,
@@ -272,7 +266,6 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         self.primaryLine = primaryLine
         self.lastActivity = lastActivity
         self.resultSentence = resultSentence
-        self.titleRegeneratable = titleRegeneratable
         self.plan = plan
         self.context = context
         self.turnCounts = turnCounts
@@ -308,7 +301,6 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             acknowledgedActivity: acknowledgedActivity,
             currentStep: currentStep,
             resultSentence: resultSentence,
-            titleRegeneratable: titleRegeneratable,
             primaryLine: primaryLine,
             lastActivity: lastActivity,
             plan: plan,
@@ -340,7 +332,6 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             acknowledgedActivity: activity,
             currentStep: currentStep,
             resultSentence: resultSentence,
-            titleRegeneratable: titleRegeneratable,
             primaryLine: primaryLine,
             lastActivity: lastActivity,
             plan: plan,
@@ -372,7 +363,6 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             acknowledgedActivity: acknowledgedActivity,
             currentStep: step,
             resultSentence: resultSentence,
-            titleRegeneratable: titleRegeneratable,
             primaryLine: primaryLine,
             lastActivity: lastActivity,
             plan: plan,
@@ -404,7 +394,6 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             acknowledgedActivity: acknowledgedActivity,
             currentStep: currentStep,
             resultSentence: resultSentence,
-            titleRegeneratable: titleRegeneratable,
             primaryLine: line,
             lastActivity: lastActivity,
             plan: plan,
@@ -935,7 +924,6 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
                 acknowledgedActivity: existing.acknowledgedActivity,
                 currentStep: existing.currentStep,
                 resultSentence: existing.resultSentence,
-                titleRegeneratable: existing.titleRegeneratable,
                 primaryLine: existing.primaryLine,
                 lastActivity: existing.lastActivity,
                 plan: plan,
@@ -1281,8 +1269,6 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     case deleteProject(ProjectID)
     case deleteWorkspace(WorkspaceID, removeLocalWorktree: Bool)
     case renameSession(TerminalSessionID, String)
-    /// Names a Session again from its recent conversation, on the Host.
-    case regenerateSessionTitle(TerminalSessionID)
     case setTaskPinned(TaskID, Bool)
     case setProjectPinned(ProjectID, Bool)
     case setWorkspacePinned(WorkspaceID, Bool)

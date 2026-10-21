@@ -200,28 +200,13 @@ func main() {
 		logger.Warn("unable to read running ghostline version", "error", err)
 		ghostlineRPCVersion = ""
 	}
-	ghostlineRuntime := server.NewGhostlineRuntime(ghostlineClient)
 	runtimes := map[string]server.Runtime{
-		settings.RuntimeGhostline: ghostlineRuntime,
+		settings.RuntimeGhostline: server.NewGhostlineRuntime(ghostlineClient),
 	}
 	runtimeAdapter := runtimes[defaultKind]
 	if runtimeAdapter == nil {
 		fatal(fmt.Errorf("default runtime %q is not available", defaultKind))
 	}
-	// The detached serve process has no parent watching it. Keep the daemon's
-	// route live even when that process exits on its own.
-	ghostlineSupervisorContext, stopGhostlineSupervisor := context.WithCancel(context.Background())
-	defer stopGhostlineSupervisor()
-	supervisor := newGhostlineSupervisor(ghostlineMigrationConfig{
-		stableSocket:    *ghostlineSocket,
-		outputDir:       *outputDir,
-		probeForeground: *ghostlineProbeForeground,
-		expectedTag:     ghostlineTagVersion,
-		state:           state,
-		logger:          logger,
-	})
-	supervisor.onRestart = ghostlineRuntime.ReplaceClient
-	go maintainGhostlineServer(ghostlineSupervisorContext, supervisor)
 	service := &server.Service{
 		Store:           state,
 		HostName:        state.Snapshot().Host.Name,

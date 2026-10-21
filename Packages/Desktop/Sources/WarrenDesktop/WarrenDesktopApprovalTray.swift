@@ -465,7 +465,7 @@ struct WarrenDesktopApprovalTrayPanel: View {
                 // As in the dock, the chosen key turns into the spinner.
                 ZStack {
                     if chosen {
-                        WarrenLoadingIndicator(size: 10, accessibilityLabel: "Answering")
+                        WarrenBrailleSpinner(size: 10, accessibilityLabel: "Answering")
                     } else {
                         Text("\(index + 1)")
                             .font(WarrenTypography.monoSmall)

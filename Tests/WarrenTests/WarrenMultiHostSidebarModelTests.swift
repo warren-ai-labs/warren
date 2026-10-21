@@ -300,27 +300,4 @@ final class WarrenMultiHostSidebarModelTests: XCTestCase {
             )
         )
     }
-
-    func testAnAttachedHostWithoutItsFirstRosterStaysConnecting() {
-        let awaiting = WarrenMultiHostSidebarModel.makeProjection(
-            endpointID: "studio",
-            endpointLabel: "studio",
-            roster: nil,
-            connectionState: .attached,
-            lastError: nil
-        )
-        XCTAssertEqual(
-            WarrenMultiHostSidebarModel.connectingUntilRoster(awaiting).connectionState,
-            .connecting
-        )
-        let failed = WarrenMultiHostSidebarModel.makeProjection(
-            endpointID: "studio",
-            endpointLabel: "studio",
-            roster: nil,
-            connectionState: .failed,
-            lastError: "refused"
-        )
-        XCTAssertEqual(WarrenMultiHostSidebarModel.connectingUntilRoster(failed), failed)
-    }
-
 }
