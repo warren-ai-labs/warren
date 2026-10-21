@@ -59,9 +59,36 @@ final class WarrenDesignSystemTests: XCTestCase {
         XCTAssertLessThan(WarrenMotion.feedbackDuration, WarrenMotion.overlayDuration)
     }
 
-    func testBrailleSpinnerFrameDurationFormsAnEightStepCycle() {
-        XCTAssertEqual(WarrenMotion.spinnerFrameDuration, 0.09)
-        XCTAssertEqual(WarrenMotion.spinnerFrameDuration * 8, 0.72, accuracy: 0.0001)
+    func testLoadingTriangleBallsStayInsideTheFrameAndCycleThroughTheCorners() {
+        let size: CGFloat = 24
+        for index in 0..<3 {
+            for step in 0..<60 {
+                let ball = WarrenLoadingBalls.ball(style: .triangle, index: index, size: size, phase: Double(step) / 60)
+                XCTAssertLessThanOrEqual(abs(ball.center.x) + ball.diameter / 2, size / 2 + 0.001)
+                XCTAssertLessThanOrEqual(abs(ball.center.y) + ball.diameter / 2, size / 2 + 0.001)
+            }
+            // Every third of a lap the balls rest on a corner, one ball per corner.
+            let start = WarrenLoadingBalls.ball(style: .triangle, index: index, size: size, phase: 0).center
+            let next = WarrenLoadingBalls.ball(style: .triangle, index: (index + 1) % 3, size: size, phase: 0).center
+            let third = WarrenLoadingBalls.ball(style: .triangle, index: index, size: size, phase: 1.0 / 3).center
+            XCTAssertEqual(third.x, next.x, accuracy: 0.001)
+            XCTAssertEqual(third.y, next.y, accuracy: 0.001)
+            XCTAssertNotEqual(start, next)
+        }
+    }
+
+    func testLoadingDotsPulseInTurnAndStayInsideTheFrame() {
+        let size: CGFloat = 18
+        let peaks = (0..<3).map { index in
+            (0..<90).max { a, b in
+                WarrenLoadingBalls.ball(style: .dots, index: index, size: size, phase: Double(a) / 90).scale
+                    < WarrenLoadingBalls.ball(style: .dots, index: index, size: size, phase: Double(b) / 90).scale
+            }!
+        }
+        XCTAssertLessThan(peaks[0], peaks[1])
+        XCTAssertLessThan(peaks[1], peaks[2])
+        let edge = WarrenLoadingBalls.ball(style: .dots, index: 2, size: size, phase: nil)
+        XCTAssertLessThanOrEqual(edge.center.x + edge.diameter / 2, size / 2 + 0.001)
     }
 
     #if os(macOS)

@@ -185,6 +185,7 @@ struct WarrenCompositionRoot: View {
             projection: activeProjection,
             navigation: activeNavigation,
             updateStatus: updateStatus,
+            hostMaintenanceMessage: remoteModel.maintenanceMessage,
             onUpdateAction: {
                 NotificationCenter.default.post(
                     name: WarrenUpdateNotification.installRequested,
@@ -411,7 +412,7 @@ struct WarrenCompositionRoot: View {
                     tokens.modalScrim
                         .ignoresSafeArea()
                     VStack(spacing: WarrenSpacing.compact) {
-                        WarrenBrailleSpinner(
+                        WarrenLoadingIndicator(
                             size: 22,
                             accessibilityLabel: "Reading Superset"
                         )
@@ -1814,17 +1815,6 @@ private struct WarrenTerminalSurfaceView: View {
                 .padding(WarrenSpacing.compact)
             }
         }
-        .overlay(alignment: .top) {
-            if let maintenanceMessage {
-                WarrenTerminalStatusPill(
-                    title: "Updating Warren…",
-                    detail: maintenanceMessage == "Warren is updating" ? nil : maintenanceMessage,
-                    lingeringDetail: "Your Sessions pick up where they were once it is back."
-                )
-                .padding(.top, WarrenSpacing.small)
-                .transition(.opacity.combined(with: .offset(y: -6)))
-            }
-        }
         .onChange(of: searchPresented) { presented in
             if presented {
                 searchQuery = activeSurface?.readSelection() ?? ""
@@ -1908,8 +1898,8 @@ private struct WarrenTerminalLoadingOverlay: View {
     }
 }
 
-/// The small floating status that sits over a terminal while it connects,
-/// reconnects or waits out a Warren update.
+/// The small floating status that sits over a terminal while it connects or
+/// reconnects. An update has the window's own notice instead.
 ///
 /// Both used to be bare capsules of their own making: one on the status
 /// surface without a border, one on the popover surface with a rule and a
@@ -1938,7 +1928,7 @@ private struct WarrenTerminalStatusPill: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         HStack(alignment: shownDetail == nil ? .center : .top, spacing: 9) {
-            WarrenBrailleSpinner(size: 13, accessibilityLabel: title)
+            WarrenLoadingIndicator(size: 13, accessibilityLabel: title)
                 .frame(width: 16, height: 16)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -1961,7 +1951,9 @@ private struct WarrenTerminalStatusPill: View {
         .padding(.leading, 11)
         .padding(.trailing, 14)
         .padding(.vertical, shownDetail == nil ? 8 : 9)
-        .background(shape.fill(tokens.popoverSurface))
+        // The card sits over live terminal text, so it takes the opaque
+        // surface even when the window is glass.
+        .background(shape.fill(WarrenColorTokens.resolved(for: colorScheme).popoverSurface))
         .overlay(shape.strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
         .shadow(color: tokens.elevationShadow, radius: 14, y: 6)
         .padding(.horizontal, WarrenSpacing.small)

@@ -318,7 +318,7 @@ struct WarrenDesktopProjectRow: View {
         kind: WarrenDesktopProjectDeletionKind
     ) -> some View {
         HStack(spacing: WarrenSpacing.xs) {
-            WarrenBrailleSpinner(size: 14, accessibilityLabel: kind.accessibilityLabel)
+            WarrenLoadingIndicator(size: 14, accessibilityLabel: kind.accessibilityLabel)
                 .accessibilityHidden(true)
             Text("Deleting…")
                 .font(WarrenTypography.navigationMeta)

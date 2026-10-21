@@ -110,7 +110,7 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
                     .font(.system(size: 19, weight: .regular))
                     .foregroundStyle(tokens.treeSecondaryText)
             case .progress:
-                WarrenBrailleSpinner(size: 18, accessibilityLabel: title)
+                WarrenLoadingIndicator(size: 18, accessibilityLabel: title)
             case .warning(let name):
                 Image(systemName: name)
                     .font(.system(size: 19, weight: .regular))

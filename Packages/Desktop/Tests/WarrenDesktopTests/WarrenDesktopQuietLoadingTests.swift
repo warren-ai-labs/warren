@@ -197,6 +197,29 @@ final class WarrenDesktopQuietLoadingTests: XCTestCase {
         }
     }
 
+    /// A Host update shows the window's one card, not one per terminal.
+    @MainActor
+    func testHostMaintenanceShowsTheWindowCard() {
+        let recorder = WarrenSemanticRecorder()
+        let root = WarrenDesktopRoot(
+            projection: Self.makeProjection(),
+            hostMaintenanceMessage: "Warren is updating",
+            persistenceEnabled: false
+        ) { context in
+            RenderTerminalSurface(context: context)
+        }
+        .environment(\.colorScheme, .dark)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .frame(width: 1_180, height: 760)
+        let hosting = mount(root, recorder: recorder)
+
+        RunLoop.main.run(until: Date().addingTimeInterval(Self.afterReveal))
+        let nodes = recorder.snapshot().nodes.filter { $0.id == WarrenDesktopUpdateHUD.elementID }
+        XCTAssertEqual(nodes.count, 1)
+        hosting.removeFromSuperview()
+    }
+
     @MainActor
     func testAnIdleShellDrawsNoUpdateState() {
         let recorder = WarrenSemanticRecorder()
