@@ -262,7 +262,7 @@ func (handle *acpAgentHandle) watchTerminal(processRuntime ProcessRuntime, termi
 	}
 	// A terminal Session ends with its process, like any other; the agent
 	// still reads the output kept above until it releases the terminal.
-	handle.service.markEnded(terminal.sessionID)
+	handle.service.markEnded(terminal.sessionID, api.EndReasonProcessExited)
 	terminal.finish(exit)
 }
 

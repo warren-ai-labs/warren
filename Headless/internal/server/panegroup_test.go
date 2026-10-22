@@ -262,7 +262,7 @@ func TestSessionLifecycleReconcilesOnlyItsOwnGroup(t *testing.T) {
 
 	// A Session that ends loses its pane; a group that loses its last pane is
 	// deleted, and no other group's revision moves.
-	service.markEnded(sessions[0])
+	service.markEnded(sessions[0], api.EndReasonRuntimeMissing)
 	if _, ok := service.PaneGroup(first.ID); ok {
 		t.Fatal("a group whose last session ended must be deleted")
 	}

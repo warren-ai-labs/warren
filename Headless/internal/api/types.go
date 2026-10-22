@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/protocol"
@@ -157,8 +158,13 @@ type Session struct {
 	Runtime     string        `json:"runtime"`
 	RuntimeKind string        `json:"runtimeKind,omitempty"`
 	Lifecycle   string        `json:"lifecycle"`
-	Epoch       uint64        `json:"epoch,omitempty"`
-	Sequence    uint64        `json:"sequence,omitempty"`
+	// EndReason records why the runtime generation ended. It is empty on a
+	// running Session, on a Session that ended before Hosts recorded a reason,
+	// and on a Session whose end the Host could not classify. Clients read an
+	// empty value as EndReasonUnknown.
+	EndReason string `json:"endReason,omitempty"`
+	Epoch     uint64 `json:"epoch,omitempty"`
+	Sequence  uint64 `json:"sequence,omitempty"`
 	// OutputCursor is the opaque Ghostline v1 position immediately after the
 	// output durably reflected by Epoch and Sequence. It is never exposed to
 	// terminal clients and must not be synthesized from a byte offset.
@@ -173,6 +179,11 @@ type Session struct {
 	// Clients use it as the semantic event stream ID; provider IDs remain opaque
 	// metadata and are never used as the primary event key.
 	AgentExecutionID string `json:"agentExecutionId,omitempty"`
+	// ResumedFromSessionID names the ended Warren Session whose provider
+	// conversation this Session continued. Empty for a Session that is not a
+	// continuation. Clients use it to keep the resumed conversation in one Tab
+	// instead of leaving the old stopped Tab beside its own continuation.
+	ResumedFromSessionID string `json:"resumedFrom,omitempty"`
 	// TranscriptPath is the JSONL transcript projected by the agent watcher.
 	TranscriptPath string `json:"transcriptPath,omitempty"`
 	// AgentStatus is the live activity and human-attention projection of an
@@ -208,6 +219,55 @@ type Session struct {
 	// projection data, overlaid on roster snapshots only and never persisted;
 	// it lets a client disable the action instead of letting it fail.
 	TitleRegeneratable bool `json:"titleRegeneratable,omitempty"`
+}
+
+// End reasons for a Session whose runtime is gone. The value answers why the
+// runtime generation ended, not what the Session can still offer; recovery is
+// a separate question the clients answer from the artifacts that remain.
+const (
+	// EndReasonUserClosed means the user asked for this Session to end. The
+	// Host records it before it kills the runtime of an explicit close, so a
+	// concurrent reconciliation cannot attribute the death to something else.
+	EndReasonUserClosed = "userClosed"
+	// EndReasonProcessExited means the runtime reported that the program it
+	// ran is gone, or the Host observed that exit itself (an Agent terminal's
+	// waited process, a Chromium that closed its own page).
+	EndReasonProcessExited = "processExited"
+	// EndReasonRuntimeMissing means the runtime can no longer find the
+	// Session: the Ghostline server died, restarted empty, or dropped it.
+	EndReasonRuntimeMissing = "runtimeMissing"
+	// EndReasonUnknown is the reading of an ended Session with no recorded
+	// reason, which is what every Host that predates the field left behind.
+	EndReasonUnknown = "unknown"
+)
+
+// SessionEndReason normalizes a persisted end reason for comparison.
+func SessionEndReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return EndReasonUnknown
+	}
+	return reason
+}
+
+// SessionKeptAfterEnd reports whether an ended Session should stay visible as a
+// stopped Tab: the runtime ended without the user closing it, so the record,
+// the transcript, and the runtime's output are the last of it that exists.
+// Browser and ACP Sessions are excluded because neither has a terminal spool a
+// stopped Tab could show.
+func SessionKeptAfterEnd(session Session) bool {
+	if session.Lifecycle != "ended" {
+		return false
+	}
+	if session.Kind == "browser" || session.RuntimeKind == "acp" {
+		return false
+	}
+	switch SessionEndReason(session.EndReason) {
+	case EndReasonProcessExited, EndReasonRuntimeMissing:
+		return true
+	default:
+		return false
+	}
 }
 
 // SessionShell is the OSC 133 semantic prompt state the Host projects for one

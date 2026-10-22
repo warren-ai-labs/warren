@@ -1750,9 +1750,14 @@ func TestRosterProjectionDoesNotProbeOrMutateRuntimeLifecycle(t *testing.T) {
 	if lists, exists := runtime.probeCounts(); lists != 1 || exists != 0 {
 		t.Fatalf("lifecycle runtime probes: lists=%d exists=%d", lists, exists)
 	}
-	// After filtering out ended sessions, only the running session should remain.
-	if len(roster.Sessions) != 1 || roster.Sessions[0].Lifecycle != "running" {
-		t.Fatalf("ended sessions filtered from roster: %#v", roster.Sessions)
+	// The Session whose runtime could not be found keeps its place as a stopped
+	// Tab, and says why it ended.
+	if len(roster.Sessions) != 2 {
+		t.Fatalf("roster sessions = %#v, want the running Session and the stopped one", roster.Sessions)
+	}
+	stopped := roster.Sessions[1]
+	if stopped.ID != "two" || stopped.Lifecycle != "ended" || stopped.EndReason != api.EndReasonRuntimeMissing {
+		t.Fatalf("stopped session = %#v, want ended/runtimeMissing", stopped)
 	}
 }
 

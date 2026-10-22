@@ -188,8 +188,19 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     /// The subagents this Session spawned, in first-seen order. They are the
     /// Session's children, not Sessions of their own; see `WarrenDesktopSubagent`.
     public let subagents: [WarrenDesktopSubagent]
+    /// Why this Session's runtime ended, when it did. Nil while it runs, and nil
+    /// for a stopped record whose end the Host could not classify.
+    public let endReason: WarrenDesktopEndReason?
+    /// The one action a stopped Tab offers, or nil when this Session has nothing
+    /// left to continue.
+    public let stoppedAction: WarrenDesktopStoppedAction?
 
     public var activity: AgentActivityState? { agentStatus?.activity }
+
+    /// Whether this Session's runtime is gone and the pane shows what it left.
+    /// A stopped Session never attaches, never takes input, and never reports
+    /// activity.
+    public var isStopped: Bool { state == .exited }
 
     /// The kind every presentation surface should name and draw an icon for.
     ///
@@ -249,7 +260,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         context: WarrenDesktopContextUsage? = nil,
         turnCounts: [String] = [],
         turnStartedAt: Date? = nil,
-        subagents: [WarrenDesktopSubagent] = []
+        subagents: [WarrenDesktopSubagent] = [],
+        endReason: WarrenDesktopEndReason? = nil,
+        stoppedAction: WarrenDesktopStoppedAction? = nil
     ) {
         self.id = id
         self.workspaceID = workspaceID
@@ -278,6 +291,8 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         self.turnCounts = turnCounts
         self.turnStartedAt = turnStartedAt
         self.subagents = subagents
+        self.endReason = endReason
+        self.stoppedAction = stoppedAction
     }
 
     public func withActivity(_ activity: AgentActivityState?) -> Self {
@@ -315,7 +330,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             context: context,
             turnCounts: turnCounts,
             turnStartedAt: turnStartedAt,
-            subagents: subagents
+            subagents: subagents,
+            endReason: endReason,
+            stoppedAction: stoppedAction
         )
     }
 
@@ -347,7 +364,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             context: context,
             turnCounts: turnCounts,
             turnStartedAt: turnStartedAt,
-            subagents: subagents
+            subagents: subagents,
+            endReason: endReason,
+            stoppedAction: stoppedAction
         )
     }
 
@@ -379,7 +398,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             context: context,
             turnCounts: turnCounts,
             turnStartedAt: turnStartedAt,
-            subagents: subagents
+            subagents: subagents,
+            endReason: endReason,
+            stoppedAction: stoppedAction
         )
     }
 
@@ -411,7 +432,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             context: context,
             turnCounts: turnCounts,
             turnStartedAt: turnStartedAt,
-            subagents: subagents
+            subagents: subagents,
+            endReason: endReason,
+            stoppedAction: stoppedAction
         )
     }
 
@@ -441,7 +464,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             context: context,
             turnCounts: turnCounts,
             turnStartedAt: turnStartedAt,
-            subagents: subagents
+            subagents: subagents,
+            endReason: endReason,
+            stoppedAction: stoppedAction
         )
     }
 
@@ -527,6 +552,12 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     private let markByWorkspaceID: [WorkspaceID: WarrenActivityMark]
     private let workspaceActivitySummariesByID: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary]
     private let activeSessionsByWorkspaceIDStorage: [WorkspaceID: [WarrenDesktopSession]]
+    /// Every Session the sidebar tree lists, which is the active ones plus the
+    /// stopped ones whose runtime is gone but whose record and last output the
+    /// Host kept. A stopped Session is not active, so it has no mark and no
+    /// running count; it still needs a row, because that row is the only way to
+    /// come back to it once its Tab is no longer the selected one.
+    private let listedSessionsByWorkspaceIDStorage: [WorkspaceID: [WarrenDesktopSession]]
     public let connectionState: WarrenDesktopConnectionState
 
     public var isConnected: Bool {
@@ -573,6 +604,12 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
 
     public var activeSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] {
         activeSessionsByWorkspaceIDStorage
+    }
+
+    /// The Sessions a sidebar tree shows under their Workspace: every active
+    /// Session, and every stopped Session the Host kept for inspection.
+    public var listedSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] {
+        listedSessionsByWorkspaceIDStorage
     }
 
     /// Workspace IDs that have at least one active or attached terminal session.
@@ -715,10 +752,15 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         // report the lifecycle half of what the Host had said.
         var markByWorkspaceID: [WorkspaceID: WarrenActivityMark] = [:]
         var activeSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] = [:]
+        var listedSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] = [:]
         for session in sessions {
             if session.state.isActive,
                let workspaceID = resolvedSessionWorkspaceIDs[session.id] ?? session.workspaceID {
                 activeSessionsByWorkspaceID[workspaceID, default: []].append(session)
+            }
+            if session.state.isActive || session.isStopped,
+               let workspaceID = resolvedSessionWorkspaceIDs[session.id] ?? session.workspaceID {
+                listedSessionsByWorkspaceID[workspaceID, default: []].append(session)
             }
             guard let workspaceID = session.workspaceID,
                   let mark = session.activityMark else { continue }
@@ -747,6 +789,7 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         }
         self.workspaceActivitySummariesByID = workspaceActivitySummariesByID
         self.activeSessionsByWorkspaceIDStorage = activeSessionsByWorkspaceID
+        self.listedSessionsByWorkspaceIDStorage = listedSessionsByWorkspaceID
 
         self.connectionState = connectionState
         self.reconciliationKey = ReconciliationKey(
@@ -942,7 +985,9 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
                 context: context,
                 turnCounts: turnCounts,
                 turnStartedAt: turnStartedAt,
-                subagents: subagents
+                subagents: subagents,
+                endReason: existing.endReason,
+                stoppedAction: existing.stoppedAction
             )
         }
     }

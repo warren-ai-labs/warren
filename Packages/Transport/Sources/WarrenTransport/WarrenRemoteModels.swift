@@ -936,6 +936,12 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let agentCapabilities: [String]?
         public let createdAt: String?
         public let endedAt: String?
+        /// Why an ended Session's runtime ended. Absent on a running Session and
+        /// on a Host that predates the field, which reads as `unknown`.
+        public let endReason: String?
+        /// The ended Session whose Agent conversation this one continued. It is
+        /// what lets a client keep one Tab for a conversation across a resume.
+        public let resumedFrom: String?
 
         public init(
             id: String,
@@ -965,7 +971,9 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             agentTurn: WarrenRemoteAgentTurn? = nil,
             agentCapabilities: [String]? = nil,
             createdAt: String? = nil,
-            endedAt: String? = nil
+            endedAt: String? = nil,
+            endReason: String? = nil,
+            resumedFrom: String? = nil
         ) {
             self.id = id
             self.workspaceID = workspaceID
@@ -995,6 +1003,8 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.agentCapabilities = agentCapabilities
             self.createdAt = createdAt
             self.endedAt = endedAt
+            self.endReason = endReason
+            self.resumedFrom = resumedFrom
         }
 
         public var displayTitle: String {
@@ -1072,6 +1082,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             case agentSessionID = "agentSessionId"
             case agentExecutionID = "agentExecutionId"
             case transcriptPath, agentStatus, agentTurn, agentCapabilities, createdAt, endedAt
+            case endReason, resumedFrom
         }
 
         public init(from decoder: Decoder) throws {
@@ -1104,6 +1115,8 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             agentCapabilities = try values.decodeIfPresent([String].self, forKey: .agentCapabilities)
             createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
             endedAt = try values.decodeIfPresent(String.self, forKey: .endedAt)
+            endReason = try values.decodeIfPresent(String.self, forKey: .endReason)
+            resumedFrom = try values.decodeIfPresent(String.self, forKey: .resumedFrom)
         }
     }
 

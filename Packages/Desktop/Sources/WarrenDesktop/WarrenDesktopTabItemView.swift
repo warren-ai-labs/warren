@@ -9,6 +9,10 @@ struct WarrenDesktopTabItem: View {
     let displayTitle: String
     let mark: WarrenActivityMark?
     let isSelected: Bool
+    /// A stopped Tab's Session has no runtime. It keeps its place and its name,
+    /// but it reads as quiet: the same grey a resting row uses, never a live
+    /// pill's contrast.
+    var isStopped: Bool = false
     /// Whether this Tab can start a drag.
     var canStartDrag: Bool = true
     let isPinned: Bool
@@ -111,6 +115,7 @@ struct WarrenDesktopTabItem: View {
             Button(action: onSelect) {
                 HStack(spacing: 7) {
                     badge(tokens: tokens)
+                        .opacity(isStopped ? 0.55 : 1)
                     if isPinned {
                         Image(systemName: "pin.fill")
                             .font(.system(size: 9, weight: .medium))
@@ -158,9 +163,13 @@ struct WarrenDesktopTabItem: View {
             .focused($isTabFocused)
             .disabled(tab.sessionID == nil)
             .foregroundStyle(
-                isSelected
-                    ? tokens.foreground.opacity(0.95)
-                    : (isHovered ? tokens.foreground.opacity(0.83) : tokens.mutedForeground)
+                isStopped
+                    ? tokens.treeQuietText
+                    : (
+                        isSelected
+                            ? tokens.foreground.opacity(0.95)
+                            : (isHovered ? tokens.foreground.opacity(0.83) : tokens.mutedForeground)
+                    )
             )
             .accessibilityLabel("Tab \(displayTitle)")
             .accessibilityValue(isSelected ? "Selected" : "Not selected")

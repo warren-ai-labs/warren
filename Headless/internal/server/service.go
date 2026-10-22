@@ -158,6 +158,11 @@ type Service struct {
 	// shell's OSC 7 working directory always reaches the roster; this flag only
 	// controls the extra probe cost.
 	ProbeForeground bool
+	// OutputDir is the directory Ghostline writes each Session's output
+	// segments to. The Host reads a segment directly to show the last output of
+	// an ended Session, whose runtime may no longer answer. Empty disables the
+	// stopped-Tab history read and leaves every stopped Session without output.
+	OutputDir string
 	// ClientsActive reports whether any client can observe roster snapshots.
 	// The merge projection only refreshes while clients are connected; nil
 	// means "always active" for tests and embedders.

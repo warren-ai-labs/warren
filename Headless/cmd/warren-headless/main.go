@@ -234,10 +234,14 @@ func main() {
 		Settings:        loadedSettings,
 		SettingsPath:    *settingsFile,
 		WorktreeRoot:    *worktreeRoot,
-		AgentStorePath:  filepath.Join(configDir, "agent-journal.db"),
-		AgentFinder:     agent.DefaultFinder{},
-		ACPHoldCommand:  acpHoldCommand(),
-		ACPHoldDir:      filepath.Join(filepath.Dir(*statePath), "acp"),
+		// OutputDir is where Ghostline keeps each Session's output segments.
+		// The Host reads them to show an ended Session's last output, so it
+		// must be the same directory the server was started with.
+		OutputDir:      *outputDir,
+		AgentStorePath: filepath.Join(configDir, "agent-journal.db"),
+		AgentFinder:    agent.DefaultFinder{},
+		ACPHoldCommand: acpHoldCommand(),
+		ACPHoldDir:     filepath.Join(filepath.Dir(*statePath), "acp"),
 		AgentHooks: func() error {
 			if _, err := agent.EnsureCodexBindHook(agent.CodexHome()); err != nil {
 				return err

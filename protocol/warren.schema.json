@@ -264,6 +264,8 @@
         { "method": "agent.goal.clear", "paramsRef": "api.AgentGoalClearCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.config.set", "paramsRef": "api.AgentConfigSetCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "session.handoff", "paramsRef": "{id: string, command?: string}", "resultRef": "api.Session" },
+        { "method": "session.history", "paramsRef": "api.SessionHistoryRequest", "resultRef": "api.SessionHistoryResult" },
+        { "method": "session.resume", "paramsRef": "api.SessionResumeRequest", "resultRef": "api.Session" },
         { "method": "agent.attachment.prepare", "paramsRef": "api.AgentAttachmentPrepareCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.attachment.chunk", "paramsRef": "api.AgentAttachmentChunkCommand", "resultRef": "api.AgentCommandReceipt" },
         { "method": "agent.attachment.complete", "paramsRef": "api.AgentAttachmentCompleteCommand", "resultRef": "api.AgentCommandReceipt" },

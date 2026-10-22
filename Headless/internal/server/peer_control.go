@@ -402,7 +402,11 @@ func (s *Service) stopOutput(sessionID string, notify bool) {
 	}
 }
 
-func (s *Service) markEnded(sessionID string) {
+// markEnded ends one Session and records why. reason must be one of the
+// api.EndReason constants; the reason is what lets a client tell a Session the
+// user closed apart from one whose runtime vanished, because only the second
+// keeps its screen and stays worth offering.
+func (s *Service) markEnded(sessionID, reason string) {
 	now := time.Now().UTC()
 	changed := false
 	_ = s.Store.Update(func(value *api.State) error {
@@ -410,6 +414,7 @@ func (s *Service) markEnded(sessionID string) {
 			if value.Sessions[index].ID == sessionID && value.Sessions[index].Lifecycle == "running" {
 				value.Sessions[index].Lifecycle = "ended"
 				value.Sessions[index].EndedAt = &now
+				value.Sessions[index].EndReason = api.SessionEndReason(reason)
 				changed = true
 			}
 		}

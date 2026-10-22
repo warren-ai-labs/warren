@@ -549,6 +549,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let tabMarks = Dictionary(uniqueKeysWithValues: projection.sessions.compactMap { session in
             session.activityMark.map { (session.id, $0) }
         })
+        // A stopped Session keeps its Tab; the bar draws it quiet so it does not
+        // read as a live pane beside the running ones.
+        let stoppedSessionIDs = Set(
+            projection.sessions.filter { $0.isStopped }.map(\.id)
+        )
         let pinnedSessionIDs = Set(
             projection.sessions.filter(\.pinned).map(\.id)
         )
@@ -560,6 +565,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             presentation: presentation,
             tabTitles: tabTitles,
             tabMarks: tabMarks,
+            stoppedSessionIDs: stoppedSessionIDs,
             pinnedSessionIDs: pinnedSessionIDs,
             isAddingSession: isAddingSession,
             sessionMoveTargets: sessionMoveTargets,
@@ -1459,6 +1465,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         presentation: Presentation,
         tabTitles: [String: String],
         tabMarks: [TerminalSessionID: WarrenActivityMark],
+        stoppedSessionIDs: Set<TerminalSessionID> = [],
         pinnedSessionIDs: Set<TerminalSessionID>,
         isAddingSession: Bool,
         sessionMoveTargets: [WarrenDesktopSessionMoveTarget],
@@ -1493,6 +1500,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             presentation: paneBar,
             tabTitles: tabTitles,
             tabMarks: tabMarks,
+            stoppedSessionIDs: stoppedSessionIDs,
             pinnedSessionIDs: pinnedSessionIDs,
             selectedTabID: navigation.selectedTabID,
             splitGroups: splitGroups(presentation: presentation),
