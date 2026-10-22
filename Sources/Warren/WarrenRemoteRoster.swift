@@ -108,6 +108,11 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         var commandLine: String?
         var directory: String?
         let lifecycle: String
+        /// Why an ended Session's runtime ended. Absent on a running Session and
+        /// on Hosts that predate the field, which read as `unknown`.
+        var endReason: String? = nil
+        /// The ended Session whose Agent conversation this one continued.
+        var resumedFrom: String? = nil
         let pinned: Bool?
         let agentStatus: AgentStatus?
         let agentTurn: AgentTurn?

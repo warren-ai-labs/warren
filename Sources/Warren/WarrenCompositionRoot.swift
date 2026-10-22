@@ -379,6 +379,33 @@ struct WarrenCompositionRoot: View {
                         wantsInputFocus: wantsInputFocus
                     ))
                 },
+                stoppedBanner: { sessionID in
+                    guard let session = remoteModel.projection.session(id: sessionID),
+                          session.isStopped else { return nil }
+                    return AnyView(WarrenDesktopStoppedBanner(
+                        reason: session.endReason,
+                        action: session.stoppedAction,
+                        isBusy: remoteModel.stoppedSessionActionInFlight.contains(sessionID)
+                            || session.workspaceID.map(remoteModel.creatingSessionWorkspaceIDs.contains) ?? false,
+                        failure: remoteModel.stoppedSessionActionFailure[sessionID],
+                        historyFailure: remoteModel.stoppedSessionHistory[sessionID]?.failureMessage,
+                        onAction: {
+                            switch session.stoppedAction {
+                            case .resume:
+                                remoteModel.resumeStoppedSession(sessionID)
+                            case .restart:
+                                remoteModel.restartStoppedSession(sessionID)
+                            case nil:
+                                break
+                            }
+                        },
+                        onRetryHistory: {
+                            remoteModel.loadStoppedSessionHistory(sessionID)
+                        }
+                    ))
+                },
+                isStoppedHistoryLoading: context.tab.sessionID
+                    .flatMap { remoteModel.stoppedSessionHistory[$0]?.isLoading } ?? false,
                 searchPresented: Binding(
                     get: {
                         terminalSearchPresented
@@ -1745,6 +1772,13 @@ private struct WarrenTerminalSurfaceView: View {
     /// Session that has a terminal (RFC 0023). The flag is the pane's
     /// keyboard intent; an inactive or overlaid pane must not take focus.
     let conversationSurface: @MainActor (TerminalSessionID, Bool) -> AnyView?
+    /// Builds the banner a stopped Session carries above its last output, or
+    /// `nil` for a live Session. The pane below it is the same read-only surface
+    /// in both cases; only the banner says the runtime is gone.
+    var stoppedBanner: @MainActor (TerminalSessionID) -> AnyView? = { _ in nil }
+    /// Whether the selected stopped Session's kept output is still loading. The
+    /// pane says so once and then shows the output or the empty state.
+    var isStoppedHistoryLoading: Bool = false
     @Binding var searchPresented: Bool
     @State private var searchQuery = ""
     @FocusState private var searchFieldFocused: Bool
@@ -1804,6 +1838,14 @@ private struct WarrenTerminalSurfaceView: View {
                 "active": activeSurface != nil ? "true" : "false",
             ])
         }
+        .overlay(alignment: .topLeading) {
+            if let sessionID = context.tab.sessionID,
+               let banner = stoppedBanner(sessionID) {
+                banner
+                    .padding(.horizontal, WarrenSpacing.compact)
+                    .padding(.top, WarrenSpacing.compact)
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if searchPresented, activeSurface != nil {
                 WarrenTerminalSearchBar(
@@ -1859,6 +1901,9 @@ private struct WarrenTerminalSurfaceView: View {
 
     private var loadingLabel: String? {
         guard maintenanceMessage == nil else { return nil }
+        if isStoppedHistoryLoading {
+            return "Loading last output…"
+        }
         if connectionState == .reconnecting {
             return "Reconnecting terminal…"
         }

@@ -681,6 +681,26 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		}
 		p.detachIfAttached(stringParam(params, "id"))
 		return p.writeResult(command.ID, publicSession(value))
+	case "session.history":
+		id := stringParam(params, "session")
+		if id == "" {
+			return p.writeCanonicalError(command.ID, errors.New("session is required"))
+		}
+		result, err := p.server.Service.SessionHistory(ctx, id)
+		if err != nil {
+			return p.writeCanonicalError(command.ID, err)
+		}
+		return p.writeResult(command.ID, result)
+	case "session.resume":
+		id := stringParam(params, "session")
+		if id == "" {
+			return p.writeCanonicalError(command.ID, errors.New("session is required"))
+		}
+		value, err := p.server.Service.ResumeSession(ctx, id)
+		if err != nil {
+			return p.writeCanonicalError(command.ID, err)
+		}
+		return p.writeResult(command.ID, publicSession(value))
 	case "session.delete.preflight":
 		id := stringParam(params, "id")
 		if id == "" {

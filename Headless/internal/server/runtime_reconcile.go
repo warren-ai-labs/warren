@@ -75,9 +75,9 @@ func (s *Service) reconcile(ctx context.Context) {
 			// is whether the manager still holds a Chromium for it, which only
 			// the daemon that started it can know.
 			if manager := s.browserManagerIfPresent(); manager == nil {
-				s.markEnded(session.ID)
+				s.markEnded(session.ID, api.EndReasonRuntimeMissing)
 			} else if _, running := manager.Session(session.ID); !running {
-				s.markEnded(session.ID)
+				s.markEnded(session.ID, api.EndReasonProcessExited)
 			}
 			continue
 		}
@@ -119,11 +119,11 @@ func (s *Service) reconcile(ctx context.Context) {
 					// The direct confirmation is authoritative for this race; keep
 					// the Session running and continue with normal reconciliation.
 				} else {
-					s.markEnded(session.ID)
+					s.markEnded(session.ID, endReasonForProbe(confirmation))
 					continue
 				}
 			} else {
-				s.markEnded(session.ID)
+				s.markEnded(session.ID, endReasonForProbe(probe))
 				continue
 			}
 		}
@@ -163,6 +163,43 @@ func (s *Service) stopMissingAgents(seen map[string]struct{}) {
 	for _, sessionID := range stale {
 		s.stopAgent(sessionID)
 	}
+}
+
+// endReasonForProbe maps what a runtime probe saw onto the durable end reason.
+// Only an answered status that says the program is gone is evidence that the
+// program exited; every other dead result means the runtime itself lost the
+// Session, which is a different thing to tell the user.
+func endReasonForProbe(result RuntimeProbeResult) string {
+	if result.Evidence == "status_not_alive" {
+		return api.EndReasonProcessExited
+	}
+	return api.EndReasonRuntimeMissing
+}
+
+// endAfterRuntimeExit ends a Session whose runtime closed its output stream.
+//
+// End of output is not by itself evidence of death: the Host also stops
+// readers deliberately when it re-anchors or detaches one, and the reader's
+// own context distinguishes those. What is left is the runtime closing the
+// stream, which Ghostline does when the program it ran is gone. The probe still
+// decides: an unavailable runtime is a loss of knowledge, not an end, and the
+// reconciliation loop owns that case.
+//
+// Ending a Session joins the reader that noticed the end, so this runs off the
+// reader goroutine.
+func (s *Service) endAfterRuntimeExit(sessionID string) {
+	session, ok := s.Session(sessionID)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	probe := s.probeRuntime(ctx, s.runtimeFor(session), session.Runtime)
+	if probe.State != RuntimeProbeDead {
+		return
+	}
+	s.logInfo("session runtime exited", "session", session.ID, "evidence", probe.Evidence)
+	s.markEnded(session.ID, endReasonForProbe(probe))
 }
 
 func (s *Service) warnRuntimeProbe(session api.Session, result RuntimeProbeResult) {

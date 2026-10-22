@@ -90,10 +90,13 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	sortProjects(state.Projects)
 	sortWorkspaces(state.Workspaces)
 	// Filter out ended sessions from the roster to reduce payload size and
-	// present only active resources. Frontend already filters by lifecycle,
-	// so this optimization improves network efficiency without changing semantics.
+	// present only active resources. The exception is a Session whose runtime
+	// ended without the user closing it: its record, transcript, and output are
+	// all that is left of it, and a client shows it as a stopped Tab. A
+	// user-closed Session, an ended browser, and a legacy record with no reason
+	// stay out, exactly as before.
 	state.Sessions = filter(state.Sessions, func(session api.Session) bool {
-		return session.Lifecycle != "ended"
+		return session.Lifecycle != "ended" || api.SessionKeptAfterEnd(session)
 	})
 	s.initMergeState()
 	mergeStates := s.mergeCache.snapshot()

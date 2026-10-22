@@ -330,7 +330,7 @@ func (s *Service) publishBrowserFrame(sessionID string, sequence uint64, payload
 // the daemon — so a browser Session can never sit in the roster as running while
 // no Chromium backs it.
 func (s *Service) endBrowserSession(sessionID string) {
-	s.markEnded(sessionID)
+	s.markEnded(sessionID, api.EndReasonProcessExited)
 	if manager := s.browserManagerIfPresent(); manager != nil {
 		_ = manager.RemoveProfile(sessionID)
 	}

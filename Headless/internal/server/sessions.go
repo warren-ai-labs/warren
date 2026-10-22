@@ -97,6 +97,10 @@ type sessionCreateRequest struct {
 	// conversation Warren already owns. The command then names that
 	// conversation itself, which the provider validators otherwise refuse.
 	resumeAgentSessionID string
+	// resumedFromSessionID is the ended Session whose conversation this one
+	// continues. It is durable lineage, so clients can keep one Tab for a
+	// conversation instead of leaving the stopped Tab beside its continuation.
+	resumedFromSessionID string
 	// processArgv runs one command as the PTY's process instead of an
 	// interactive shell; command is then only the displayed command line.
 	// It backs a terminal an ACP agent creates (RFC 0023 §6.6).
@@ -162,8 +166,12 @@ func (s *Service) createSessionWith(ctx context.Context, request sessionCreateRe
 		if strings.TrimSpace(command) == "" {
 			command = "pi"
 		}
-		if err := agent.ValidatePiCommand(command); err != nil {
-			return api.Session{}, err
+		// A resume names the conversation Warren already owns, which is the one
+		// case where Pi's session-reuse flag is correct.
+		if !resuming {
+			if err := agent.ValidatePiCommand(command); err != nil {
+				return api.Session{}, err
+			}
 		}
 	}
 	if kind == "qoder" {
@@ -280,9 +288,33 @@ func (s *Service) createSessionWith(ctx context.Context, request sessionCreateRe
 	}
 	if resuming {
 		session.AgentSessionID = request.resumeAgentSessionID
+		session.ResumedFromSessionID = request.resumedFromSessionID
 	}
 	storeStartedAt := time.Now()
-	if err := s.Store.Update(func(value *api.State) error { value.Sessions = append(value.Sessions, session); return nil }); err != nil {
+	if err := s.Store.Update(func(value *api.State) error {
+		// A resume must not leave two running writers on one provider
+		// conversation. Checking inside the state transaction is what makes that
+		// hold when two clients resume at once: the check and the append cannot
+		// be interleaved, and a Session that lost the race is reported instead
+		// of being written.
+		//
+		// Only a resume carries the ended Session it continues. An ACP handoff
+		// reuses a conversation too, but it replaces the chat Session that held
+		// it instead of joining it, so it deliberately leaves ResumedFrom empty
+		// and keeps its own reasoning about the writer it takes over.
+		if resuming && request.resumedFromSessionID != "" {
+			for _, other := range value.Sessions {
+				if other.Lifecycle != "running" || other.ID == id {
+					continue
+				}
+				if strings.EqualFold(strings.TrimSpace(other.AgentSessionID), session.AgentSessionID) {
+					return fmt.Errorf("another Session already continues this conversation: %s", other.ID)
+				}
+			}
+		}
+		value.Sessions = append(value.Sessions, session)
+		return nil
+	}); err != nil {
 		_ = adapter.Kill(ctx, runtimeName)
 		return api.Session{}, err
 	}
@@ -359,10 +391,20 @@ func (s *Service) DeleteSession(ctx context.Context, id string) error {
 		return err
 	}
 	// Only explicit Close Tab / Terminate Session reaches kill-session.
-	adapter := s.runtimeFor(*session)
-	if err := adapter.Kill(ctx, session.Runtime); err != nil {
-		return err
+	if session.Lifecycle == "running" {
+		// Record who ended this Session before its runtime dies. A concurrent
+		// reconciliation, or a roster snapshot taken in the same second, would
+		// otherwise see a dead runtime and a running record and call the end a
+		// missing runtime — leaving a stopped Tab for a Session the user is
+		// closing, and a reason that points at the wrong cause.
+		s.markEnded(id, api.EndReasonUserClosed)
+		adapter := s.runtimeFor(*session)
+		if err := adapter.Kill(ctx, session.Runtime); err != nil {
+			return err
+		}
 	}
+	// An ended Session has no runtime left to kill; closing its stopped Tab is
+	// the removal itself.
 	s.stopOutput(id, true)
 	if session.Kind == "opencode" {
 		// OpenCode's projection cache is retained across a daemon restart, but

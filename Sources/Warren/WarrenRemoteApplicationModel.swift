@@ -457,6 +457,19 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private var retainedSurfaceRebindTask: Task<Void, Never>?
     private var tabOrderByWorkspaceID: [WorkspaceID: [String]] = [:]
     private var appliedLiveTabSessionIDs: Set<TerminalSessionID> = []
+    /// What the Host kept of each stopped Session's last output, keyed by
+    /// Session. Loaded on demand the first time a stopped Tab is opened; a
+    /// stopped Session never subscribes to the runtime, so this is its whole
+    /// stream.
+    @Published private(set) var stoppedSessionHistory: [TerminalSessionID: WarrenStoppedSessionHistory] = [:]
+    /// The stopped Sessions whose last output was already fed into their surface.
+    private var stoppedSessionHistoryFed: Set<TerminalSessionID> = []
+    /// The stopped Sessions with an action in flight, so the one button they
+    /// offer cannot be pressed twice.
+    @Published private(set) var stoppedSessionActionInFlight: Set<TerminalSessionID> = []
+    /// Why a stopped Session's one action failed, shown in its banner until the
+    /// next attempt.
+    @Published private(set) var stoppedSessionActionFailure: [TerminalSessionID: String] = [:]
     let surfaceManager: TerminalSurfaceManager
     /// Latest screencast frame per Warren Browser Session. Kept out of the
     /// terminal surface manager because the payload is an image, not VT state.
@@ -5768,6 +5781,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 ?? plan?.currentStep
                 ?? lastPrimaryLineBySessionID[id]
             if let primaryLine { lastPrimaryLineBySessionID[id] = primaryLine }
+            let stopped = value.lifecycle == "ended"
             return WarrenDesktopSession(
                 id: id,
                 workspaceID: workspaceID,
@@ -5800,7 +5814,15 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 context: streamID.flatMap { agentContextByStreamID[$0] },
                 turnCounts: streamID.map { Self.turnCounts(agentTurnStepsByStreamID[$0] ?? []) } ?? [],
                 turnStartedAt: streamID.flatMap { agentTurnByStreamID[$0]?.startedAt },
-                subagents: streamID.flatMap { agentSubagentsByStreamID[$0] } ?? []
+                subagents: streamID.flatMap { agentSubagentsByStreamID[$0] } ?? [],
+                endReason: stopped ? WarrenDesktopEndReason(wire: value.endReason) : nil,
+                stoppedAction: stopped
+                    ? WarrenDesktopStoppedSessionRoster.action(
+                        kind: value.kind,
+                        agentProvider: value.agentProvider,
+                        agentSessionID: value.agentSessionId
+                    )
+                    : nil
             )
         }
         let liveSessionIDs = Set(remoteSessions.map(\.1))
@@ -5829,11 +5851,34 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         agentStatusBySessionID = agentStatusBySessionID.filter {
             liveSessionIDs.contains($0.key) && activeStatusSessionIDs.contains($0.key)
         }
-        // Ended sessions stay in the projection for history, but they are
-        // not openable tabs: attaching to them would fail and leave the user
-        // staring at a terminal that cannot accept input.
+        // A Session whose runtime ended without the user closing it keeps its
+        // Tab as a stopped one: the pane shows the output the Host kept and
+        // offers the single action that continues it. Everything else that ended
+        // stays in the projection as history but has no Tab to open.
+        let stoppedSessionIDs = Set(
+            WarrenDesktopStoppedSessionRoster.stoppedSessionIDs(
+                remoteSessions.map { value, id, _ in
+                    WarrenDesktopStoppedSessionInput(
+                        sessionID: id.description,
+                        lifecycle: value.lifecycle,
+                        kind: value.kind,
+                        runtimeKind: value.runtimeKind,
+                        endReason: value.endReason,
+                        resumedFrom: value.resumedFrom
+                    )
+                }
+            ).compactMap(TerminalSessionID.init(uuidString:))
+        )
+        // Forget stopped Sessions whose Tab is gone: a resumed or removed
+        // Session must not keep its kept output in memory.
+        stoppedSessionHistory = stoppedSessionHistory.filter { stoppedSessionIDs.contains($0.key) }
+        stoppedSessionHistoryFed.formIntersection(stoppedSessionIDs)
+        stoppedSessionActionInFlight.formIntersection(stoppedSessionIDs)
+        stoppedSessionActionFailure = stoppedSessionActionFailure.filter { stoppedSessionIDs.contains($0.key) }
         let unorderedTabs = remoteSessions.compactMap { value, id, _ -> ClientTab? in
-            guard value.lifecycle == "running" else { return nil }
+            guard value.lifecycle == "running" || stoppedSessionIDs.contains(id) else {
+                return nil
+            }
             return ClientTab(
                 id: Self.tabID(id),
                 title: value.title,
@@ -5955,7 +6000,10 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// locally: its grid already holds the current screen, so presentation
     /// is a reparent plus a control-lease swap and performs zero replay,
     /// snapshot, or clear. Everything else takes the cold seeding path.
-    private func makeSurface(for session: WarrenDesktopSession) -> GhosttySurface {
+    private func makeSurface(
+        for session: WarrenDesktopSession,
+        readOnly: Bool = false
+    ) -> GhosttySurface {
         let sessionID = session.id
         let inputRouter = self.inputRouter
         let inputBridge = WarrenOrderedInputBridge { [inputRouter, sessionID] data in
@@ -5967,7 +6015,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             workingDirectory: session.workingDirectory,
             font: terminalFont,
             backgroundOpacity: terminalBackgroundOpacity,
-            onInput: { data in inputBridge.send(data) },
+            onInput: { data in
+                // A stopped Session has no runtime, so its surface is a picture:
+                // keystrokes belong to nothing and must never be queued for a
+                // Session that no longer exists.
+                guard !readOnly else { return }
+                inputBridge.send(data)
+            },
             onResize: { [weak self] columns, rows in
                 Task { @MainActor in
                     // Every visible pane owns a native surface and therefore
@@ -6165,6 +6219,13 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     private func presentSelectedSession(activatingInput: Bool = false) async {
         guard let tabID = navigation.selectedTabID,
               let sessionID = projection.tabs.first(where: { $0.id == tabID })?.sessionID else { return }
+        // A stopped Session has no runtime to attach to. Its pane shows the output
+        // the Host kept and the one action that continues it, so it must never
+        // ask for a subscription, the control lease, or the keyboard.
+        if let stopped = projection.sessions.first(where: { $0.id == sessionID && $0.isStopped }) {
+            presentStoppedSession(stopped, activatingInput: activatingInput)
+            return
+        }
         // A browser Session is presented by the browser region, not here. Leaving
         // the Terminal attached to its previous Session is what keeps that
         // Session on screen beside the viewer.
@@ -6388,6 +6449,143 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         ])
         attachedSessionID = nil
         await attachSelectedSession()
+    }
+
+    // MARK: Stopped Sessions
+
+    /// Presents a stopped Session: no subscription, no control lease, no
+    /// keyboard, and no resize. The pane shows what the Host kept of the last
+    /// output and the single action that continues the Session.
+    private func presentStoppedSession(_ session: WarrenDesktopSession, activatingInput: Bool) {
+        let sessionID = session.id
+        // Give the keyboard up before the selection moves, so the blur reaches
+        // the Session that actually held it.
+        relinquishTerminalFocus()
+        if activatingInput {
+            surfaceManager.cancelPendingInputFocus()
+        }
+        cancelResizeRequests()
+        inputRouter.discard(for: sessionID)
+        attachedSessionID = nil
+        focusedSessionID = nil
+        pendingFocusSessionID = nil
+        pendingFocusSize = nil
+        pendingFocusResizeSize = nil
+        focusClaimInFlight = false
+        focusClaimGeneration += 1
+        selectedSessionID = sessionID
+        ensureStoppedSessionSurface(for: session)
+        loadStoppedSessionHistory(sessionID)
+        TerminalDiagnostics.log("present_stopped", [
+            "session": sessionID.description,
+            "reason": session.endReason?.rawValue ?? "unknown",
+        ])
+    }
+
+    /// Mounts the read-only surface a stopped Session renders into. It is a real
+    /// terminal surface because the Host's kept output is real terminal bytes:
+    /// colors, cursor moves, and alternate screens all have to render the way
+    /// they did when the program wrote them.
+    private func ensureStoppedSessionSurface(for session: WarrenDesktopSession) {
+        if surfaceManager.surface(for: session.id) == nil {
+            surfaceManager.insert(makeSurface(for: session, readOnly: true))
+        }
+        feedStoppedSessionHistory(session.id)
+    }
+
+    /// Feeds a stopped Session's kept output into its surface, once.
+    private func feedStoppedSessionHistory(_ sessionID: TerminalSessionID) {
+        guard !stoppedSessionHistoryFed.contains(sessionID),
+              let history = stoppedSessionHistory[sessionID],
+              history.phase == .ready,
+              !history.payload.isEmpty,
+              surfaceManager.surface(for: sessionID) != nil else { return }
+        stoppedSessionHistoryFed.insert(sessionID)
+        surfaceManager.enqueueRawOutput(history.payload, for: sessionID)
+        surfaceManager.requestPresent(sessionID)
+    }
+
+    /// Loads what the Host kept of a stopped Session's last output, or retries
+    /// after a failed read.
+    func loadStoppedSessionHistory(_ sessionID: TerminalSessionID) {
+        guard let wire, stoppedSessionHistory[sessionID]?.isLoading != true else { return }
+        stoppedSessionHistory[sessionID] = .loading
+        Task { @MainActor [weak self] in
+            do {
+                let data = try await wire.request(
+                    "session.history",
+                    params: ["session": sessionID.description]
+                )
+                let payload = try JSONDecoder().decode(WarrenStoppedSessionHistoryPayload.self, from: data)
+                guard let self, self.wire === wire else { return }
+                let bytes = payload.payload.flatMap { Data(base64Encoded: $0) } ?? Data()
+                self.stoppedSessionHistory[sessionID] = .ready(bytes)
+                self.feedStoppedSessionHistory(sessionID)
+            } catch {
+                guard let self else { return }
+                if Self.isTransportFailure(error as NSError) {
+                    self.stoppedSessionHistory.removeValue(forKey: sessionID)
+                    return
+                }
+                if self.wire === wire {
+                    self.stoppedSessionHistory[sessionID] = .failed(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Continues a stopped Agent Session's conversation in a new Session. The
+    /// Host owns the resume command; this only names the Session to continue.
+    func resumeStoppedSession(_ sessionID: TerminalSessionID) {
+        guard let wire,
+              projection.session(id: sessionID)?.isStopped == true,
+              stoppedSessionActionInFlight.insert(sessionID).inserted else { return }
+        stoppedSessionActionFailure.removeValue(forKey: sessionID)
+        Task { @MainActor [weak self] in
+            defer { self?.stoppedSessionActionInFlight.remove(sessionID) }
+            do {
+                let data = try await wire.request(
+                    "session.resume",
+                    params: ["session": sessionID.description]
+                )
+                let created = try JSONDecoder().decode(CreatedSession.self, from: data)
+                guard let self, self.wire === wire,
+                      let createdID = TerminalSessionID(uuidString: created.id) else { return }
+                try? await self.refreshRoster(using: wire)
+                self.publishNavigationIfChanged(
+                    WarrenDesktopNavigationReducer.reduce(
+                        self.navigation,
+                        action: .selectTab(Self.tabID(createdID)),
+                        in: self.projection
+                    )
+                )
+                await self.presentSelectedSession(activatingInput: true)
+            } catch {
+                guard let self else { return }
+                if self.wire === wire {
+                    self.stoppedSessionActionFailure[sessionID] = error.localizedDescription
+                }
+                self.present(error)
+            }
+        }
+    }
+
+    /// Starts the same shell or custom command again in the stopped Session's
+    /// own workspace directory. The Host launches it as a new Session; nothing
+    /// of the stopped one is replayed or re-run automatically.
+    func restartStoppedSession(_ sessionID: TerminalSessionID) {
+        // The in-flight guard belongs to `createSession`, which marks the
+        // workspace before it starts and clears it when the launch finishes; the
+        // stopped pane reads that mark for its busy state rather than keeping a
+        // second one of its own.
+        guard let session = projection.session(id: sessionID),
+              session.isStopped,
+              let workspaceID = session.workspaceID else { return }
+        let launch = TerminalSessionLaunchRequest(
+            kind: session.kind,
+            command: session.runtimeProcess
+        )
+        createSession(workspaceID: workspaceID, request: launch)
     }
 
     private func attachSelectedSession(

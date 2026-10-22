@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "./i18n.jsx";
 import {
   fetchChangelog,
@@ -108,40 +108,6 @@ function Nav({ current = "home" }) {
   );
 }
 
-const CHIP_START_SECONDS = (2 * 24 + 6) * 3600 + 41 * 60 + 9;
-
-function formatUptime(totalSeconds) {
-  const pad = (value) => String(value).padStart(2, "0");
-  const days = Math.floor(totalSeconds / 86400);
-  const rest = totalSeconds % 86400;
-  return `${days}d ${pad(Math.floor(rest / 3600))}:${pad(Math.floor((rest % 3600) / 60))}:${pad(rest % 60)}`;
-}
-
-// A sample session whose clock keeps ticking, so the page shows work that is
-// still running rather than telling the reader about it.
-function SessionChip() {
-  const { t } = useI18n();
-  const startedAt = useRef(Date.now() - CHIP_START_SECONDS * 1000);
-  const [seconds, setSeconds] = useState(CHIP_START_SECONDS);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setSeconds(Math.floor((Date.now() - startedAt.current) / 1000));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  return (
-    <div className="session-chip" aria-label={t("hero.chipLabel")}>
-      <span className="running-dot" aria-hidden="true" />
-      <span className="session-chip-title">{t("hero.chipTitle")}</span>
-      <span className="session-chip-meta">
-        claude · {t("hero.chipRunning")} <b>{formatUptime(seconds)}</b> · {t("hero.chipHistory")}
-      </span>
-    </div>
-  );
-}
-
 function Hero() {
   const { t } = useI18n();
   const version = t("changelog.entries")[0]?.version;
@@ -173,7 +139,6 @@ function Hero() {
               fetchPriority="high"
             />
           </div>
-          <SessionChip />
         </div>
       </div>
     </section>

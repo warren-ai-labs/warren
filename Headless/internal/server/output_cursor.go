@@ -223,8 +223,16 @@ func (s *Service) readCursorOutput(session api.Session, outputSession *outputSes
 			s.recordCursorOutput(session.ID, data, reader.Cursor())
 		}
 		if readErr != nil {
-			if !errors.Is(readErr, io.EOF) && readerContext.Err() == nil {
+			// A clean end of output means the runtime closed this Session's
+			// stream, which it does when the program exits. The reader's own
+			// cancellation is the Host detaching or re-anchoring deliberately,
+			// and errors are neither.
+			cleanEnd := errors.Is(readErr, io.EOF) && readerContext.Err() == nil
+			if !cleanEnd && !errors.Is(readErr, io.EOF) && readerContext.Err() == nil {
 				s.logWarn("read ghostline output", "session", session.ID, "error", readErr)
+			}
+			if cleanEnd {
+				go s.endAfterRuntimeExit(session.ID)
 			}
 			return
 		}

@@ -19,6 +19,8 @@ struct WarrenDesktopTabBar: View {
     let presentation: WarrenDesktopPaneBarPresentation
     let tabTitles: [String: String]
     let tabMarks: [TerminalSessionID: WarrenActivityMark]
+    /// The Sessions whose runtime is gone. Their Tabs stay, drawn quiet.
+    var stoppedSessionIDs: Set<TerminalSessionID> = []
     let pinnedSessionIDs: Set<TerminalSessionID>
     let selectedTabID: String?
     /// Every pane group the track draws. Compact mode lists a scope's panes, so
@@ -105,6 +107,7 @@ struct WarrenDesktopTabBar: View {
         presentation: WarrenDesktopPaneBarPresentation,
         tabTitles: [String: String],
         tabMarks: [TerminalSessionID: WarrenActivityMark],
+        stoppedSessionIDs: Set<TerminalSessionID> = [],
         pinnedSessionIDs: Set<TerminalSessionID>,
         selectedTabID: String?,
         splitGroups: [WarrenDesktopSplitGroup] = [],
@@ -146,6 +149,7 @@ struct WarrenDesktopTabBar: View {
         self.presentation = presentation
         self.tabTitles = tabTitles
         self.tabMarks = tabMarks
+        self.stoppedSessionIDs = stoppedSessionIDs
         self.pinnedSessionIDs = pinnedSessionIDs
         self.selectedTabID = selectedTabID
         self.splitGroups = splitGroups
@@ -333,6 +337,7 @@ struct WarrenDesktopTabBar: View {
             displayTitle: tabTitles[tab.id] ?? tab.title,
             mark: mark,
             isSelected: selectedTabID == tab.id,
+            isStopped: tab.sessionID.map(stoppedSessionIDs.contains) ?? false,
             isPinned: tab.sessionID.map(pinnedSessionIDs.contains) ?? false,
             selectionNamespace: tabSelection,
             width: trackTabWidth,

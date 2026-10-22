@@ -19,10 +19,6 @@ const messages = {
     "hero.requirements": "macOS 13+ · Apple silicon · Host also runs on Linux",
     "hero.shotAlt":
       "Warren on macOS: a Claude conversation in a workspace, with the project sidebar on the left and the Inspector showing uncommitted changes on the right",
-    "hero.chipLabel": "Example of a running session",
-    "hero.chipTitle": "Document the Inspector",
-    "hero.chipRunning": "running",
-    "hero.chipHistory": "3 quits, 1 Wi-Fi drop",
     "anywhere.title": "Same session on every screen.",
     "anywhere.lede":
       "The Host owns the session. Open it from the desktop, a browser or your phone and you land on the same conversation, scrolled to the same answer.",
@@ -1625,10 +1621,6 @@ const messages = {
     "hero.source": "查看源码",
     "hero.requirements": "macOS 13+ · Apple 芯片 · Host 也能跑在 Linux 上",
     "hero.shotAlt": "macOS 上的 Warren：Workspace 里的一段 Claude 对话，左侧是项目侧栏，右侧 Inspector 显示未提交的改动",
-    "hero.chipLabel": "一个运行中会话的示例",
-    "hero.chipTitle": "Document the Inspector",
-    "hero.chipRunning": "已运行",
-    "hero.chipHistory": "退出 3 次，断网 1 次",
     "anywhere.title": "每块屏幕，同一个会话。",
     "anywhere.lede":
       "会话属于 Host。从桌面端、浏览器或手机打开，看到的都是同一段对话，停在同一条回答上。",

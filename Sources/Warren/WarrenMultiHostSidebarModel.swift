@@ -640,7 +640,7 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                 projectGroups: activeHost.projection.groups,
                 tasks: activeHost.projection.taskGroups.map(\.task),
                 workspaceActivitySummaries: activeHost.projection.workspaceActivitySummaries,
-                activeSessionsByWorkspaceID: activeHost.projection.activeSessionsByWorkspaceID,
+                activeSessionsByWorkspaceID: activeHost.projection.listedSessionsByWorkspaceID,
                 activeWorkspaceIDs: activeHost.projection.activeWorkspaceIDs,
                 lastError: activeHost.lastError
             )
