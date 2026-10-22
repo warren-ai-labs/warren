@@ -92,9 +92,10 @@ extension WarrenColorTokens {
     /// Group names: projects and tasks. The loudest label in
     /// the tree, because a group is the name a person gave it.
     var treeGroupText: Color { foreground }
-    /// A Session's title, the loudest line in the tree after a selection.
-    var treeSessionText: Color { foreground.opacity(0.84) }
-    var treeSessionSelectedText: Color { foreground.opacity(0.96) }
+    /// A Session's title, the loudest line in the tree after a selection: the
+    /// design's `ink2`, lifting to full `foreground` when selected.
+    var treeSessionText: Color { ink2 }
+    var treeSessionSelectedText: Color { foreground }
     /// Worktree names and a Session's activity line.
     var treeSecondaryText: Color { sidebarLeafText }
     /// The high point of a working row's activity line.
@@ -124,13 +125,16 @@ extension WarrenColorTokens {
 /// branch, so it is monospaced and regular.
 enum WarrenDesktopTreeTypography {
     static let groupName = Font.system(size: 13.5, weight: .semibold)
+    /// A Session's title: the design's 13.5/18, the same size as the group
+    /// name above it so weight alone carries the tier.
+    static let sessionTitle = Font.system(size: 13.5, weight: .regular)
     static let branchName = Font.system(size: 11.5, weight: .regular, design: .monospaced)
     /// "N idle worktrees" and "N inactive projects".
     static let foldedCount = Font.system(size: 12, weight: .regular)
     static let foldedCountNumber = Font.system(size: 12, weight: .medium).monospacedDigit()
     static let inactiveProjectName = Font.system(size: 12.5, weight: .regular)
     /// The last-activity age at the end of an idle row.
-    static let age = Font.system(size: 11, weight: .regular).monospacedDigit()
+    static let age = Font.system(size: 12, weight: .regular).monospacedDigit()
 }
 
 /// The room around one group of a section: a hairline with a gap on each side
@@ -498,6 +502,7 @@ struct WarrenDesktopProjectAvatar: View {
 struct WarrenDesktopSessionKindBadge: View {
     let icon: WarrenDesktopAppIcon
     var size: CGFloat = WarrenDesktopSidebarMetrics.sessionIconSize
+    @Environment(\.displayScale) private var displayScale
 
     init(icon: WarrenDesktopAppIcon, size: CGFloat = WarrenDesktopSidebarMetrics.sessionIconSize) {
         self.icon = icon
@@ -522,8 +527,9 @@ struct WarrenDesktopSessionKindBadge: View {
         shape
             .fill(icon.tileColor)
             .overlay { glyph }
-            // Keeps a near-black tile's edge on the dark card.
-            .overlay { shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5) }
+            // Keeps a near-black tile's edge on the dark card. One device
+            // pixel: 0.5pt is a pixel on Retina but a blurred half pixel at 1x.
+            .overlay { shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 1 / displayScale) }
             .frame(width: size, height: size)
             .accessibilityHidden(true)
     }

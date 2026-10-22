@@ -170,7 +170,7 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
                 .background(tokens.muted.opacity(0.85), in: Circle())
                 .overlay {
                     Circle()
-                        .stroke(tokens.border.opacity(0.8), lineWidth: WarrenSpacing.hairline)
+                        .strokeBorder(tokens.border.opacity(0.8), lineWidth: WarrenSpacing.hairline)
                 }
                 .contentShape(.rect)
         }

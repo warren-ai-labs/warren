@@ -2016,7 +2016,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         HStack(spacing: 6) {
             WarrenDesktopFadingLine(edge: Self.usesLocationTitle(for: session) ? .leading : .trailing) {
                 Text(title)
-                    .font(.system(size: 13))
+                    .font(WarrenDesktopTreeTypography.sessionTitle)
                     .foregroundStyle(
                         titleColor
                             ?? (isSelected ? tokens.treeSessionSelectedText : tokens.treeSessionText)

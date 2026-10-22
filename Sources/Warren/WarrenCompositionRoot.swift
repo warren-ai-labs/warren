@@ -1635,7 +1635,7 @@ private struct WarrenSupersetImportView: View {
         .clipShape(.rect(cornerRadius: WarrenRadius.medium))
         .overlay {
             RoundedRectangle(cornerRadius: WarrenRadius.medium)
-                .stroke(tokens.border, lineWidth: WarrenSpacing.hairline)
+                .strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline)
         }
     }
 

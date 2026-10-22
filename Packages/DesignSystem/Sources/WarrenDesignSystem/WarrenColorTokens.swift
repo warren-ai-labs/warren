@@ -39,6 +39,13 @@ public struct WarrenColorTokens: Sendable {
     public let foreground: Color
     public let muted: Color
     public let mutedForeground: Color
+    /// The design's solid ink ladder below `foreground`: secondary labels,
+    /// supporting text, then the quietest metadata. Solid rather than a fade of
+    /// one base, so each step keeps the same contrast on every ground and the
+    /// steps stay as far apart as the mockups draw them.
+    public let ink2: Color
+    public let ink3: Color
+    public let ink4: Color
     public let border: Color
     public let ring: Color
     /// Focus ring used by keyboard navigation and other non-pointer focus.
@@ -130,6 +137,9 @@ public struct WarrenColorTokens: Sendable {
         foreground: Color,
         muted: Color,
         mutedForeground: Color,
+        ink2: Color,
+        ink3: Color,
+        ink4: Color,
         border: Color,
         ring: Color,
         focusRing: Color,
@@ -161,6 +171,9 @@ public struct WarrenColorTokens: Sendable {
         self.foreground = foreground
         self.muted = muted
         self.mutedForeground = mutedForeground
+        self.ink2 = ink2
+        self.ink3 = ink3
+        self.ink4 = ink4
         self.border = border
         self.ring = ring
         self.focusRing = focusRing
@@ -196,7 +209,12 @@ public struct WarrenColorTokens: Sendable {
         background: hex(0x0B0B_0B),
         foreground: hex(0xEDED_ED),
         muted: hex(0x1C1C_1C),
-        mutedForeground: hex(0xA3A3_A3),
+        // The design's ink3. Secondary text a step brighter than this sat too
+        // close to body text and blurred the two tiers together.
+        mutedForeground: hex(0x8A8A_8A),
+        ink2: hex(0xD4D4_D4),
+        ink3: hex(0x8A8A_8A),
+        ink4: hex(0x5C5C_5C),
         border: hex(0x1F1F_1F),
         ring: hex(0x3A3A_3A),
         primary: hex(0xEDED_ED),
@@ -245,7 +263,12 @@ public struct WarrenColorTokens: Sendable {
         foreground: hex(0x1C19_17),
         muted: hex(0xEBE7_E3),
         mutedForeground: hex(0x6B65_60),
-        border: hex(0xE0DB_D6),
+        ink2: hex(0x3A34_2F),
+        ink3: hex(0x6B65_60),
+        ink4: hex(0x9A93_8C),
+        // The design's warm paper line, so a card's edge reads against the
+        // #EBE7E3 backdrop without going grey.
+        border: hex(0xE6E1_DC),
         ring: hex(0xD2CC_C6),
         primary: hex(0x1C19_17),
         highlight: hex(0xB752_2C),
@@ -388,6 +411,9 @@ public struct WarrenColorTokens: Sendable {
         foreground: Color,
         muted: Color,
         mutedForeground: Color,
+        ink2: Color,
+        ink3: Color,
+        ink4: Color,
         border: Color,
         ring: Color,
         primary: Color,
@@ -418,6 +444,9 @@ public struct WarrenColorTokens: Sendable {
             foreground: foreground,
             muted: muted,
             mutedForeground: mutedForeground,
+            ink2: ink2,
+            ink3: ink3,
+            ink4: ink4,
             border: border,
             ring: ring,
             // Focus is an interaction signal, not a passive separator. Keep
@@ -492,9 +521,11 @@ public extension WarrenColorTokens {
     var cardSurface: Color { material == .glass ? popoverSurface : chromeSurface }
 
     /// The hairline around a card on the window backdrop: the sidebar, a pane,
-    /// the tab capsule. Foreground-derived so it lightens Ember and darkens
-    /// paper by the same small step.
-    var cardBorder: Color { foreground.opacity(0.07) }
+    /// the tab capsule. Opaque, it is the design's solid `border` line: a
+    /// `foreground` fade landed on a cool #EEEEED on paper that all but vanished
+    /// against the warm backdrop. Glass has no fixed ground under it, so there
+    /// it stays a fade that lightens Ember and darkens paper by one small step.
+    var cardBorder: Color { material == .glass ? foreground.opacity(0.07) : border }
 
     /// The hairline around the card that holds the keyboard. Brighter rather
     /// than tinted: a hue here would be read as Agent state.

@@ -417,7 +417,7 @@ private struct WarrenDesktopWebAddressRow: View {
         .clipShape(.rect(cornerRadius: WarrenRadius.small))
         .overlay {
             RoundedRectangle(cornerRadius: WarrenRadius.small)
-                .stroke(tokens.border, lineWidth: WarrenSpacing.hairline)
+                .strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(address.kind.accessibilityTitle) address: \(displayURL.absoluteString)")

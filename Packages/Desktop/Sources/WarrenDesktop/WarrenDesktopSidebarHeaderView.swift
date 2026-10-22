@@ -95,7 +95,7 @@ struct WarrenDesktopSidebarHeader: View {
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 4) {
                             Text(host?.name ?? "This Mac")
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.system(size: 13.5, weight: .semibold))
                                 .foregroundStyle(tokens.foreground.opacity(0.92))
                                 .lineLimit(1)
                                 .truncationMode(.tail)

@@ -145,7 +145,7 @@ public struct WarrenPanelSurfaceModifier: ViewModifier {
                 .overlay {
                     if showsBorder {
                         RoundedRectangle(cornerRadius: resolvedCornerRadius)
-                            .stroke(
+                            .strokeBorder(
                                 isElevatedModal ? tokens.border.opacity(0.9) : tokens.border,
                                 lineWidth: WarrenSpacing.hairline
                             )
@@ -304,7 +304,7 @@ public struct WarrenInputField: View {
                 .clipShape(.rect(cornerRadius: WarrenRadius.small))
                 .overlay {
                     RoundedRectangle(cornerRadius: WarrenRadius.small)
-                        .stroke(
+                        .strokeBorder(
                             isFocused ? tokens.focusRing : WarrenDialogPalette.border(for: colorScheme, tokens: tokens),
                             lineWidth: WarrenSpacing.hairline
                         )
@@ -369,7 +369,7 @@ public struct WarrenSecondaryButtonStyle: ButtonStyle {
                 .clipShape(.rect(cornerRadius: WarrenRadius.small))
                 .overlay {
                     RoundedRectangle(cornerRadius: WarrenRadius.small)
-                        .stroke(
+                        .strokeBorder(
                             state == .focused
                                 ? tokens.focusRing
                                 : WarrenDialogPalette.border(for: colorScheme, tokens: tokens),
