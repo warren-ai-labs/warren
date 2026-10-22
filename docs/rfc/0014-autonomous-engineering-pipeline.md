@@ -1,6 +1,6 @@
 # RFC 0014: Autonomous Software Engineering Pipeline and Declarative Execution Engine
 
-- Status: Proposed
+- Status: Deprecated (2026-10-22). The declarative pipeline engine will not be built. Coordinating several Agents moves to a Lead Agent that drives ordinary Sessions through the CLI, so this document describes no current or planned behavior.
 - Owner: Warren Headless, Desktop, Web, and iOS
 - Created: 2026-09-03
 - Scope: Autonomous task and workflow execution, Git worktree isolation, declarative pipeline primitives, explicit context injection, self-repair loops, human gates, and data-driven UI/UX.

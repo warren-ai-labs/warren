@@ -19,6 +19,7 @@ first, but they describe no current behavior.
 | **Implemented** | Shipped and describing current behavior. |
 | **Superseded** / **Abandoned** | No longer current. Lives in `../archive/rfc/`. |
 | **Withdrawn** | Was implemented, then removed from the product. Kept in place for history; describes no current behavior. |
+| **Deprecated** | Was proposed, then dropped before it was built. Kept in place for history; describes no current or planned behavior. |
 
 ## Active
 
@@ -34,8 +35,6 @@ first, but they describe no current behavior.
 | [0011](0011-session-process-inventory.md) | Per-session process inventory | Proposed | 2026-09-02 |
 | [0012](0012-antigravity-cli-agent-support.md) | Antigravity CLI Agent support | Proposed | 2026-09-03 |
 | [0013](0013-agent-interaction-architecture-and-pty-guarding.md) | Dual-track Agent architecture and PTY input guardrails | Proposed | 2026-09-03 |
-| [0014](0014-autonomous-engineering-pipeline.md) | Autonomous engineering pipeline and declarative execution engine | Proposed | 2026-09-03 |
-| [0015](0015-cloud-agent-daemon-and-scheduled-bots.md) | 24/7 cloud Agent daemon, webhook workers, and scheduled bots | Proposed ⁴ | 2026-09-03 |
 | [0016](0016-canonical-agent-execution-protocol.md) | Canonical Agent execution protocol and client event replicas | Implemented | 2026-09-05 |
 | [0017](0017-agent-task-handoff.md) | Agent Task handoff and structured context synthesis | Implemented | 2026-09-06 |
 | [0018](0018-multi-host-sidebar-projects.md) | Multi-Host Project and Workspace sidebar | Draft | 2026-09-08 |
@@ -44,11 +43,11 @@ first, but they describe no current behavior.
 | [0021](0021-embedded-editor-sidebar.md) | Embedded editor sidebar and Workspace pane integration | Draft | 2026-09-16 |
 | [0022](0022-warren-browser.md) | Warren Browser: an embedded Chromium runtime with an agent action surface | Draft | 2026-09-20 |
 | [0023](0023-acp-agent-sessions.md) | ACP Agent Sessions and the attention-first Conversation surface | Implemented | 2026-09-28 |
+| [0024](0024-lead-agent.md) | Lead Agent | Proposed | 2026-10-22 |
 
 ¹ Amended 2026-09-16: the `stalled` activity and the `warning` attention kind were removed.
 ² Layout ownership and persistence are superseded by [RFC 0020](0020-host-owned-pane-groups.md).
 ³ Written in Chinese, unlike every other RFC. Its `agent.turn.interrupt` references describe a pre-4.0 design; [RFC 0016](0016-canonical-agent-execution-protocol.md) is authoritative and the canonical method is `agent.turn.cancel`.
-⁴ Baseline draft, subject to active iteration.
 
 ## Archived
 
@@ -58,6 +57,8 @@ first, but they describe no current behavior.
 | [0003](0003-terminal-groups.md) | Terminal Groups for standalone shells | Withdrawn 2026-10-15: Terminal Groups were removed and every Session belongs to a Workspace |
 | [0004](../archive/rfc/0004-headless-flow-orchestration.md) | Headless flow orchestration and optional extensions | Abandoned, superseded by [0014](0014-autonomous-engineering-pipeline.md) |
 | [0011](../archive/rfc/0011-cloud-agent-runs.md) | Cloud Agent runs and runner control plane | Abandoned, superseded by [0015](0015-cloud-agent-daemon-and-scheduled-bots.md) |
+| [0014](0014-autonomous-engineering-pipeline.md) | Autonomous engineering pipeline and declarative execution engine | Deprecated 2026-10-22: coordination moves to a Lead Agent driving ordinary Sessions |
+| [0015](0015-cloud-agent-daemon-and-scheduled-bots.md) | 24/7 cloud Agent daemon, webhook workers, and scheduled bots | Deprecated 2026-10-22: built on the deprecated 0014 pipelines |
 
 > [!NOTE]
 > The archived `0011` (Cloud Agent runs) and the active
