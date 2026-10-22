@@ -1015,8 +1015,36 @@ private struct WarrenDesktopClampedWidth: Layout {
         subview.place(
             at: bounds.origin,
             anchor: .topLeading,
-            proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+            proposal: Self.childProposal(bounds)
         )
+    }
+
+    // A layout without these answers every alignment query from its parent's
+    // stack by placing its subviews again. Here that re-ran the title's
+    // `ViewThatFits` on every pass of the top chrome; the child's own guides
+    // are the same answer without the placement.
+    func explicitAlignment(
+        of guide: HorizontalAlignment,
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGFloat? {
+        subviews.first.map { bounds.minX + $0.dimensions(in: Self.childProposal(bounds))[guide] }
+    }
+
+    func explicitAlignment(
+        of guide: VerticalAlignment,
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGFloat? {
+        subviews.first.map { bounds.minY + $0.dimensions(in: Self.childProposal(bounds))[guide] }
+    }
+
+    private static func childProposal(_ bounds: CGRect) -> ProposedViewSize {
+        ProposedViewSize(width: bounds.width, height: bounds.height)
     }
 }
 

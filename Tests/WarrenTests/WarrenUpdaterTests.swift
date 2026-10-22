@@ -146,27 +146,39 @@ final class WarrenUpdaterTests: XCTestCase {
     }
 
     @MainActor
-    func testDiskImageUpdateAcceptsOnlyNewerWarrenAtVolumeRoot() throws {
+    func testDiskImageUpdateReportsTheVersionRelationAtVolumeRoot() throws {
         let volume = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: volume) }
         let updater = WarrenUpdater(currentVersion: WarrenVersion("0.31.0"), cacheDirectory: volume)
+        let applicationURL = volume.appendingPathComponent("Warren.app")
 
-        try makeApplication(at: volume.appendingPathComponent("Warren.app"), version: "0.31.0")
-        XCTAssertNil(updater.diskImageUpdate(onVolume: volume))
+        try makeApplication(at: applicationURL, version: "0.31.0")
+        let same = try XCTUnwrap(updater.diskImageUpdate(onVolume: volume))
+        XCTAssertEqual(same.version, WarrenVersion("0.31.0"))
+        XCTAssertEqual(same.installedVersion, WarrenVersion("0.31.0"))
+        XCTAssertEqual(same.relation, .same)
 
-        try FileManager.default.removeItem(at: volume.appendingPathComponent("Warren.app"))
+        try FileManager.default.removeItem(at: applicationURL)
         try makeApplication(
-            at: volume.appendingPathComponent("Warren.app"),
+            at: applicationURL,
             version: "0.32.0",
             bundleIdentifier: "com.example.other"
         )
         XCTAssertNil(updater.diskImageUpdate(onVolume: volume))
 
-        try FileManager.default.removeItem(at: volume.appendingPathComponent("Warren.app"))
-        try makeApplication(at: volume.appendingPathComponent("Warren.app"), version: "0.32.0")
-        let update = try XCTUnwrap(updater.diskImageUpdate(onVolume: volume))
-        XCTAssertEqual(update.version, WarrenVersion("0.32.0"))
-        XCTAssertEqual(update.displayVersion, "v0.32.0")
+        try FileManager.default.removeItem(at: applicationURL)
+        try makeApplication(at: applicationURL, version: "0.30.0")
+        let older = try XCTUnwrap(updater.diskImageUpdate(onVolume: volume))
+        XCTAssertEqual(older.relation, .older)
+        XCTAssertEqual(older.displayVersion, "v0.30.0")
+
+        try FileManager.default.removeItem(at: applicationURL)
+        try makeApplication(at: applicationURL, version: "0.32.0")
+        let newer = try XCTUnwrap(updater.diskImageUpdate(onVolume: volume))
+        XCTAssertEqual(newer.version, WarrenVersion("0.32.0"))
+        XCTAssertEqual(newer.relation, .newer)
+        XCTAssertEqual(newer.displayVersion, "v0.32.0")
+        XCTAssertEqual(newer.displayInstalledVersion, "v0.31.0")
     }
 
     @MainActor

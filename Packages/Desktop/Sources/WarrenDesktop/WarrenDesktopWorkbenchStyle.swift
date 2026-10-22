@@ -124,7 +124,14 @@ extension WarrenColorTokens {
 /// name a person chose, so it is proportional and bold; a worktree is a git
 /// branch, so it is monospaced and regular.
 enum WarrenDesktopTreeTypography {
-    static let groupName = Font.system(size: 13.5, weight: .semibold)
+    static let groupNameSize: CGFloat = 13.5
+    /// Chinese characters fill their em box, so at the Latin size a Chinese
+    /// name reads a step larger than an English one beside it. The wide
+    /// scripts take one size down and the Latin names keep theirs, which is
+    /// what the two scripts' own shapes ask for.
+    static let groupNameWideSize: CGFloat = 13
+    static let groupName = Font.system(size: groupNameSize, weight: .semibold)
+    static let groupNameWide = Font.system(size: groupNameWideSize, weight: .semibold)
     /// A Session's title: the design's 13.5/18, the same size as the group
     /// name above it so weight alone carries the tier.
     static let sessionTitle = Font.system(size: 13.5, weight: .regular)
@@ -135,6 +142,50 @@ enum WarrenDesktopTreeTypography {
     static let inactiveProjectName = Font.system(size: 12.5, weight: .regular)
     /// The last-activity age at the end of an idle row.
     static let age = Font.system(size: 12, weight: .regular).monospacedDigit()
+
+    /// A project or task name drawn script by script, so a Chinese name and an
+    /// English one share one optical size on their rows.
+    static func groupNameText(_ name: String) -> Text {
+        var text: Text?
+        for run in scriptRuns(name) {
+            let part = Text(run.text).font(run.isWide ? groupNameWide : groupName)
+            text = text.map { $0 + part } ?? part
+        }
+        return text ?? Text(name).font(groupName)
+    }
+
+    /// The name cut into runs of one script, in order, so each run can take
+    /// its own font.
+    static func scriptRuns(_ name: String) -> [(text: String, isWide: Bool)] {
+        var runs: [(text: String, isWide: Bool)] = []
+        for character in name {
+            let isWide = character.unicodeScalars.contains(where: isWideScript)
+            if var last = runs.last, last.isWide == isWide {
+                last.text.append(character)
+                runs[runs.count - 1] = last
+            } else {
+                runs.append((String(character), isWide))
+            }
+        }
+        return runs
+    }
+
+    /// Whether a scalar is drawn on a full square rather than a narrow Latin
+    /// advance: the CJK ideographs, kana, Hangul, and their punctuation and
+    /// fullwidth forms.
+    static func isWideScript(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x1100...0x115F, 0x2E80...0x2FDF, 0x2FF0...0x2FFF,
+             0x3000...0x303F, 0x3041...0x30FF, 0x3100...0x312F,
+             0x3130...0x318F, 0x31A0...0x31BF, 0x3400...0x4DBF,
+             0x4E00...0x9FFF, 0xA960...0xA97F, 0xAC00...0xD7FF,
+             0xF900...0xFAFF, 0xFE30...0xFE4F, 0xFF00...0xFF60,
+             0xFFE0...0xFFE6, 0x20000...0x3FFFF:
+            true
+        default:
+            false
+        }
+    }
 }
 
 /// The room around one group of a section: a hairline with a gap on each side

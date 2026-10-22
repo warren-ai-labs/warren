@@ -94,13 +94,18 @@ still applies the existing three-hour automatic-check cadence and always allows
 the menu's manual check. Release builds display the `Update` or `Failed`
 status beside the traffic-light row; preview builds retain the `BUILD` marker.
 
-Opening a downloaded Warren disk image while Warren runs installs it in place.
-The app watches volume mounts; when a volume's root holds a newer
-`com.abcdlsj.warren`, Warren copies it into the update cache, requires an
-Apple-issued signature from the running app's team for the bundle and every
-nested binary, clears the download quarantine, and hands it to the same
-installer as the zip update. The disk image is ejected and Warren restarts.
-Clearing the quarantine is what keeps the restarted app from asking Gatekeeper
-again: the user approved this developer on first install, and an app signed by
-any other team is rejected. Without a running Warren, the disk image falls back
-to the drag-to-install window.
+Opening a downloaded Warren disk image while Warren runs asks whether to
+install it in place. The app watches volume mounts; when a volume's root holds
+`com.abcdlsj.warren`, Warren brings its window forward and names the image's
+version next to the installed one, marking it newer, the same, or older, and
+nothing is installed until the user picks Install. An older image stays
+installable, with the downgrade named in the prompt. On Install, Warren copies
+the bundle into the update cache, requires an Apple-issued signature from the
+running app's team for the bundle and every nested binary, clears the download
+quarantine, and hands it to the same installer as the zip update. The disk
+image is ejected and Warren restarts; unmounting without installing leaves the
+image untouched. Clearing the quarantine is what keeps the restarted app from
+asking Gatekeeper again: the user approved this developer on first install, and
+an app signed by any other team is rejected. One mount of one image asks once,
+and a dismissed prompt returns on the next mount. Without a running Warren, the
+disk image falls back to the drag-to-install window.

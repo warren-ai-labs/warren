@@ -104,6 +104,9 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private var endpointCapabilitiesObserver: NSObjectProtocol?
     private var screenChangeObserver: NSObjectProtocol?
     private var volumeMountObserver: NSObjectProtocol?
+    /// Disk images already prompted for, keyed by volume path and version, so
+    /// one mount of one image asks exactly once.
+    private var offeredDiskImages: Set<String> = []
     private weak var copyLocalWebURLMenuItem: NSMenuItem?
     private weak var copyLocalWebURLSeparator: NSMenuItem?
 
@@ -159,7 +162,7 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
                 return
             }
             Task { @MainActor in
-                self?.installDiskImageUpdateIfPresent(onVolume: volumeURL)
+                self?.offerDiskImageUpdateIfPresent(onVolume: volumeURL)
             }
         }
         installCLIIfNeededInBackground()
@@ -319,13 +322,29 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         }
     }
 
-    /// Opening a downloaded Warren disk image while Warren runs installs it in
-    /// place: the user neither drags the app nor approves it a second time.
-    private func installDiskImageUpdateIfPresent(onVolume volumeURL: URL) {
+    /// Mounting a Warren disk image while Warren runs asks whether to install
+    /// the app it carries. The prompt names both versions, so a same-version or
+    /// older image is a visible choice instead of a silent no-op, and nothing
+    /// is installed until the user picks Install.
+    private func offerDiskImageUpdateIfPresent(onVolume volumeURL: URL) {
         guard updateInstallTask == nil,
               let update = updater.diskImageUpdate(onVolume: volumeURL) else { return }
+        let promptKey = "\(volumeURL.path)#\(update.version)"
+        guard !offeredDiskImages.contains(promptKey) else { return }
+        offeredDiskImages.insert(promptKey)
         presentMainWindowIfNeeded()
         NSApp.activate(ignoringOtherApps: true)
+        guard WarrenDiskImagePrompt.confirm(update) else {
+            // Asking again on a later mount keeps the image usable after the
+            // user dismissed this one.
+            offeredDiskImages.remove(promptKey)
+            return
+        }
+        installDiskImageUpdate(update)
+    }
+
+    private func installDiskImageUpdate(_ update: WarrenDiskImageUpdate) {
+        guard updateInstallTask == nil else { return }
         updateMenuItem?.isEnabled = false
         updateMenuItem?.title = "Installing Update \(update.displayVersion)…"
         NotificationCenter.default.post(name: WarrenUpdateNotification.installing, object: nil)
@@ -930,6 +949,35 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         installCLI.target = target
         toolsMenuItem.submenu = toolsMenu
         return mainMenu
+    }
+}
+
+/// The one question a mounted Warren disk image asks. Both versions are named
+/// so the relation is read from numbers, not from which button appeared.
+@MainActor
+private enum WarrenDiskImagePrompt {
+    static func confirm(_ update: WarrenDiskImageUpdate) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = update.relation == .older ? .warning : .informational
+        alert.messageText = "Install Warren \(update.displayVersion)?"
+        alert.informativeText = message(for: update)
+        alert.addButton(withTitle: update.relation == .older ? "Install Older Version" : "Install")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private static func message(for update: WarrenDiskImageUpdate) -> String {
+        let installed = update.displayInstalledVersion
+        let relation: String
+        switch update.relation {
+        case .newer:
+            relation = "This disk image is newer than the installed Warren (\(installed))."
+        case .same:
+            relation = "This disk image matches the installed Warren (\(installed))."
+        case .older:
+            relation = "This disk image is older than the installed Warren (\(installed)), so installing downgrades it."
+        }
+        return "\(relation) Running Sessions keep running through the install."
     }
 }
 

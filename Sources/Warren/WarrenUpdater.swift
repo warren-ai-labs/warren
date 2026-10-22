@@ -151,14 +151,30 @@ enum WarrenUpdaterError: LocalizedError, Equatable, Sendable {
     }
 }
 
-/// A newer Warren.app at the root of a mounted volume, typically the disk
-/// image the user just downloaded and opened.
+/// How a mounted volume's Warren.app compares to the installed one.
+enum WarrenDiskImageVersionRelation: Equatable, Sendable {
+    case newer
+    case same
+    case older
+}
+
+/// A Warren.app at the root of a mounted volume, typically the disk image the
+/// user just downloaded and opened. Every relation is offered, because the
+/// same or an older image is a visible choice rather than a silent no-op.
 struct WarrenDiskImageUpdate: Equatable, Sendable {
     let volumeURL: URL
     let applicationURL: URL
     let version: WarrenVersion
+    let installedVersion: WarrenVersion
+
+    var relation: WarrenDiskImageVersionRelation {
+        if version > installedVersion { return .newer }
+        if version < installedVersion { return .older }
+        return .same
+    }
 
     var displayVersion: String { "v\(version)" }
+    var displayInstalledVersion: String { "v\(installedVersion)" }
 }
 
 /// Notifications used by the desktop banner and the application delegate.
@@ -314,9 +330,10 @@ final class WarrenUpdater {
         return applicationURL
     }
 
-    /// Returns the Warren.app at the root of a mounted volume when it is newer
-    /// than the running app. The Info.plist is read directly because Bundle
-    /// caches by path, and every Warren disk image mounts at /Volumes/Warren.
+    /// Returns the Warren.app at the root of a mounted volume, whatever its
+    /// version, so the caller can name the version relation before anything is
+    /// installed. The Info.plist is read directly because Bundle caches by
+    /// path, and every Warren disk image mounts at /Volumes/Warren.
     func diskImageUpdate(onVolume volumeURL: URL) -> WarrenDiskImageUpdate? {
         let applicationURL = volumeURL.appendingPathComponent("Warren.app", isDirectory: true)
         guard let currentVersion,
@@ -325,11 +342,15 @@ final class WarrenUpdater {
               ),
               info["CFBundleIdentifier"] as? String == "com.abcdlsj.warren",
               let rawVersion = info["CFBundleShortVersionString"] as? String,
-              let version = WarrenVersion(rawVersion),
-              version > currentVersion else {
+              let version = WarrenVersion(rawVersion) else {
             return nil
         }
-        return WarrenDiskImageUpdate(volumeURL: volumeURL, applicationURL: applicationURL, version: version)
+        return WarrenDiskImageUpdate(
+            volumeURL: volumeURL,
+            applicationURL: applicationURL,
+            version: version,
+            installedVersion: currentVersion
+        )
     }
 
     /// Copies a disk image's Warren.app into the update cache, requires the

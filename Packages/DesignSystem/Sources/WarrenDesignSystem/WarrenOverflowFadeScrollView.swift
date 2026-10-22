@@ -19,9 +19,11 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
     private let content: () -> Content
     private let contentID = "warren-overflow-content"
 
-    @State private var edges = WarrenScrollEdges()
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
+    /// Held by reference so a change re-renders only the fades and chevrons
+    /// that observe it. As plain view state, every edge crossing re-ran this
+    /// body and so `content`, rebuilding every row of a long list at the
+    /// moment a scroll left the top.
+    @State private var edgeModel = WarrenScrollEdgeModel()
 
     public init(
         _ axes: Axis.Set = .vertical,
@@ -38,71 +40,57 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
     }
 
     public var body: some View {
+        let model = edgeModel
         ScrollViewReader { proxy in
             ScrollView(axes, showsIndicators: false) {
                 content()
                     .id(contentID)
                     .background {
                         WarrenScrollEdgeObserver { newEdges in
-                            guard edges != newEdges else { return }
-                            edges = newEdges
+                            guard model.edges != newEdges else { return }
+                            model.edges = newEdges
                         }
                     }
             }
             // A fade painted in the surface color only works over an opaque
             // surface. On glass the region behind is the window's coat, so the
             // content itself fades out instead.
-            .mask { glassFadeMask }
-            .overlay(alignment: .top) {
-                fade(edge: .top)
-                    .opacity(axes.contains(.vertical) && edges.canScrollTop ? 1 : 0)
+            .mask {
+                WarrenScrollEdgeMask(model: model, axes: axes, fadeLength: fadeLength)
             }
-            .overlay(alignment: .bottom) {
-                fade(edge: .bottom)
-                    .opacity(axes.contains(.vertical) && edges.canScrollBottom ? 1 : 0)
-            }
-            .overlay(alignment: .leading) {
-                fade(edge: .leading)
-                    .opacity(horizontalIndicatorVisible(edges.canScrollLeft) ? 1 : 0)
-            }
-            .overlay(alignment: .trailing) {
-                fade(edge: .trailing)
-                    .opacity(horizontalIndicatorVisible(edges.canScrollRight) ? 1 : 0)
-            }
-            .overlay(alignment: .leading) {
-                chevron(edge: .leading) {
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        proxy.scrollTo(contentID, anchor: .leading)
+            .overlay {
+                WarrenScrollEdgeIndicators(
+                    model: model,
+                    axes: axes,
+                    fadeLength: fadeLength,
+                    surface: surface,
+                    showsEdgeChevrons: showsEdgeChevrons,
+                    onScroll: { anchor in
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            proxy.scrollTo(contentID, anchor: anchor)
+                        }
                     }
-                }
-                .opacity(horizontalIndicatorVisible(edges.canScrollLeft) ? 1 : 0)
-                .allowsHitTesting(horizontalIndicatorVisible(edges.canScrollLeft))
-                .accessibilityHidden(!horizontalIndicatorVisible(edges.canScrollLeft))
-            }
-            .overlay(alignment: .trailing) {
-                chevron(edge: .trailing) {
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        proxy.scrollTo(contentID, anchor: .trailing)
-                    }
-                }
-                .opacity(horizontalIndicatorVisible(edges.canScrollRight) ? 1 : 0)
-                .allowsHitTesting(horizontalIndicatorVisible(edges.canScrollRight))
-                .accessibilityHidden(!horizontalIndicatorVisible(edges.canScrollRight))
+                )
             }
         }
     }
+}
 
-    private enum Edge { case top, bottom, leading, trailing }
+@MainActor
+private final class WarrenScrollEdgeModel: ObservableObject {
+    @Published var edges = WarrenScrollEdges()
+}
 
-    private func horizontalIndicatorVisible(_ canScroll: Bool) -> Bool {
-        showsEdgeChevrons && axes.contains(.horizontal) && canScroll
-    }
+private struct WarrenScrollEdgeMask: View {
+    @ObservedObject var model: WarrenScrollEdgeModel
+    let axes: Axis.Set
+    let fadeLength: CGFloat
 
-    private var fadesByMask: Bool { windowMaterial == .glass }
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
 
-    @ViewBuilder
-    private var glassFadeMask: some View {
-        if fadesByMask {
+    var body: some View {
+        if windowMaterial == .glass {
+            let edges = model.edges
             let top = axes.contains(.vertical) && edges.canScrollTop
             let bottom = axes.contains(.vertical) && edges.canScrollBottom
             let leading = axes.contains(.horizontal) && edges.canScrollLeft
@@ -127,6 +115,62 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
             Color.black
         }
     }
+}
+
+/// The surface-colored fades and the horizontal chevrons, drawn over the
+/// scroll view from the observed edges.
+private struct WarrenScrollEdgeIndicators: View {
+    @ObservedObject var model: WarrenScrollEdgeModel
+    let axes: Axis.Set
+    let fadeLength: CGFloat
+    let surface: Color
+    let showsEdgeChevrons: Bool
+    let onScroll: (UnitPoint) -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+
+    private enum Edge { case top, bottom, leading, trailing }
+
+    var body: some View {
+        let edges = model.edges
+        Color.clear
+            .allowsHitTesting(false)
+            .overlay(alignment: .top) {
+                fade(edge: .top)
+                    .opacity(axes.contains(.vertical) && edges.canScrollTop ? 1 : 0)
+            }
+            .overlay(alignment: .bottom) {
+                fade(edge: .bottom)
+                    .opacity(axes.contains(.vertical) && edges.canScrollBottom ? 1 : 0)
+            }
+            .overlay(alignment: .leading) {
+                fade(edge: .leading)
+                    .opacity(horizontalIndicatorVisible(edges.canScrollLeft) ? 1 : 0)
+            }
+            .overlay(alignment: .trailing) {
+                fade(edge: .trailing)
+                    .opacity(horizontalIndicatorVisible(edges.canScrollRight) ? 1 : 0)
+            }
+            .overlay(alignment: .leading) {
+                chevron(edge: .leading) { onScroll(.leading) }
+                    .opacity(horizontalIndicatorVisible(edges.canScrollLeft) ? 1 : 0)
+                    .allowsHitTesting(horizontalIndicatorVisible(edges.canScrollLeft))
+                    .accessibilityHidden(!horizontalIndicatorVisible(edges.canScrollLeft))
+            }
+            .overlay(alignment: .trailing) {
+                chevron(edge: .trailing) { onScroll(.trailing) }
+                    .opacity(horizontalIndicatorVisible(edges.canScrollRight) ? 1 : 0)
+                    .allowsHitTesting(horizontalIndicatorVisible(edges.canScrollRight))
+                    .accessibilityHidden(!horizontalIndicatorVisible(edges.canScrollRight))
+            }
+    }
+
+    private func horizontalIndicatorVisible(_ canScroll: Bool) -> Bool {
+        showsEdgeChevrons && axes.contains(.horizontal) && canScroll
+    }
+
+    private var fadesByMask: Bool { windowMaterial == .glass }
 
     @ViewBuilder
     private func fade(edge: Edge) -> some View {

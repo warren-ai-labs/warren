@@ -132,8 +132,7 @@ struct WarrenDesktopProjectRow: View {
 
                     // The name gives way first; the branch stays readable.
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Text(project.name)
-                            .font(WarrenDesktopTreeTypography.groupName)
+                        WarrenDesktopTreeTypography.groupNameText(project.name)
                             .foregroundStyle(tokens.treeGroupText)
                             .lineLimit(1)
                             .truncationMode(.tail)
