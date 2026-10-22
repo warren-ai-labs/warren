@@ -1,6 +1,6 @@
 # RFC 0015: 24/7 Cloud Agent Daemon, Webhook Workers, and Scheduled Bots
 
-- Status: Proposed (Baseline Draft — Subject to Active Iteration)
+- Status: Deprecated (2026-10-22). Every flow here runs an RFC 0014 pipeline, which is deprecated, so this design describes no current or planned behavior.
 - Owner: Warren Headless, Desktop, Web, iOS, and Relay
 - Created: 2026-09-03
 - Scope: Always-on headless daemon architecture, webhook ingestion, scheduled cron execution, mobile attention routing, and zero-friction deployment.
