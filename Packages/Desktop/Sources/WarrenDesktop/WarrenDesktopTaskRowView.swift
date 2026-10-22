@@ -39,22 +39,14 @@ struct WarrenDesktopTaskRow: View {
                 HStack(spacing: WarrenDesktopSidebarMetrics.groupIconSpacing) {
                     taskIcon(tokens: tokens)
 
-                    // The name gives way first; the task's external ID stays
-                    // readable beside it.
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Text(task.name)
-                            .font(WarrenDesktopTreeTypography.groupName)
-                            .foregroundStyle(tokens.treeGroupText)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        if let externalID {
-                            Text(externalID)
-                                .font(.system(size: 11))
-                                .foregroundStyle(tokens.treeQuietText)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                    }
+                    // The name owns the whole line. A task created from an
+                    // external tracker carries a long custom ID, and printing
+                    // it here cost the name its width; the row's tooltip has
+                    // it, so a hover still answers what the ID is.
+                    WarrenDesktopTreeTypography.groupNameText(task.name)
+                        .foregroundStyle(tokens.treeGroupText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
 
                     if task.pinned {
                         Image(systemName: "pin.fill")
@@ -120,7 +112,8 @@ struct WarrenDesktopTaskRow: View {
         )
         .contentShape(.rect)
         .onHover { isHovered = $0 }
-        // A long name truncates to one line; the whole name is on hover.
+        // A long name truncates to one line; the whole name, and the external
+        // ID the row keeps out of its layout, are on hover.
         .help(externalID.map { "\(task.name) · \($0)" } ?? task.name)
         .warrenContextMenu(taskContextMenuActions)
         .accessibilityElement(children: .contain)
@@ -162,8 +155,8 @@ struct WarrenDesktopTaskRow: View {
             .modifier(WarrenDesktopTaskAddFocus(isFocused: isAddFocused, ring: tokens.focusRing))
             .disabled(isInteractionDisabled)
             .opacity(showsAddMenu ? 1 : 0)
-            // Hidden, it gives its width back to the name, so a resting row shows
-            // the whole name and the external ID beside it.
+            // Hidden, it gives its width back to the name, so a resting row
+            // shows as much of the name as it can.
             .frame(width: showsAddMenu ? nil : 0)
             .clipped()
             .focused($isAddFocused)

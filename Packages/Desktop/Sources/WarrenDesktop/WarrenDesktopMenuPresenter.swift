@@ -160,8 +160,8 @@ struct WarrenDesktopMenuPanelBindingModifier<Panel: View>: ViewModifier {
     let panel: () -> Panel
 
     @Environment(\.warrenMenuCenter) private var center: WarrenDesktopMenuCenter?
-    @State private var anchor: CGPoint = .zero
     @State private var presentedID: UUID?
+    @State private var frameReader = WarrenDesktopFrameReader()
 
     func body(content: Content) -> some View {
         content
@@ -170,10 +170,13 @@ struct WarrenDesktopMenuPanelBindingModifier<Panel: View>: ViewModifier {
                 value: WarrenDesktopMenuPanelContentKey.live(presentedID, in: center, panel: panel)
             )
             .background {
+                // The anchor is read when the panel opens, as the tap-opened
+                // modifiers read theirs. Tracking the frame instead ran a
+                // callback and a state write on every frame a scroll moved the
+                // view, and every sidebar Session row carries one of these.
                 GeometryReader { geo in
+                    let _ = frameReader.read = { geo.frame(in: .global) }
                     Color.clear
-                        .onAppear { anchor = anchorPoint(for: geo.frame(in: .global)) }
-                        .onChange(of: geo.frame(in: .global)) { anchor = anchorPoint(for: $0) }
                 }
             }
             .onChange(of: isPresented) { presented in
@@ -181,7 +184,7 @@ struct WarrenDesktopMenuPanelBindingModifier<Panel: View>: ViewModifier {
                 if presented {
                     presentedID = center.presentPanel(
                         AnyView(panel()),
-                        at: anchor,
+                        at: anchorPoint(for: frameReader.read?() ?? .zero),
                         width: width,
                         edge: edge,
                         isPassive: isPassive
@@ -203,6 +206,13 @@ struct WarrenDesktopMenuPanelBindingModifier<Panel: View>: ViewModifier {
             CGPoint(x: frame.minX, y: frame.maxY + WarrenDesktopMenuMetrics.anchorGap)
         }
     }
+}
+
+/// Reads a view's current frame on demand. It publishes nothing, so pointing
+/// it at the latest geometry during an update invalidates no view.
+@MainActor
+final class WarrenDesktopFrameReader {
+    var read: (() -> CGRect)?
 }
 
 struct WarrenDesktopMenuPanelButtonModifier<Panel: View>: ViewModifier {
