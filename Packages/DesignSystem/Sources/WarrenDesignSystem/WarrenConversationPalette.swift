@@ -69,28 +69,30 @@ public struct WarrenConversationPalette: Sendable {
         blue: WarrenColorTokens.hex(0x6F9C_FF)
     )
 
-    /// Light has no design of its own yet; it reuses the workbench's Ember
-    /// Paper surfaces so the pane still reads as one product in light mode.
-    /// The dark-only values above are what the design specifies.
+    /// The paper scale from `lead-agent.html`. The person's bubble is #F2EFEC
+    /// rather than the window's #EBE7E3 backdrop color, which made it read as
+    /// a hole in the card.
     public static let light = WarrenConversationPalette(
-        card: WarrenColorTokens.light.background,
-        raise: WarrenColorTokens.light.popoverSurface,
-        bubble: WarrenColorTokens.light.muted,
-        code: WarrenColorTokens.light.inputSurface,
-        line: WarrenColorTokens.light.border,
-        line2: WarrenColorTokens.light.ring,
-        ink: WarrenColorTokens.light.foreground,
-        ink2: WarrenColorTokens.light.foreground.opacity(0.84),
-        ink3: WarrenColorTokens.light.mutedForeground,
-        ink4: WarrenColorTokens.light.mutedForeground.opacity(0.72),
-        focus: WarrenColorTokens.light.ring,
-        quote: WarrenColorTokens.light.ring,
-        hover: WarrenColorTokens.light.foreground.opacity(0.05),
-        press: WarrenColorTokens.light.foreground.opacity(0.08),
-        accent: WarrenColorTokens.light.highlight,
-        green: WarrenColorTokens.light.success,
-        red: WarrenColorTokens.light.destructive,
-        blue: WarrenColorTokens.light.info
+        card: WarrenColorTokens.hex(0xFFFF_FF),
+        raise: WarrenColorTokens.hex(0xFCFB_FA),
+        bubble: WarrenColorTokens.hex(0xF2EF_EC),
+        code: WarrenColorTokens.hex(0xF7F5_F3),
+        line: WarrenColorTokens.hex(0xE6E1_DC),
+        line2: WarrenColorTokens.hex(0xD9D3_CD),
+        ink: WarrenColorTokens.hex(0x1C19_17),
+        ink2: WarrenColorTokens.hex(0x3A34_2F),
+        ink3: WarrenColorTokens.hex(0x6B65_60),
+        ink4: WarrenColorTokens.hex(0x9A93_8C),
+        // One step past line2, as Ember's #3A3A3A is past #2E2E2E, so a
+        // focused composer still lifts its outline.
+        focus: WarrenColorTokens.hex(0xC9C2_BB),
+        quote: WarrenColorTokens.hex(0xD9D3_CD),
+        hover: WarrenColorTokens.hex(0xF6F3_F0),
+        press: WarrenColorTokens.hex(0xE6E1_DC),
+        accent: WarrenColorTokens.hex(0xB752_2C),
+        green: WarrenColorTokens.hex(0x2F7D_51),
+        red: WarrenColorTokens.hex(0xB326_1E),
+        blue: WarrenColorTokens.hex(0x1C6F_B8)
     )
 
     public static func resolved(for colorScheme: ColorScheme) -> Self {

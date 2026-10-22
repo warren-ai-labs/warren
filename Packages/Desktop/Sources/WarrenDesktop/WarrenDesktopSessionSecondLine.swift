@@ -107,18 +107,21 @@ struct WarrenDesktopSessionSecondLine: Equatable {
 extension WarrenColorTokens {
     /// The Session second line's ladder.
     ///
-    /// The design gives these as fixed greys on the dark ground; expressed as
-    /// fractions of `sidebarTextBase` they step the same way on either ground,
-    /// which is the rule the tree's other text tiers already follow.
-    var sessionPrimaryRunningText: Color { sidebarTextBase.opacity(0.79) }
+    /// The design draws the line in two solid inks: the activity in `ink3` and
+    /// its time, count and separators in `ink4`. Running and idle rows share
+    /// them; the badge's dot already says which state a row is in, and dimming
+    /// every idle line a further step left most of the rail a single grey.
+    /// Only the shimmer's peak lifts above `ink3`, so light moving across a
+    /// working line stays visible.
+    var sessionPrimaryRunningText: Color { ink3 }
     var sessionPrimaryRunningHighlightText: Color { sidebarTextBase.opacity(0.99) }
-    var sessionExtraRunningText: Color { sidebarTextBase.opacity(0.635) }
-    var sessionMetaRunningText: Color { sidebarTextBase.opacity(0.548) }
-    var sessionPrimaryIdleText: Color { sidebarTextBase.opacity(0.548) }
-    var sessionExtraIdleText: Color { sidebarTextBase.opacity(0.47) }
-    var sessionMetaIdleText: Color { sidebarTextBase.opacity(0.44) }
-    var sessionSeparatorRunningText: Color { sidebarTextBase.opacity(0.44) }
-    var sessionSeparatorIdleText: Color { sidebarTextBase.opacity(0.375) }
+    var sessionExtraRunningText: Color { ink3 }
+    var sessionMetaRunningText: Color { ink4 }
+    var sessionPrimaryIdleText: Color { ink3 }
+    var sessionExtraIdleText: Color { ink3 }
+    var sessionMetaIdleText: Color { ink4 }
+    var sessionSeparatorRunningText: Color { ink4 }
+    var sessionSeparatorIdleText: Color { ink4 }
     /// The `88% ctx` reminder. A reminder is not a state, so it does not take
     /// the attention hue; it is the palette's amber, softened like the rest
     /// of the line, and resolved per appearance rather than fixed for the
@@ -142,9 +145,10 @@ enum WarrenDesktopSessionSecondLineLayout {
     /// A shell command's own size. The monospaced face is a little smaller so
     /// its wider glyphs occupy the same run as the row's regular text.
     static let commandFontSize: CGFloat = 11.5
-    static let metaFontSize: CGFloat = 11
-    /// The trailing column's ceiling, the measured width of `icon + 4/6`.
-    static let maximumMetaWidth: CGFloat = 33
+    /// The design's 12/15 meta tier, the same size as the activity it trails.
+    static let metaFontSize: CGFloat = 12
+    /// The trailing column's ceiling, the width of `icon + 4/6` at the meta size.
+    static let maximumMetaWidth: CGFloat = 35
     /// One separator, its two spaces included.
     static let separatorWidth: CGFloat = 10
     /// Between the primary-and-append segment and the trailing column.

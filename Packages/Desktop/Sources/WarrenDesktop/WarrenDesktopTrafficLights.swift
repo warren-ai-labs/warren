@@ -7,6 +7,7 @@ import SwiftUI
 struct WarrenDesktopTrafficLights: View {
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.displayScale) private var displayScale
     @State private var isGroupHovered = false
 
     private enum Light: CaseIterable {
@@ -89,7 +90,7 @@ struct WarrenDesktopTrafficLights: View {
                 .frame(width: 12, height: 12)
                 .overlay {
                     Circle()
-                        .strokeBorder(.black.opacity(0.12), lineWidth: 0.5)
+                        .strokeBorder(.black.opacity(0.12), lineWidth: 1 / displayScale)
                 }
                 .overlay {
                     Image(systemName: glyph(for: light))
