@@ -1145,13 +1145,14 @@ struct WarrenCompositionRoot: View {
     ) {
         guard reference.endpointID == selectedEndpointID else { return }
         guard remoteModel.isReady(for: reference.endpointID) else { return }
-        guard let session = activeProjection.sessions.first(where: { $0.id == reference.id }),
-              session.state.isActive else {
-            // Once the Host is ready, a missing or no-longer-live row is
-            // authoritative. Drop it instead of retrying the stale UUID on
-            // every roster update. Every live Session the tree lists is
+        guard activeProjection.canOpenSession(reference.id) else {
+            // Once the Host is ready, a missing row, or an ended one with no
+            // Tab, is authoritative. Drop it instead of retrying the stale UUID
+            // on every roster update. Every live Session the tree lists is
             // openable: the rich tree's leaves include plain shells, and
-            // requiring an Agent binding left those rows inert.
+            // requiring an Agent binding left those rows inert. A stopped
+            // Session with a Tab is openable too, since its pane is where
+            // Resume lives; requiring a live runtime left those rows inert.
             if pendingSidebarOpenSession == reference {
                 pendingSidebarOpenSession = nil
             }

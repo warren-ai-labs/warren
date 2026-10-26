@@ -201,10 +201,17 @@ struct WarrenAttentionAlertsModifier: ViewModifier {
                     try await model.resolvePendingDecision(decisionID, optionID: optionID, in: sessionID)
                 }
             }
-            .onReceive(model.$projection.combineLatest(model.$pendingDecisions)) { value in
-                let (projection, decisions) = value
+            .onReceive(
+                model.$projection
+                    .combineLatest(model.$pendingDecisions, model.$leadAttentionRevision)
+            ) { value in
+                let (projection, decisions, _) = value
+                let alerts = WarrenDesktopAttentionAlerts.alerts(
+                    projection: projection,
+                    decisions: decisions
+                )
                 WarrenAttentionNotifier.shared.update(
-                    WarrenDesktopAttentionAlerts.alerts(projection: projection, decisions: decisions)
+                    alerts + model.leadAttentionAlerts()
                 )
             }
     }

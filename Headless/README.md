@@ -125,6 +125,9 @@ warren session send SESSION_ID "Run a shell command"
 warren session read SESSION_ID --timeout 8s
 ```
 
+`project add PATH` resolves `.`, `..`, and `~/` on the client that runs the
+command, so give an absolute Host path when the endpoint is another machine.
+
 ### Multi-host Desktop sidebar
 
 The macOS Desktop can show Project and Workspace rosters from several

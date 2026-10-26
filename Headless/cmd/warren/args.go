@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -400,6 +402,25 @@ func positional(value map[string]any, index int, _ string) string {
 	}
 	return items[index]
 }
+
+// absoluteProjectPath resolves a path typed at the client. Project paths are
+// filesystem paths on the Host, and the Host would otherwise resolve a relative
+// path against its own working directory instead of the client's.
+func absoluteProjectPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(home, strings.TrimPrefix(path, "~"))
+	}
+	return filepath.Abs(path)
+}
+
 func stringValue(value map[string]any, key string) string {
 	result, _ := value[key].(string)
 	return result

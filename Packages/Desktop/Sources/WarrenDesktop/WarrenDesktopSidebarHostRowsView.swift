@@ -204,6 +204,7 @@ struct WarrenDesktopSidebarHostRows: View {
         }
         return WarrenDesktopSidebarSectionHeader(
             title: "Projects",
+            count: host.projectGroups.count,
             disclosureExpanded: !singleHostProjectsCollapsed,
             actionImage: "plus",
             actionLabel: "Add Project…",
@@ -373,13 +374,11 @@ struct WarrenDesktopSidebarHostRows: View {
                                 )
                             }
                         } else if split.hasRows {
-                            VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.worktreeSpacing) {
-                                ForEach(scopedWorkspaces(split.live, host: host)) { scopedWorkspace in
-                                    let sessions = workspaceDisplayMode.isRich
-                                        && !routesSelectionToTaskRow(scopedWorkspace.workspace, in: host)
-                                        && !isWorkspaceLeavesCollapsed(scopedWorkspace.workspace.id, in: host)
-                                        ? host.activeSessions(in: scopedWorkspace.workspace.id)
-                                        : []
+                            let scoped = scopedWorkspaces(split.live, host: host)
+                            let leafCounts = scoped.map { hostLeafSessions($0.workspace, host: host).count }
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(scoped.enumerated()), id: \.element.id) { index, scopedWorkspace in
+                                    let sessions = hostLeafSessions(scopedWorkspace.workspace, host: host)
                                     // The same group the single-Host tree draws; see
                                     // WarrenDesktopSessionLeafGroup.
                                     WarrenDesktopSessionLeafGroup(
@@ -398,9 +397,13 @@ struct WarrenDesktopSidebarHostRows: View {
                                             host: host
                                         )
                                     }
+                                    .padding(.top, WarrenDesktopWorktreeGap.above(index, leafCounts: leafCounts))
                                 }
                                 if split.showsIdleRow {
                                     hostIdleWorkspaceRows(split.idle, project: group.project, host: host)
+                                        .padding(.top, WarrenDesktopWorktreeGap.aboveIdleRow(
+                                            followsWorktrees: !split.live.isEmpty
+                                        ))
                                 }
                             }
                         }
@@ -425,6 +428,18 @@ struct WarrenDesktopSidebarHostRows: View {
                     )
             }
         }
+    }
+
+    /// The Sessions `workspace`'s row lists as leaves.
+    private func hostLeafSessions(
+        _ workspace: Workspace,
+        host: WarrenDesktopSidebarHostProjection
+    ) -> [WarrenDesktopSession] {
+        workspaceDisplayMode.isRich
+            && !routesSelectionToTaskRow(workspace, in: host)
+            && !isWorkspaceLeavesCollapsed(workspace.id, in: host)
+            ? host.activeSessions(in: workspace.id)
+            : []
     }
 
     /// See the current-Host tree's `isWorkspaceLive`.
@@ -466,6 +481,7 @@ struct WarrenDesktopSidebarHostRows: View {
                 isExpanded: isExpanded,
                 semanticID: "\(key).idle-worktrees",
                 isEnabled: enabled,
+                isWorktreeLevel: true,
                 onToggle: { toggleIdleWorkspaces(key) }
             )
             if isExpanded {
@@ -1275,7 +1291,7 @@ struct WarrenDesktopSidebarHostRows: View {
 
 enum WarrenDesktopSidebarHostsSectionPresentation {
     static func title(hostCount: Int, isHovered: Bool) -> String {
-        isHovered ? "PROJECTS · \(hostCount)" : "PROJECTS · HOSTS"
+        isHovered ? "Projects · \(hostCount)" : "Projects · Hosts"
     }
 
     static func accessibilityLabel(hostCount: Int) -> String {
@@ -1297,8 +1313,7 @@ private struct WarrenDesktopSidebarHostsSectionHeader: View {
             hostCount: hostCount,
             isHovered: isHovered
         ))
-        .font(WarrenDesktopSidebarSectionHeader.titleFont)
-        .tracking(WarrenDesktopSidebarSectionHeader.titleTracking)
+        .font(WarrenDesktopTreeTypography.sectionTitle)
         .foregroundStyle(tokens.treeQuietText)
         .lineLimit(1)
         // The count replaces the word in place; the two cross-fade.

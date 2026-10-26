@@ -132,14 +132,15 @@ struct WarrenDesktopProjectRow: View {
 
                     // The name gives way first; the branch stays readable.
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        WarrenDesktopTreeTypography.groupNameText(project.name)
+                        WarrenDesktopFadingName(text: WarrenDesktopTreeTypography.groupNameText(project.name))
                             .foregroundStyle(tokens.treeGroupText)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
                         if let branchName {
-                            Text(branchName)
-                                .font(WarrenDesktopTreeTypography.branchName)
-                                .foregroundStyle(tokens.treeQuietText)
+                            WarrenDesktopTreeTypography.scriptText(
+                                branchName,
+                                latin: WarrenDesktopTreeTypography.branchName,
+                                wide: WarrenDesktopTreeTypography.branchNameWide
+                            )
+                                .foregroundStyle(tokens.treeBranchText)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                                 .layoutPriority(-1)

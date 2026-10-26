@@ -12,23 +12,32 @@ enum WarrenDesktopSidebarMetrics {
     /// Inset of the tree from the sidebar card's edges.
     static let contentHorizontalInset: CGFloat = 8
     static let contentVerticalInset: CGFloat = 10
+    /// The tree's gaps come in four steps, each clearly wider than the one
+    /// inside it: 0 between Sessions and between worktrees with none, 12
+    /// between worktrees that list Sessions, 12 + hairline + 12 between
+    /// groups, and 28 between sections.
+    ///
     /// Between one section (Tasks, Projects) and the next.
-    static let sectionSpacing: CGFloat = 24
+    static let sectionSpacing: CGFloat = 28
     /// Between a section heading and its first group.
-    static let sectionHeaderSpacing: CGFloat = 8
+    static let sectionHeaderSpacing: CGFloat = 6
     /// Between two groups of one section, on each side of the hairline that
     /// divides them.
-    static let groupSpacing: CGFloat = 10
+    static let groupSpacing: CGFloat = 12
     /// Above and below a folded group, so two folded neighbours sit 2pt apart.
     static let foldedGroupInset: CGFloat = 1
     /// Between a group row and its first worktree.
-    static let groupContentSpacing: CGFloat = 2
-    /// Between two worktrees of one group. Wide against the 1pt that hangs a
-    /// worktree's Sessions under it, so the gap alone groups a worktree with
-    /// its Sessions in a rail too narrow to indent them.
-    static let worktreeSpacing: CGFloat = 14
-    /// Between a worktree row and its Sessions, and between two Sessions.
-    static let sessionSpacing: CGFloat = 1
+    static let groupContentSpacing: CGFloat = 4
+    /// Between two worktrees of one group when either lists Sessions. Two
+    /// worktrees with none pack with no gap, so a group of idle branches
+    /// reads as one short list rather than a column of islands.
+    static let worktreeSpacing: CGFloat = 12
+    /// Above a project's idle-worktrees row, which belongs to the worktrees
+    /// over it rather than to the next project.
+    static let idleRowSpacing: CGFloat = 6
+    /// Between a worktree row and its Sessions, and between two Sessions:
+    /// the rows' own padding is the gap.
+    static let sessionSpacing: CGFloat = 0
 
     static let sectionHeaderHeight: CGFloat = 20
     static let groupRowHeight: CGFloat = 30
@@ -51,11 +60,13 @@ enum WarrenDesktopSidebarMetrics {
     static let groupIconSize: CGFloat = 18
     static let groupIconSpacing: CGFloat = 8
     static let worktreeIconSize: CGFloat = 11
+    /// A Task worktree's project tile, in the branch glyph's column.
+    static let worktreeProjectTileSize: CGFloat = 12
     static let worktreeIconSpacing: CGFloat = 6
 
     static let sessionIconSize: CGFloat = 16
     static let sessionIconSpacing: CGFloat = 8
-    static let sessionVerticalPadding: CGFloat = 6
+    static let sessionVerticalPadding: CGFloat = 5
     /// A Session row's second line, the same height whether it is drawing the
     /// activity now or the last one.
     static let sessionActivityLineHeight: CGFloat = 15
@@ -112,6 +123,9 @@ extension WarrenColorTokens {
     /// Below the quiet tier: a dimmed branch prefix under a quiet name, and
     /// the age beside an idle row.
     var treeFaintText: Color { sidebarSectionText.opacity(0.66) }
+    /// Branch names: between the leaf and section tiers, legible on the dark
+    /// card without competing with the Sessions under them.
+    var treeBranchText: Color { sidebarTextBase.opacity(0.66) }
     var treeGroupIcon: Color { foreground.opacity(0.62) }
     var treeRowHover: Color { foreground.opacity(0.05) }
     var treeRowSelected: Color { foreground.opacity(0.08) }
@@ -135,18 +149,26 @@ enum WarrenDesktopTreeTypography {
     static let groupName = Font.system(size: groupNameSize, weight: .semibold)
     static let groupNameWide = Font.system(size: groupNameWideSize, weight: .semibold)
     /// A Session's title, a half step under the group name above it: in a
-    /// Chinese name weight alone barely separates the two tiers.
+    /// Chinese name weight alone barely separates the two tiers. The wide
+    /// scripts take half a step less again, as group names do.
     static let sessionTitle = Font.system(size: 13, weight: .regular)
-    /// A worktree is a label over its Sessions rather than a row among them,
-    /// so its branch sits a step under the Session's second line.
-    static let branchName = Font.system(size: 11, weight: .regular, design: .monospaced)
+    static let sessionTitleWide = Font.system(size: 12.5, weight: .regular)
+    /// A branch name. Proportional: the branch glyph already says it is a
+    /// branch, and a Chinese branch name in a monospaced face ran unevenly.
+    static let branchName = Font.system(size: 11.5, weight: .medium)
+    static let branchNameWide = Font.system(size: 11, weight: .medium)
     /// The project a Task's worktree belongs to, ahead of its branch.
-    static let worktreeProjectName = Font.system(size: 11, weight: .medium)
+    static let worktreeProjectName = Font.system(size: 11.5, weight: .medium)
     /// That worktree's branch when it differs from its siblings'.
-    static let worktreeBranchSuffix = Font.system(size: 10.5, weight: .regular, design: .monospaced)
+    static let worktreeBranchSuffix = Font.system(size: 11.5, weight: .regular)
+    static let worktreeBranchSuffixWide = Font.system(size: 11, weight: .regular)
     /// "N idle worktrees" and "N inactive projects".
-    static let foldedCount = Font.system(size: 12, weight: .regular)
-    static let foldedCountNumber = Font.system(size: 12, weight: .medium).monospacedDigit()
+    static let foldedCount = Font.system(size: 11.5, weight: .regular)
+    static let foldedCountNumber = Font.system(size: 11.5, weight: .medium).monospacedDigit()
+    /// A section heading: sentence case, not tracked capitals, which read as
+    /// a watermark in a Chinese interface. Its count is a step quieter.
+    static let sectionTitle = Font.system(size: 11.5, weight: .semibold)
+    static let sectionCount = Font.system(size: 11, weight: .medium).monospacedDigit()
     static let inactiveProjectName = Font.system(size: 12.5, weight: .regular)
     /// The last-activity age at the end of an idle row.
     static let age = Font.system(size: 11, weight: .regular).monospacedDigit()
@@ -160,6 +182,42 @@ enum WarrenDesktopTreeTypography {
             text = text.map { $0 + part } ?? part
         }
         return text ?? Text(name).font(groupName)
+    }
+
+    /// `text` drawn script by script in `latin` and `wide`, so a Chinese run
+    /// and a Latin one share one optical size.
+    static func scriptText(_ text: String, latin: Font, wide: Font) -> Text {
+        var result: Text?
+        for run in scriptRuns(text) {
+            let part = Text(run.text).font(run.isWide ? wide : latin)
+            result = result.map { $0 + part } ?? part
+        }
+        return result ?? Text(text).font(latin)
+    }
+
+    /// The verbs a generated Session title starts with.
+    static let titleVerbs: Set<String> = [
+        "implement", "inspect", "fix", "review", "debug", "keep", "add", "update", "refactor",
+    ]
+
+    /// A generated title's leading verb, or `nil`. Down a column of Sessions
+    /// the verbs repeat and, being Latin, are read before the Chinese after
+    /// them; the row dims the verb so the eye lands on what the work is.
+    static func leadingVerb(of title: String) -> String? {
+        guard let space = title.firstIndex(of: " ") else { return nil }
+        let word = String(title[..<space])
+        guard titleVerbs.contains(word),
+              !title[space...].trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return word
+    }
+
+    /// A Session's title: the leading verb of a generated title in
+    /// `verbColor`, the rest in whatever colour the row gives it.
+    static func sessionTitleText(_ title: String, verbColor: Color?) -> Text {
+        let body = { (text: String) in scriptText(text, latin: sessionTitle, wide: sessionTitleWide) }
+        guard let verbColor, let verb = leadingVerb(of: title) else { return body(title) }
+        return Text(verb).font(sessionTitle).foregroundColor(verbColor)
+            + body(String(title.dropFirst(verb.count)))
     }
 
     /// The name cut into runs of one script, in order, so each run can take
@@ -558,7 +616,7 @@ struct WarrenDesktopProjectAvatar: View {
 ///
 /// Every badge is the same tile whatever it holds, so a row of mixed Agents
 /// and programs reads as one row of app icons.
-struct WarrenDesktopSessionKindBadge: View {
+public struct WarrenDesktopSessionKindBadge: View {
     let icon: WarrenDesktopAppIcon
     var size: CGFloat = WarrenDesktopSidebarMetrics.sessionIconSize
     @Environment(\.displayScale) private var displayScale
@@ -568,11 +626,11 @@ struct WarrenDesktopSessionKindBadge: View {
         self.size = size
     }
 
-    init(kind: TerminalSessionKind, size: CGFloat = WarrenDesktopSidebarMetrics.sessionIconSize) {
+    public init(kind: TerminalSessionKind, size: CGFloat) {
         self.init(icon: WarrenDesktopAppIcon(kind: kind), size: size)
     }
 
-    init(session: WarrenDesktopSession, size: CGFloat = WarrenDesktopSidebarMetrics.sessionIconSize) {
+    public init(session: WarrenDesktopSession, size: CGFloat) {
         self.init(icon: WarrenDesktopAppIcon.resolve(session), size: size)
     }
 
@@ -581,7 +639,7 @@ struct WarrenDesktopSessionKindBadge: View {
     static let glyphRatio: CGFloat = 0.62
     static let cornerRatio: CGFloat = 0.27
 
-    var body: some View {
+    public var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * Self.cornerRatio, style: .continuous)
         shape
             .fill(icon.tileColor)
@@ -676,5 +734,55 @@ struct WarrenDesktopChromeCapsule<Content: View>: View {
                     .strokeBorder(tokens.cardBorder, lineWidth: 1)
                     .allowsHitTesting(false)
             }
+    }
+}
+
+/// A name that fades its last 28pt when it does not fit, the tree's one way
+/// of cutting a name or a title. A name that fits takes only its own width,
+/// so whatever follows it on the row stays beside it.
+struct WarrenDesktopFadingName: View {
+    let text: Text
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            text
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            WarrenDesktopFadingLine { text }
+        }
+    }
+}
+
+/// A Task's leading tile: the project avatar's size and corner on a neutral
+/// ground, so a Task and a project head line up as one kind of group.
+struct WarrenDesktopTaskTile: View {
+    var size: CGFloat = WarrenDesktopSidebarMetrics.groupIconSize
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+
+    var body: some View {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
+        WarrenDesktopTaskGlyph(size: size * 0.56, color: tokens.ink3)
+            .frame(width: size, height: size)
+            .background(
+                tokens.foreground.opacity(colorScheme == .dark ? 0.07 : 0.06),
+                in: RoundedRectangle(cornerRadius: size * 5 / 18, style: .continuous)
+            )
+            .accessibilityHidden(true)
+    }
+}
+
+/// The Task mark: a flag. On the Task tile, and alone beside a Projects
+/// worktree that belongs to a Task.
+struct WarrenDesktopTaskGlyph: View {
+    var size: CGFloat = 11
+    var color: Color
+
+    var body: some View {
+        Image(systemName: "flag")
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(color)
+            .accessibilityHidden(true)
     }
 }

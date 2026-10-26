@@ -376,6 +376,13 @@ func resourceCommand(args []string) error {
 		return fmt.Errorf("unsupported command: %s %s", resource, action)
 	}
 	request := normalizedParams(params, resource, action)
+	if resource == "project" && action == "add" {
+		path, err := absoluteProjectPath(stringValue(request, "path"))
+		if err != nil {
+			return err
+		}
+		request["path"] = path
+	}
 	if resource == "session" && action == "undo" {
 		request["operation"] = positional(params, 0, "operation ID")
 	}

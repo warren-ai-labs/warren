@@ -8,6 +8,9 @@ struct WarrenDesktopTabItem: View {
     let tab: ClientTab
     let displayTitle: String
     let mark: WarrenActivityMark?
+    /// Whether this Tab's Conversation Session is a Lead. The title carries the
+    /// outlined word; a pending Lead request also raises the icon's dot.
+    var isLead: Bool = false
     let isSelected: Bool
     /// A stopped Tab's Session has no runtime. It keeps its place and its name,
     /// but it reads as quiet: the same grey a resting row uses, never a live
@@ -122,11 +125,17 @@ struct WarrenDesktopTabItem: View {
                             .foregroundStyle(tokens.mutedForeground)
                             .accessibilityHidden(true)
                     }
-                    WarrenDesktopFadingLine(edge: .trailing) {
-                        Text(displayTitle)
-                            .font(.system(size: 13, weight: .medium))
+                    HStack(spacing: 6) {
+                        WarrenDesktopFadingLine(edge: .trailing) {
+                            Text(displayTitle)
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        if isLead {
+                            WarrenDesktopLeadMark(tokens: tokens, height: 14)
+                                .fixedSize()
+                        }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(.rect)
                     // The drag source is native because SwiftUI's `.draggable`
                     // does not reliably complete a drop over the AppKit
@@ -261,7 +270,21 @@ struct WarrenDesktopTabItem: View {
                 .accessibilityHidden(true)
         } else {
             // Status lives in the sidebar's dots; the Tab names the Session.
+            // A Lead's unanswered request is the one exception: its Tab carries
+            // the same orange dot, because the request may be waiting in a pane
+            // the person has not looked at.
             WarrenDesktopSessionKindBadge(kind: tab.kind, size: 16)
+                .overlay(alignment: .bottomTrailing) {
+                    if isLead, let mark, mark.tier == .actionable {
+                        WarrenDesktopStatusDot(
+                            mark: mark,
+                            size: 6,
+                            ring: tokens.workbenchCardFill,
+                            tokens: tokens
+                        )
+                        .offset(x: 3, y: 3)
+                    }
+                }
         }
     }
 }

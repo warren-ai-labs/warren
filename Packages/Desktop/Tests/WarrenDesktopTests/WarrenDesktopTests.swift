@@ -1230,14 +1230,14 @@ final class WarrenDesktopTests: XCTestCase {
                 hostCount: 2,
                 isHovered: false
             ),
-            "PROJECTS · HOSTS"
+            "Projects · Hosts"
         )
         XCTAssertEqual(
             WarrenDesktopSidebarHostsSectionPresentation.title(
                 hostCount: 2,
                 isHovered: true
             ),
-            "PROJECTS · 2"
+            "Projects · 2"
         )
     }
 

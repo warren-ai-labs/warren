@@ -40,6 +40,25 @@ struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
     }
 }
 
+/// The gap above one worktree among its group's worktrees.
+///
+/// Worktrees that list Sessions are 12pt apart, so the gap alone says which
+/// Sessions belong to which branch; two that list none pack with no gap,
+/// since an empty worktree is one line of a list, not a block.
+enum WarrenDesktopWorktreeGap {
+    static func above(_ index: Int, leafCounts: [Int]) -> CGFloat {
+        guard index > 0, index < leafCounts.count else { return 0 }
+        return leafCounts[index - 1] == 0 && leafCounts[index] == 0
+            ? 0
+            : WarrenDesktopSidebarMetrics.worktreeSpacing
+    }
+
+    /// Above the idle-worktrees row: close to the worktrees it follows.
+    static func aboveIdleRow(followsWorktrees: Bool) -> CGFloat {
+        followsWorktrees ? WarrenDesktopSidebarMetrics.idleRowSpacing : 0
+    }
+}
+
 /// How a row folds its Session leaves away.
 ///
 /// Folding is the user's call, never the tree's: the row only offers it when

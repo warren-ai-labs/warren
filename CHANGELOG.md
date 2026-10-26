@@ -4,6 +4,12 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Resolve `warren project add PATH` at the client, so `.`, `..`, and `~/repo`
+  work. The Host expanded relative paths against its own working directory, so
+  only absolute paths reliably named the repository the user meant.
+
 ## [0.33.0] - 2026-10-21
 
 A minor release: Agents can be stopped from the CLI and from the Desktop with

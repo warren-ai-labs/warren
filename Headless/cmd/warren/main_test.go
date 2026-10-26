@@ -2679,3 +2679,113 @@ func TestPaneSplitSendsOneGuardedTreeUpdate(t *testing.T) {
 		t.Fatalf("the new pane must arrive without an id for the Host to assign: %#v", second)
 	}
 }
+
+// A relative path typed at the client must be resolved against the client's
+// working directory. The Host resolves relative paths against its own working
+// directory, which is unrelated to the directory the user typed the command in.
+func TestProjectAddResolvesRelativePathAtClient(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	requests := make(chan map[string]any, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		var auth map[string]any
+		if connection.ReadJSON(&auth) != nil {
+			return
+		}
+		if err := connection.WriteJSON(map[string]any{
+			"t": "welcome", "version": api.Version,
+			"host": map[string]any{"id": "test-host"}, "accessScopeId": "test-scope",
+		}); err != nil {
+			return
+		}
+		for {
+			var envelope map[string]any
+			if connection.ReadJSON(&envelope) != nil {
+				return
+			}
+			requests <- envelope
+			method, _ := envelope["method"].(string)
+			id, _ := envelope["id"].(string)
+			switch method {
+			case "project.add":
+				_ = connection.WriteJSON(map[string]any{
+					"t": "response", "id": id, "ok": true,
+					"result": api.Project{ID: "project-1"},
+				})
+			default:
+				_ = connection.WriteJSON(map[string]any{"t": "response", "id": id, "ok": false, "error": "unsupported"})
+			}
+		}
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(path, config.Config{
+		Current:   "test",
+		Endpoints: map[string]config.Endpoint{"test": {Name: "test", URL: server.URL, Token: "token", Type: "daemon"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	repository := filepath.Join(t.TempDir(), "repository")
+	nested := filepath.Join(repository, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(nested)
+
+	if _, err := captureStdout(t, func() error {
+		return run([]string{"--config", path, "--endpoint", "test", "--json", "project", "add", ".."})
+	}); err != nil {
+		t.Fatalf("project add: %v", err)
+	}
+	close(requests)
+	var add map[string]any
+	for envelope := range requests {
+		if envelope["method"] == "project.add" {
+			add = envelope
+		}
+	}
+	if add == nil {
+		t.Fatal("no project.add was sent")
+	}
+	params, _ := add["params"].(map[string]any)
+	if params["path"] != repository {
+		t.Fatalf("project path = %#v, want the client-resolved %q", params["path"], repository)
+	}
+}
+
+func TestAbsoluteProjectPathExpandsHomeAndCleans(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	working, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "dot", path: ".", want: working},
+		{name: "parent", path: "../repo", want: filepath.Join(filepath.Dir(working), "repo")},
+		{name: "home", path: "~/repo", want: filepath.Join(home, "repo")},
+		{name: "home alone", path: "~", want: home},
+		{name: "absolute stays", path: "/srv/repo", want: "/srv/repo"},
+		{name: "empty stays empty", path: "", want: ""},
+	}
+	for _, test := range tests {
+		got, err := absoluteProjectPath(test.path)
+		if err != nil {
+			t.Fatalf("%s: %v", test.name, err)
+		}
+		if got != test.want {
+			t.Fatalf("%s: %q resolved to %q, want %q", test.name, test.path, got, test.want)
+		}
+	}
+}

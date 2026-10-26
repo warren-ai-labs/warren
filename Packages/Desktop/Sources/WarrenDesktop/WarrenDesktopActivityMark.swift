@@ -89,7 +89,7 @@ extension WarrenDesktopSession {
     /// a plain shell reports its OSC 133 state instead: green while a command is
     /// running, red after a command failed. A shell that never emitted a marker
     /// reports nothing, so no state is invented for it.
-    var rowStatusMark: WarrenActivityMark? {
+    public var rowStatusMark: WarrenActivityMark? {
         if isAgentSession { return activityMark }
         guard let shell = shellState else { return activityMark }
         if shell.isRunningCommand { return .working }
