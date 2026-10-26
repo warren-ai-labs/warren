@@ -400,6 +400,11 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
             .ignoresSafeArea()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         let hosting = NSHostingView(rootView: root)
+        // The window owns the content's size, and its `minSize` is the only
+        // floor. Left at the default, the hosting view re-measured the whole
+        // tree for its min and max size after every transaction — a hover
+        // change included, which a scroll makes on every frame.
+        hosting.sizingOptions = []
         hosting.frame = NSRect(x: 0, y: 0, width: 1280, height: 800)
 
         let window = WarrenWindow(

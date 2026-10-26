@@ -444,6 +444,18 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, map[string]bool{"detached": true})
+	case "schedule.create", "schedule.list", "schedule.get", "schedule.remove",
+		"schedule.pause", "schedule.resume", "schedule.run", "schedule.runs":
+		// A schedule acts later on the owner's behalf, after the requesting
+		// client may be gone, so only the Host owner may read or change one.
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
+		value, err := p.server.Service.dispatchSchedule(ctx, command.Method, params)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
 	case "project.worktrees":
 		value, err := p.server.Service.ListProjectWorktrees(stringParam(params, "project"))
 		if err != nil {

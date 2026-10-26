@@ -96,6 +96,8 @@ func run(arguments []string) error {
 		return sshCommand(args[1:])
 	case "agent":
 		return agentCommand(args[1:])
+	case "schedule":
+		return scheduleCommand(args[1:])
 	case "task", "project", "workspace", "worktree", "session", "browser", "pane":
 		if args[0] == "task" && len(args) > 1 && args[1] == "workspace" {
 			return taskWorkspaceCommand(args[2:])

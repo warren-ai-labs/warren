@@ -38,6 +38,7 @@ Usage:
 Commands:
   relay connect|share
   agent create|list|current|send|read|wait|attach|remove|rename|pin|move
+  schedule create|list|view|remove|pause|resume|run|runs  Host-owned timers
   endpoint list|add|use|remove|current
   display list|add|remove|move|set|reset
   task list|create|remove|rename|pin|move|attach|detach|workspace

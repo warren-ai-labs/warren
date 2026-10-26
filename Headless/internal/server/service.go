@@ -269,6 +269,19 @@ type Service struct {
 
 	lifecycleOnce   sync.Once
 	lifecycleCancel context.CancelFunc
+
+	// SchedulePath persists Host-owned Schedules and their run history. Empty
+	// disables schedules.
+	SchedulePath  string
+	schedulesOnce sync.Once
+	schedules     *scheduleBook
+	scheduleCtxMu sync.Mutex
+	scheduleCtx   context.Context
+	// scheduleClock, scheduleTimeZone, and scheduleBusyPoll are test seams
+	// for the wall clock, the Host time zone, and the busy-Agent recheck.
+	scheduleClock    func() time.Time
+	scheduleTimeZone *time.Location
+	scheduleBusyPoll time.Duration
 	// agentStoreMu guards the one-time open of AgentStorePath. Opening the
 	// agent journal is expensive, so it must never run inside outputMu:
 	// roster snapshots and terminal attaches call lazyInit on their hot path
@@ -604,6 +617,9 @@ func (s *Service) Start(parent context.Context) {
 		// working directory is cheap and must reach the roster, while the OS
 		// foreground probe only adds data when the runtime was started with it.
 		go s.metadataLoop(ctx)
+		if strings.TrimSpace(s.SchedulePath) != "" {
+			go s.scheduleLoop(ctx)
+		}
 	})
 }
 

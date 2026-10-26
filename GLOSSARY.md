@@ -167,6 +167,19 @@ A normalized instruction in a closed vocabulary — `navigate`, `click`, `type`,
 `wait`, `snapshot`, `screenshot`, `evaluate` — sent to one Warren Browser
 Session. An unknown action is a protocol error, not a passthrough.
 
+**Schedule**:
+A Host-owned timer that performs one action on a cron expression or at one
+instant, in the Host's local time zone: a turn of an existing Agent, a new Agent
+whose first turn is the prompt, or a command run as a new shell Session in a
+Workspace. Its state and run history survive Host restarts.
+It is not roster state and no client renders it.
+_Avoid_: Cron Job, Timer Session
+
+**Schedule Run**:
+One execution of a Schedule's action, with its due time, status, target
+Session, and error. A run whose Agent is mid-turn is held as waiting until the
+turn ends, unless the Schedule skips busy Agents.
+
 **Warren Host**:
 A running Warren Headless authority that owns Projects, Workspaces, Terminal
 Sessions, and the Web interface through which those resources are accessed.

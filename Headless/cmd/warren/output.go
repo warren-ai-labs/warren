@@ -110,6 +110,22 @@ func printValue(value any) error {
 		case currentSessionValue:
 			fmt.Println(items.Session.ID)
 			return nil
+		case []ScheduleRow:
+			for _, item := range items {
+				fmt.Println(item.ID)
+			}
+			return nil
+		case api.Schedule:
+			fmt.Println(items.ID)
+			return nil
+		case []api.ScheduleRun:
+			for _, item := range items {
+				fmt.Println(item.ID)
+			}
+			return nil
+		case api.ScheduleRun:
+			fmt.Println(items.ID)
+			return nil
 		}
 	}
 	if outputJSON {
@@ -213,6 +229,22 @@ func printValue(value any) error {
 		printKVTable(currentSessionPairs(items))
 	case *currentSessionValue:
 		printKVTable(currentSessionPairs(*items))
+	case []ScheduleRow:
+		rows := make([][]string, 0, len(items))
+		for _, item := range items {
+			rows = append(rows, scheduleRowCells(item))
+		}
+		printTable([]string{"ID", "NAME", "STATE", "WHEN", "NEXT RUN", "UNTIL", "RUNS", "LAST RUN", "ACTION"}, rows...)
+	case api.Schedule:
+		printKVTable(schedulePairs(items))
+	case []api.ScheduleRun:
+		rows := make([][]string, 0, len(items))
+		for _, item := range items {
+			rows = append(rows, scheduleRunCells(item))
+		}
+		printTable([]string{"RUN ID", "TRIGGER", "DUE", "STARTED", "FINISHED", "STATUS", "SESSION", "EXIT", "ERROR"}, rows...)
+	case api.ScheduleRun:
+		printKVTable(scheduleRunPairs(items))
 	case api.SessionMovePreflight:
 		printKVTable(sessionMovePreflightPairs(items))
 	case *api.SessionMovePreflight:

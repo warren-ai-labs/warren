@@ -339,6 +339,42 @@ writes terminal bytes. Cancelling an idle Agent prints
 result once it ends, whether it was cancelled, interrupted, completed, or
 failed. `agent attach` is the explicit raw TTY operation.
 
+`warren schedule` manages Host-owned timers. The daemon stores them in
+`schedules.json` beside `state.json`, evaluates them in the Host's local time
+zone, and keeps firing after a restart without any CLI process running:
+
+```sh
+warren schedule create --name gray-check --cron "47 10 * * *" --until 2026-10-30 \
+  --agent AGENT_ID --prompt-file ~/.warren/schedules/gray-check.prompt
+warren schedule create --cron "0 2 * * *" --keep 7 \
+  --workspace WORKSPACE_ID --provider claude --prompt "Review yesterday's commits"
+warren schedule create --at "2026-10-24 09:00" --workspace WORKSPACE_ID --command "make smoke"
+warren schedule list
+warren schedule runs SCHEDULE_ID
+```
+
+An agent action starts one turn through the same Host path as `agent send`.
+`--prompt-file` names a file on the Host that is read at each run. When the
+Agent is mid-turn, the default `--when-busy wait` holds the prompt until the turn
+ends (bounded by `--busy-timeout` when set, and replaced by the next occurrence
+if it is still held then); `--when-busy skip` records the run as skipped. A
+missing or ended Agent fails the run. A new-agent action (`--workspace` with `--provider`, and optionally
+`--command` for the provider executable) creates a new Agent per run with the
+prompt as its launch-time first turn, exactly like `agent create --prompt`. The
+run stays `running` until that turn ends and then records `succeeded` or
+`failed`; the Agent is titled after the schedule and run time and stays open for
+follow-up turns. Its `--when-busy` applies to the previous run: `wait` starts
+only after the previous run's first turn ends, `skip` records a skipped run.
+`--keep N` removes the Agents of older runs beyond the newest N after each run,
+leaving pinned and working Agents; without it every Agent is kept.
+A command action runs through `/bin/sh` as
+a new shell Session in the Workspace and records its exit status. `--until`
+(a bare date includes that day) and `--max-runs` end a cron schedule; a one-shot
+ends after its run. A run missed while the Host was down or asleep runs once
+when it is back. `pause`, `resume`, `run` (once now, not counted toward
+`--max-runs`), `view`, and `remove` complete the lifecycle; only the Host owner
+token may use schedule methods.
+
 `session` is the generic PTY resource. `session create` starts shells,
 custom commands, and other interactive programs; it does not create Codex,
 Claude, or OpenCode Agents. `session send` writes terminal input and `session read` returns
@@ -396,7 +432,7 @@ CLI works against the local daemon without extra setup. On a remote host, use
 
 ## API Boundaries
 
-The control interface is `/v1/ws`: authenticate with the token first, then use request/response messages with request IDs. Roster is the Host resource projection; terminal output uses WebSocket binary frames. `task.create`, `task.remove`, `task.rename`, `task.pin`, and `task.move` manage Task lifecycle; `task.attach` and `task.detach` manage Workspace membership. `workspace.create` accepts an optional `task`; when present, the Workspace is inserted with that membership instead of requiring a later attach request. `task.move`, `project.move`, and `workspace.move` persist sidebar order on the Host (each accepts `id` and an optional `before`; omitting `before` moves the entry to the end). `session.current` accepts only an already-resolved Warren Session ID, while `session.move.preflight` and `session.delete.preflight` validate context without mutation. `session.subscribe` creates an output subscription and returns the attachment identity used by DENB input frames; `session.focus` acquires the shared control lease and may carry the viewport; `session.unsubscribe` removes one output subscription. SSH and Relay provide reachability only and do not enter the resource domain model.
+The control interface is `/v1/ws`: authenticate with the token first, then use request/response messages with request IDs. Roster is the Host resource projection; terminal output uses WebSocket binary frames. `task.create`, `task.remove`, `task.rename`, `task.pin`, and `task.move` manage Task lifecycle; `task.attach` and `task.detach` manage Workspace membership. `workspace.create` accepts an optional `task`; when present, the Workspace is inserted with that membership instead of requiring a later attach request. `task.move`, `project.move`, and `workspace.move` persist sidebar order on the Host (each accepts `id` and an optional `before`; omitting `before` moves the entry to the end). `session.current` accepts only an already-resolved Warren Session ID, while `session.move.preflight` and `session.delete.preflight` validate context without mutation. `session.subscribe` creates an output subscription and returns the attachment identity used by DENB input frames; `session.focus` acquires the shared control lease and may carry the viewport; `session.unsubscribe` removes one output subscription. `schedule.create`, `schedule.list`, `schedule.get`, `schedule.pause`, `schedule.resume`, `schedule.run`, `schedule.runs`, and `schedule.remove` manage Schedules; they require the Host owner token and are not part of the roster. SSH and Relay provide reachability only and do not enter the resource domain model.
 
 Public Access route state is owned by the Relay and persisted in `publicTunnel`
 metadata in `~/.warren/settings.json`; after a restart the daemon reconnects to

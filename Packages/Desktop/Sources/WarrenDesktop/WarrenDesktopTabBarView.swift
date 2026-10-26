@@ -988,7 +988,7 @@ extension Array where Element == WarrenDesktopTabRowElement {
 /// title would still take the whole cap. This measures the content's own width
 /// and clamps that, while still letting the content shrink when the row is
 /// narrower than the content itself.
-private struct WarrenDesktopClampedWidth: Layout {
+struct WarrenDesktopClampedWidth: Layout {
     let maxWidth: CGFloat
 
     func sizeThatFits(
@@ -1020,9 +1020,9 @@ private struct WarrenDesktopClampedWidth: Layout {
     }
 
     // A layout without these answers every alignment query from its parent's
-    // stack by placing its subviews again. Here that re-ran the title's
-    // `ViewThatFits` on every pass of the top chrome; the child's own guides
-    // are the same answer without the placement.
+    // stack by asking its subview, and a `ViewThatFits` answers one by building
+    // its candidates' subgraphs again. The pill aligns this by its centre, which
+    // the default guides already give, so the query stops here.
     func explicitAlignment(
         of guide: HorizontalAlignment,
         in bounds: CGRect,
@@ -1030,7 +1030,7 @@ private struct WarrenDesktopClampedWidth: Layout {
         subviews: Subviews,
         cache: inout ()
     ) -> CGFloat? {
-        subviews.first.map { bounds.minX + $0.dimensions(in: Self.childProposal(bounds))[guide] }
+        nil
     }
 
     func explicitAlignment(
@@ -1040,7 +1040,7 @@ private struct WarrenDesktopClampedWidth: Layout {
         subviews: Subviews,
         cache: inout ()
     ) -> CGFloat? {
-        subviews.first.map { bounds.minY + $0.dimensions(in: Self.childProposal(bounds))[guide] }
+        nil
     }
 
     private static func childProposal(_ bounds: CGRect) -> ProposedViewSize {

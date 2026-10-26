@@ -141,12 +141,12 @@ extension WarrenColorTokens {
 /// is added only when the primary plus that whole append fit. Nothing appended
 /// is ever truncated, and the first append that does not fit stops the rest.
 enum WarrenDesktopSessionSecondLineLayout {
-    static let primaryFontSize: CGFloat = 12
+    static let primaryFontSize: CGFloat = 11.5
     /// A shell command's own size. The monospaced face is a little smaller so
     /// its wider glyphs occupy the same run as the row's regular text.
-    static let commandFontSize: CGFloat = 11.5
-    /// The design's 12/15 meta tier, the same size as the activity it trails.
-    static let metaFontSize: CGFloat = 12
+    static let commandFontSize: CGFloat = 11
+    /// The meta tier, a half step under the activity it trails.
+    static let metaFontSize: CGFloat = 11
     /// The trailing column's ceiling, the width of `icon + 4/6` at the meta size.
     static let maximumMetaWidth: CGFloat = 35
     /// One separator, its two spaces included.
