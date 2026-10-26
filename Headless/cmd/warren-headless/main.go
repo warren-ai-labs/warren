@@ -242,6 +242,7 @@ func main() {
 		AgentFinder:    agent.DefaultFinder{},
 		ACPHoldCommand: acpHoldCommand(),
 		ACPHoldDir:     filepath.Join(filepath.Dir(*statePath), "acp"),
+		SchedulePath:   filepath.Join(filepath.Dir(*statePath), "schedules.json"),
 		AgentHooks: func() error {
 			if _, err := agent.EnsureCodexBindHook(agent.CodexHome()); err != nil {
 				return err

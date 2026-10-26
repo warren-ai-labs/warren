@@ -851,28 +851,17 @@ func splitShellWords(command string) ([]string, error) {
 	return words, nil
 }
 
-// appendAgentInitialPrompt adds a provider CLI's positional startup prompt to
-// an executable command that may already contain arbitrary arguments. The
-// command is evaluated by a POSIX shell inside the terminal runtime, so quote
-// the prompt as one shell word instead of interpolating it literally.
+// appendAgentInitialPrompt adds a positional startup prompt; see
+// agent.AppendInitialPrompt for the provider conventions.
 func appendAgentInitialPrompt(command, prompt string) string {
-	return strings.TrimSpace(command) + " " + shellQuote(prompt)
+	return agent.AppendInitialPrompt(command, "", prompt)
 }
 
 func appendAgentInitialPromptForProvider(command, provider, prompt string) string {
-	command = strings.TrimSpace(command)
-	if strings.EqualFold(strings.TrimSpace(provider), "opencode") {
-		return command + " --prompt " + shellQuote(prompt)
-	}
-	if strings.EqualFold(strings.TrimSpace(provider), "antigravity") {
-		return command + " -i " + shellQuote(prompt)
-	}
-	return appendAgentInitialPrompt(command, prompt)
+	return agent.AppendInitialPrompt(command, provider, prompt)
 }
 
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-}
+func shellQuote(value string) string { return agent.ShellQuote(value) }
 
 func agentCancelCommand(args []string) error {
 	help, present, err := validateStrictFlags(args, agentCancelValueFlags, agentCancelBooleanFlags)

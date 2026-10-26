@@ -139,7 +139,7 @@ final class WarrenDesktopSessionRowRenderTests: XCTestCase {
             WarrenDesktopSidebarMetrics.sessionRowHeight,
             accuracy: 0.5
         )
-        XCTAssertEqual(WarrenDesktopSidebarMetrics.sessionRowHeight, 47, accuracy: 0.001)
+        XCTAssertEqual(WarrenDesktopSidebarMetrics.sessionRowHeight, 45, accuracy: 0.001)
     }
 
     /// Writes the mounted sidebar to PNGs when asked, so the row can be looked

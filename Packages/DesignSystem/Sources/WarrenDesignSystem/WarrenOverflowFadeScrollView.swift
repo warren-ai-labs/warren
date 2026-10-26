@@ -16,6 +16,7 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
     private let fadeLength: CGFloat
     private let surface: Color
     private let showsEdgeChevrons: Bool
+    private let suspendsHitTestingWhileScrolling: Bool
     private let content: () -> Content
     private let contentID = "warren-overflow-content"
 
@@ -24,33 +25,45 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
     /// body and so `content`, rebuilding every row of a long list at the
     /// moment a scroll left the top.
     @State private var edgeModel = WarrenScrollEdgeModel()
+    @State private var activity = WarrenScrollActivity()
 
     public init(
         _ axes: Axis.Set = .vertical,
         fadeLength: CGFloat = 24,
         surface: Color,
         showsEdgeChevrons: Bool = false,
+        suspendsHitTestingWhileScrolling: Bool = false,
         @ViewBuilder content: @escaping () -> Content
     ) {
         self.axes = axes
         self.fadeLength = fadeLength
         self.surface = surface
         self.showsEdgeChevrons = showsEdgeChevrons
+        self.suspendsHitTestingWhileScrolling = suspendsHitTestingWhileScrolling
         self.content = content
     }
 
     public var body: some View {
         let model = edgeModel
+        let activity = activity
+        let suspends = suspendsHitTestingWhileScrolling
         ScrollViewReader { proxy in
             ScrollView(axes, showsIndicators: false) {
-                content()
-                    .id(contentID)
-                    .background {
-                        WarrenScrollEdgeObserver { newEdges in
-                            guard model.edges != newEdges else { return }
-                            model.edges = newEdges
+                WarrenScrollHitGate(
+                    activity: activity,
+                    isEnabled: suspends,
+                    content: content()
+                        .id(contentID)
+                        .background {
+                            WarrenScrollEdgeObserver(
+                                onChange: { newEdges in
+                                    guard model.edges != newEdges else { return }
+                                    model.edges = newEdges
+                                },
+                                onScrollingChange: suspends ? { activity.isScrolling = $0 } : nil
+                            )
                         }
-                    }
+                )
             }
             // A fade painted in the surface color only works over an opaque
             // surface. On glass the region behind is the window's coat, so the
@@ -79,6 +92,33 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
 @MainActor
 private final class WarrenScrollEdgeModel: ObservableObject {
     @Published var edges = WarrenScrollEdges()
+}
+
+/// Whether the content is moving under the pointer right now.
+@MainActor
+private final class WarrenScrollActivity: ObservableObject {
+    @Published var isScrolling = false
+}
+
+/// Takes the content out of hit testing while it scrolls.
+///
+/// Content moving under a still pointer makes AppKit ask, every frame, which
+/// view is under the pointer for its cursor, and SwiftUI ask again for its
+/// hover state. Both walk every responder in the content, so a long sidebar
+/// spent most of each 120 Hz frame answering. Hover is the only thing lost:
+/// wheel events go to the scroll view, which stays hit-testable, and a click
+/// restores the content before it is delivered.
+///
+/// `content` is built by the scroll view's body, which a change here does not
+/// re-run, so flipping the gate re-renders this modifier and nothing inside it.
+private struct WarrenScrollHitGate<Gated: View>: View {
+    @ObservedObject var activity: WarrenScrollActivity
+    let isEnabled: Bool
+    let content: Gated
+
+    var body: some View {
+        content.allowsHitTesting(!(isEnabled && activity.isScrolling))
+    }
 }
 
 private struct WarrenScrollEdgeMask: View {
@@ -227,26 +267,37 @@ private struct WarrenScrollEdgeIndicators: View {
 
 private struct WarrenScrollEdgeObserver: NSViewRepresentable {
     let onChange: (WarrenScrollEdges) -> Void
+    var onScrollingChange: ((Bool) -> Void)?
 
     func makeNSView(context: Context) -> WarrenScrollEdgeObserverView {
         let view = WarrenScrollEdgeObserverView()
         view.onChange = onChange
+        view.onScrollingChange = onScrollingChange
         return view
     }
 
     func updateNSView(_ nsView: WarrenScrollEdgeObserverView, context: Context) {
         nsView.onChange = onChange
+        nsView.onScrollingChange = onScrollingChange
         nsView.reconcileScrollView()
     }
 }
 
 private final class WarrenScrollEdgeObserverView: NSView {
     var onChange: ((WarrenScrollEdges) -> Void)?
+    /// Reports when the clip view starts and stops moving. A wheel scroll has
+    /// no end event, so the end is the moment movement has paused this long.
+    var onScrollingChange: ((Bool) -> Void)?
+    static let scrollSettleInterval: TimeInterval = 0.15
 
     private weak var observedScrollView: NSScrollView?
     private var observations: [NSObjectProtocol] = []
     private var lastEdges: WarrenScrollEdges?
     private var publicationScheduled = false
+    private var isScrolling = false
+    private var lastScrollMovement: TimeInterval = 0
+    private var settleScheduled = false
+    private var clickMonitor: Any?
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
@@ -258,6 +309,7 @@ private final class WarrenScrollEdgeObserverView: NSView {
         guard window != nil else {
             removeObservations()
             observedScrollView = nil
+            endScrolling()
             return
         }
         reconcileScrollView()
@@ -289,7 +341,8 @@ private final class WarrenScrollEdgeObserverView: NSView {
             object: scrollView.contentView,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
+            MainActor.assumeIsolated {
+                self?.noteScrollMovement()
                 self?.schedulePublication()
             }
         })
@@ -332,6 +385,65 @@ private final class WarrenScrollEdgeObserverView: NSView {
         guard edges != lastEdges else { return }
         lastEdges = edges
         onChange?(edges)
+    }
+
+    private func noteScrollMovement() {
+        guard onScrollingChange != nil else { return }
+        lastScrollMovement = ProcessInfo.processInfo.systemUptime
+        if !isScrolling {
+            isScrolling = true
+            onScrollingChange?(true)
+            installClickMonitor()
+        }
+        scheduleSettleCheck(after: Self.scrollSettleInterval)
+    }
+
+    private func scheduleSettleCheck(after delay: TimeInterval) {
+        guard !settleScheduled else { return }
+        settleScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            settleScheduled = false
+            guard isScrolling else { return }
+            let idle = ProcessInfo.processInfo.systemUptime - lastScrollMovement
+            if idle >= Self.scrollSettleInterval {
+                endScrolling()
+            } else {
+                scheduleSettleCheck(after: Self.scrollSettleInterval - idle)
+            }
+        }
+    }
+
+    private func endScrolling() {
+        removeClickMonitor()
+        guard isScrolling else { return }
+        isScrolling = false
+        onScrollingChange?(false)
+    }
+
+    /// A click while the content still moves — one that stops a momentum
+    /// scroll, say — must land on the row under it. The monitor runs before
+    /// the click is dispatched; the gate is lifted and the window laid out
+    /// at once, so the click's own hit test already sees the content.
+    private func installClickMonitor() {
+        guard clickMonitor == nil else { return }
+        clickMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, let window = self.window, event.window === window else { return }
+                self.endScrolling()
+                window.contentView?.layoutSubtreeIfNeeded()
+            }
+            return event
+        }
+    }
+
+    private func removeClickMonitor() {
+        if let clickMonitor {
+            NSEvent.removeMonitor(clickMonitor)
+        }
+        clickMonitor = nil
     }
 
     private func removeObservations() {

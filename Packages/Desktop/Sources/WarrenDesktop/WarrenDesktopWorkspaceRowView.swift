@@ -32,6 +32,12 @@ enum WarrenDesktopWorkspaceGlyph: Equatable, Sendable {
 struct WarrenDesktopWorkspaceRow: View {
     let workspace: Workspace
     let semanticScope: String
+    /// The project named ahead of the branch, for a Task's worktrees: one Task
+    /// can span several projects.
+    var projectLabel: String? = nil
+    /// False when the branch repeats the one its sibling worktrees share, so
+    /// the row names only its project.
+    var showsBranch: Bool = true
     let mark: WarrenActivityMark?
     let activeTabCount: Int
     let isSelected: Bool
@@ -133,12 +139,30 @@ struct WarrenDesktopWorkspaceRow: View {
                     // selected Session below says where the work is. Its
                     // type prefix is dimmer still, so the eye lands on the
                     // rest.
-                    WarrenDesktopBranchNameLabel(
-                        name: workspace.name.isEmpty ? "Workspace" : workspace.name,
-                        leafColor: isSelectionDisabled ? tokens.treeQuietText : tokens.treeSecondaryText,
-                        prefixColor: isSelectionDisabled ? tokens.treeFaintText : tokens.treeQuietText,
-                        font: WarrenDesktopTreeTypography.branchName
-                    )
+                    if let projectLabel {
+                        Text(projectLabel)
+                            .font(WarrenDesktopTreeTypography.worktreeProjectName)
+                            .foregroundStyle(isSelectionDisabled ? tokens.treeQuietText : tokens.treeSecondaryText)
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                    }
+                    if projectLabel == nil || showsBranch {
+                        if projectLabel != nil {
+                            Text("·")
+                                .font(WarrenDesktopTreeTypography.worktreeBranchSuffix)
+                                .foregroundStyle(tokens.treeFaintText)
+                        }
+                        WarrenDesktopBranchNameLabel(
+                            name: workspace.name.isEmpty ? "Workspace" : workspace.name,
+                            leafColor: projectLabel != nil || isSelectionDisabled
+                                ? tokens.treeQuietText : tokens.treeSecondaryText,
+                            prefixColor: projectLabel != nil || isSelectionDisabled
+                                ? tokens.treeFaintText : tokens.treeQuietText,
+                            font: projectLabel == nil
+                                ? WarrenDesktopTreeTypography.branchName
+                                : WarrenDesktopTreeTypography.worktreeBranchSuffix
+                        )
+                    }
 
                     if isDeleting {
                         deletionStatus(tokens: tokens)
@@ -174,13 +198,13 @@ struct WarrenDesktopWorkspaceRow: View {
             .simultaneousGesture(TapGesture(count: 2).onEnded {
                 if !isInteractionDisabled && !isSelectionDisabled { onDoubleClick() }
             })
-            .accessibilityLabel("Workspace \(workspace.name)")
+            .accessibilityLabel("Workspace \(presentedName)")
             .accessibilityValue(workspaceAccessibilityValue)
             .accessibilityAddTraits(isSelected && !isSelectionDisabled ? .isSelected : [])
             .warrenSemanticElement(
                 id: "workspace.\(semanticScope).\(workspace.id.description)",
                 role: .button,
-                label: "Workspace \(workspace.name)",
+                label: "Workspace \(presentedName)",
                 value: workspaceAccessibilityValue,
                 isEnabled: !isInteractionDisabled && !isSelectionDisabled,
                 isSelected: isSelected && !isSelectionDisabled,
@@ -198,11 +222,15 @@ struct WarrenDesktopWorkspaceRow: View {
                 WarrenDesktopLeafDisclosureAccessory(
                     disclosure: leafDisclosure,
                     isRevealed: true,
-                    label: "workspace \(workspace.name)",
+                    label: "workspace \(presentedName)",
                     semanticID: "workspace-leaves.\(semanticScope).\(workspace.id.description)",
                     isEnabled: !isInteractionDisabled,
                     chevronColor: tokens.treeChevron.opacity(0.8)
                 )
+                // An open worktree's chevron waits for the pointer: one per
+                // worktree read as a column of noise down a busy rail. A
+                // folded one stays, since it is then the only sign of the fold.
+                .opacity(leafDisclosure.isExpanded && !(isHovered || isFocused || forceHover) ? 0 : 1)
             }
         }
         .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
@@ -220,9 +248,15 @@ struct WarrenDesktopWorkspaceRow: View {
             !isInteractionDisabled && !isMutationDisabled ? contextMenuActions : []
         )
         // A long name truncates to one line; the whole name is on hover.
-        .help(taskName.map { "\(workspace.name) · Task: \($0)" } ?? workspace.name)
+        .help(taskName.map { "\(presentedName) · Task: \($0)" } ?? presentedName)
         .accessibilityElement(children: .contain)
         .onHover { isHovered = $0 }
+    }
+
+    /// The whole name, project included, for hover and assistive technology,
+    /// whatever the row has room to draw.
+    private var presentedName: String {
+        projectLabel.map { "\($0) · \(workspace.name)" } ?? workspace.name
     }
 
     private var contextMenuActions: [WarrenDesktopContextMenuAction] {

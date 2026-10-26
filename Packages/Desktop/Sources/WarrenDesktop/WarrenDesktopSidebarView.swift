@@ -117,7 +117,11 @@ struct WarrenDesktopSidebar: View {
                 WarrenOverflowFadeScrollView(
                     .vertical,
                     fadeLength: WarrenLayoutMetrics.sidebarScrollFadeLength,
-                    surface: tokens.workbenchCardFill
+                    surface: tokens.workbenchCardFill,
+                    // Every row carries hover, help, and menu responders; a
+                    // still pointer over moving rows walked them all twice a
+                    // frame. Hover pauses for the scroll and resumes after it.
+                    suspendsHitTestingWhileScrolling: true
                 ) {
                     Group {
                         if let sidebarHostProjections, usesSidebarHostSections {

@@ -13,7 +13,7 @@ enum WarrenDesktopSidebarMetrics {
     static let contentHorizontalInset: CGFloat = 8
     static let contentVerticalInset: CGFloat = 10
     /// Between one section (Tasks, Projects) and the next.
-    static let sectionSpacing: CGFloat = 18
+    static let sectionSpacing: CGFloat = 24
     /// Between a section heading and its first group.
     static let sectionHeaderSpacing: CGFloat = 8
     /// Between two groups of one section, on each side of the hairline that
@@ -22,15 +22,17 @@ enum WarrenDesktopSidebarMetrics {
     /// Above and below a folded group, so two folded neighbours sit 2pt apart.
     static let foldedGroupInset: CGFloat = 1
     /// Between a group row and its first worktree.
-    static let groupContentSpacing: CGFloat = 4
-    /// Between two worktrees of one group.
-    static let worktreeSpacing: CGFloat = 6
+    static let groupContentSpacing: CGFloat = 2
+    /// Between two worktrees of one group. Wide against the 1pt that hangs a
+    /// worktree's Sessions under it, so the gap alone groups a worktree with
+    /// its Sessions in a rail too narrow to indent them.
+    static let worktreeSpacing: CGFloat = 14
     /// Between a worktree row and its Sessions, and between two Sessions.
     static let sessionSpacing: CGFloat = 1
 
     static let sectionHeaderHeight: CGFloat = 20
     static let groupRowHeight: CGFloat = 30
-    static let worktreeRowHeight: CGFloat = 24
+    static let worktreeRowHeight: CGFloat = 22
     /// A worktree with no Session, listed under its project's idle row.
     static let idleWorktreeRowHeight: CGFloat = 22
     /// The row that folds a section's inactive projects away.
@@ -51,8 +53,8 @@ enum WarrenDesktopSidebarMetrics {
     static let worktreeIconSize: CGFloat = 11
     static let worktreeIconSpacing: CGFloat = 6
 
-    static let sessionIconSize: CGFloat = 18
-    static let sessionIconSpacing: CGFloat = 10
+    static let sessionIconSize: CGFloat = 16
+    static let sessionIconSpacing: CGFloat = 8
     static let sessionVerticalPadding: CGFloat = 6
     /// A Session row's second line, the same height whether it is drawing the
     /// activity now or the last one.
@@ -132,16 +134,22 @@ enum WarrenDesktopTreeTypography {
     static let groupNameWideSize: CGFloat = 13
     static let groupName = Font.system(size: groupNameSize, weight: .semibold)
     static let groupNameWide = Font.system(size: groupNameWideSize, weight: .semibold)
-    /// A Session's title: the design's 13.5/18, the same size as the group
-    /// name above it so weight alone carries the tier.
-    static let sessionTitle = Font.system(size: 13.5, weight: .regular)
-    static let branchName = Font.system(size: 11.5, weight: .regular, design: .monospaced)
+    /// A Session's title, a half step under the group name above it: in a
+    /// Chinese name weight alone barely separates the two tiers.
+    static let sessionTitle = Font.system(size: 13, weight: .regular)
+    /// A worktree is a label over its Sessions rather than a row among them,
+    /// so its branch sits a step under the Session's second line.
+    static let branchName = Font.system(size: 11, weight: .regular, design: .monospaced)
+    /// The project a Task's worktree belongs to, ahead of its branch.
+    static let worktreeProjectName = Font.system(size: 11, weight: .medium)
+    /// That worktree's branch when it differs from its siblings'.
+    static let worktreeBranchSuffix = Font.system(size: 10.5, weight: .regular, design: .monospaced)
     /// "N idle worktrees" and "N inactive projects".
     static let foldedCount = Font.system(size: 12, weight: .regular)
     static let foldedCountNumber = Font.system(size: 12, weight: .medium).monospacedDigit()
     static let inactiveProjectName = Font.system(size: 12.5, weight: .regular)
     /// The last-activity age at the end of an idle row.
-    static let age = Font.system(size: 12, weight: .regular).monospacedDigit()
+    static let age = Font.system(size: 11, weight: .regular).monospacedDigit()
 
     /// A project or task name drawn script by script, so a Chinese name and an
     /// English one share one optical size on their rows.

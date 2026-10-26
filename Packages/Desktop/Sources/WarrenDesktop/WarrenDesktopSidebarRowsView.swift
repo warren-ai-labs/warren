@@ -835,6 +835,9 @@ struct WarrenDesktopSidebarRows: View {
                                 VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.groupContentSpacing) {
                                     taskRow(group)
                                     if !tree.collapsedTaskIDs.contains(group.task.id) {
+                                        let sharedBranch = WarrenDesktopTaskWorktreeBranch.shared(
+                                            group.workspaces.map(\.name)
+                                        )
                                         VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.worktreeSpacing) {
                                             ForEach(group.workspaces) { workspace in
                                                 if let project = groups.first(where: { $0.project.id == workspace.projectID }) {
@@ -850,7 +853,8 @@ struct WarrenDesktopSidebarRows: View {
                                                             workspace,
                                                             in: project,
                                                             semanticScope: "task-list",
-                                                            displayName: "\(project.project.name) · \(workspace.name)"
+                                                            projectLabel: project.project.name,
+                                                            showsBranch: workspace.name != sharedBranch
                                                         )
                                                     } leaves: {
                                                         workspaceSessionRows(
@@ -1171,14 +1175,10 @@ struct WarrenDesktopSidebarRows: View {
         _ workspace: Workspace,
         in group: WarrenDesktopProjectGroup,
         semanticScope: String = "project-list",
-        displayName: String? = nil,
+        projectLabel: String? = nil,
+        showsBranch: Bool = true,
         taskName: String? = nil
     ) -> some View {
-        let presentedWorkspace = displayName.map { name in
-            var value = workspace
-            value.name = name
-            return value
-        } ?? workspace
         let rowID = "workspace.\(semanticScope).\(workspace.id.description)"
         let isProjectDeleting = deletingProjectIDs.contains(group.project.id)
         let isDeleting = deletingWorkspaceIDs.contains(workspace.id)
@@ -1197,8 +1197,10 @@ struct WarrenDesktopSidebarRows: View {
         ZStack {
             let activitySummary = workspaceActivitySummary(workspace.id)
             WarrenDesktopWorkspaceRow(
-                workspace: presentedWorkspace,
+                workspace: workspace,
                 semanticScope: semanticScope,
+                projectLabel: projectLabel,
+                showsBranch: showsBranch,
                 mark: activitySummary?.mark,
                 activeTabCount: activitySummary?.activeTabCount ?? 0,
                 isSelected: isWorkspaceRowSelected(
@@ -2229,12 +2231,12 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             // has to act on, so it stays bright and still while the others
             // shimmer or dim.
             Text(WarrenDesktopActivityText.shortened(text))
-                .font(.system(size: 12))
+                .font(.system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize))
                 .foregroundStyle(tokens.treeSessionText)
                 .lineLimit(1)
         } else if agent.isRunning {
             Text(WarrenDesktopActivityText.shortened(text))
-                .font(.system(size: 12))
+                .font(.system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize))
                 .lineLimit(1)
                 .modifier(WarrenDesktopActivityShimmer(
                     base: tokens.treeSecondaryText,
@@ -2243,7 +2245,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                 ))
         } else {
             Text(WarrenDesktopActivityText.shortened(text))
-                .font(.system(size: 12))
+                .font(.system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize))
                 .foregroundStyle(tokens.treeQuietText)
                 .lineLimit(1)
         }
@@ -2963,3 +2965,17 @@ struct WarrenDesktopDialogFooter: View {
     }
 }
 
+/// The branch a Task's worktrees have in common, which their rows leave out.
+enum WarrenDesktopTaskWorktreeBranch {
+    /// The name most of the Task's worktrees share, or `nil` when no two
+    /// share one. A Task's worktrees usually sit on one branch across several
+    /// projects, and repeating it on every row said nothing the Task row had
+    /// not; only a worktree off that branch still names its own.
+    static func shared(_ names: [String]) -> String? {
+        var counts: [String: Int] = [:]
+        for name in names where !name.isEmpty { counts[name, default: 0] += 1 }
+        let best = counts.max { a, b in a.value == b.value ? a.key > b.key : a.value < b.value }
+        guard let best, best.value > 1 else { return nil }
+        return best.key
+    }
+}

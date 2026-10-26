@@ -144,8 +144,11 @@ public extension View {
 /// Holds the control's last laid-out frame without making the control
 /// re-render each time it moves.
 @MainActor
+/// Reads the control's current frame when the pointer arrives. It publishes
+/// nothing, so pointing it at the latest geometry during an update invalidates
+/// no view.
 private final class WarrenTooltipAnchor {
-    var frame: CGRect = .zero
+    var read: (() -> CGRect)?
 }
 
 private struct WarrenTooltipModifier: ViewModifier {
@@ -160,16 +163,18 @@ private struct WarrenTooltipModifier: ViewModifier {
         if let center {
             content
                 .background {
+                    // Read on hover rather than tracked: tracking ran a callback
+                    // for every tooltip on every frame a scroll moved it.
                     GeometryReader { proxy in
-                        let frame = proxy.frame(in: .named(WarrenTooltipCenter.coordinateSpace))
+                        let _ = anchor.read = {
+                            proxy.frame(in: .named(WarrenTooltipCenter.coordinateSpace))
+                        }
                         Color.clear
-                            .onAppear { anchor.frame = frame }
-                            .onChange(of: frame) { anchor.frame = $0 }
                     }
                 }
                 .onHover { inside in
                     if inside {
-                        center.enter(.init(id: id, text: text, shortcut: shortcut, anchor: anchor.frame))
+                        center.enter(.init(id: id, text: text, shortcut: shortcut, anchor: anchor.read?() ?? .zero))
                     } else {
                         center.leave(id)
                     }
