@@ -274,6 +274,36 @@ final class WarrenConversationTests: XCTestCase {
         XCTAssertEqual(notices.first?.text, raw)
     }
 
+    func testModelMetadataWarningIsANoticeInsteadOfAnAnswer() {
+        let warning = "Model metadata for `deepseek` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+        let turn = WarrenConversation.project([
+            event("turn.started"),
+            event("message.created", [
+                "role": .string("assistant"),
+                "messageId": .string("diagnostic"),
+                "content": .string(warning),
+            ]),
+            event("message.completed", [
+                "role": .string("assistant"),
+                "messageId": .string("diagnostic"),
+                "content": .string(warning),
+            ]),
+            event("message.created", [
+                "role": .string("assistant"),
+                "messageId": .string("answer"),
+                "content": .string("Done."),
+            ]),
+            event("turn.completed"),
+        ]).turns.first
+
+        XCTAssertEqual(turn?.answer, "Done.")
+        XCTAssertEqual(turn?.notices, [
+            .init(id: "diagnostic", kind: .warning, text: warning),
+        ])
+        XCTAssertFalse(turn?.narration.contains(warning) ?? true)
+        XCTAssertFalse(turn?.answer.contains("Model metadata") ?? true)
+    }
+
     func testSkillStepNamesTheSkillWithoutItsPluginPrefix() {
         let started = event("tool.started", [
             "callId": .string("s1"), "toolName": .string("skill"), "toolKind": .string("skill"),

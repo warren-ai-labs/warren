@@ -35,6 +35,10 @@ struct WarrenDesktopWorkspaceRow: View {
     /// The project named ahead of the branch, for a Task's worktrees: one Task
     /// can span several projects.
     var projectLabel: String? = nil
+    /// The project's identity, for the tile that stands in for the branch
+    /// glyph on a Task's worktree: the colour matches the project's avatar in
+    /// Projects, so one glance says which project the worktree is in.
+    var projectIdentity: String? = nil
     /// False when the branch repeats the one its sibling worktrees share, so
     /// the row names only its project.
     var showsBranch: Bool = true
@@ -132,8 +136,16 @@ struct WarrenDesktopWorkspaceRow: View {
                 onSelect()
             }) {
                 HStack(spacing: WarrenDesktopSidebarMetrics.worktreeIconSpacing) {
-                    workspaceGlyph(tokens: tokens)
-                        .frame(width: 12, height: 12)
+                    if let projectLabel, let projectIdentity {
+                        WarrenDesktopProjectAvatar(
+                            name: projectLabel,
+                            identity: projectIdentity,
+                            size: WarrenDesktopSidebarMetrics.worktreeProjectTileSize
+                        )
+                    } else {
+                        workspaceGlyph(tokens: tokens)
+                            .frame(width: 12, height: 12)
+                    }
 
                     // A branch name stays quiet whatever it holds; the
                     // selected Session below says where the work is. Its
@@ -144,7 +156,7 @@ struct WarrenDesktopWorkspaceRow: View {
                             .font(WarrenDesktopTreeTypography.worktreeProjectName)
                             .foregroundStyle(isSelectionDisabled ? tokens.treeQuietText : tokens.treeSecondaryText)
                             .lineLimit(1)
-                            .layoutPriority(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     if projectLabel == nil || showsBranch {
                         if projectLabel != nil {
@@ -155,12 +167,14 @@ struct WarrenDesktopWorkspaceRow: View {
                         WarrenDesktopBranchNameLabel(
                             name: workspace.name.isEmpty ? "Workspace" : workspace.name,
                             leafColor: projectLabel != nil || isSelectionDisabled
-                                ? tokens.treeQuietText : tokens.treeSecondaryText,
-                            prefixColor: projectLabel != nil || isSelectionDisabled
-                                ? tokens.treeFaintText : tokens.treeQuietText,
+                                ? tokens.treeQuietText : tokens.treeBranchText,
+                            prefixColor: tokens.treeFaintText,
                             font: projectLabel == nil
                                 ? WarrenDesktopTreeTypography.branchName
-                                : WarrenDesktopTreeTypography.worktreeBranchSuffix
+                                : WarrenDesktopTreeTypography.worktreeBranchSuffix,
+                            wideFont: projectLabel == nil
+                                ? WarrenDesktopTreeTypography.branchNameWide
+                                : WarrenDesktopTreeTypography.worktreeBranchSuffixWide
                         )
                     }
 
@@ -360,9 +374,11 @@ struct WarrenDesktopWorkspaceRow: View {
                 guard !isInteractionDisabled, !isMutationDisabled else { return }
                 onSelectTask(taskID)
             } label: {
-                Text("Task")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(tokens.highlight)
+                WarrenDesktopTaskGlyph(
+                    size: 10,
+                    color: isInteractionDisabled || isMutationDisabled
+                        ? tokens.treeFaintText.opacity(0.6) : tokens.treeFaintText
+                )
                     .frame(width: WarrenDesktopWorkspaceRowAccessories.taskLinkWidth, height: 18)
                     .contentShape(.rect)
             }
@@ -370,6 +386,7 @@ struct WarrenDesktopWorkspaceRow: View {
             .disabled(isInteractionDisabled || isMutationDisabled)
             .accessibilityLabel("Task \(taskName)")
             .accessibilityValue("Open task")
+            .warrenTooltip("In Task: \(taskName)")
             .warrenSemanticElement(
                 id: "workspace-task.\(semanticScope).\(workspace.id.description)",
                 role: .button,

@@ -173,13 +173,13 @@ struct WarrenDesktopSidebarRows: View {
                                     } else if soloWorkspace == nil, split.hasRows,
                                         isProjectExpanded(group.project.id)
                                         || hasDeletingWorkspace(in: group.project.id) {
-                                        VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.worktreeSpacing) {
-                                            ForEach(split.live) { workspace in
+                                        let leafCounts = split.live.map {
+                                            leafCount($0, semanticScope: "project-list")
+                                        }
+                                        VStack(alignment: .leading, spacing: 0) {
+                                            ForEach(Array(split.live.enumerated()), id: \.element.id) { index, workspace in
                                                 WarrenDesktopSessionLeafGroup(
-                                                    leafCount: showsSessionLeaves(
-                                                        workspace,
-                                                        semanticScope: "project-list"
-                                                    ) ? activeSessions(in: workspace.id).count : 0
+                                                    leafCount: leafCounts[index]
                                                 ) {
                                                     workspaceRow(
                                                         workspace,
@@ -193,9 +193,13 @@ struct WarrenDesktopSidebarRows: View {
                                                         semanticScope: "project-list"
                                                     )
                                                 }
+                                                .padding(.top, WarrenDesktopWorktreeGap.above(index, leafCounts: leafCounts))
                                             }
                                             if split.showsIdleRow {
                                                 idleWorkspaceRows(split.idle, in: group)
+                                                    .padding(.top, WarrenDesktopWorktreeGap.aboveIdleRow(
+                                                        followsWorktrees: !split.live.isEmpty
+                                                    ))
                                             }
                                         }
                                     }
@@ -440,6 +444,7 @@ struct WarrenDesktopSidebarRows: View {
         let allProjectsExpanded = areAllProjectsExpanded
         return WarrenDesktopSidebarSectionHeader(
             title: "Projects",
+            count: groups.count,
             disclosureExpanded: !tree.projectsCollapsed,
             actionImage: "plus",
             actionLabel: "Add Project…",
@@ -626,6 +631,7 @@ struct WarrenDesktopSidebarRows: View {
                 isExpanded: isExpanded,
                 semanticID: "project-idle-worktrees.\(projectID.description)",
                 isEnabled: !isInteractionDisabled,
+                isWorktreeLevel: true,
                 onToggle: { toggleIdleWorkspaces(projectID) }
             )
             if isExpanded {
@@ -784,6 +790,13 @@ struct WarrenDesktopSidebarRows: View {
         return !activeSessions(in: workspace.id).contains(where: isSessionSelected)
     }
 
+    /// How many Session leaves `workspace` lists in `semanticScope`.
+    private func leafCount(_ workspace: Workspace, semanticScope: String) -> Int {
+        showsSessionLeaves(workspace, semanticScope: semanticScope)
+            ? activeSessions(in: workspace.id).count
+            : 0
+    }
+
     private func workspaceRowContainsSelection(
         _ workspace: Workspace,
         ownsSessionLeaves: Bool
@@ -811,6 +824,7 @@ struct WarrenDesktopSidebarRows: View {
                 VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.sectionHeaderSpacing) {
                     WarrenDesktopSidebarSectionHeader(
                         title: "Tasks",
+                        count: taskGroups.count,
                         disclosureExpanded: !tree.tasksCollapsed,
                         actionImage: "plus",
                         actionLabel: "New Task…",
@@ -838,14 +852,17 @@ struct WarrenDesktopSidebarRows: View {
                                         let sharedBranch = WarrenDesktopTaskWorktreeBranch.shared(
                                             group.workspaces.map(\.name)
                                         )
-                                        VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.worktreeSpacing) {
-                                            ForEach(group.workspaces) { workspace in
+                                        let taskWorkspaces = group.workspaces.filter { workspace in
+                                            groups.contains { $0.project.id == workspace.projectID }
+                                        }
+                                        let leafCounts = taskWorkspaces.map {
+                                            leafCount($0, semanticScope: "task-list")
+                                        }
+                                        VStack(alignment: .leading, spacing: 0) {
+                                            ForEach(Array(taskWorkspaces.enumerated()), id: \.element.id) { index, workspace in
                                                 if let project = groups.first(where: { $0.project.id == workspace.projectID }) {
                                                     WarrenDesktopSessionLeafGroup(
-                                                        leafCount: showsSessionLeaves(
-                                                            workspace,
-                                                            semanticScope: "task-list"
-                                                        ) ? activeSessions(in: workspace.id).count : 0
+                                                        leafCount: leafCounts[index]
                                                     ) {
                                                         // A task's worktrees name their project,
                                                         // since one task can span several.
@@ -854,6 +871,7 @@ struct WarrenDesktopSidebarRows: View {
                                                             in: project,
                                                             semanticScope: "task-list",
                                                             projectLabel: project.project.name,
+                                                            projectIdentity: project.project.id.description,
                                                             showsBranch: workspace.name != sharedBranch
                                                         )
                                                     } leaves: {
@@ -863,6 +881,7 @@ struct WarrenDesktopSidebarRows: View {
                                                             semanticScope: "task-list"
                                                         )
                                                     }
+                                                    .padding(.top, WarrenDesktopWorktreeGap.above(index, leafCounts: leafCounts))
                                                 }
                                             }
                                         }
@@ -1176,6 +1195,7 @@ struct WarrenDesktopSidebarRows: View {
         in group: WarrenDesktopProjectGroup,
         semanticScope: String = "project-list",
         projectLabel: String? = nil,
+        projectIdentity: String? = nil,
         showsBranch: Bool = true,
         taskName: String? = nil
     ) -> some View {
@@ -1200,6 +1220,7 @@ struct WarrenDesktopSidebarRows: View {
                 workspace: workspace,
                 semanticScope: semanticScope,
                 projectLabel: projectLabel,
+                projectIdentity: projectIdentity,
                 showsBranch: showsBranch,
                 mark: activitySummary?.mark,
                 activeTabCount: activitySummary?.activeTabCount ?? 0,
@@ -1643,6 +1664,10 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         WarrenDesktopTabTitle.sessionTitle(for: session, worktreeRoot: worktreeRoot).title
     }
 
+    static func isCustomTitled(_ session: WarrenDesktopSession) -> Bool {
+        !(session.customTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+    }
+
     /// Whether this row's title is a location. A plain shell reads its title
     /// from where it is, and that title fades at its start so the tail of a
     /// path survives.
@@ -1722,6 +1747,12 @@ struct WarrenDesktopWorkspaceSessionRow: View {
            second != detailLabel,
            second != statusLabel {
             values.append(second)
+        }
+        if session.isLead {
+            values.append("Lead")
+        }
+        if session.leadNeedsAttention {
+            values.append("Needs input")
         }
         if session.pinned {
             values.append("Pinned")
@@ -1875,7 +1906,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         )
         .overlay(alignment: .bottomTrailing) {
             WarrenDesktopStatusDot(
-                mark: session.rowStatusMark,
+                mark: session.leadNeedsAttention ? .inputNeeded : session.rowStatusMark,
                 size: Self.statusDotSize,
                 ring: tokens.workbenchCardFill,
                 tokens: tokens,
@@ -2017,14 +2048,21 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     private func titleLine(tokens: WarrenColorTokens, titleColor: Color? = nil) -> some View {
         HStack(spacing: 6) {
             WarrenDesktopFadingLine(edge: Self.usesLocationTitle(for: session) ? .leading : .trailing) {
-                Text(title)
-                    .font(WarrenDesktopTreeTypography.sessionTitle)
+                WarrenDesktopTreeTypography.sessionTitleText(
+                    title,
+                    // A title the person chose is theirs as written.
+                    verbColor: Self.isCustomTitled(session) ? nil : tokens.ink3
+                )
                     .foregroundStyle(
                         titleColor
                             ?? (isSelected ? tokens.treeSessionSelectedText : tokens.treeSessionText)
                     )
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            if session.isLead {
+                WarrenDesktopLeadMark(tokens: tokens)
+                    .fixedSize()
+            }
             subagentCapsule(tokens: tokens)
             pin(tokens: tokens)
         }
@@ -2655,6 +2693,8 @@ struct WarrenDesktopSidebarSectionAction: Identifiable {
 
 struct WarrenDesktopSidebarSectionHeader: View {
     let title: String
+    /// How many groups the section holds, drawn quietly after its title.
+    var count: Int? = nil
     var disclosureExpanded: Bool? = nil
     var actionImage: String? = nil
     var actionLabel = ""
@@ -2756,16 +2796,13 @@ struct WarrenDesktopSidebarSectionHeader: View {
         .onHover { isHovered = $0 }
     }
 
-    /// The section label's type, shared with the multi-Host "PROJECTS ·
-    /// HOSTS" heading so TASKS, PROJECTS and that heading read as one set.
-    static let titleFont = Font.system(size: 10.5, weight: .semibold)
-    static let titleTracking: CGFloat = 1.1
-
     private func titleLabel(tokens: WarrenColorTokens) -> some View {
-        Text(title.uppercased())
-            .font(Self.titleFont)
-            .tracking(Self.titleTracking)
-            .foregroundStyle(tokens.treeQuietText)
+        (Text(title)
+            .font(WarrenDesktopTreeTypography.sectionTitle)
+            .foregroundColor(tokens.treeQuietText)
+            + Text(count.map { "  \($0)" } ?? "")
+            .font(WarrenDesktopTreeTypography.sectionCount)
+            .foregroundColor(tokens.treeFaintText))
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: WarrenDesktopSidebarMetrics.sectionHeaderHeight)

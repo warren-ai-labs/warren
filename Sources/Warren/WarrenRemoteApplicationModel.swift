@@ -369,6 +369,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// ACP Sessions own no terminal (RFC 0023): no surface, no subscribe, no
     /// resize. The Conversation surface renders them from their Agent stream.
     private(set) var conversationSessionIDs: Set<TerminalSessionID> = []
+    /// Bumped when a Lead's pending request changes. The attention notifier
+    /// reads this instead of the projection, so a question's text can change
+    /// without rebuilding the window's Session rows.
+    @Published private(set) var leadAttentionRevision: UInt64 = 0
+    private var leadAttentionSignatures: [TerminalSessionID: String] = [:]
     /// Chat Sessions whose agent publishes selectors (`agent-config-v1`), and
     /// those with a provider conversation to hand off (RFC 0023 §6.11, §6.12).
     private var conversationConfigSessionIDs: Set<TerminalSessionID> = []
@@ -2041,6 +2046,80 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     // MARK: Conversation (RFC 0023)
 
+    /// Folds the Lead flags the client reads from each conversation into the
+    /// projection's Session rows. The Host has no parent/child records
+    /// (RFC 0024 §8), so this is presentation state rebuilt from messages.
+    private func refreshLeadMarks() {
+        var leadIDs: Set<TerminalSessionID> = []
+        var signatures: [TerminalSessionID: String] = [:]
+        for (sessionID, feed) in conversationFeeds {
+            let lead = WarrenLeadConversation.derive(from: feed.conversation) { id in
+                guard let sessionID = TerminalSessionID(uuidString: id) else { return false }
+                return projection.session(id: sessionID) != nil
+            }
+            if lead.isLead { leadIDs.insert(sessionID) }
+            if let decision = lead.pendingDecision {
+                signatures[sessionID] = "ask|\(decision.id)|\(decision.question)"
+            } else if let checks = lead.pendingChecks {
+                signatures[sessionID] = "checks|\(checks.id)|\(checks.checks.count)"
+            }
+        }
+        if signatures != leadAttentionSignatures {
+            leadAttentionSignatures = signatures
+            leadAttentionRevision &+= 1
+        }
+        let attentionIDs = Set(signatures.keys)
+        let currentLeadIDs = Set(projection.sessions.filter(\.isLead).map(\.id))
+        let currentAttentionIDs = Set(projection.sessions.filter(\.leadNeedsAttention).map(\.id))
+        guard leadIDs != currentLeadIDs || attentionIDs != currentAttentionIDs else { return }
+        let sessions = projection.sessions.map { session in
+            session.withLead(
+                isLead: leadIDs.contains(session.id),
+                needsAttention: attentionIDs.contains(session.id)
+            )
+        }
+        _ = publishProjectionIfChanged(projection.replacingSessions(sessions))
+    }
+
+    /// The system notifications a Lead's text markers ask for. They join the
+    /// existing attention alerts, so a decision or checklist notifies through
+    /// the same path as a provider permission.
+    func leadAttentionAlerts() -> [WarrenDesktopAttentionAlert] {
+        projection.sessions.compactMap { session -> WarrenDesktopAttentionAlert? in
+            guard session.leadNeedsAttention,
+                  let feed = conversationFeeds[session.id] else { return nil }
+            let lead = WarrenLeadConversation.derive(from: feed.conversation) { id in
+                guard let sessionID = TerminalSessionID(uuidString: id) else { return false }
+                return projection.session(id: sessionID) != nil
+            }
+            let workspace = session.workspaceID.flatMap { projection.workspace(id: $0) }
+            let project = workspace.flatMap { projection.projectGroup(id: $0.projectID)?.project.name }
+            let branch = workspace.flatMap { value in
+                value.branch?.isEmpty == false ? value.branch : value.name
+            }
+            let title = session.displayTitle
+            let body: String
+            let key: String
+            if let decision = lead.pendingDecision {
+                body = decision.question
+                key = "lead-ask|\(decision.id)"
+            } else if let checks = lead.pendingChecks {
+                body = "Check \(checks.checks.count) things on main"
+                key = "lead-checks|\(checks.id)"
+            } else {
+                return nil
+            }
+            return WarrenDesktopAttentionAlert(
+                sessionID: session.id,
+                key: "\(session.id.description)|\(key)",
+                title: title,
+                location: [project, branch].compactMap { $0 }.joined(separator: " \u{00B7} "),
+                body: body,
+                quickAnswer: nil
+            )
+        }
+    }
+
     /// The feed a Conversation surface renders. It is seeded from the local
     /// replica, then kept current by the same batches that drive activity.
     func conversationFeed(for sessionID: TerminalSessionID) -> WarrenConversationFeed {
@@ -2086,6 +2165,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 feed?.merge(state, streamID: streamID)
             }
             feed?.markLoaded()
+            refreshLeadMarks()
         }
     }
 
@@ -4988,6 +5068,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                     publishSessionSummary(streamID: streamID, sessionID: sessionID)
                 }
                 conversationFeeds[sessionID]?.merge(result.stateEvents, streamID: streamID)
+                refreshLeadMarks()
                 drainConversationQueue(sessionID)
             }
             applyAgentCheckpoint(
@@ -5069,6 +5150,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     ) async {
         guard let projectedSessionID = agentSessionByStreamID[streamID] else { return }
         conversationFeeds[projectedSessionID]?.merge(events, streamID: streamID)
+        refreshLeadMarks()
         drainConversationQueue(projectedSessionID)
         foldCurrentStep(events, streamID: streamID, sessionID: projectedSessionID)
         foldOpenDecision(events, streamID: streamID)
@@ -5728,6 +5810,12 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             value.agentSessionId?.isEmpty == false ? id : nil
         })
         conversationFeeds = conversationFeeds.filter { conversationSessionIDs.contains($0.key) }
+        // A Lead is read from its own conversation, so every Conversation
+        // Session needs a feed even while its pane is closed: the sidebar mark
+        // and the system notification are decided before anyone opens it.
+        for sessionID in conversationSessionIDs {
+            _ = conversationFeed(for: sessionID)
+        }
         let agentTurns = Dictionary(uniqueKeysWithValues: remoteSessions.compactMap {
             value, sessionID, _ in
             value.agentTurn.map { (sessionID, $0) }
@@ -5893,9 +5981,21 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         let sessionWorkspaces = Dictionary(uniqueKeysWithValues: remoteSessions.map { value in
             (value.1, value.2)
         })
+        // A running Session that resumed a stopped one takes over that
+        // stopped Tab's place in the strip.
+        let tabSuccessors = Dictionary(
+            remoteSessions.compactMap { value, id, _ -> (String, String)? in
+                guard value.lifecycle == "running",
+                      let resumedFrom = value.resumedFrom.flatMap(TerminalSessionID.init(uuidString:))
+                else { return nil }
+                return (Self.tabID(resumedFrom), Self.tabID(id))
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
         let tabs = applyingLocalTabOrder(
             unorderedTabs,
-            sessionWorkspaces: sessionWorkspaces
+            sessionWorkspaces: sessionWorkspaces,
+            successors: tabSuccessors
         )
         let nextProjection = WarrenDesktopProjection(
             host: host,
@@ -5909,6 +6009,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             paneGroups: paneGroups
         )
         publishProjectionIfChanged(nextProjection)
+        refreshLeadMarks()
         // Which Sessions are Conversations, and their names, came with this
         // roster; the tray's decisions are filtered and worded by both.
         publishPendingDecisions()
@@ -6863,7 +6964,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
 
     private func applyingLocalTabOrder(
         _ tabs: [ClientTab],
-        sessionWorkspaces: [TerminalSessionID: WorkspaceID]
+        sessionWorkspaces: [TerminalSessionID: WorkspaceID],
+        successors: [String: String] = [:]
     ) -> [ClientTab] {
         let tabWorkspaceIDs = Dictionary(uniqueKeysWithValues: tabs.compactMap { tab in
             tab.sessionID.flatMap { sessionWorkspaces[$0] }.map { (tab.id, $0) }
@@ -6881,7 +6983,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             let preferredOrder = tabOrderByWorkspaceID[workspaceID] ?? availableIDs
             let reconciledOrder = WarrenRemoteTabOrdering.reconciling(
                 preferredOrder: preferredOrder,
-                availableTabIDs: availableIDs
+                availableTabIDs: availableIDs,
+                successors: successors
             )
             tabOrderByWorkspaceID[workspaceID] = reconciledOrder
             let tabsByID = Dictionary(uniqueKeysWithValues: result.map { ($0.id, $0) })

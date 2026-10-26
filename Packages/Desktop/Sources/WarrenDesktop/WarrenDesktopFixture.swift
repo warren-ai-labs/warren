@@ -194,6 +194,14 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     /// The one action a stopped Tab offers, or nil when this Session has nothing
     /// left to continue.
     public let stoppedAction: WarrenDesktopStoppedAction?
+    /// Whether this Conversation Session is a Lead (RFC 0024): one of its own
+    /// assistant messages references a Crew member. This is presentation state
+    /// read from the client's own conversation, not a Host fact.
+    public let isLead: Bool
+    /// Whether the Lead has an unanswered decision or checklist. A Lead's
+    /// request is a message marker, so the Host's own `blocked` status does not
+    /// know about it; the client raises the row's mark to the attention tier.
+    public let leadNeedsAttention: Bool
 
     public var activity: AgentActivityState? { agentStatus?.activity }
 
@@ -262,7 +270,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         turnStartedAt: Date? = nil,
         subagents: [WarrenDesktopSubagent] = [],
         endReason: WarrenDesktopEndReason? = nil,
-        stoppedAction: WarrenDesktopStoppedAction? = nil
+        stoppedAction: WarrenDesktopStoppedAction? = nil,
+        isLead: Bool = false,
+        leadNeedsAttention: Bool = false
     ) {
         self.id = id
         self.workspaceID = workspaceID
@@ -293,6 +303,8 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         self.subagents = subagents
         self.endReason = endReason
         self.stoppedAction = stoppedAction
+        self.isLead = isLead
+        self.leadNeedsAttention = leadNeedsAttention
     }
 
     public func withActivity(_ activity: AgentActivityState?) -> Self {
@@ -332,7 +344,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             turnStartedAt: turnStartedAt,
             subagents: subagents,
             endReason: endReason,
-            stoppedAction: stoppedAction
+            stoppedAction: stoppedAction,
+            isLead: isLead,
+            leadNeedsAttention: leadNeedsAttention
         )
     }
 
@@ -366,7 +380,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             turnStartedAt: turnStartedAt,
             subagents: subagents,
             endReason: endReason,
-            stoppedAction: stoppedAction
+            stoppedAction: stoppedAction,
+            isLead: isLead,
+            leadNeedsAttention: leadNeedsAttention
         )
     }
 
@@ -400,7 +416,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             turnStartedAt: turnStartedAt,
             subagents: subagents,
             endReason: endReason,
-            stoppedAction: stoppedAction
+            stoppedAction: stoppedAction,
+            isLead: isLead,
+            leadNeedsAttention: leadNeedsAttention
         )
     }
 
@@ -434,7 +452,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             turnStartedAt: turnStartedAt,
             subagents: subagents,
             endReason: endReason,
-            stoppedAction: stoppedAction
+            stoppedAction: stoppedAction,
+            isLead: isLead,
+            leadNeedsAttention: leadNeedsAttention
         )
     }
 
@@ -466,8 +486,53 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             turnStartedAt: turnStartedAt,
             subagents: subagents,
             endReason: endReason,
-            stoppedAction: stoppedAction
+            stoppedAction: stoppedAction,
+            isLead: isLead,
+            leadNeedsAttention: leadNeedsAttention
         )
+    }
+
+    /// The Lead flags read from this client's conversation. They are not Host
+    /// state, so the projection is refreshed when a message changes them.
+    public func withLead(isLead: Bool, needsAttention: Bool) -> Self {
+        guard isLead != self.isLead || needsAttention != self.leadNeedsAttention else { return self }
+        return Self(
+            id: id,
+            workspaceID: workspaceID,
+            tabID: tabID,
+            title: title,
+            customTitle: customTitle,
+            pinned: pinned,
+            kind: kind,
+            agentProvider: agentProvider,
+            state: state,
+            agentStatus: agentStatus,
+            activityUpdatedAt: activityUpdatedAt,
+            createdAt: createdAt,
+            runtimeProcess: runtimeProcess,
+            runtimeCommandLine: runtimeCommandLine,
+            workingDirectory: workingDirectory,
+            shellState: shellState,
+            acknowledgedActivity: acknowledgedActivity,
+            currentStep: currentStep,
+            primaryLine: primaryLine,
+            lastActivity: lastActivity,
+            plan: plan,
+            context: context,
+            turnCounts: turnCounts,
+            turnStartedAt: turnStartedAt,
+            subagents: subagents,
+            endReason: endReason,
+            stoppedAction: stoppedAction,
+            isLead: isLead,
+            leadNeedsAttention: needsAttention
+        )
+    }
+
+    /// The mark this Session's status dot draws. A Lead's unanswered request is
+    /// a client-side fact, so it outranks whatever lifecycle the Host reports.
+    public var effectiveActivityMark: WarrenActivityMark? {
+        leadNeedsAttention ? .inputNeeded : activityMark
     }
 
 }
@@ -799,6 +864,25 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         )
     }
 
+    /// A projection with the same Host resources and a new Session list. The
+    /// Lead flags are folded on the client after projection creation, so this
+    /// republishes the rows a Tab and the sidebar read without rebuilding the
+    /// Host-owned tree.
+    public func replacingSessions(_ sessions: [WarrenDesktopSession]) -> Self {
+        Self(
+            host: host,
+            groups: groups,
+            tasks: taskGroups.map(\.task),
+            sessions: sessions,
+            tabs: tabs,
+            sessionWorkspaceIDs: sessionWorkspaceIDs,
+            tabWorkspaceIDs: tabWorkspaceIDs,
+            connectionState: connectionState,
+            paneGroups: paneGroups,
+            unreadNoticeCount: unreadNoticeCount
+        )
+    }
+
     /// Convenience initializer for callers that already have domain arrays.
     /// Grouping happens once at projection construction, not while rendering rows.
     public init(
@@ -872,6 +956,17 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
 
     public func workspaceID(forTabID tabID: String) -> WorkspaceID? {
         tabWorkspaceIDs[tabID]
+    }
+
+    /// Whether opening this Session has a Tab to land on: a live Session, or a
+    /// stopped one the Host kept a Tab for, whose pane shows its last output
+    /// and offers Resume or Restart. An ended Session with no Tab is history
+    /// only, so opening it would select nothing.
+    public func canOpenSession(_ id: TerminalSessionID) -> Bool {
+        guard let session = session(id: id) else { return false }
+        if session.state.isActive { return true }
+        return session.isStopped
+            && session.tabID.map { workspaceID(forTabID: $0) != nil } == true
     }
 
     /// Tabs are workspace-local UI. The Host may keep tabs from several

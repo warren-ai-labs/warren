@@ -1,4 +1,6 @@
 import XCTest
+import WarrenClientCore
+import WarrenDomain
 @testable import WarrenDesktop
 
 /// The rule that decides which ended Sessions keep a Tab, and what that Tab
@@ -123,5 +125,49 @@ final class WarrenDesktopStoppedSessionTests: XCTestCase {
         XCTAssertEqual(WarrenDesktopEndReason(wire: "exitedBySomethingNew"), .unknown)
         XCTAssertTrue(WarrenDesktopEndReason.runtimeMissing.detail.contains("runtime"))
         XCTAssertTrue(WarrenDesktopEndReason.processExited.detail.contains("program"))
+    }
+
+    /// A sidebar row opens whatever has a Tab to land on. A stopped Session's
+    /// Tab is where its Resume lives, so requiring a live runtime left every
+    /// stopped row inert after a Host restart.
+    func testAStoppedSessionWithATabIsOpenable() {
+        let hostID = HostID(rawValue: UUID())
+        let projectID = ProjectID(rawValue: UUID())
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let live = TerminalSessionID(rawValue: UUID())
+        let stopped = TerminalSessionID(rawValue: UUID())
+        let history = TerminalSessionID(rawValue: UUID())
+        func session(_ id: TerminalSessionID, state: WarrenDesktopSessionState) -> WarrenDesktopSession {
+            WarrenDesktopSession(
+                id: id,
+                workspaceID: workspaceID,
+                tabID: "tab-\(id)",
+                title: "Session",
+                kind: .claude,
+                state: state
+            )
+        }
+        let projection = WarrenDesktopProjection(
+            host: WarrenDomain.Host(id: hostID, name: "Local"),
+            projects: [Project(id: projectID, hostID: hostID, name: "P", rootPath: "/p")],
+            workspaces: [Workspace(id: workspaceID, projectID: projectID, name: "main", path: "/p", branch: "main")],
+            sessions: [
+                session(live, state: .attached),
+                session(stopped, state: .exited),
+                session(history, state: .exited),
+            ],
+            // The Host keeps a Tab for the stopped Session; the other ended one
+            // is history only.
+            tabs: [
+                ClientTab(id: "tab-\(live)", title: "Live", sessionID: live, kind: .claude),
+                ClientTab(id: "tab-\(stopped)", title: "Stopped", sessionID: stopped, kind: .claude),
+            ],
+            sessionWorkspaceIDs: [live: workspaceID, stopped: workspaceID, history: workspaceID]
+        )
+
+        XCTAssertTrue(projection.canOpenSession(live))
+        XCTAssertTrue(projection.canOpenSession(stopped))
+        XCTAssertFalse(projection.canOpenSession(history), "An ended Session with no Tab has nothing to open")
+        XCTAssertFalse(projection.canOpenSession(TerminalSessionID(rawValue: UUID())))
     }
 }

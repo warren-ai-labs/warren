@@ -120,6 +120,9 @@ struct WarrenConversationActions {
     var sessionExists: (String) -> Bool = { _ in false }
     /// Opens a changed file's diff in the right sidebar's Changes tab.
     var reviewFile: (WarrenConversation.FileChange) -> Void = { _ in }
+    /// Resolves a Lead marker's Session id to its live row, including a stopped
+    /// Session whose record the Host kept.
+    var leadSession: (String) -> WarrenDesktopSession? = { _ in nil }
     var supportsConfig = false
     var canHandoff = false
     /// Whether this Session's Host advertises `agent-attachments-v1`.
@@ -179,6 +182,10 @@ struct WarrenConversationSurface: View {
         var actions = WarrenConversationActions()
         actions.openSession = { model.openSession(named: $0) }
         actions.sessionExists = { model.sessionIsOpen(named: $0) }
+        actions.leadSession = { [weak model] id in
+            guard let model, let sessionID = TerminalSessionID(uuidString: id) else { return nil }
+            return model.projection.session(id: sessionID)
+        }
         actions.supportsConfig = model.supportsConversationConfig(sessionID)
         actions.canHandoff = model.conversationHasConversation(sessionID)
         actions.supportsAttachments = model.supportsConversationAttachments(sessionID)
@@ -266,9 +273,10 @@ private enum ConversationLayout {
     static let column: CGFloat = 720
     static let widePadding: CGFloat = 24
     static let narrowPadding: CGFloat = 16
-    /// 44 between turns, 8 under the last one.
+    /// 44 between turns. The last turn leaves room for the answer actions,
+    /// which are overlaid below the content instead of taking a layout row.
     static let turnGap: CGFloat = 44
-    static let lastTurnGap: CGFloat = 8
+    static let lastTurnGap: CGFloat = 34
     /// 12 between an answer's blocks, 16 from the message to the work trail.
     static let innerGap: CGFloat = 12
     static let askGap: CGFloat = 16
@@ -325,6 +333,18 @@ struct WarrenConversationView: View {
     /// for the dock's buttons and the 1–9 / Return / Esc keys, so a key press
     /// shows the same progress as a click and cannot answer twice.
     @State private var decisionAttempt: WarrenConversationDecisionAttempt?
+    /// Lead decisions and checklists are answered by the same composer keys.
+    /// The answered ids hide a panel the moment its reply is sent; the
+    /// conversation's own next user turn keeps it answered across a relaunch.
+    @State private var answeredLeadRequests: Set<String> = []
+    @State private var leadDecisionHighlight = 0
+    @State private var leadCheckOutcomes: [WarrenLeadReply.CheckOutcome?] = []
+    @State private var leadCheckRequestID: String?
+    /// The row whose Problem note is being written in the composer.
+    @State private var leadNoting: Int?
+    /// A local focus claim for Problem; the model's token only moves when a
+    /// Session is entered.
+    @State private var localFocusRequest: UInt = 0
 
     private var palette: WarrenConversationPalette {
         WarrenConversationPalette.resolved(for: colorScheme)
@@ -339,6 +359,63 @@ struct WarrenConversationView: View {
     }
 
     private var conversation: WarrenConversation { feed.conversation }
+
+    /// What this conversation says about its Lead. The resolver filters a
+    /// reference the roster does not know, which is the RFC's "shown as
+    /// written" rule.
+    private var lead: WarrenLeadConversation {
+        WarrenLeadConversation.derive(from: conversation) { actions.leadSession($0) != nil }
+    }
+
+    private var pendingLeadDecision: WarrenLeadConversation.PendingDecision? {
+        guard let decision = lead.pendingDecision,
+              !answeredLeadRequests.contains(decision.id) else { return nil }
+        return decision
+    }
+
+    private var pendingLeadChecks: WarrenLeadConversation.PendingChecks? {
+        guard let checks = lead.pendingChecks,
+              !answeredLeadRequests.contains(checks.id) else { return nil }
+        return checks
+    }
+
+    private var resolvedLeadChecks: [WarrenLeadReply.CheckOutcome?] {
+        guard let checks = pendingLeadChecks else { return [] }
+        return (0..<checks.checks.count).map { index in
+            leadCheckOutcomes.indices.contains(index) ? leadCheckOutcomes[index] : nil
+        }
+    }
+
+    private var leadChecksAllResolved: Bool {
+        guard let checks = pendingLeadChecks, !checks.checks.isEmpty else { return false }
+        return resolvedLeadChecks.allSatisfy { $0 != nil }
+    }
+
+    private var leadCrew: [WarrenLeadCrewMember] {
+        lead.crew.compactMap { member in
+            guard let session = actions.leadSession(member.sessionID) else { return nil }
+            return WarrenLeadCrewMember(
+                id: member.sessionID,
+                session: session,
+                markerTitle: member.markerTitle
+            )
+        }
+    }
+
+    /// The strip's one line: the latest member's own result sentence under the
+    /// name the Lead gave it, or the all-closed summary once nothing is live.
+    private var leadCrewLatest: String {
+        let live = leadCrew.filter(\.isLive)
+        let pool = live.isEmpty ? leadCrew : live
+        let latest = pool.max {
+            ($0.session.activityUpdatedAt ?? .distantPast) < ($1.session.activityUpdatedAt ?? .distantPast)
+        }
+        guard let latest else { return "" }
+        guard let result = latest.result, !result.isEmpty else {
+            return live.isEmpty ? "All crews closed" : latest.title
+        }
+        return "\(latest.title) \u{00B7} \(result)"
+    }
     private var lastTurn: WarrenConversation.Turn? { conversation.turns.last }
     private var busy: Bool {
         feed.status?.activity == .working || feed.status?.activity == .blocked
@@ -358,6 +435,15 @@ struct WarrenConversationView: View {
         .overlay(alignment: .topLeading) { keyboardShortcuts.opacity(0) }
         .onChange(of: feed.status?.activity) { activity in
             if activity != .working, activity != .blocked { stopping = false }
+        }
+        .onChange(of: pendingLeadDecision?.id) { _ in
+            leadDecisionHighlight = 0
+        }
+        .onChange(of: pendingLeadChecks?.id) { _ in
+            let count = pendingLeadChecks?.checks.count ?? 0
+            leadCheckOutcomes = Array(repeating: nil, count: count)
+            leadCheckRequestID = pendingLeadChecks?.id
+            leadNoting = nil
         }
     }
 
@@ -499,8 +585,17 @@ struct WarrenConversationView: View {
     private var composerStack: some View {
         let plan = feed.status?.activity == .working ? conversation.plan.flatMap { $0.total > 0 ? $0 : nil } : nil
         let decision = conversation.decisions.first
-        let hasPanels = actionError != nil || decision != nil || plan != nil || !feed.queuedPrompts.isEmpty
-        let panelIdentity = "\(actionError ?? "-")|\(decision?.id ?? "-")|\(plan?.current ?? "-")|\(feed.queuedPrompts.count)"
+        let leadDecision = pendingLeadDecision
+        let leadChecks = pendingLeadChecks
+        let crew = leadCrew
+        let hasPanels = actionError != nil
+            || decision != nil
+            || leadDecision != nil
+            || leadChecks != nil
+            || plan != nil
+            || !feed.queuedPrompts.isEmpty
+            || !crew.isEmpty
+        let panelIdentity = "\(actionError ?? "-")|\(decision?.id ?? "-")|\(leadDecision?.id ?? "-")|\(leadChecks?.id ?? "-")|\(crew.count)|\(plan?.current ?? "-")|\(feed.queuedPrompts.count)"
         if hasPanels {
             VStack(spacing: -1) {
                 if let actionError {
@@ -509,7 +604,7 @@ struct WarrenConversationView: View {
                     }
                 }
                 if let decision {
-                    WarrenConversationStackPanel(outline: palette.accent.opacity(0.55), roundsTop: actionError == nil) {
+                    WarrenConversationStackPanel(outline: palette.line2, roundsTop: actionError == nil) {
                         WarrenConversationDecisionDock(
                             decision: decision,
                             count: conversation.decisions.count,
@@ -522,16 +617,56 @@ struct WarrenConversationView: View {
                     // and the next rises in, instead of the text swapping in place.
                     .id(decision.id)
                 }
-                if plan != nil || !feed.queuedPrompts.isEmpty {
+                if let leadDecision {
                     WarrenConversationStackPanel(
                         outline: palette.line2,
                         roundsTop: actionError == nil && decision == nil
+                    ) {
+                        WarrenLeadDecisionPanel(
+                            question: leadDecision.question,
+                            reason: nil,
+                            options: leadDecision.options,
+                            highlight: leadDecisionHighlight,
+                            onChoose: { index in answerLeadDecision(leadDecision, index: index) }
+                        )
+                    }
+                    .id(leadDecision.id)
+                }
+                if let leadChecks {
+                    WarrenConversationStackPanel(
+                        outline: palette.line2,
+                        roundsTop: actionError == nil && decision == nil && leadDecision == nil
+                    ) {
+                        WarrenLeadChecksPanel(
+                            checks: leadChecks.checks,
+                            outcomes: resolvedLeadChecks,
+                            noting: leadNoting,
+                            onToggle: { toggleLeadCheck($0) },
+                            onProblem: { beginLeadProblem($0) },
+                            onClear: { clearLeadCheck($0) },
+                            onAllPassed: { allLeadChecksPassed() },
+                            onSend: { sendLeadChecks(leadChecks) }
+                        )
+                    }
+                    .id(leadChecks.id)
+                }
+                if plan != nil || !feed.queuedPrompts.isEmpty || !crew.isEmpty {
+                    WarrenConversationStackPanel(
+                        outline: palette.line2,
+                        roundsTop: actionError == nil && decision == nil && leadDecision == nil && leadChecks == nil
                     ) {
                         VStack(alignment: .leading, spacing: 0) {
                             if let plan {
                                 WarrenConversationPlanStrip(plan: plan)
                             }
-                            if plan != nil, !feed.queuedPrompts.isEmpty {
+                            if !crew.isEmpty {
+                                WarrenLeadCrewStrip(
+                                    members: crew,
+                                    latest: leadCrewLatest,
+                                    onOpen: { actions.openSession($0) }
+                                )
+                            }
+                            if (plan != nil && !crew.isEmpty) || (plan != nil && !feed.queuedPrompts.isEmpty) || (!crew.isEmpty && !feed.queuedPrompts.isEmpty) {
                                 Rectangle().fill(palette.line).frame(height: 1)
                             }
                             if !feed.queuedPrompts.isEmpty {
@@ -566,13 +701,33 @@ struct WarrenConversationView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 10)
             }
+            if let index = leadNoting,
+               let checks = pendingLeadChecks?.checks,
+               checks.indices.contains(index) {
+                let check = checks[index]
+                HStack(spacing: 6) {
+                    Text("Problem")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(palette.red)
+                    Text(check.what)
+                        .font(.system(size: 12))
+                        .foregroundStyle(palette.ink2)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(palette.bubble, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+            }
             ZStack(alignment: .topLeading) {
                 if draft.isEmpty {
                     Text(placeholder)
                         .font(WarrenTypography.reading)
                         .foregroundStyle(palette.ink4)
-                        .padding(.leading, 1)
-                        .padding(.top, 1)
+                        .padding(.leading, ConversationComposerMetrics.horizontalInset)
+                        .padding(.top, ConversationComposerMetrics.verticalInset)
                         .allowsHitTesting(false)
                 }
                 WarrenConversationTextView(
@@ -580,11 +735,12 @@ struct WarrenConversationView: View {
                     text: $draft,
                     height: $textHeight,
                     isEditable: true,
-                    focusRequest: focusRequest,
+                    focusRequest: focusRequest &+ localFocusRequest,
                     wantsInputFocus: wantsInputFocus,
                     onSubmit: submitDraft,
                     onEscape: handleEscape,
                     onSelectOption: selectDecisionOption,
+                    onMoveOption: moveLeadDecisionSelection,
                     onRestorePrevious: restorePrevious,
                     onJumpToLatest: { jumpRequest &+= 1 },
                     onCopyLastAnswer: copyLastAnswer,
@@ -616,7 +772,10 @@ struct WarrenConversationView: View {
     }
 
     private var placeholder: String {
-        if !conversation.decisions.isEmpty { return "Or tell \(providerName) what to do instead" }
+        if leadNoting != nil { return "What’s wrong? Press Return to save" }
+        if !conversation.decisions.isEmpty || pendingLeadDecision != nil {
+            return "Or tell \(providerName) what to do instead"
+        }
         if busy { return "Add a follow-up, sent after this turn" }
         return isEmptyConversation ? "Ask \(providerName) to do something on this branch" : "Reply to \(providerName)"
     }
@@ -777,13 +936,29 @@ struct WarrenConversationView: View {
     // MARK: Actions
 
     private func submitDraft() {
-        // Return on an empty composer takes the dock's first option, as its
-        // ↵ hint says.
-        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let decision = conversation.decisions.first,
-           let first = decision.options.first {
-            choose(decision, optionID: first.id)
+        // While a Problem note is open, Return saves the note instead of
+        // sending anything, even when the person typed text for it.
+        if leadNoting != nil {
+            saveLeadProblemNote()
             return
+        }
+        // Return on an empty composer takes the dock's default: a provider
+        // permission's first option, a Lead decision's highlighted option, or
+        // the one Send to Lead action once every check is resolved.
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let decision = conversation.decisions.first,
+               let first = decision.options.first {
+                choose(decision, optionID: first.id)
+                return
+            }
+            if let leadDecision = pendingLeadDecision {
+                answerLeadDecision(leadDecision, index: leadDecisionHighlight)
+                return
+            }
+            if let checks = pendingLeadChecks, leadChecksAllResolved {
+                sendLeadChecks(checks)
+                return
+            }
         }
         guard canSend else { return }
         let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -846,6 +1021,10 @@ struct WarrenConversationView: View {
     }
 
     private func handleEscape() {
+        if leadNoting != nil {
+            leadNoting = nil
+            return
+        }
         if let decision = conversation.decisions.first {
             choose(decision, optionID: rejectionOptionID(for: decision))
         } else if busy {
@@ -856,11 +1035,115 @@ struct WarrenConversationView: View {
     }
 
     private func selectDecisionOption(_ digit: Int) -> Bool {
+        guard draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        if let decision = conversation.decisions.first,
+           digit >= 1, digit <= decision.options.count {
+            choose(decision, optionID: decision.options[digit - 1].id)
+            return true
+        }
+        if let leadDecision = pendingLeadDecision,
+           digit >= 1, digit <= leadDecision.options.count {
+            answerLeadDecision(leadDecision, index: digit - 1)
+            return true
+        }
+        return false
+    }
+
+    /// Arrow keys move the Lead decision's highlight while the composer is
+    /// empty. Returns false when there is no Lead decision, so Up still brings
+    /// back the previous message.
+    private func moveLeadDecisionSelection(_ delta: Int) -> Bool {
         guard draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let decision = conversation.decisions.first,
-              digit >= 1, digit <= decision.options.count else { return false }
-        choose(decision, optionID: decision.options[digit - 1].id)
+              conversation.decisions.isEmpty,
+              let decision = pendingLeadDecision,
+              !decision.options.isEmpty,
+              delta != 0 else { return false }
+        let count = decision.options.count
+        leadDecisionHighlight = ((leadDecisionHighlight + delta) % count + count) % count
         return true
+    }
+
+    private func answerLeadDecision(_ decision: WarrenLeadConversation.PendingDecision, index: Int) {
+        guard decision.options.indices.contains(index),
+              !answeredLeadRequests.contains(decision.id) else { return }
+        answeredLeadRequests.insert(decision.id)
+        leadDecisionHighlight = 0
+        pinnedToBottom = true
+        hasNewReply = false
+        actions.send(WarrenLeadReply.decision(decision.options[index]), [])
+    }
+
+    private func toggleLeadCheck(_ index: Int) {
+        guard let checks = pendingLeadChecks, checks.checks.indices.contains(index) else { return }
+        normalizeLeadCheckOutcomes(checks)
+        if leadCheckOutcomes[index] == .passed {
+            leadCheckOutcomes[index] = nil
+        } else {
+            leadCheckOutcomes[index] = .passed
+        }
+        if leadNoting == index { leadNoting = nil }
+    }
+
+    private func beginLeadProblem(_ index: Int) {
+        guard let checks = pendingLeadChecks, checks.checks.indices.contains(index) else { return }
+        normalizeLeadCheckOutcomes(checks)
+        leadNoting = index
+        draft = ""
+        textHeight = 22
+        localFocusRequest &+= 1
+    }
+
+    private func saveLeadProblemNote() {
+        guard let index = leadNoting, let checks = pendingLeadChecks,
+              checks.checks.indices.contains(index) else {
+            leadNoting = nil
+            return
+        }
+        normalizeLeadCheckOutcomes(checks)
+        let note = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        leadCheckOutcomes[index] = .problem(note: note)
+        leadNoting = nil
+        draft = ""
+        textHeight = 22
+    }
+
+    private func clearLeadCheck(_ index: Int) {
+        guard let checks = pendingLeadChecks, checks.checks.indices.contains(index) else { return }
+        normalizeLeadCheckOutcomes(checks)
+        leadCheckOutcomes[index] = nil
+        if leadNoting == index { leadNoting = nil }
+    }
+
+    private func allLeadChecksPassed() {
+        guard let checks = pendingLeadChecks else { return }
+        normalizeLeadCheckOutcomes(checks)
+        for index in leadCheckOutcomes.indices where leadCheckOutcomes[index] == nil {
+            leadCheckOutcomes[index] = .passed
+        }
+        leadNoting = nil
+    }
+
+    private func normalizeLeadCheckOutcomes(_ checks: WarrenLeadConversation.PendingChecks) {
+        if leadCheckRequestID != checks.id || leadCheckOutcomes.count != checks.checks.count {
+            leadCheckRequestID = checks.id
+            leadCheckOutcomes = Array(repeating: nil, count: checks.checks.count)
+        }
+    }
+
+    private func sendLeadChecks(_ checks: WarrenLeadConversation.PendingChecks) {
+        guard !answeredLeadRequests.contains(checks.id) else { return }
+        normalizeLeadCheckOutcomes(checks)
+        guard leadChecksAllResolved else { return }
+        let results = checks.checks.enumerated().compactMap { index, check -> WarrenLeadReply.CheckResult? in
+            guard let outcome = leadCheckOutcomes[index] else { return nil }
+            return WarrenLeadReply.CheckResult(what: check.what, outcome: outcome)
+        }
+        guard results.count == checks.checks.count else { return }
+        answeredLeadRequests.insert(checks.id)
+        leadNoting = nil
+        pinnedToBottom = true
+        hasNewReply = false
+        actions.send(WarrenLeadReply.checks(results), [])
     }
 
     private func rejectionOptionID(for decision: WarrenConversation.Decision) -> String {
@@ -946,6 +1229,13 @@ private enum ConversationSpacing {
     static let small: CGFloat = 6
     static let compact: CGFloat = 8
     static let medium: CGFloat = 12
+}
+
+private enum ConversationComposerMetrics {
+    /// The placeholder and the AppKit text container share this origin. The
+    /// text view's line fragment padding is zeroed so its caret starts here too.
+    static let horizontalInset: CGFloat = 0
+    static let verticalInset: CGFloat = 2
 }
 
 /// What typing into the composer at a pending decision means.
@@ -1037,7 +1327,14 @@ private struct WarrenConversationTurnView: View, Equatable {
                 ? WarrenConversation.visibleStreamingText(turn.answer, complete: turn.answerComplete)
                 : turn.answer
             if !answer.isEmpty {
-                WarrenConversationMarkdown(text: answer, style: .answer, streaming: running && !turn.answerComplete)
+                WarrenConversationMarkdown(
+                    text: answer,
+                    style: .answer,
+                    streaming: running && !turn.answerComplete,
+                    rendersLeadMarkers: true,
+                    leadSession: actions.leadSession,
+                    openSession: actions.openSession
+                )
             }
             ForEach(Array(turn.notices.enumerated()), id: \.offset) { _, notice in
                 switch notice.kind {
@@ -1057,6 +1354,8 @@ private struct WarrenConversationTurnView: View, Equatable {
                         .fixedSize(horizontal: false, vertical: true)
                 case .note:
                     Text(notice.text).font(WarrenTypography.caption).foregroundStyle(palette.ink3)
+                case .warning:
+                    WarrenConversationWarningNotice(notice: notice, palette: palette)
                 }
             }
             ForEach(Array(turn.errors.enumerated()), id: \.offset) { _, error in
@@ -1079,6 +1378,8 @@ private struct WarrenConversationTurnView: View, Equatable {
                     onReviewAll: { actions.reviewFile(turn.files[0]) }
                 )
             }
+        }
+        .overlay(alignment: .bottomTrailing) {
             if !running, !turn.answer.isEmpty {
                 WarrenConversationAnswerFooter(
                     answer: turn.answer,
@@ -1088,6 +1389,7 @@ private struct WarrenConversationTurnView: View, Equatable {
                     // last turn: an earlier turn's prompt is old context.
                     onRetry: isLast ? { onRetry(turn) } : nil
                 )
+                .offset(y: 26)
             }
         }
         .contentShape(Rectangle())
@@ -1177,17 +1479,24 @@ private struct WarrenConversationPromptView: View {
                     .background(palette.bubble, in: RoundedRectangle(cornerRadius: ConversationLayout.bubbleRadius, style: .continuous))
                 }
                 .frame(maxWidth: maxWidth, alignment: .leading)
-                if hovering || meta != nil {
+                .overlay(alignment: .topLeading) {
                     HStack(spacing: 2) {
-                        if let meta {
-                            Text(meta).font(WarrenTypography.caption).foregroundStyle(palette.ink4)
-                        }
                         iconButton("square.on.square", label: "Copy", action: onCopy)
                         if let onEdit {
                             iconButton("pencil", label: "Edit and resend", action: onEdit)
                         }
                     }
-                    .padding(.trailing, 2)
+                    .fixedSize()
+                    .offset(x: onEdit == nil ? -28 : -52)
+                    .opacity(hovering ? 1 : 0)
+                    .allowsHitTesting(hovering)
+                    .accessibilityHidden(!hovering)
+                }
+                if let meta {
+                    Text(meta)
+                        .font(WarrenTypography.caption)
+                        .foregroundStyle(palette.ink4)
+                        .padding(.trailing, 2)
                 }
             }
         }
@@ -1336,6 +1645,48 @@ private struct WarrenConversationDisclosure<Content: View>: View {
                         Rectangle().fill(palette.line).frame(width: 1)
                     }
                     .padding(.leading, 6)
+            }
+        }
+        .onAppear { if forcesExpanded { open = true } }
+    }
+}
+
+/// A provider warning is diagnostic metadata, so it stays a small collapsed
+/// flag instead of competing with the Agent's answer for attention.
+private struct WarrenConversationWarningNotice: View {
+    let notice: WarrenConversation.Notice
+    let palette: WarrenConversationPalette
+    @State private var open = false
+    @Environment(\.conversationForcesExpanded) private var forcesExpanded
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ConversationSpacing.xxs) {
+            Button {
+                open.toggle()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 9))
+                    Text("Warning")
+                        .font(WarrenTypography.caption)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                }
+                .foregroundStyle(palette.ink4)
+                .frame(height: 22)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Provider warning")
+            .accessibilityValue(open ? "Expanded" : "Collapsed")
+            if open {
+                Text(notice.text)
+                    .font(WarrenTypography.caption)
+                    .foregroundStyle(palette.ink3)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 14)
             }
         }
         .onAppear { if forcesExpanded { open = true } }
@@ -1664,7 +2015,10 @@ private struct WarrenConversationAnswerFooter: View {
         }
         .padding(.top, 2)
         .padding(.leading, -4)
+        .frame(height: 26, alignment: .leading)
         .opacity(visible ? 1 : 0)
+        .allowsHitTesting(visible)
+        .accessibilityHidden(!visible)
     }
 
     private func iconButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
@@ -1698,6 +2052,11 @@ struct WarrenConversationMarkdown: View {
     let text: String
     var style: Style
     var streaming: Bool
+    /// Lead markers are honoured only in the Lead's own assistant answers. A
+    /// person's message and a TUI transcript keep them as written.
+    var rendersLeadMarkers = false
+    var leadSession: (String) -> WarrenDesktopSession? = { _ in nil }
+    var openSession: (String) -> Void = { _ in }
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -1720,35 +2079,52 @@ struct WarrenConversationMarkdown: View {
     private func blockView(_ block: WarrenMarkdownBlock, tokens: WarrenConversationPalette, isLast: Bool) -> some View {
         switch block {
         case .paragraph(let value):
-            inline(value, tokens: tokens, caret: streaming && isLast)
-                .font(WarrenTypography.reading)
-                .lineSpacing(ConversationLeading.reading)
-                .fixedSize(horizontal: false, vertical: true)
+            inlineContent(
+                value,
+                tokens: tokens,
+                caret: streaming && isLast,
+                font: WarrenTypography.reading,
+                lineSpacing: ConversationLeading.reading,
+                lineHeight: 22
+            )
         case .heading(let level, let value):
-            inline(value, tokens: tokens, caret: false)
-                .font(style == .answer ? WarrenTypography.readingTitle : WarrenTypography.readingStrong)
-                .lineSpacing(ConversationLeading.readingTitle)
-                .fixedSize(horizontal: false, vertical: true)
+            inlineContent(
+                value,
+                tokens: tokens,
+                caret: false,
+                font: style == .answer ? WarrenTypography.readingTitle : WarrenTypography.readingStrong,
+                lineSpacing: ConversationLeading.readingTitle,
+                lineHeight: 22
+            )
         case .unorderedList(let items), .orderedList(let items):
             VStack(alignment: .leading, spacing: style == .message ? 2 : 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         marker(item, tokens: tokens)
-                        inline(item.text, tokens: tokens, caret: false)
-                            .font(WarrenTypography.reading)
-                            .lineSpacing(ConversationLeading.reading)
-                            .fixedSize(horizontal: false, vertical: true)
+                        inlineContent(
+                            item.text,
+                            tokens: tokens,
+                            caret: false,
+                            font: WarrenTypography.reading,
+                            lineSpacing: ConversationLeading.reading,
+                            lineHeight: 22
+                        )
                     }
                     .padding(.leading, CGFloat(item.depth) * 18)
                 }
             }
             .padding(.leading, 22)
         case .quote(let value):
-            inline(value, tokens: tokens, caret: false)
-                .font(WarrenTypography.reading)
-                .lineSpacing(ConversationLeading.reading)
+            inlineContent(
+                value,
+                tokens: tokens,
+                caret: false,
+                font: WarrenTypography.reading,
+                lineSpacing: ConversationLeading.reading,
+                lineHeight: 22,
+                color: palette.ink3
+            )
                 .foregroundStyle(palette.ink3)
-                .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 10)
                 .overlay(alignment: .leading) {
                     Rectangle()
@@ -1760,10 +2136,14 @@ struct WarrenConversationMarkdown: View {
                 Label(alert.title, systemImage: alert.kind.symbol)
                     .font(WarrenTypography.readingEmphasis)
                     .foregroundStyle(alertTint(alert.kind, tokens: tokens))
-                inline(alert.content, tokens: tokens, caret: false)
-                    .font(WarrenTypography.reading)
-                    .lineSpacing(ConversationLeading.reading)
-                    .fixedSize(horizontal: false, vertical: true)
+                inlineContent(
+                    alert.content,
+                    tokens: tokens,
+                    caret: false,
+                    font: WarrenTypography.reading,
+                    lineSpacing: ConversationLeading.reading,
+                    lineHeight: 22
+                )
             }
             .padding(.leading, 10)
             .overlay(alignment: .leading) {
@@ -1775,6 +2155,40 @@ struct WarrenConversationMarkdown: View {
             WarrenConversationCodeFence(language: language, code: value, style: style)
         case .divider:
             Rectangle().fill(palette.line).frame(height: 1)
+        }
+    }
+
+    /// One inline run, with Lead references when this is an assistant answer.
+    /// Everything else goes through the ordinary `Text` path, so a message with
+    /// no markers pays nothing for the flow layout.
+    @ViewBuilder
+    private func inlineContent(
+        _ value: String,
+        tokens: WarrenConversationPalette,
+        caret: Bool,
+        font: Font,
+        lineSpacing: CGFloat,
+        lineHeight: CGFloat,
+        color: Color? = nil
+    ) -> some View {
+        if rendersLeadMarkers, value.contains("[#") {
+            WarrenLeadInlineText(
+                text: value,
+                font: font,
+                lineHeight: lineHeight,
+                palette: tokens,
+                session: leadSession,
+                openSession: openSession,
+                styled: { styledInline($0, cacheable: !caret) },
+                color: color
+            )
+            .lineSpacing(lineSpacing)
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+            inline(value, tokens: tokens, caret: caret)
+                .font(font)
+                .lineSpacing(lineSpacing)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -2301,7 +2715,7 @@ private struct WarrenConversationContextMeter: View {
 /// One panel resting on the composer: the shared raised surface, square at the
 /// bottom so it merges with the composer's top edge, outlined on its sides and
 /// top only. Panels stack with a 1pt overlap, so one line separates them.
-private struct WarrenConversationStackPanel<Content: View>: View {
+struct WarrenConversationStackPanel<Content: View>: View {
     var outline: Color
     var roundsTop: Bool
     @ViewBuilder var content: () -> Content
@@ -2606,15 +3020,14 @@ struct WarrenConversationDecisionAttempt: Equatable {
     var error: String?
 }
 
-/// The one loud place: the pending decision, resting on the composer. It is the
-/// only element in the pane carrying the attention hue, as its outline and the
-/// light falling from its top edge.
+/// The provider's pending request, resting on the composer in the same shape
+/// as a Lead decision and checklist: the attention hue is only the eyebrow's
+/// dot, the command is a code block, and the row has one filled default action.
 ///
-/// The question leads: what the Agent wants to do, at the size of a heading,
-/// with the kind of step as its glyph and the provider's reason under it. The
-/// answers sit in one row of buttons under the command, the recommendation
-/// filled and the rejection set apart at the far end, each wearing its key.
-/// When the row does not fit the pane, it falls back to a list.
+/// The dock still owns every behaviour it had: the provider's option order is
+/// preserved for choosing, the chosen key turns into a spinner, a long command
+/// folds with copy, a diff is shown, the reason is repeated only when it says
+/// something new, and a narrow pane falls back to a list.
 private struct WarrenConversationDecisionDock: View {
     let decision: WarrenConversation.Decision
     let count: Int
@@ -2625,7 +3038,6 @@ private struct WarrenConversationDecisionDock: View {
     /// Lines of a command shown before it folds behind "Show all".
     static let commandLineLimit = 4
     static let commandLineHeight: CGFloat = 17
-    static let glyphTile: CGFloat = 26
 
     @State private var showsWholeCommand = false
     @State private var commandHovered = false
@@ -2638,68 +3050,43 @@ private struct WarrenConversationDecisionDock: View {
     private var inFlight: String? { attempt?.optionID }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             header
             if !decision.detail.isEmpty {
-                command
+                command.padding(.top, 10)
             }
             if let diff = decision.diff, !diff.text.isEmpty {
-                WarrenConversationDiffView(text: diff.text).frame(maxHeight: 180)
+                WarrenConversationDiffView(text: diff.text)
+                    .frame(maxHeight: 180)
+                    .padding(.top, 10)
             }
-            answers
+            if let reason = reasonLine {
+                Text(reason)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(palette.ink3)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
+            }
+            answers.padding(.top, 12)
             if let error = attempt?.error {
-                Text(error).font(WarrenTypography.caption).foregroundStyle(palette.red)
+                Text(error)
+                    .font(WarrenTypography.caption)
+                    .foregroundStyle(palette.red)
+                    .padding(.top, 8)
             }
         }
-        .padding(12)
-        .background(alignment: .top) {
-            LinearGradient(
-                colors: [palette.accent.opacity(0.12), palette.accent.opacity(0)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 56)
-            .allowsHitTesting(false)
-        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
         .animation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion), value: attempt)
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: WarrenConversationStepIcon.symbol(for: decision.toolKind))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(palette.accent)
-                .frame(width: Self.glyphTile, height: Self.glyphTile)
-                .background(palette.bubble, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(palette.line2, lineWidth: 1))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(palette.ink)
-                    .lineLimit(1)
-                // The provider's reason, unless it restates the title or the
-                // command below it.
-                if let reason = reasonLine {
-                    Text(reason)
-                        .font(WarrenTypography.caption)
-                        .foregroundStyle(palette.ink3)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 0)
-            if count > 1 {
-                Text("1 / \(count)")
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(palette.ink3)
-                    .warrenNumericTransition(value: count)
-                    .padding(.horizontal, 7)
-                    .frame(height: 20)
-                    .background(palette.bubble, in: Capsule())
-                    .accessibilityLabel("1 of \(count) requests")
-            }
-        }
+        WarrenLeadEyebrow(
+            text: title,
+            trailing: "1 of \(max(1, count))"
+        )
+        .accessibilityLabel("\(title), 1 of \(max(1, count)) requests")
     }
 
     /// The command or file the decision is about. A long one folds after a
@@ -2714,7 +3101,7 @@ private struct WarrenConversationDecisionDock: View {
         let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
         return VStack(alignment: .leading, spacing: 6) {
             (decision.toolKind == "ran" ? Text("$ ").foregroundColor(palette.ink4) + Text(decision.detail) : Text(decision.detail))
-                .font(WarrenTypography.code)
+                .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(palette.ink2)
                 .lineSpacing(2)
                 .textSelection(.enabled)
@@ -2732,7 +3119,6 @@ private struct WarrenConversationDecisionDock: View {
                     }
                 }
                 .background(palette.code, in: shape)
-                .overlay(shape.strokeBorder(palette.line, lineWidth: 1))
                 .overlay(alignment: .topTrailing) {
                     Button {
                         copyFeedback.copy(decision.detail, confirmingIn: copySource)
@@ -2763,33 +3149,100 @@ private struct WarrenConversationDecisionDock: View {
         }
     }
 
-    /// One row when it fits, otherwise the same buttons as a list.
+    /// One row when it fits, otherwise the same buttons as a list. The refusal
+    /// sits at the leading edge and the filled default at the trailing edge,
+    /// as the design's approval panel does.
     private var answers: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 6) {
-                ForEach(Array(decision.options.enumerated()), id: \.element.id) { index, option in
-                    if option.id == escapeOptionID, index > 0 {
+                ForEach(displayedOptions, id: \.option.id) { entry in
+                    answerButton(entry, stretches: false)
+                    if entry.option.id == escapeOptionID {
                         Spacer(minLength: 12)
                     }
-                    answerButton(option, index: index, stretches: false)
                 }
             }
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(decision.options.enumerated()), id: \.element.id) { index, option in
-                    answerButton(option, index: index, stretches: true)
+                ForEach(displayedOptions, id: \.option.id) { entry in
+                    answerButton(entry, stretches: true)
                 }
             }
         }
     }
 
-    private var title: String {
-        decision.ask(providerName: providerName)
+    private struct DisplayOption {
+        let option: WarrenConversation.Decision.Option
+        let key: String
+        let role: WarrenDecisionButtonStyle.Role
+        let label: String
+    }
+
+    /// The design reads Deny, then the narrower allow, then the filled default
+    /// at the far right. The provider's option ids are untouched.
+    private var displayedOptions: [DisplayOption] {
+        let defaultID = defaultOptionID
+        let rejects = decision.options.enumerated().filter { $0.element.isReject }
+        let allows = decision.options.enumerated().filter { !$0.element.isReject }.reversed()
+        return (rejects + allows).map { index, option in
+            let role: WarrenDecisionButtonStyle.Role
+            if option.isReject {
+                role = .reject
+            } else if option.id == defaultID {
+                role = .recommended
+            } else {
+                role = .secondary
+            }
+            return DisplayOption(
+                option: option,
+                key: option.isReject
+                    ? (option.id == escapeOptionID ? "Esc" : "\(index + 1)")
+                    : (option.id == defaultID ? "\u{21B5}" : "\(index + 1)"),
+                role: role,
+                label: label(option)
+            )
+        }
     }
 
     /// The option Esc answers: the last rejection, as the composer's escape
-    /// chain picks it.
+    /// chain picks it. A provider that sends two rejections keeps both, but
+    /// only this one is the design's plain `Deny`.
     private var escapeOptionID: String? {
         (decision.options.last { $0.isReject } ?? decision.options.last)?.id
+    }
+
+    /// The provider's first allow is the client's default, as before.
+    private var defaultOptionID: String? {
+        decision.options.first(where: { !$0.isReject })?.id
+    }
+
+    private func label(_ option: WarrenConversation.Decision.Option) -> String {
+        if option.isReject { return option.id == escapeOptionID ? "Deny" : option.label }
+        if option.kind == "allow_once" { return "Allow once" }
+        if option.kind == "allow_always", let prefix = commandPrefix {
+            return "Always allow \(prefix)"
+        }
+        return option.label
+    }
+
+    /// A short command prefix for "Always allow …", taken from the command the
+    /// request is about. Nil when the request is not a command or has no words.
+    private var commandPrefix: String? {
+        guard decision.toolKind == "ran" else { return nil }
+        var command = WarrenConversation.displayTarget(decision.detail, root: nil)
+            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            .map(String.init)
+        // ACP wraps a command as `/bin/zsh -lc <command>`; the prefix the
+        // person would allow is the command inside the wrapper.
+        if let index = command.firstIndex(of: "-lc"), index + 1 < command.count {
+            command = Array(command[(index + 1)...])
+        }
+        guard !command.isEmpty else { return nil }
+        let count = command.first == "git" ? min(3, command.count) : min(2, command.count)
+        return command.prefix(count).joined(separator: " ")
+    }
+
+    private var title: String {
+        decision.ask(providerName: providerName)
     }
 
     /// The provider's reason, or nil when it would repeat the title or the
@@ -2798,69 +3251,51 @@ private struct WarrenConversationDecisionDock: View {
         let reason = decision.reason.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !reason.isEmpty else { return nil }
         if reason == decision.detail.trimmingCharacters(in: .whitespacesAndNewlines) { return nil }
+        // ACP's reason is often the command itself, wrapped in a shell launch;
+        // showing it again under the block says nothing.
+        if decision.detail.contains(reason) { return nil }
         if reason == title { return nil }
         return reason
     }
 
-    private func answerButton(
-        _ option: WarrenConversation.Decision.Option,
-        index: Int,
-        stretches: Bool
-    ) -> some View {
-        // No provider marks a recommendation: the ACP option carries only
-        // id/name/kind and the CLI payloads carry only id/label. So the
-        // client's convention is the first entry of `orderedOptions`, which
-        // sorts allow-once, allow-always, reject-once, reject-always.
-        let role: WarrenDecisionButtonStyle.Role = index == 0
-            ? .recommended
-            : option.isReject ? .reject : .secondary
-        let chosen = inFlight == option.id
-        // Every number key answers; the keycap names the shortest way in.
-        let key = index == 0 ? "\u{21B5}" : option.id == escapeOptionID ? "Esc" : "\(index + 1)"
+    private func answerButton(_ entry: DisplayOption, stretches: Bool) -> some View {
+        let chosen = inFlight == entry.option.id
         return Button {
-            onChoose(option.id)
+            onChoose(entry.option.id)
         } label: {
             HStack(spacing: 8) {
+                Text(entry.label)
+                    .font(.system(size: 12.5, weight: entry.role == .recommended ? .medium : .regular))
+                    .lineLimit(1)
                 // The chosen option's key turns into the spinner, so the
                 // answer shows where it was given, whether by click or key.
                 ZStack {
                     if chosen {
                         WarrenLoadingIndicator(size: 10, accessibilityLabel: "Answering")
                     } else {
-                        Text(key).font(.system(size: key.count > 1 ? 10 : 11, design: .monospaced))
+                        Text(entry.key)
+                            .font(.system(size: entry.key.count > 1 ? 10.5 : 11, design: .monospaced))
+                            .opacity(entry.role == .recommended ? 0.5 : 1)
                     }
                 }
-                .padding(.horizontal, key.count > 1 ? 4 : 0)
-                .frame(minWidth: 18, minHeight: 18)
-                .background(
-                    role == .recommended ? palette.card.opacity(0.12) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .strokeBorder(role == .recommended ? Color.clear : palette.line2, lineWidth: 1)
-                )
-                Text(option.label)
-                    .font(.system(size: 13, weight: role == .recommended ? .semibold : .medium))
-                    .lineLimit(1)
+                .frame(minWidth: 14)
                 if stretches { Spacer(minLength: 0) }
             }
-            .padding(.leading, 6)
-            .padding(.trailing, 12)
-            .frame(height: 30)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
             .contentShape(Rectangle())
         }
-        .buttonStyle(WarrenDecisionButtonStyle(role: role))
+        .buttonStyle(WarrenDecisionButtonStyle(role: entry.role))
         // The other options step back while one is on its way.
         .opacity(inFlight == nil || chosen ? 1 : 0.4)
         .disabled(inFlight != nil)
-        .accessibilityLabel(option.label)
-        .accessibilityHint("Press \(index + 1)")
+        .accessibilityLabel(entry.label)
+        .accessibilityHint("Press \(entry.key)")
     }
 }
 
-/// The decision dock's answers: the recommendation filled in ink, the other
-/// choices outlined, a rejection plain.
+/// The decision dock's answers: the default filled in ink, the other choices
+/// plain rows that light up under the pointer.
 private struct WarrenDecisionButtonStyle: ButtonStyle {
     enum Role { case recommended, secondary, reject }
     let role: Role
@@ -2875,15 +3310,14 @@ private struct WarrenDecisionButtonStyle: ButtonStyle {
         configuration.label
             .foregroundStyle(foreground(palette, active: active))
             .background(fill(palette, active: active, pressed: configuration.isPressed), in: shape)
-            .overlay(shape.strokeBorder(role == .secondary ? palette.line2 : Color.clear, lineWidth: 1))
             .onHover { hovering = $0 }
     }
 
     private func foreground(_ palette: WarrenConversationPalette, active: Bool) -> Color {
         switch role {
         case .recommended: palette.card
-        case .secondary: palette.ink2
-        case .reject: active ? palette.ink2 : palette.ink3
+        case .secondary: active ? palette.ink : palette.ink2
+        case .reject: active ? palette.ink : palette.ink3
         }
     }
 
@@ -2910,6 +3344,7 @@ private struct WarrenConversationTextView: NSViewRepresentable {
     let onSubmit: () -> Void
     let onEscape: () -> Void
     let onSelectOption: (Int) -> Bool
+    let onMoveOption: (Int) -> Bool
     let onRestorePrevious: () -> Bool
     let onJumpToLatest: () -> Void
     let onCopyLastAnswer: () -> Void
@@ -2925,7 +3360,11 @@ private struct WarrenConversationTextView: NSViewRepresentable {
         textView.drawsBackground = false
         textView.font = .systemFont(ofSize: 15)
         textView.textColor = .labelColor
-        textView.textContainerInset = NSSize(width: 0, height: 2)
+        textView.textContainerInset = NSSize(
+            width: ConversationComposerMetrics.horizontalInset,
+            height: ConversationComposerMetrics.verticalInset
+        )
+        textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -3017,6 +3456,7 @@ private struct WarrenConversationTextView: NSViewRepresentable {
         var onSubmit: (() -> Void)?
         var onEscape: (() -> Void)?
         var onSelectOption: ((Int) -> Bool)?
+        var onMoveOption: ((Int) -> Bool)?
         var onRestorePrevious: (() -> Bool)?
         var onJumpToLatest: (() -> Void)?
         var onCopyLastAnswer: (() -> Void)?
@@ -3025,6 +3465,7 @@ private struct WarrenConversationTextView: NSViewRepresentable {
             onSubmit = { parent.onSubmit() }
             onEscape = { parent.onEscape() }
             onSelectOption = { parent.onSelectOption($0) }
+            onMoveOption = { parent.onMoveOption($0) }
             onRestorePrevious = { parent.onRestorePrevious() }
             onJumpToLatest = { parent.onJumpToLatest() }
             onCopyLastAnswer = { parent.onCopyLastAnswer() }
@@ -3050,6 +3491,11 @@ private struct WarrenConversationTextView: NSViewRepresentable {
             let returnKey = event.keyCode == 36 || event.keyCode == 76
             if returnKey, !flags.contains(.shift), !hasMarkedText() {
                 onSubmit?()
+                return
+            }
+            if string.isEmpty,
+               (event.keyCode == 125 || event.keyCode == 126),
+               onMoveOption?(event.keyCode == 125 ? 1 : -1) == true {
                 return
             }
             if event.keyCode == 126, string.isEmpty, onRestorePrevious?() == true {

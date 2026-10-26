@@ -547,8 +547,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             )
         })
         let tabMarks = Dictionary(uniqueKeysWithValues: projection.sessions.compactMap { session in
-            session.activityMark.map { (session.id, $0) }
+            session.effectiveActivityMark.map { (session.id, $0) }
         })
+        let leadSessionIDs = Set(projection.sessions.filter(\.isLead).map(\.id))
         // A stopped Session keeps its Tab; the bar draws it quiet so it does not
         // read as a live pane beside the running ones.
         let stoppedSessionIDs = Set(
@@ -565,6 +566,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             presentation: presentation,
             tabTitles: tabTitles,
             tabMarks: tabMarks,
+            leadSessionIDs: leadSessionIDs,
             stoppedSessionIDs: stoppedSessionIDs,
             pinnedSessionIDs: pinnedSessionIDs,
             isAddingSession: isAddingSession,
@@ -1465,6 +1467,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         presentation: Presentation,
         tabTitles: [String: String],
         tabMarks: [TerminalSessionID: WarrenActivityMark],
+        leadSessionIDs: Set<TerminalSessionID> = [],
         stoppedSessionIDs: Set<TerminalSessionID> = [],
         pinnedSessionIDs: Set<TerminalSessionID>,
         isAddingSession: Bool,
@@ -1500,6 +1503,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             presentation: paneBar,
             tabTitles: tabTitles,
             tabMarks: tabMarks,
+            leadSessionIDs: leadSessionIDs,
             stoppedSessionIDs: stoppedSessionIDs,
             pinnedSessionIDs: pinnedSessionIDs,
             selectedTabID: navigation.selectedTabID,
@@ -3653,6 +3657,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     .first { $0.request.kind == session.presentedKind }?.id
             },
             mark: tab.sessionID.flatMap { tabMarks[$0] },
+            isLead: session?.isLead ?? false,
             canClose: true
         )
     }

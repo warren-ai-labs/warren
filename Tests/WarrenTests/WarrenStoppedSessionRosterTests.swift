@@ -9,7 +9,7 @@ import WarrenTransport
 /// stopped-Tab rule ever sees it. These tests go through that round trip on
 /// purpose.
 final class WarrenStoppedSessionRosterTests: XCTestCase {
-    private func rosterJSON(endReason: String, lifecycle: String) -> Data {
+    private func rosterJSON(endReason: String, lifecycle: String, resumedFrom: String = "") -> Data {
         Data(
             """
             {
@@ -30,7 +30,8 @@ final class WarrenStoppedSessionRosterTests: XCTestCase {
                   "title": "Shell",
                   "kind": "shell",
                   "lifecycle": "\(lifecycle)",
-                  "endReason": "\(endReason)"
+                  "endReason": "\(endReason)",
+                  "resumedFrom": "\(resumedFrom)"
                 }
               ]
             }
@@ -73,5 +74,16 @@ final class WarrenStoppedSessionRosterTests: XCTestCase {
     func testARunningSessionKeepsNoStoppedTabAfterTheRoundTrip() throws {
         let roster = try applicationRoster(rosterJSON(endReason: "", lifecycle: "running"))
         XCTAssertTrue(stoppedIDs(roster).isEmpty)
+    }
+
+    /// The resume link is what puts a resumed Session in its stopped Tab's
+    /// place; dropped in the round trip, every resume would land at the end.
+    func testResumedFromSurvivesTheApplicationRosterRoundTrip() throws {
+        let roster = try applicationRoster(rosterJSON(
+            endReason: "",
+            lifecycle: "running",
+            resumedFrom: "55555555-5555-4555-8555-555555555555"
+        ))
+        XCTAssertEqual(roster.sessions.first?.resumedFrom, "55555555-5555-4555-8555-555555555555")
     }
 }

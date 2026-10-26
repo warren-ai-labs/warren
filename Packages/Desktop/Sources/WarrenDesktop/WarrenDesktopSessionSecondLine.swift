@@ -142,6 +142,9 @@ extension WarrenColorTokens {
 /// is ever truncated, and the first append that does not fit stops the rest.
 enum WarrenDesktopSessionSecondLineLayout {
     static let primaryFontSize: CGFloat = 11.5
+    /// The wide scripts' size on the same line. Layout measures at the Latin
+    /// size, which only errs toward leaving room.
+    static let primaryWideFontSize: CGFloat = 11
     /// A shell command's own size. The monospaced face is a little smaller so
     /// its wider glyphs occupy the same run as the row's regular text.
     static let commandFontSize: CGFloat = 11
@@ -285,6 +288,16 @@ struct WarrenDesktopSecondLineView: View {
         }
     }
 
+    /// Second-line prose, script by script: a Chinese run half a step under
+    /// the Latin one, as on the title above it.
+    static func proseText(_ text: String) -> Text {
+        WarrenDesktopTreeTypography.scriptText(
+            text,
+            latin: .system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize),
+            wide: .system(size: WarrenDesktopSessionSecondLineLayout.primaryWideFontSize)
+        )
+    }
+
     /// The primary fact and the appends that fit, laid out at natural width so
     /// the caller can clip and fade the segment as a whole.
     private func segment(
@@ -295,13 +308,17 @@ struct WarrenDesktopSecondLineView: View {
             ? line.primary
             : WarrenDesktopActivityText.shortened(line.primary)
         return HStack(spacing: 0) {
-            Text(primaryText)
-                .font(line.isCommand
-                    ? .system(
-                        size: WarrenDesktopSessionSecondLineLayout.commandFontSize,
-                        design: .monospaced
-                    )
-                    : .system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize))
+            Group {
+                if line.isCommand {
+                    Text(primaryText)
+                        .font(.system(
+                            size: WarrenDesktopSessionSecondLineLayout.commandFontSize,
+                            design: .monospaced
+                        ))
+                } else {
+                    Self.proseText(primaryText)
+                }
+            }
                 .modifier(WarrenDesktopActivityShimmer(
                     base: tint.primary,
                     peak: tint.primaryPeak,
@@ -314,8 +331,7 @@ struct WarrenDesktopSecondLineView: View {
                     .font(.system(size: extra.isFailure ? 10 : WarrenDesktopSessionSecondLineLayout.primaryFontSize))
                     .foregroundStyle(tint.separator)
                     .frame(width: WarrenDesktopSessionSecondLineLayout.separatorWidth)
-                Text(extra.text)
-                    .font(.system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize))
+                Self.proseText(extra.text)
                     .foregroundStyle(
                         extra.isFailure
                             ? tint.failure

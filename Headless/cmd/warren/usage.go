@@ -433,7 +433,7 @@ title it left behind:
 	case "task.attach", "task.detach":
 		return fmt.Sprintf("Usage:\n  warren %s %s TASK_ID WORKSPACE_ID\n", name, action)
 	case "project.add":
-		return fmt.Sprintf("Usage:\n  warren %s add PATH [--name NAME] [--auto-import-worktrees]\n", name)
+		return fmt.Sprintf("Usage:\n  warren %s add PATH [--name NAME] [--auto-import-worktrees]\n\nPATH may be absolute, relative, or start with ~; relative paths are resolved against the current directory on this client.\n", name)
 	case "project.remove", "project.delete":
 		return fmt.Sprintf("Usage:\n  warren %s remove PROJECT_ID [--force]\n", name)
 	case "project.rename":

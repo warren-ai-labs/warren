@@ -21,8 +21,8 @@ import WarrenDesignSystem
 enum WarrenDesktopWorkspaceRowAccessories {
     /// Hit target for the editor entry glyph.
     static let editorEntryWidth: CGFloat = 20
-    /// The Task link is wider because it carries the word "Task", not a glyph.
-    static let taskLinkWidth: CGFloat = 32
+    /// Hit target for the Task link's flag glyph.
+    static let taskLinkWidth: CGFloat = 18
 
     static func inset(
         isEditorMarked: Bool,

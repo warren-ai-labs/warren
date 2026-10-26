@@ -43,10 +43,8 @@ struct WarrenDesktopTaskRow: View {
                     // external tracker carries a long custom ID, and printing
                     // it here cost the name its width; the row's tooltip has
                     // it, so a hover still answers what the ID is.
-                    WarrenDesktopTreeTypography.groupNameText(task.name)
+                    WarrenDesktopFadingName(text: WarrenDesktopTreeTypography.groupNameText(task.name))
                         .foregroundStyle(tokens.treeGroupText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
 
                     if task.pinned {
                         Image(systemName: "pin.fill")
@@ -128,21 +126,12 @@ struct WarrenDesktopTaskRow: View {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// The drawn width of `checkmark.square` at 14pt.
-    static let taskIconWidth: CGFloat = 12
+    /// The Task tile, the project avatar's size, so both group heads share
+    /// one icon column and their names one start.
+    static let taskIconWidth: CGFloat = WarrenDesktopSidebarMetrics.groupIconSize
 
     private func taskIcon(tokens: WarrenColorTokens) -> some View {
-        // At 14pt the symbol draws a 12pt square inside a 16pt image box. The
-        // slot is the drawn square's width, so its left edge lines up with a
-        // project avatar's and the name keeps the same gap after it.
-        Image(systemName: "checkmark.square")
-            .font(.system(size: 14, weight: .regular))
-            .foregroundStyle(tokens.treeGroupIcon)
-            .frame(
-                width: Self.taskIconWidth,
-                height: WarrenDesktopSidebarMetrics.groupIconSize
-            )
-            .accessibilityHidden(true)
+        WarrenDesktopTaskTile()
     }
 
     private func taskAddMenu(tokens: WarrenColorTokens) -> some View {

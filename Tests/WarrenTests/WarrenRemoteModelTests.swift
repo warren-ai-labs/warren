@@ -1275,6 +1275,37 @@ final class WarrenRemoteModelTests: XCTestCase {
         )
     }
 
+    /// A resume replaces the stopped Tab in place: the Session that continues
+    /// it lands where the stopped Tab was, not at the end of the strip.
+    func testRemoteTabOrderingPutsAResumeWhereItsStoppedTabWas() {
+        XCTAssertEqual(
+            WarrenRemoteTabOrdering.reconciling(
+                preferredOrder: ["tab-a", "stopped", "tab-b"],
+                availableTabIDs: ["tab-a", "tab-b", "resumed"],
+                successors: ["stopped": "resumed"]
+            ),
+            ["tab-a", "resumed", "tab-b"]
+        )
+        // A successor the order already places keeps its own place.
+        XCTAssertEqual(
+            WarrenRemoteTabOrdering.reconciling(
+                preferredOrder: ["resumed", "tab-a", "stopped"],
+                availableTabIDs: ["tab-a", "resumed"],
+                successors: ["stopped": "resumed"]
+            ),
+            ["resumed", "tab-a"]
+        )
+        // A successor whose stopped Tab was never in the order is just new.
+        XCTAssertEqual(
+            WarrenRemoteTabOrdering.reconciling(
+                preferredOrder: ["tab-a", "tab-b"],
+                availableTabIDs: ["tab-a", "tab-b", "resumed"],
+                successors: ["elsewhere": "resumed"]
+            ),
+            ["tab-a", "tab-b", "resumed"]
+        )
+    }
+
     func testStaleSessionDeleteErrorIsBenign() {
         let sessionID = TerminalSessionID()
 

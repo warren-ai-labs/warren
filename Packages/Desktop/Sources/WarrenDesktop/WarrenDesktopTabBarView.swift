@@ -19,6 +19,8 @@ struct WarrenDesktopTabBar: View {
     let presentation: WarrenDesktopPaneBarPresentation
     let tabTitles: [String: String]
     let tabMarks: [TerminalSessionID: WarrenActivityMark]
+    /// The Conversation Sessions this Host's client reads as Leads.
+    var leadSessionIDs: Set<TerminalSessionID> = []
     /// The Sessions whose runtime is gone. Their Tabs stay, drawn quiet.
     var stoppedSessionIDs: Set<TerminalSessionID> = []
     let pinnedSessionIDs: Set<TerminalSessionID>
@@ -107,6 +109,7 @@ struct WarrenDesktopTabBar: View {
         presentation: WarrenDesktopPaneBarPresentation,
         tabTitles: [String: String],
         tabMarks: [TerminalSessionID: WarrenActivityMark],
+        leadSessionIDs: Set<TerminalSessionID> = [],
         stoppedSessionIDs: Set<TerminalSessionID> = [],
         pinnedSessionIDs: Set<TerminalSessionID>,
         selectedTabID: String?,
@@ -149,6 +152,7 @@ struct WarrenDesktopTabBar: View {
         self.presentation = presentation
         self.tabTitles = tabTitles
         self.tabMarks = tabMarks
+        self.leadSessionIDs = leadSessionIDs
         self.stoppedSessionIDs = stoppedSessionIDs
         self.pinnedSessionIDs = pinnedSessionIDs
         self.selectedTabID = selectedTabID
@@ -336,6 +340,7 @@ struct WarrenDesktopTabBar: View {
             tab: tab,
             displayTitle: tabTitles[tab.id] ?? tab.title,
             mark: mark,
+            isLead: tab.sessionID.map(leadSessionIDs.contains) ?? false,
             isSelected: selectedTabID == tab.id,
             isStopped: tab.sessionID.map(stoppedSessionIDs.contains) ?? false,
             isPinned: tab.sessionID.map(pinnedSessionIDs.contains) ?? false,
@@ -1070,6 +1075,9 @@ struct WarrenDesktopSoloPaneIdentity: View {
         var kindName: String = "Shell"
         let providerPresetID: String?
         let mark: WarrenActivityMark?
+        /// A Lead's outlined word, and the reason its pill may carry the
+        /// attention dot.
+        var isLead: Bool = false
         let canClose: Bool
     }
 
@@ -1108,6 +1116,17 @@ struct WarrenDesktopSoloPaneIdentity: View {
                     WarrenDesktopSessionKindBadge(kind: preset.request.kind, size: 16)
                 } else {
                     WarrenDesktopSessionKindBadge(kind: .shell, size: 16)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if identity.isLead, let mark = identity.mark, mark.tier == .actionable {
+                    WarrenDesktopStatusDot(
+                        mark: mark,
+                        size: 6,
+                        ring: tokens.selectedTabPillFill,
+                        tokens: tokens
+                    )
+                    .offset(x: 3, y: 3)
                 }
             }
 
@@ -1207,9 +1226,19 @@ struct WarrenDesktopSoloPaneIdentity: View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 5) {
                     titleText(tokens: tokens)
+                    if identity.isLead {
+                        WarrenDesktopLeadMark(tokens: tokens, height: 14)
+                            .fixedSize()
+                    }
                     runningCommandText(tokens: tokens)
                 }
-                titleText(tokens: tokens)
+                HStack(spacing: 5) {
+                    titleText(tokens: tokens)
+                    if identity.isLead {
+                        WarrenDesktopLeadMark(tokens: tokens, height: 14)
+                            .fixedSize()
+                    }
+                }
                 fadingTitleText(tokens: tokens)
             }
         }

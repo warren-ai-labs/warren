@@ -235,37 +235,40 @@ enum WarrenDesktopBranchName {
 
 /// A branch name that is cut at most once.
 ///
-/// The leaf's own middle cut and the row's truncation must not both apply, or
-/// the name reads `feat/autonom…n…ng-pipeline`. When the whole name does not
-/// fit, the prefix goes first, since the leaf is the part someone recognizes;
-/// only when the leaf alone still does not fit is it cut, and then by the row
-/// in its middle, from the uncut leaf.
+/// When the whole name does not fit, the prefix goes first, since the leaf is
+/// the part someone recognizes, and a quiet `…/` stands for it; only when the
+/// leaf alone still does not fit does its end fade, as every name in the tree
+/// does.
 struct WarrenDesktopBranchNameLabel: View {
     let name: String
     let leafColor: Color
     let prefixColor: Color
-    let font: Font
+    var font: Font = WarrenDesktopTreeTypography.branchName
+    var wideFont: Font = WarrenDesktopTreeTypography.branchNameWide
 
     var body: some View {
-        let cut = WarrenDesktopBranchName.parts(name)
         let whole = WarrenDesktopBranchName.wholeParts(name)
         ViewThatFits(in: .horizontal) {
-            WarrenDesktopBranchName.text(name, leaf: leafColor, prefix: prefixColor)
-                .font(font)
+            line(prefix: whole.prefix, leaf: whole.leaf)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
-            if !cut.prefix.isEmpty {
-                (Text("…/").foregroundColor(prefixColor) + Text(cut.leaf).foregroundColor(leafColor))
-                    .font(font)
+            if !whole.prefix.isEmpty {
+                line(prefix: "…/", leaf: whole.leaf)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            Text(whole.leaf)
-                .foregroundColor(leafColor)
-                .font(font)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            WarrenDesktopFadingLine {
+                line(prefix: whole.prefix.isEmpty ? "" : "…/", leaf: whole.leaf)
+            }
         }
+    }
+
+    private func line(prefix: String, leaf: String) -> Text {
+        let leafText = WarrenDesktopTreeTypography.scriptText(leaf, latin: font, wide: wideFont)
+            .foregroundColor(leafColor)
+        guard !prefix.isEmpty else { return leafText }
+        return WarrenDesktopTreeTypography.scriptText(prefix, latin: font, wide: wideFont)
+            .foregroundColor(prefixColor) + leafText
     }
 }
 
@@ -367,6 +370,10 @@ struct WarrenDesktopFoldedCountRow: View {
     let isExpanded: Bool
     let semanticID: String
     let isEnabled: Bool
+    /// Drawn as a worktree among worktrees: a quiet `+` in the branch glyph's
+    /// column and the count in the label's own grey, so the row reads as more
+    /// of the project above it rather than a heading for the next one.
+    var isWorktreeLevel = false
     let onToggle: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -379,9 +386,16 @@ struct WarrenDesktopFoldedCountRow: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Button(action: onToggle) {
             HStack(spacing: WarrenDesktopSidebarMetrics.worktreeIconSpacing) {
+                if isWorktreeLevel {
+                    Image(systemName: "plus")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(tokens.treeFaintText)
+                        .frame(width: 12, height: 12)
+                        .accessibilityHidden(true)
+                }
                 (Text("\(count)")
                     .font(WarrenDesktopTreeTypography.foldedCountNumber)
-                    .foregroundColor(tokens.treeSecondaryText)
+                    .foregroundColor(isWorktreeLevel ? tokens.treeQuietText : tokens.treeSecondaryText)
                     + Text(" \(noun)")
                     .font(WarrenDesktopTreeTypography.foldedCount)
                     .foregroundColor(tokens.treeQuietText))

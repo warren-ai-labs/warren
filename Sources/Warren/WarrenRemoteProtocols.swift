@@ -25,14 +25,30 @@ enum WarrenRemoteTabOrdering {
         return result
     }
 
+    /// Reconciles a remembered order with the Tabs the roster has now.
+    ///
+    /// `successors` maps a Tab that is gone to the Tab that continues it, as a
+    /// resumed Session continues the stopped one it names. The successor takes
+    /// the place of the Tab it continues, so a resume reads as the stopped Tab
+    /// coming back rather than a new Tab at the end of the strip.
     static func reconciling(
         preferredOrder: [String],
-        availableTabIDs: [String]
+        availableTabIDs: [String],
+        successors: [String: String] = [:]
     ) -> [String] {
         let available = Set(availableTabIDs)
+        let remembered = Set(preferredOrder)
         var seen: Set<String> = []
-        let retained = preferredOrder.filter {
-            available.contains($0) && seen.insert($0).inserted
+        let retained = preferredOrder.compactMap { tabID -> String? in
+            var candidate = tabID
+            // A successor the order already places keeps its own place.
+            if !available.contains(candidate),
+               let successor = successors[candidate],
+               !remembered.contains(successor) {
+                candidate = successor
+            }
+            guard available.contains(candidate), seen.insert(candidate).inserted else { return nil }
+            return candidate
         }
         return retained + availableTabIDs.filter { seen.insert($0).inserted }
     }

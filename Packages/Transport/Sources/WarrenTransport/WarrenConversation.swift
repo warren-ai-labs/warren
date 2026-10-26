@@ -65,7 +65,7 @@ public struct WarrenConversation: Equatable, Sendable {
     /// surface can draw a slash command in a mono face instead of reading tags
     /// out of prose; `note` is every other provider notice.
     public struct Notice: Equatable, Sendable, Identifiable {
-        public enum Kind: String, Equatable, Sendable { case note, command, output }
+        public enum Kind: String, Equatable, Sendable { case note, command, output, warning }
 
         public let id: String
         public var kind: Kind = .note
@@ -324,6 +324,7 @@ public struct WarrenConversation: Equatable, Sendable {
         var text: String
         var complete: Bool
         var order: UInt64
+        var noticeKind: Notice.Kind?
     }
 
     /// A step's target as a person reads it: without the `cd <dir> &&` an
@@ -486,15 +487,25 @@ extension WarrenConversation {
                 } else {
                     // Mutate in place: copying the array out and back would
                     // copy the message's text on every delta.
+                    let noticeKind = WarrenConversation.providerWarningKind(content)
                     if let position = result.turns[index].messages.firstIndex(where: { $0.id == id }) {
                         if type == "message.delta" {
                             result.turns[index].messages[position].text += content
                         } else if !content.isEmpty {
                             result.turns[index].messages[position].text = content
                         }
+                        if result.turns[index].messages[position].noticeKind == nil {
+                            result.turns[index].messages[position].noticeKind = noticeKind
+                        }
                         if type == "message.completed" { result.turns[index].messages[position].complete = true }
                     } else {
-                        result.turns[index].messages.append(Message(id: id, text: content, complete: type == "message.completed", order: event.sequence))
+                        result.turns[index].messages.append(Message(
+                            id: id,
+                            text: content,
+                            complete: type == "message.completed",
+                            order: event.sequence,
+                            noticeKind: noticeKind
+                        ))
                     }
                 }
             case "reasoning.delta":
@@ -759,12 +770,30 @@ extension WarrenConversation {
     fileprivate static func finish(_ turn: inout Turn) {
         let lastStep = turn.steps.map(\.order).max() ?? 0
         let visible = turn.messages.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        let answer = visible.filter { $0.order > lastStep }
-        turn.narration = visible.filter { $0.order <= lastStep }.map(\.text)
+        let prose = visible.filter { $0.noticeKind == nil }
+        let answer = prose.filter { $0.order > lastStep }
+        turn.narration = prose.filter { $0.order <= lastStep }.map(\.text)
         turn.answer = answer.map(\.text).joined(separator: "\n\n")
         turn.answerComplete = !answer.isEmpty && answer.allSatisfy(\.complete)
+        turn.notices.removeAll { $0.kind == .warning }
+        turn.notices.append(contentsOf: visible.compactMap { message in
+            guard message.noticeKind == .warning else { return nil }
+            return Notice(id: message.id, kind: .warning, text: message.text)
+        })
         turn.files = filesChanged(turn.steps)
         turn.summary = summarize(turn.steps)
+    }
+
+    /// ACP currently reports a missing model catalog as an assistant message.
+    /// It is provider diagnostics, not conversation prose, so the projection
+    /// lifts this known warning into a quiet notice instead of showing it as
+    /// something the Agent said. Unknown warnings keep their original role.
+    private static func providerWarningKind(_ content: String) -> Notice.Kind? {
+        let value = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.hasPrefix("Model metadata for "),
+              value.contains(" not found. Defaulting to fallback metadata;")
+        else { return nil }
+        return .warning
     }
 
     fileprivate static func decisionStep(id: String, payload: [String: WarrenRemoteJSONValue], state: String, order: UInt64) -> Step {

@@ -24,6 +24,22 @@ public struct WarrenDesktopAttentionAlert: Equatable, Sendable {
         public let rejectOptionID: String
         public let rejectLabel: String
     }
+
+    public init(
+        sessionID: TerminalSessionID,
+        key: String,
+        title: String,
+        location: String,
+        body: String,
+        quickAnswer: QuickAnswer? = nil
+    ) {
+        self.sessionID = sessionID
+        self.key = key
+        self.title = title
+        self.location = location
+        self.body = body
+        self.quickAnswer = quickAnswer
+    }
 }
 
 /// The Sessions on this Host an Agent has stopped for, for the Dock badge and

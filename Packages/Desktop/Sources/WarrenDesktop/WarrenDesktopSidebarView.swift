@@ -92,6 +92,16 @@ struct WarrenDesktopSidebar: View {
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Whether the Tasks section draws anything; see the rows' `tasksSection`.
+    private var drawsTasksSection: Bool {
+        guard showsTasks else { return false }
+        guard sidebarTree.showsActiveOnly else { return true }
+        let active = editorActivity.activeWorkspaceIDs(projection.activeWorkspaceIDs, hostId: activeEndpointID)
+        return projection.taskGroups.contains { group in
+            group.workspaces.contains { active.contains($0.id) }
+        }
+    }
+
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         // The rail owns the column's width. A child that cannot compress widens
@@ -125,7 +135,12 @@ struct WarrenDesktopSidebar: View {
                 ) {
                     Group {
                         if let sidebarHostProjections, usesSidebarHostSections {
-                            VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
+                            // Tasks and the Host sections are two sections:
+                            // they get the gap between sections, not the
+                            // 2pt that stacked Tasks onto the first Host.
+                            VStack(alignment: .leading, spacing: drawsTasksSection
+                                ? WarrenDesktopSidebarMetrics.sectionSpacing
+                                : WarrenSpacing.xxs) {
                                 // Tasks remain a current-host feature in the
                                 // first multi-host release. Reuse the existing
                                 // rows for that section while the scoped Host
