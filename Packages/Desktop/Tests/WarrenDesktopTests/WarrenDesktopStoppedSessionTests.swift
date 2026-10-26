@@ -1,5 +1,7 @@
+import SwiftUI
 import XCTest
 import WarrenClientCore
+import WarrenDesignSystem
 import WarrenDomain
 @testable import WarrenDesktop
 
@@ -169,5 +171,69 @@ final class WarrenDesktopStoppedSessionTests: XCTestCase {
         XCTAssertTrue(projection.canOpenSession(stopped))
         XCTAssertFalse(projection.canOpenSession(history), "An ended Session with no Tab has nothing to open")
         XCTAssertFalse(projection.canOpenSession(TerminalSessionID(rawValue: UUID())))
+    }
+
+    /// Resume All continues one stopped record per conversation, the newest,
+    /// and leaves out the conversation the current banner's Resume covers.
+    func testResumeAllTakesTheNewestRecordOfEachOtherConversation() {
+        let old = Date(timeIntervalSince1970: 100)
+        let new = Date(timeIntervalSince1970: 200)
+        let candidates = [
+            WarrenDesktopResumeCandidate(sessionID: "current", conversationID: "conv-a", createdAt: new),
+            WarrenDesktopResumeCandidate(sessionID: "same-as-current", conversationID: "conv-a", createdAt: old),
+            WarrenDesktopResumeCandidate(sessionID: "b-old", conversationID: "conv-b", createdAt: old),
+            WarrenDesktopResumeCandidate(sessionID: "c", conversationID: "conv-c"),
+            WarrenDesktopResumeCandidate(sessionID: "b-new", conversationID: "conv-b", createdAt: new),
+        ]
+
+        XCTAssertEqual(
+            WarrenDesktopStoppedSessionRoster.resumeAllTargets(candidates, besides: "current"),
+            ["c", "b-new"]
+        )
+        // From a banner that offers no Resume of its own, every conversation is
+        // someone else's.
+        XCTAssertEqual(
+            WarrenDesktopStoppedSessionRoster.resumeAllTargets(candidates, besides: "a-shell"),
+            ["current", "c", "b-new"]
+        )
+        XCTAssertTrue(
+            WarrenDesktopStoppedSessionRoster.resumeAllTargets(
+                [candidates[0], candidates[1]],
+                besides: "current"
+            ).isEmpty,
+            "Only the current conversation is stopped, so there is nothing else to resume"
+        )
+    }
+
+    /// A stopped Session's title is quiet whether or not it is selected, so a
+    /// Session that can only be resumed reads apart from a running one.
+    @MainActor
+    func testAStoppedSessionTitleIsQuiet() {
+        let tokens = WarrenColorTokens.resolved(for: .dark, material: .opaque)
+        func session(_ state: WarrenDesktopSessionState) -> WarrenDesktopSession {
+            WarrenDesktopSession(
+                id: TerminalSessionID(rawValue: UUID()),
+                workspaceID: WorkspaceID(rawValue: UUID()),
+                title: "Claude Code",
+                kind: .claude,
+                state: state
+            )
+        }
+        for isSelected in [false, true] {
+            XCTAssertEqual(
+                WarrenDesktopWorkspaceSessionRow.titleInk(
+                    session: session(.exited), isSelected: isSelected, tokens: tokens
+                ),
+                tokens.treeQuietText
+            )
+        }
+        // A running Session at rest takes the resting ink; its dot, when
+        // lit, lifts it to the live one.
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceSessionRow.titleInk(
+                session: session(.attached), isSelected: false, tokens: tokens
+            ),
+            tokens.treeSessionRestingText
+        )
     }
 }

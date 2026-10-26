@@ -100,6 +100,20 @@ public struct WarrenDesktopStoppedSessionInput: Hashable, Sendable {
     }
 }
 
+/// One stopped Session whose Tab offers Resume, as Resume All sees it.
+public struct WarrenDesktopResumeCandidate: Hashable, Sendable {
+    public let sessionID: String
+    /// The provider conversation the Session is bound to.
+    public let conversationID: String
+    public let createdAt: Date?
+
+    public init(sessionID: String, conversationID: String, createdAt: Date? = nil) {
+        self.sessionID = sessionID
+        self.conversationID = conversationID
+        self.createdAt = createdAt
+    }
+}
+
 /// Which ended Sessions the Tab list keeps. This is one rule with one test, not
 /// a condition repeated wherever a Tab is built.
 public enum WarrenDesktopStoppedSessionRoster {
@@ -154,6 +168,34 @@ public enum WarrenDesktopStoppedSessionRoster {
         default:
             return nil
         }
+    }
+
+    /// The Sessions Resume All continues besides `current`.
+    ///
+    /// One per conversation, the newest stopped record of it: a conversation
+    /// resumed before and stopped again leaves two stopped Tabs, and the Host
+    /// lets only one running Session own a conversation, so resuming both would
+    /// only fail. The current Session's own conversation is left out, because
+    /// the banner's Resume already covers it. The order follows the input.
+    public static func resumeAllTargets(
+        _ candidates: [WarrenDesktopResumeCandidate],
+        besides current: String
+    ) -> [String] {
+        let currentConversation = candidates
+            .first { $0.sessionID == current }
+            .flatMap { normalized($0.conversationID) }
+        var newest: [String: WarrenDesktopResumeCandidate] = [:]
+        for candidate in candidates where candidate.sessionID != current {
+            guard let conversation = normalized(candidate.conversationID),
+                  conversation != currentConversation else { continue }
+            if let kept = newest[conversation],
+               (kept.createdAt ?? .distantPast) >= (candidate.createdAt ?? .distantPast) {
+                continue
+            }
+            newest[conversation] = candidate
+        }
+        let chosen = Set(newest.values.map(\.sessionID))
+        return candidates.map(\.sessionID).filter(chosen.contains)
     }
 
     private static func normalized(_ value: String?) -> String? {

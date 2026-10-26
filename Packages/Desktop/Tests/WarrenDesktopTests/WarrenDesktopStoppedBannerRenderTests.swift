@@ -61,6 +61,39 @@ final class WarrenDesktopStoppedBannerRenderTests: XCTestCase {
     }
 
     @MainActor
+    func testResumeAllAppearsOnlyWhenOtherSessionsCanResume() throws {
+        func nodes(count: Int, onResumeAll: @escaping () -> Void = {}) -> (Harness, [String: WarrenSemanticNode]) {
+            let harness = mount(
+                WarrenDesktopStoppedBanner(
+                    reason: .runtimeMissing,
+                    action: .resume,
+                    isBusy: false,
+                    failure: nil,
+                    historyFailure: nil,
+                    onAction: {},
+                    onRetryHistory: {},
+                    resumeAllCount: count,
+                    onResumeAll: onResumeAll
+                )
+            )
+            return (harness, Dictionary(
+                harness.recorder.snapshot().nodes.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            ))
+        }
+
+        XCTAssertNil(nodes(count: 0).1["stopped-banner.resume-all"])
+
+        var resumedAll = false
+        let (harness, shown) = nodes(count: 2) { resumedAll = true }
+        XCTAssertEqual(shown["stopped-banner.resume-all"]?.label, "Resume All")
+        XCTAssertEqual(shown["stopped-banner.resume-all"]?.value, "2")
+        XCTAssertEqual(shown["stopped-banner.action"]?.label, "Resume")
+        try harness.recorder.perform(.press, on: "stopped-banner.resume-all")
+        XCTAssertTrue(resumedAll)
+    }
+
+    @MainActor
     func testAStoppedShellOffersRestartAndNoResume() {
         let harness = mount(
             WarrenDesktopStoppedBanner(

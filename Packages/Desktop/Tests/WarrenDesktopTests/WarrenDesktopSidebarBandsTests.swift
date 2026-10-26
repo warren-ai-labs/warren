@@ -458,21 +458,3 @@ final class WarrenDesktopSidebarBandsTests: XCTestCase {
         )
     }
 }
-
-/// A Task's worktree rows leave out the branch their siblings share.
-final class WarrenDesktopTaskWorktreeBranchTests: XCTestCase {
-    func testTheMostSharedNameIsLeftOutAndAnOddOneKeepsItsOwn() {
-        let names = ["release/a/x", "release/a/x", "release/a/y", "release/a/x"]
-        XCTAssertEqual(WarrenDesktopTaskWorktreeBranch.shared(names), "release/a/x")
-    }
-
-    func testNoNameIsSharedWhenNoTwoWorktreesAgree() {
-        XCTAssertNil(WarrenDesktopTaskWorktreeBranch.shared(["a", "b"]))
-        XCTAssertNil(WarrenDesktopTaskWorktreeBranch.shared(["a"]))
-        XCTAssertNil(WarrenDesktopTaskWorktreeBranch.shared(["", ""]))
-    }
-
-    func testATieResolvesTheSameWayEveryTime() {
-        XCTAssertEqual(WarrenDesktopTaskWorktreeBranch.shared(["b", "a", "b", "a"]), "a")
-    }
-}

@@ -229,10 +229,20 @@ test("macOS app surfaces avoid native business sheets and alerts", () => {
     "Sources/Warren/WarrenMain.swift",
     "Packages/Desktop/Sources/WarrenDesktop/WarrenDesktopRootView.swift",
   ];
+  // The one native alert is the mounted disk image's install question. It
+  // needs a blocking Install/Cancel choice before the image replaces the app,
+  // and a posted notice cannot answer that.
+  const warrenMain = readFileSync(resolve(repoRoot, "Sources/Warren/WarrenMain.swift"), "utf8");
+  const diskImagePrompt = warrenMain.match(/private enum WarrenDiskImagePrompt \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(diskImagePrompt, "Sources/Warren/WarrenMain.swift: WarrenDiskImagePrompt");
+  assert.match(diskImagePrompt, /NSAlert\(\)/, "WarrenDiskImagePrompt.confirm");
   for (const relative of files) {
     const content = readFileSync(resolve(repoRoot, relative), "utf8");
     assert.doesNotMatch(content, /\.sheet\s*\(/, relative);
-    assert.doesNotMatch(content, /NSAlert\(\)/, relative);
+    const withoutDiskImagePrompt = relative === "Sources/Warren/WarrenMain.swift"
+      ? content.replace(diskImagePrompt, "")
+      : content;
+    assert.doesNotMatch(withoutDiskImagePrompt, /NSAlert\(\)/, relative);
   }
   // The SSH host picker is a Workbench menu page, not a native sheet: the
   // Host panel drills into it and the Desktop draws it on the shared menu

@@ -4,11 +4,96 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-10-26
+
+A minor release: a Host can run scheduled Agent prompts and commands on its
+own, a stopped Session keeps its last output and can be resumed from its Tab or
+all at once, a Lead Agent's references, decisions, checks and Crew appear on the
+Conversation, and the Desktop sidebar is split into Projects and Tasks with a
+new rhythm and ink ladder. The JSON control protocol remains at 4.0 and this
+release migrates no state.
+
+### Added
+
+- Run Agent prompts and commands on a Host schedule. `warren schedule
+  create|list|view|remove|pause|resume|run|runs` fires on a cron expression or
+  at one instant in the Host's local time zone, persists in `schedules.json`
+  beside the state file, and keeps firing across daemon restarts. An agent
+  action starts one turn through `agent.turn.start` and holds the prompt while
+  the Agent is mid-turn; a command action runs as a new shell Session in a
+  Workspace and records its exit status.
+- Create a fresh Agent per scheduled run with `--provider`. The prompt becomes
+  the Agent's launch-time first turn, the run stays open until that turn ends
+  and records how it ended, `--when-busy` applies to the previous run's Agent so
+  runs do not stack, and `--keep N` removes older runs' Agents while leaving
+  pinned and working ones.
+- Keep a stopped Session and bring it back. The Host records one durable end
+  reason -- user closed, process exited, runtime missing, or unknown for older
+  records -- keeps the records the user did not close in the roster, and serves
+  their last output through `session.history`. `session.resume` continues an
+  Agent conversation in a new Session that keeps its workspace, title, pin and
+  provider binding, and refuses a second running writer.
+- Show a stopped Session as a quiet Tab that keeps the output the Host retained,
+  with one action: Resume for an Agent with a recorded conversation, Restart in
+  the same directory for a shell or custom Session. A stopped banner offers
+  Resume All, which resumes the Session on screen first and then the others one
+  at a time in place; closing a stopped Tab removes it for good.
+- Present a Lead Agent's message markers as structure. `#agent` references
+  become inline Session capsules, consecutive `#accept` markers become a
+  checklist panel, `#ask` markers a decision panel, and a Lead's Crew sits in a
+  strip on the Conversation; answering either sends an ordinary user message.
+- Mark a Lead Session with a quiet LEAD word on its sidebar row and Tab, and
+  raise the attention dot only for an unanswered `#ask` or `#accept`. Crew
+  progress and ordinary Lead messages do not notify.
+- Split the Desktop sidebar into Projects and Tasks tabs that carry their
+  counts, a waiting dot for the hidden list, the add action and the fold-all
+  action.
+- Ask before installing a mounted disk image. Every image with a Warren.app at
+  its root brings the window forward, names the image's version beside the
+  installed one, says whether it is newer, the same or older, and spells out a
+  downgrade; one mount of one image asks once.
+
+### Changed
+
+- Give the sidebar four steps of rhythm and one ink ladder: 0 between Sessions
+  and empty worktrees, 12 between worktrees with Sessions, 12 plus a hairline
+  plus 12 between groups, and 28 between sections. Agent Session rows are 44pt,
+  a plain shell is one 28pt line, branches use 11.5pt proportional medium,
+  names fade their last 28pt, Tasks take an 18pt tile and their worktrees a
+  12pt project tile, and section headings are sentence case with a quiet count.
+- Draw a group name at one optical size per script, with wide scripts half a
+  step down, and keep each tooltip's anchor read when the pointer arrives
+  instead of tracking it on every scroll frame.
+- Shape the provider permission dock like the Lead's panels: the attention hue
+  is only the eyebrow's dot, choices are rows, and one filled default action.
+- Drop the sample-session chip from the web hero.
+
 ### Fixed
 
 - Resolve `warren project add PATH` at the client, so `.`, `..`, and `~/repo`
-  work. The Host expanded relative paths against its own working directory, so
-  only absolute paths reliably named the repository the user meant.
+  name the repository the user meant instead of the Host's working directory.
+- Open a stopped Session from its sidebar row, draw its title in the quiet ink,
+  and put a resumed Session in the stopped Tab's place instead of appending it.
+- Keep Task links and Task worktrees marked by a quiet badge, and keep a Task's
+  long external ID in its row's tooltip so the name owns the row width.
+- Show Agent message actions over the message without shifting its layout, and
+  show provider diagnostics as quiet warnings.
+- Keep Lead replies and Tab titles distinct.
+- Align the composer caret with its placeholder.
+- Refuse a second resume writer inside the state transaction that appends the
+  new Session, so two clients resuming one conversation cannot both create a
+  running Session bound to the same transcript.
+- Stop re-measuring the window on every scroll frame, pause sidebar hover while
+  the sidebar scrolls, and stop rebuilding sidebar rows on every edge crossing.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0; the Host adds `session.history`,
+  `session.resume`, and `schedule.*` methods, and the Host state schema is
+  unchanged. This release migrates no state.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
 
 ## [0.33.0] - 2026-10-21
 
