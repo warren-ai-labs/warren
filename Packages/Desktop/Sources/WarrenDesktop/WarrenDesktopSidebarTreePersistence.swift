@@ -7,7 +7,17 @@ import WarrenDomain
 /// recorded, so a new row is never hidden by a choice nobody made. It is intentionally not Host
 /// state: ordering lives on the Host, while expansion is a per-endpoint UI
 /// preference.
+/// Which list the sidebar shows. One at a time: Projects is the tree of every
+/// project's branches and Sessions, Tasks the tree of Tasks and the worktrees
+/// they span.
+public enum WarrenDesktopSidebarTab: String, Equatable, Sendable, CaseIterable {
+    case projects
+    case tasks
+}
+
 public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
+    /// The list on screen, remembered per Host.
+    public var selectedTab: WarrenDesktopSidebarTab
     /// Tasks the user folded away.
     public var collapsedTaskIDs: Set<TaskID>
     /// Projects the user folded away.
@@ -31,6 +41,7 @@ public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
     public var inactiveProjectsExpanded: Bool
 
     public init(
+        selectedTab: WarrenDesktopSidebarTab = .projects,
         collapsedTaskIDs: Set<TaskID> = [],
         collapsedProjectIDs: Set<ProjectID> = [],
         collapsedWorkspaceIDs: Set<WorkspaceID> = [],
@@ -42,6 +53,7 @@ public struct WarrenDesktopSidebarTreeState: Equatable, Sendable {
         expandedIdleWorkspaceProjectIDs: Set<ProjectID> = [],
         inactiveProjectsExpanded: Bool = false
     ) {
+        self.selectedTab = selectedTab
         self.collapsedTaskIDs = collapsedTaskIDs
         self.collapsedProjectIDs = collapsedProjectIDs
         self.collapsedWorkspaceIDs = collapsedWorkspaceIDs
@@ -79,6 +91,8 @@ public enum WarrenDesktopSidebarTreePersistence {
         let expandedIdleWorkspaces = (defaults.stringArray(forKey: base + ".projects.idle-worktrees.expanded") ?? [])
             .compactMap(ProjectID.init(uuidString:))
         return WarrenDesktopSidebarTreeState(
+            selectedTab: defaults.string(forKey: base + ".tab")
+                .flatMap(WarrenDesktopSidebarTab.init(rawValue:)) ?? .projects,
             collapsedTaskIDs: Set(collapsedTasks),
             collapsedProjectIDs: Set(collapsedProjects),
             collapsedWorkspaceIDs: Set(collapsedWorkspaces),
@@ -98,6 +112,7 @@ public enum WarrenDesktopSidebarTreePersistence {
         defaults: UserDefaults = .standard
     ) {
         let base = "warren.desktop.sidebar.tree.\(scope)"
+        defaults.set(state.selectedTab.rawValue, forKey: base + ".tab")
         defaults.set(
             state.collapsedTaskIDs.map(\.description).sorted(),
             forKey: base + ".tasks.folded"

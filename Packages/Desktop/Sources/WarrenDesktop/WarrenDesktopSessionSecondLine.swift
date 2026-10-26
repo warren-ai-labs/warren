@@ -11,11 +11,16 @@ import WarrenDomain
 /// from the tone below. Kept free of AppKit so the model can be asserted
 /// without mounting a view.
 struct WarrenDesktopSessionSecondLine: Equatable {
-    /// Whether the Session is working. The tone picks both the colour ladder
-    /// and whether the primary fact carries the slow shimmer.
+    /// The state the line speaks for. The tone picks the line's one ink and
+    /// whether the primary fact carries the slow shimmer.
     enum Tone: Equatable {
         case running
         case idle
+        /// A finished turn the person has not looked at yet.
+        case done
+        /// The Agent waits on a person.
+        case attention
+        case failure
     }
 
     /// One appended fact. The context reminder draws in the amber tier, a
@@ -39,6 +44,9 @@ struct WarrenDesktopSessionSecondLine: Equatable {
 
     let tone: Tone
     let primary: String
+    /// The state's own words before the primary, in the medium weight:
+    /// `Needs approval`, `Needs input`, `Failed`.
+    var lead: String? = nil
     let extras: [Extra]
     let meta: Meta
     /// The idle placeholder a Session with nothing to report draws. It is drawn
@@ -57,6 +65,7 @@ struct WarrenDesktopSessionSecondLine: Equatable {
     var announcement: String? {
         guard !isPlaceholder else { return nil }
         var parts: [String] = []
+        if let lead { parts.append(lead) }
         if !primary.isEmpty { parts.append(primary) }
         parts.append(contentsOf: extras.map(\.text))
         switch meta {
@@ -77,29 +86,28 @@ struct WarrenDesktopSessionSecondLine: Equatable {
         let warning: Color
         let failure: Color
 
+        /// One ink per state: a working line in `t4` with a `t2` peak moving
+        /// across it, a finished-unseen one in `t4`, a resting one in `t5`, a
+        /// request in ember and a failure in red. Counts and separators sit
+        /// in the line's own ink; only the context reminder keeps its amber.
         static func resolve(tone: Tone, tokens: WarrenColorTokens) -> Tint {
+            let ink = tokens.sidebarInk
+            let base: Color
             switch tone {
-            case .running:
-                Tint(
-                    primary: tokens.sessionPrimaryRunningText,
-                    primaryPeak: tokens.sessionPrimaryRunningHighlightText,
-                    extra: tokens.sessionExtraRunningText,
-                    meta: tokens.sessionMetaRunningText,
-                    separator: tokens.sessionSeparatorRunningText,
-                    warning: tokens.sessionContextWarningText,
-                    failure: tokens.sessionFailureText
-                )
-            case .idle:
-                Tint(
-                    primary: tokens.sessionPrimaryIdleText,
-                    primaryPeak: tokens.sessionPrimaryIdleText,
-                    extra: tokens.sessionExtraIdleText,
-                    meta: tokens.sessionMetaIdleText,
-                    separator: tokens.sessionSeparatorIdleText,
-                    warning: tokens.sessionContextWarningText,
-                    failure: tokens.sessionFailureText
-                )
+            case .running, .done: base = ink.t4
+            case .idle: base = ink.t5
+            case .attention: base = tokens.highlight
+            case .failure: base = tokens.sessionFailureText
             }
+            return Tint(
+                primary: base,
+                primaryPeak: tone == .running ? ink.t2 : base,
+                extra: base,
+                meta: tone == .running || tone == .done ? ink.t5 : base,
+                separator: tone == .running || tone == .done ? ink.t5 : base,
+                warning: tokens.sessionContextWarningText,
+                failure: tokens.sessionFailureText
+            )
         }
     }
 }
@@ -180,7 +188,10 @@ enum WarrenDesktopSessionSecondLineLayout {
         let primary = line.isLocation || line.isCommand
             ? line.primary
             : WarrenDesktopActivityText.shortened(line.primary)
-        let primaryWidth = textWidth(
+        let leadWidth = line.lead.map {
+            textWidth($0, fontSize: primaryFontSize, monospaced: false, weight: .medium) + separatorWidth
+        } ?? 0
+        let primaryWidth = leadWidth + textWidth(
             primary,
             fontSize: line.isCommand ? commandFontSize : primaryFontSize,
             monospaced: line.isCommand
@@ -205,13 +216,9 @@ enum WarrenDesktopSessionSecondLineLayout {
 
     static func metaWidth(of meta: WarrenDesktopSessionSecondLine.Meta) -> CGFloat {
         switch meta {
-        case .none:
+        // A duration is drawn at the title line's end, not here.
+        case .none, .time:
             return 0
-        case .time(let text):
-            return min(
-                maximumMetaWidth,
-                textWidth(text, fontSize: metaFontSize, monospaced: true)
-            )
         case .plan(let done, let total):
             let text = textWidth("\(done)/\(total)", fontSize: metaFontSize, monospaced: true)
             return min(maximumMetaWidth, planIconWidth + planIconSpacing + text)
@@ -224,12 +231,13 @@ enum WarrenDesktopSessionSecondLineLayout {
     static func textWidth(
         _ text: String,
         fontSize: CGFloat,
-        monospaced: Bool
+        monospaced: Bool,
+        weight: NSFont.Weight = .regular
     ) -> CGFloat {
         guard !text.isEmpty else { return 0 }
         let font = monospaced
-            ? NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
-            : NSFont.systemFont(ofSize: fontSize)
+            ? NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: weight)
+            : NSFont.systemFont(ofSize: fontSize, weight: weight)
         return ceil((text as NSString).size(withAttributes: [.font: font]).width)
     }
 }
@@ -308,6 +316,15 @@ struct WarrenDesktopSecondLineView: View {
             ? line.primary
             : WarrenDesktopActivityText.shortened(line.primary)
         return HStack(spacing: 0) {
+            if let lead = line.lead {
+                Text(lead)
+                    .font(.system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize, weight: .medium))
+                    .foregroundStyle(tint.primary)
+                Text("·")
+                    .font(.system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize))
+                    .foregroundStyle(tint.separator)
+                    .frame(width: WarrenDesktopSessionSecondLineLayout.separatorWidth)
+            }
             Group {
                 if line.isCommand {
                     Text(primaryText)
@@ -356,13 +373,7 @@ struct WarrenDesktopSecondLineView: View {
             }
             .foregroundStyle(tint.meta)
             .fixedSize()
-        case .time(let text):
-            Text(text)
-                .font(.system(size: WarrenDesktopSessionSecondLineLayout.metaFontSize))
-                .monospacedDigit()
-                .foregroundStyle(tint.meta)
-                .fixedSize()
-        case .none:
+        case .time, .none:
             EmptyView()
         }
     }
@@ -439,13 +450,53 @@ extension WarrenDesktopWorkspaceSessionRow {
             extras.append(.init(text: session.turnCounts[1]))
         }
 
-        return WarrenDesktopSessionSecondLine(
+        let line = WarrenDesktopSessionSecondLine(
             tone: tone,
             primary: primary,
             extras: extras,
             meta: isPlaceholder ? .none : meta(for: session, isRunning: isRunning, now: now),
             isPlaceholder: isPlaceholder
         )
+        return stated(line, for: session)
+    }
+
+    /// The line in its state's words and ink, from the mark the badge's dot
+    /// draws: a request leads with what is asked and gives the Host's reason,
+    /// a failure leads with `Failed`, and a finished turn not yet seen keeps
+    /// the brighter resting ink.
+    static func stated(
+        _ line: WarrenDesktopSessionSecondLine,
+        for session: WarrenDesktopSession
+    ) -> WarrenDesktopSessionSecondLine {
+        let mark = session.leadNeedsAttention ? .inputNeeded : session.rowStatusMark
+        let reason = session.agentStatus?.attention?.reason
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        func restated(tone: WarrenDesktopSessionSecondLine.Tone, lead: String?, primary: String) -> WarrenDesktopSessionSecondLine {
+            WarrenDesktopSessionSecondLine(
+                tone: tone,
+                primary: primary,
+                lead: lead,
+                extras: line.extras,
+                meta: line.meta,
+                isPlaceholder: false,
+                isLocation: line.isLocation,
+                isCommand: line.isCommand
+            )
+        }
+        switch mark {
+        case .approvalNeeded:
+            return restated(tone: .attention, lead: "Needs approval", primary: reason.isEmpty ? line.primary : reason)
+        case .inputNeeded:
+            return restated(tone: .attention, lead: "Needs input", primary: reason.isEmpty ? line.primary : reason)
+        case .attentionUnspecified:
+            return restated(tone: .attention, lead: "Needs attention", primary: reason.isEmpty ? line.primary : reason)
+        case .failed:
+            return restated(tone: .failure, lead: "Failed", primary: line.primary)
+        case .ready where line.tone == .idle && !line.isPlaceholder:
+            return restated(tone: .done, lead: nil, primary: line.primary)
+        default:
+            return line
+        }
     }
 
     /// The second line of a plain shell, from the OSC 133 prompt state the Host

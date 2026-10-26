@@ -401,6 +401,10 @@ struct WarrenCompositionRoot: View {
                         },
                         onRetryHistory: {
                             remoteModel.loadStoppedSessionHistory(sessionID)
+                        },
+                        resumeAllCount: remoteModel.resumeAllTargets(besides: sessionID).count,
+                        onResumeAll: {
+                            remoteModel.resumeAllStoppedSessions(from: sessionID)
                         }
                     ))
                 },

@@ -370,10 +370,13 @@ struct WarrenDesktopFoldedCountRow: View {
     let isExpanded: Bool
     let semanticID: String
     let isEnabled: Bool
-    /// Drawn as a worktree among worktrees: a quiet `+` in the branch glyph's
-    /// column and the count in the label's own grey, so the row reads as more
-    /// of the project above it rather than a heading for the next one.
+    /// Drawn as a worktree among worktrees: the branch glyph in the icon
+    /// column, so the row reads as more of the project above it rather than a
+    /// heading for the next one.
     var isWorktreeLevel = false
+    /// Projects whose avatars lead the row, overlapping, as the inactive row
+    /// shows the first few of the projects it holds.
+    var stackedProjects: [Project] = []
     let onToggle: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -385,20 +388,36 @@ struct WarrenDesktopFoldedCountRow: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Button(action: onToggle) {
-            HStack(spacing: WarrenDesktopSidebarMetrics.worktreeIconSpacing) {
+            HStack(spacing: WarrenDesktopSidebarMetrics.iconTextSpacing) {
                 if isWorktreeLevel {
-                    Image(systemName: "plus")
-                        .font(.system(size: 9, weight: .semibold))
+                    WarrenDesktopViewBoxGlyph.worktreeBranch(size: WarrenDesktopSidebarMetrics.worktreeIconSize)
                         .foregroundStyle(tokens.treeFaintText)
-                        .frame(width: 12, height: 12)
+                        .frame(width: WarrenDesktopSidebarMetrics.iconColumnWidth)
                         .accessibilityHidden(true)
+                }
+                if !stackedProjects.isEmpty {
+                    HStack(spacing: -WarrenDesktopSidebarMetrics.inactiveStackOverlap) {
+                        ForEach(stackedProjects.prefix(WarrenDesktopSidebarMetrics.inactiveStackCount)) { project in
+                            WarrenDesktopProjectAvatar(
+                                name: project.name,
+                                identity: project.id.description,
+                                size: WarrenDesktopSidebarMetrics.inactiveProjectIconSize,
+                                cornerRadius: 4
+                            )
+                            .background(
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(tokens.workbenchCardFill)
+                                    .padding(-1.5)
+                            )
+                        }
+                    }
+                    .accessibilityHidden(true)
                 }
                 (Text("\(count)")
                     .font(WarrenDesktopTreeTypography.foldedCountNumber)
-                    .foregroundColor(isWorktreeLevel ? tokens.treeQuietText : tokens.treeSecondaryText)
                     + Text(" \(noun)")
-                    .font(WarrenDesktopTreeTypography.foldedCount)
-                    .foregroundColor(tokens.treeQuietText))
+                    .font(WarrenDesktopTreeTypography.foldedCount))
+                    .foregroundColor(tokens.treeQuietText)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 WarrenDesktopTreeChevron(isExpanded: isExpanded)
@@ -455,16 +474,17 @@ struct WarrenDesktopIdleWorktreeRow: View {
         let ageDate = workspace.lastActiveAt
         let spokenAge = WarrenDesktopActivityAge.spokenLabel(since: ageDate)
         Button(action: onSelect) {
-            HStack(spacing: WarrenDesktopSidebarMetrics.worktreeIconSpacing) {
-                WarrenDesktopWorkspaceGlyphView(workspace: workspace)
-                    .frame(width: 12, height: 12)
+            HStack(spacing: WarrenDesktopSidebarMetrics.iconTextSpacing) {
+                // The idle row above already draws the branch glyph; its list
+                // keeps the column empty so the names line up under its words.
+                Color.clear
+                    .frame(width: WarrenDesktopSidebarMetrics.iconColumnWidth, height: 1)
                 WarrenDesktopBranchNameLabel(
                     name: name,
-                    leafColor: tokens.treeQuietText,
-                    prefixColor: tokens.treeFaintText,
-                    font: WarrenDesktopTreeTypography.branchName
+                    leafColor: tokens.treeBranchText,
+                    prefixColor: tokens.treeFaintText
                 )
-                Spacer(minLength: 0)
+                Spacer(minLength: 6)
                 if let ageDate {
                     WarrenDesktopActivityAgeText(date: ageDate, color: tokens.treeFaintText)
                 }
@@ -533,7 +553,7 @@ struct WarrenDesktopInactiveProjectRow: View {
                 .frame(width: WarrenDesktopSidebarMetrics.groupIconSize)
                 Text(project.name)
                     .font(WarrenDesktopTreeTypography.inactiveProjectName)
-                    .foregroundStyle(isHovered ? tokens.treeSessionText : tokens.treeSecondaryText)
+                    .foregroundStyle(isHovered ? tokens.treeSessionText : tokens.treeSessionRestingText)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 0)

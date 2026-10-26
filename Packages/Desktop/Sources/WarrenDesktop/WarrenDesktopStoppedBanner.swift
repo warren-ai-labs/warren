@@ -21,6 +21,10 @@ public struct WarrenDesktopStoppedBanner: View {
     let historyFailure: String?
     let onAction: () -> Void
     let onRetryHistory: () -> Void
+    /// How many other stopped Sessions Resume All would continue. Zero hides
+    /// the button.
+    let resumeAllCount: Int
+    let onResumeAll: () -> Void
 
     public init(
         reason: WarrenDesktopEndReason?,
@@ -29,7 +33,9 @@ public struct WarrenDesktopStoppedBanner: View {
         failure: String?,
         historyFailure: String?,
         onAction: @escaping () -> Void,
-        onRetryHistory: @escaping () -> Void
+        onRetryHistory: @escaping () -> Void,
+        resumeAllCount: Int = 0,
+        onResumeAll: @escaping () -> Void = {}
     ) {
         self.reason = reason
         self.action = action
@@ -38,6 +44,8 @@ public struct WarrenDesktopStoppedBanner: View {
         self.historyFailure = historyFailure
         self.onAction = onAction
         self.onRetryHistory = onRetryHistory
+        self.resumeAllCount = resumeAllCount
+        self.onResumeAll = onResumeAll
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -93,6 +101,22 @@ public struct WarrenDesktopStoppedBanner: View {
                     action: onAction
                 )
             }
+            if resumeAllCount > 0 {
+                Button("Resume All", action: onResumeAll)
+                    .buttonStyle(WarrenSecondaryButtonStyle())
+                    .controlSize(.small)
+                    .disabled(isBusy)
+                    .help(resumeAllExplanation)
+                    .accessibilityLabel(resumeAllExplanation)
+                    .warrenSemanticElement(
+                        id: "stopped-banner.resume-all",
+                        role: .button,
+                        label: "Resume All",
+                        value: "\(resumeAllCount)",
+                        isEnabled: !isBusy,
+                        action: onResumeAll
+                    )
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -114,6 +138,11 @@ public struct WarrenDesktopStoppedBanner: View {
             label: "Stopped",
             value: detailLine
         )
+    }
+
+    private var resumeAllExplanation: String {
+        let others = resumeAllCount == 1 ? "1 other stopped Session" : "\(resumeAllCount) other stopped Sessions"
+        return action == .resume ? "Resume this and \(others)" : "Resume \(others)"
     }
 
     private var detailLine: String {

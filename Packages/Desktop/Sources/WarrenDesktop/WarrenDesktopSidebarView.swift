@@ -26,6 +26,10 @@ struct WarrenDesktopSidebar: View {
     /// Whether the pointer is over the rail, so an idle row does not collapse
     /// under it.
     @State private var pointerInsideSidebar = false
+    /// What the tab bar's fold action does: the tree on screen reports
+    /// whether all its projects are open, and a bump asks it to toggle them.
+    @State private var allProjectsExpanded: Bool?
+    @State private var toggleAllProjectsRequest = 0
     /// Rich is the default because the tree is the only session switcher: the
     /// tab strip controls the panes on screen and no longer lists a workspace's
     /// other Sessions. Compact remains available for navigating projects
@@ -92,14 +96,82 @@ struct WarrenDesktopSidebar: View {
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Whether the Tasks section draws anything; see the rows' `tasksSection`.
-    private var drawsTasksSection: Bool {
-        guard showsTasks else { return false }
-        guard sidebarTree.showsActiveOnly else { return true }
-        let active = editorActivity.activeWorkspaceIDs(projection.activeWorkspaceIDs, hostId: activeEndpointID)
-        return projection.taskGroups.contains { group in
-            group.workspaces.contains { active.contains($0.id) }
+    /// The list on screen. With Tasks turned off only Projects exists.
+    private var tab: WarrenDesktopSidebarTab {
+        showsTasks ? sidebarTree.selectedTab : .projects
+    }
+
+    private var projectCount: Int {
+        if let sidebarHostProjections, usesSidebarHostSections {
+            return sidebarHostProjections.reduce(0) { $0 + $1.projectGroups.count }
         }
+        return projection.groups.count
+    }
+
+    private var taskWorkspaceIDs: Set<WorkspaceID> {
+        Set(projection.taskGroups.flatMap { $0.workspaces.map(\.id) })
+    }
+
+    private var projectsNeedYou: Bool {
+        if let sidebarHostProjections, usesSidebarHostSections {
+            return sidebarHostProjections.contains { host in
+                WarrenDesktopSidebarAttention.needsYou(host.activeSessionsByWorkspaceID.values.joined())
+            }
+        }
+        return WarrenDesktopSidebarAttention.needsYou(projection.activeSessionsByWorkspaceID.values.joined())
+    }
+
+    private var tasksNeedYou: Bool {
+        let ids = taskWorkspaceIDs
+        return WarrenDesktopSidebarAttention.needsYou(
+            projection.activeSessionsByWorkspaceID
+                .filter { ids.contains($0.key) }
+                .values
+                .joined()
+        )
+    }
+
+    private var tabBar: some View {
+        let addAction: WarrenDesktopSidebarSectionAction = tab == .tasks
+            ? WarrenDesktopSidebarSectionAction(
+                id: "new-task",
+                image: "plus",
+                label: "New Task…",
+                isEnabled: projection.isConnected,
+                action: onRequestTaskCreate
+            )
+            : WarrenDesktopSidebarSectionAction(
+                id: "add-project",
+                image: "plus",
+                label: "Add Project…",
+                isEnabled: projection.isConnected && endpointCapabilities.canAddProject,
+                action: { onAction(.addProject) }
+            )
+        var additional: [WarrenDesktopSidebarSectionAction] = []
+        if tab == .projects, let expanded = allProjectsExpanded {
+            additional.append(WarrenDesktopSidebarSectionAction(
+                id: "toggle-all-projects",
+                image: expanded ? "rectangle.compress.vertical" : "rectangle.expand.vertical",
+                label: expanded ? "Collapse all projects" : "Expand all projects",
+                isEnabled: true,
+                action: { toggleAllProjectsRequest += 1 }
+            ))
+        }
+        return WarrenDesktopSidebarTabBar(
+            selected: tab,
+            showsTasks: showsTasks,
+            projectCount: projectCount,
+            taskCount: projection.taskGroups.count,
+            projectsNeedYou: projectsNeedYou,
+            tasksNeedYou: tasksNeedYou,
+            addAction: addAction,
+            additionalActions: additional,
+            onSelect: { next in
+                withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
+                    sidebarTree.selectedTab = next
+                }
+            }
+        )
     }
 
     var body: some View {
@@ -123,6 +195,7 @@ struct WarrenDesktopSidebar: View {
             if let displayConfigurationError {
                 displayConfigurationNotice(displayConfigurationError, tokens: tokens)
             }
+            tabBar
             ScrollViewReader { proxy in
                 WarrenOverflowFadeScrollView(
                     .vertical,
@@ -135,15 +208,10 @@ struct WarrenDesktopSidebar: View {
                 ) {
                     Group {
                         if let sidebarHostProjections, usesSidebarHostSections {
-                            // Tasks and the Host sections are two sections:
-                            // they get the gap between sections, not the
-                            // 2pt that stacked Tasks onto the first Host.
-                            VStack(alignment: .leading, spacing: drawsTasksSection
-                                ? WarrenDesktopSidebarMetrics.sectionSpacing
-                                : WarrenSpacing.xxs) {
+                            if tab == .tasks {
                                 // Tasks remain a current-host feature in the
                                 // first multi-host release. Reuse the existing
-                                // rows for that section while the scoped Host
+                                // rows for that list while the scoped Host
                                 // view owns only Projects/Workspaces.
                                 WarrenDesktopSidebarRows(
                                     taskGroups: projection.taskGroups,
@@ -184,6 +252,7 @@ struct WarrenDesktopSidebar: View {
                                     onOpenEditor: onOpenEditor,
                                     onSplitDropSession: onSplitDropSession
                                 )
+                            } else {
                                 WarrenDesktopSidebarHostRows(
                                     hosts: sidebarHostProjections.map {
                                         $0.widenedActivity(with: editorActivity)
@@ -216,7 +285,8 @@ struct WarrenDesktopSidebar: View {
                                     onToggleActiveOnly: toggleActiveOnly,
                                     onRetry: onRetrySidebarHost,
                                     onSplitDropSession: onSplitDropSession,
-                                    onOpenEditor: onOpenEditor
+                                    onOpenEditor: onOpenEditor,
+                                    toggleAllProjectsRequest: toggleAllProjectsRequest
                                 )
                             }
                         } else {
@@ -259,10 +329,12 @@ struct WarrenDesktopSidebar: View {
                             onRequestRename: onRequestRename,
                             onRequestDeletion: onRequestDeletion,
                             onOpenEditor: onOpenEditor,
-                            onSplitDropSession: onSplitDropSession
+                            onSplitDropSession: onSplitDropSession,
+                            toggleAllProjectsRequest: toggleAllProjectsRequest
                             )
                         }
                     }
+                    .onPreferenceChange(WarrenDesktopAllProjectsExpandedKey.self) { allProjectsExpanded = $0 }
                     .padding(.vertical, WarrenDesktopSidebarMetrics.contentVerticalInset)
                     .padding(.horizontal, WarrenDesktopSidebarMetrics.contentHorizontalInset)
                     .animation(
@@ -275,11 +347,12 @@ struct WarrenDesktopSidebar: View {
                           case let .workspace(reference)? = newSelection else {
                         return
                     }
-                    // A task-linked workspace is navigated from its Task row.
-                    // The Host tree renders that row unselectable, so scrolling
-                    // into the Projects subtree would land on a row the user
-                    // cannot act on while the usable row sits in Tasks.
-                    let owningTaskID = currentHostTaskID(for: reference)
+                    // On the Tasks tab a task-linked workspace is found under
+                    // its Task; anything else is found on the Projects tab.
+                    let owningTaskID = tab == .tasks ? currentHostTaskID(for: reference) : nil
+                    if tab == .tasks, owningTaskID == nil {
+                        sidebarTree.selectedTab = .projects
+                    }
                     if let owningTaskID {
                         // Task rows exist only while the Task is expanded, so
                         // reveal it before asking for the scroll.
@@ -311,14 +384,18 @@ struct WarrenDesktopSidebar: View {
                     let workspace = projection.groups
                         .flatMap(\.workspaces)
                         .first(where: { $0.id == workspaceID })
-                    // `workspaceScrollTarget` already points a task-linked
-                    // workspace at its Task row, but that row is only mounted
-                    // while the Task is expanded. Reveal it first so the scroll
-                    // has a target instead of silently doing nothing.
-                    if showsTasks, let owningTaskID = workspace?.taskID {
-                        Self.revealTask(owningTaskID, in: &sidebarTree)
+                    // On the Tasks tab a task-linked workspace is found under
+                    // its Task, which is only mounted while the Task is open;
+                    // a workspace no Task lists is found on the Projects tab.
+                    if tab == .tasks {
+                        if let owningTaskID = workspace?.taskID,
+                           taskWorkspaceIDs.contains(workspaceID) {
+                            Self.revealTask(owningTaskID, in: &sidebarTree)
+                        } else {
+                            sidebarTree.selectedTab = .projects
+                        }
                     }
-                    let targetID = workspace.map(Self.workspaceScrollTarget)
+                    let targetID = workspace.map { Self.workspaceScrollTarget(for: $0, tab: tab) }
                         ?? "workspace.project-list.\(workspaceID.description)"
                     // A nil anchor asks ScrollViewReader to make an off-screen
                     // row visible with the smallest required movement. It
@@ -465,19 +542,20 @@ struct WarrenDesktopSidebar: View {
     ) {
         tree.tasksCollapsed = false
         tree.collapsedTaskIDs.remove(taskID)
+        tree.selectedTab = .tasks
     }
 
-    static func workspaceScrollTarget(for workspace: Workspace) -> String {
-        let scope = workspace.taskID == nil ? "project-list" : "task-list"
+    /// Where a selected workspace's row is: under its Task on the Tasks tab,
+    /// under its project otherwise.
+    static func workspaceScrollTarget(for workspace: Workspace, tab: WarrenDesktopSidebarTab) -> String {
+        let scope = tab == .tasks && workspace.taskID != nil ? "task-list" : "project-list"
         return "workspace.\(scope).\(workspace.id.description)"
     }
 
     /// The scroll target for a workspace selected in the Host-scoped tree.
     ///
-    /// A task-linked workspace resolves to its Task row, because the Host tree
-    /// deliberately renders that row unselectable and the Projects subtree
-    /// therefore holds no target the user can act on. Everything else resolves
-    /// to its Host row.
+    /// On the Tasks tab a task-linked workspace resolves to its Task row;
+    /// everything else resolves to its Host row.
     static func hostWorkspaceScrollTarget(
         endpointID: String,
         workspaceID: WorkspaceID,

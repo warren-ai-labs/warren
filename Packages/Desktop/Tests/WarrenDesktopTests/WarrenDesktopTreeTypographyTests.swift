@@ -53,8 +53,8 @@ final class WarrenDesktopTreeTypographyTests: XCTestCase {
     }
 
     func testWideScriptTakesTheSmallerSize() {
-        XCTAssertEqual(WarrenDesktopTreeTypography.groupNameSize, 13.5)
-        XCTAssertEqual(WarrenDesktopTreeTypography.groupNameWideSize, 13)
+        XCTAssertEqual(WarrenDesktopTreeTypography.groupNameSize, 13)
+        XCTAssertEqual(WarrenDesktopTreeTypography.groupNameWideSize, 12.5)
         XCTAssertLessThan(
             WarrenDesktopTreeTypography.groupNameWideSize,
             WarrenDesktopTreeTypography.groupNameSize

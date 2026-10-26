@@ -131,7 +131,7 @@ struct WarrenDesktopProjectRow: View {
                     )
 
                     // The name gives way first; the branch stays readable.
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
                         WarrenDesktopFadingName(text: WarrenDesktopTreeTypography.groupNameText(project.name))
                             .foregroundStyle(tokens.treeGroupText)
                         if let branchName {
@@ -140,7 +140,7 @@ struct WarrenDesktopProjectRow: View {
                                 latin: WarrenDesktopTreeTypography.branchName,
                                 wide: WarrenDesktopTreeTypography.branchNameWide
                             )
-                                .foregroundStyle(tokens.treeBranchText)
+                                .foregroundStyle(tokens.treeFaintText)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                                 .layoutPriority(-1)
@@ -220,8 +220,8 @@ struct WarrenDesktopProjectRow: View {
                         }
                     }
                 )
-                if !isExpanded, WarrenDesktopTreeFoldDots.drawsAny(foldMarks) {
-                    WarrenDesktopTreeFoldDots(marks: foldMarks)
+                if !isExpanded {
+                    WarrenDesktopFoldSummary(marks: foldMarks, count: foldMarks.count)
                 }
             }
 
@@ -236,6 +236,9 @@ struct WarrenDesktopProjectRow: View {
             .buttonStyle(.plain)
             .disabled(isInteractionDisabled)
             .focused($isToggleFocused)
+            // Open, the chevron waits for the pointer; folded, it stays as the
+            // sign of the fold.
+            .opacity(isExpanded && !(isHovered || isFocused || isToggleFocused || forceHover) ? 0 : 1)
             .accessibilityLabel(isExpanded ? "Collapse project \(project.name)" : "Expand project \(project.name)")
             .warrenSemanticElement(
                 id: "\(semanticID).toggle",

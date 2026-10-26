@@ -25,6 +25,26 @@ public enum WarrenSidebarTextWeight {
     public static let descendingTiers: [Double] = [workspace, leaf, section]
 }
 
+/// The sidebar's five inks, brightest first, and its two washes.
+///
+/// Solid values rather than fades of one base: the sidebar design names each
+/// step by its colour, so a row's tier is the same on every ground and the
+/// steps stay as far apart as drawn.
+public struct WarrenSidebarInk: Sendable {
+    /// Project and Task names, a selected title, the selected tab.
+    public let t1: Color
+    /// A live Session's title.
+    public let t2: Color
+    /// A resting Session's title, a Task worktree's project name.
+    public let t3: Color
+    /// Branch names, a live second line, an unselected tab.
+    public let t4: Color
+    /// Times, counts, branch prefixes, glyphs, a resting second line.
+    public let t5: Color
+    public let hover: Color
+    public let selected: Color
+}
+
 /// The semantic color layer shared by the macOS client and the design system.
 ///
 /// The dark values are Superset's default Ember theme. The light values are
@@ -116,6 +136,8 @@ public struct WarrenColorTokens: Sendable {
     /// near the text color and steps down, rather than starting mid-scale and
     /// stepping out.
     public let sidebarTextBase: Color
+    /// The sidebar's ink ladder and washes; see `WarrenSidebarInk`.
+    public let sidebarInk: WarrenSidebarInk
 
     /// Foreground-derived washes preserve Superset's contrast relationships.
     public let fillHover: Color
@@ -161,6 +183,7 @@ public struct WarrenColorTokens: Sendable {
         tabGroupTints: [Color],
         hostForegroundTints: [Color],
         sidebarTextBase: Color,
+        sidebarInk: WarrenSidebarInk,
         fillHover: Color,
         fillSelected: Color,
         tertiaryWash: Color,
@@ -195,6 +218,7 @@ public struct WarrenColorTokens: Sendable {
         self.tabGroupTints = tabGroupTints
         self.hostForegroundTints = hostForegroundTints
         self.sidebarTextBase = sidebarTextBase
+        self.sidebarInk = sidebarInk
         self.fillHover = fillHover
         self.fillSelected = fillSelected
         self.tertiaryWash = tertiaryWash
@@ -244,6 +268,15 @@ public struct WarrenColorTokens: Sendable {
         // The leaf tier lands on the spec's #858585 activity grey and the
         // section tier at #666666, near its #5C5C5C.
         sidebarTextBase: hex(0xA8A8_A8),
+        sidebarInk: WarrenSidebarInk(
+            t1: hex(0xEDED_ED),
+            t2: hex(0xD4D4_D4),
+            t3: hex(0x9999_99),
+            t4: hex(0x7A7A_7A),
+            t5: hex(0x5757_57),
+            hover: hex(0xEDED_ED).opacity(0.05),
+            selected: hex(0xEDED_ED).opacity(0.085)
+        ),
         hoverOpacity: 0.07,
         selectedOpacity: 0.10,
         tertiaryOpacity: 0.05,
@@ -298,6 +331,15 @@ public struct WarrenColorTokens: Sendable {
         // from `mutedForeground` instead put metadata at 2.3:1, which is the
         // difference between quiet and gone.
         sidebarTextBase: hex(0x413B_34),
+        sidebarInk: WarrenSidebarInk(
+            t1: hex(0x1C19_17),
+            t2: hex(0x3A34_2F),
+            t3: hex(0x6E68_62),
+            t4: hex(0x8A83_7C),
+            t5: hex(0xABA4_9D),
+            hover: hex(0x1C19_17).opacity(0.045),
+            selected: hex(0x1C19_17).opacity(0.07)
+        ),
         // A wash is `foreground`-derived, so it darkens paper and lightens
         // Ember without needing a separate mechanism. Only the amounts differ:
         // a dark wash on white reads stronger at the same alpha.
@@ -433,6 +475,7 @@ public struct WarrenColorTokens: Sendable {
         popoverSurface: Color,
         inputSurface: Color,
         sidebarTextBase: Color,
+        sidebarInk: WarrenSidebarInk,
         hoverOpacity: Double,
         selectedOpacity: Double,
         tertiaryOpacity: Double,
@@ -473,6 +516,7 @@ public struct WarrenColorTokens: Sendable {
             tabGroupTints: identityTints,
             hostForegroundTints: hostForegroundTints,
             sidebarTextBase: sidebarTextBase,
+            sidebarInk: sidebarInk,
             fillHover: foreground.opacity(hoverOpacity),
             fillSelected: foreground.opacity(selectedOpacity),
             tertiaryWash: foreground.opacity(tertiaryOpacity),

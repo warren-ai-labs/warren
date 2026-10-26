@@ -321,96 +321,21 @@ final class WarrenDesktopShellRowTests: XCTestCase {
         )
     }
 
-    // MARK: - Idle collapse
+    // MARK: - One line
 
-    private func collapsed(
-        _ session: WarrenDesktopSession,
-        seenAt: Date? = nil
-    ) -> Bool {
-        WarrenDesktopWorkspaceSessionRow.isCollapsedShell(
-            for: session,
-            seenAt: seenAt,
-            now: now
-        )
-    }
-
-    func testAShellThatNeverRanStartsCollapsed() {
-        let session = shell(
-            state: WarrenDesktopShellState(atPrompt: true, shellName: "zsh"),
-            createdAt: now.addingTimeInterval(-30)
-        )
-        XCTAssertTrue(collapsed(session))
-    }
-
-    func testAShellCollapsesTenMinutesAfterItsLastCommand() {
-        let rested = shell(state: WarrenDesktopShellState(
-            atPrompt: true, lastCommand: "swift build", lastExitCode: 0,
-            lastExitAt: now.addingTimeInterval(-601)
-        ))
-        XCTAssertTrue(collapsed(rested))
-
-        let recent = shell(state: WarrenDesktopShellState(
-            atPrompt: true, lastCommand: "swift build", lastExitCode: 0,
-            lastExitAt: now.addingTimeInterval(-599)
-        ))
-        XCTAssertFalse(collapsed(recent))
-    }
-
-    func testRunningAShellKeepsItTwoLines() {
-        let session = shell(state: WarrenDesktopShellState(
+    func testAPlainShellIsAlwaysOneLine() {
+        let resting = shell(state: WarrenDesktopShellState(atPrompt: true, shellName: "zsh"))
+        let running = shell(state: WarrenDesktopShellState(
             atPrompt: false, runningCommand: "npm run dev",
             lastExitAt: now.addingTimeInterval(-3600)
         ))
-        XCTAssertFalse(collapsed(session))
+        XCTAssertTrue(WarrenDesktopWorkspaceSessionRow.isOneLine(resting))
+        XCTAssertTrue(WarrenDesktopWorkspaceSessionRow.isOneLine(running))
+        XCTAssertNil(WarrenDesktopWorkspaceSessionRow.oneLineTitle(for: resting))
+        XCTAssertEqual(WarrenDesktopWorkspaceSessionRow.oneLineTitle(for: running), "npm run dev")
     }
 
-    func testAFailedCommandStaysTwoLinesUntilItHasBeenSeen() {
-        let session = shell(state: WarrenDesktopShellState(
-            atPrompt: true, lastCommand: "swift test", lastExitCode: 1,
-            lastExitAt: now.addingTimeInterval(-3600)
-        ))
-        XCTAssertFalse(collapsed(session), "An unseen failure keeps its command and exit code")
-        XCTAssertFalse(
-            collapsed(session, seenAt: now.addingTimeInterval(-300)),
-            "Seeing it starts a fresh ten-minute rest"
-        )
-        XCTAssertTrue(collapsed(session, seenAt: now.addingTimeInterval(-601)))
-    }
-
-    private func shown(
-        current: Bool,
-        resting: Bool = true,
-        pointerInside: Bool = false,
-        dwelling: Bool = false
-    ) -> Bool {
-        WarrenDesktopWorkspaceSessionRow.shownCollapse(
-            current: current,
-            resting: resting,
-            pointerInsideSidebar: pointerInside,
-            isDwelling: dwelling
-        )
-    }
-
-    /// Entering the rail to reach another Session leaves a collapsed shell
-    /// collapsed; only dwelling on the row itself opens it.
-    func testOnlyDwellingOnTheRowOpensACollapsedShell() {
-        XCTAssertTrue(shown(current: true, pointerInside: true))
-        XCTAssertFalse(shown(current: true, pointerInside: true, dwelling: true))
-    }
-
-    /// An open row does not shrink under the pointer reading it, and folds
-    /// once the pointer leaves the rail.
-    func testAPointerOnTheRailPostponesTheCollapse() {
-        XCTAssertFalse(shown(current: false, pointerInside: true))
-        XCTAssertTrue(shown(current: false, pointerInside: false))
-    }
-
-    func testARowThatIsNotRestingIsAlwaysOpen() {
-        XCTAssertFalse(shown(current: true, resting: false))
-        XCTAssertFalse(shown(current: true, resting: false, pointerInside: true))
-    }
-
-    func testAnAgentInsideAShellNeverCollapses() {
+    func testAnAgentInsideAShellKeepsTwoLines() {
         let session = shell(
             state: WarrenDesktopShellState(atPrompt: true, shellName: "zsh"),
             kind: .shell,
@@ -418,6 +343,6 @@ final class WarrenDesktopShellRowTests: XCTestCase {
             createdAt: now.addingTimeInterval(-3600),
             agentProvider: .claude
         )
-        XCTAssertFalse(collapsed(session))
+        XCTAssertFalse(WarrenDesktopWorkspaceSessionRow.isOneLine(session))
     }
 }

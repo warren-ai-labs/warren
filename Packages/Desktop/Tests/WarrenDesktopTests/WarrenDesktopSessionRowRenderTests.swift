@@ -86,7 +86,7 @@ final class WarrenDesktopSessionRowRenderTests: XCTestCase {
     }
 
     @MainActor
-    func testAWorkingAndARestingSessionRowAreTheSameTwoLineHeight() {
+    func testAgentRowsShareTwoLinesAndAShellTakesOne() {
         let workspaceID = WorkspaceID()
         let working = WarrenDesktopSession(
             id: TerminalSessionID(),
@@ -129,17 +129,13 @@ final class WarrenDesktopSessionRowRenderTests: XCTestCase {
         }
         let heights = ids.compactMap { nodes[$0]?.frame.height }
         XCTAssertEqual(heights.count, 3)
-        XCTAssertEqual(
-            Set(heights.map { ($0 * 2).rounded() / 2 }).count,
-            1,
-            "Every Session row is the same height: \(heights)"
-        )
-        XCTAssertEqual(
-            heights.first ?? 0,
-            WarrenDesktopSidebarMetrics.sessionRowHeight,
-            accuracy: 0.5
-        )
-        XCTAssertEqual(WarrenDesktopSidebarMetrics.sessionRowHeight, 43, accuracy: 0.001)
+        // The two Agent rows share the two-line height; the plain shell is
+        // one line, whatever it runs.
+        XCTAssertEqual(heights[0], WarrenDesktopSidebarMetrics.sessionRowHeight, accuracy: 0.5)
+        XCTAssertEqual(heights[1], WarrenDesktopSidebarMetrics.sessionRowHeight, accuracy: 0.5)
+        XCTAssertEqual(heights[2], WarrenDesktopSidebarMetrics.shellRowHeight, accuracy: 0.5)
+        XCTAssertEqual(WarrenDesktopSidebarMetrics.sessionRowHeight, 44, accuracy: 0.001)
+        XCTAssertEqual(WarrenDesktopSidebarMetrics.shellRowHeight, 28, accuracy: 0.001)
     }
 
     /// Writes the mounted sidebar to PNGs when asked, so the row can be looked

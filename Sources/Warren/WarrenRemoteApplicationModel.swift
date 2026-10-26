@@ -472,6 +472,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// The stopped Sessions with an action in flight, so the one button they
     /// offer cannot be pressed twice.
     @Published private(set) var stoppedSessionActionInFlight: Set<TerminalSessionID> = []
+    /// The stopped Tabs that offer Resume, refreshed with the roster. Not
+    /// published: it changes only with the projection, which already is.
+    private(set) var stoppedResumeCandidates: [WarrenDesktopResumeCandidate] = []
     /// Why a stopped Session's one action failed, shown in its banner until the
     /// next attempt.
     @Published private(set) var stoppedSessionActionFailure: [TerminalSessionID: String] = [:]
@@ -5963,6 +5966,27 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         stoppedSessionHistoryFed.formIntersection(stoppedSessionIDs)
         stoppedSessionActionInFlight.formIntersection(stoppedSessionIDs)
         stoppedSessionActionFailure = stoppedSessionActionFailure.filter { stoppedSessionIDs.contains($0.key) }
+        // What Resume All may continue, read once here so the stopped banner
+        // only filters a short list.
+        let conversationsBySessionID = Dictionary(
+            remoteSessions.compactMap { value, id, _ -> (TerminalSessionID, String)? in
+                guard stoppedSessionIDs.contains(id),
+                      let conversation = value.agentSessionId?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                      !conversation.isEmpty else { return nil }
+                return (id, conversation)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        stoppedResumeCandidates = sessions.compactMap { session in
+            guard session.stoppedAction == .resume,
+                  let conversation = conversationsBySessionID[session.id] else { return nil }
+            return WarrenDesktopResumeCandidate(
+                sessionID: session.id.description,
+                conversationID: conversation,
+                createdAt: session.createdAt
+            )
+        }
         let unorderedTabs = remoteSessions.compactMap { value, id, _ -> ClientTab? in
             guard value.lifecycle == "running" || stoppedSessionIDs.contains(id) else {
                 return nil
@@ -6638,36 +6662,99 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// Continues a stopped Agent Session's conversation in a new Session. The
     /// Host owns the resume command; this only names the Session to continue.
     func resumeStoppedSession(_ sessionID: TerminalSessionID) {
-        guard let wire,
-              projection.session(id: sessionID)?.isStopped == true,
-              stoppedSessionActionInFlight.insert(sessionID).inserted else { return }
-        stoppedSessionActionFailure.removeValue(forKey: sessionID)
+        guard let wire, beginStoppedResume(sessionID) else { return }
         Task { @MainActor [weak self] in
-            defer { self?.stoppedSessionActionInFlight.remove(sessionID) }
-            do {
-                let data = try await wire.request(
-                    "session.resume",
-                    params: ["session": sessionID.description]
-                )
-                let created = try JSONDecoder().decode(CreatedSession.self, from: data)
-                guard let self, self.wire === wire,
-                      let createdID = TerminalSessionID(uuidString: created.id) else { return }
-                try? await self.refreshRoster(using: wire)
-                self.publishNavigationIfChanged(
-                    WarrenDesktopNavigationReducer.reduce(
-                        self.navigation,
-                        action: .selectTab(Self.tabID(createdID)),
-                        in: self.projection
-                    )
-                )
-                await self.presentSelectedSession(activatingInput: true)
-            } catch {
-                guard let self else { return }
-                if self.wire === wire {
-                    self.stoppedSessionActionFailure[sessionID] = error.localizedDescription
-                }
+            guard let self else { return }
+            if let error = await self.performStoppedResume(sessionID, using: wire, selectsResult: true) {
                 self.present(error)
             }
+        }
+    }
+
+    /// The other stopped Sessions Resume All would continue from `sessionID`'s
+    /// banner.
+    func resumeAllTargets(besides sessionID: TerminalSessionID) -> [TerminalSessionID] {
+        WarrenDesktopStoppedSessionRoster
+            .resumeAllTargets(stoppedResumeCandidates, besides: sessionID.description)
+            .compactMap(TerminalSessionID.init(uuidString:))
+    }
+
+    /// Resumes `sessionID` when it offers Resume, and every other stopped
+    /// conversation with it.
+    ///
+    /// The Session on screen goes first and is selected, so the pane in front
+    /// of the person comes back while the rest follow. The others resume one
+    /// at a time in place and leave the selection alone; a failure stays on its
+    /// own banner, and the batch reports once rather than once per Session.
+    func resumeAllStoppedSessions(from sessionID: TerminalSessionID) {
+        guard let wire else { return }
+        let resumesCurrent = projection.session(id: sessionID)?.stoppedAction == .resume
+            && beginStoppedResume(sessionID)
+        let others = resumeAllTargets(besides: sessionID).filter(beginStoppedResume)
+        guard resumesCurrent || !others.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var failures: [Error] = []
+            if resumesCurrent,
+               let error = await self.performStoppedResume(sessionID, using: wire, selectsResult: true) {
+                failures.append(error)
+            }
+            for other in others {
+                if let error = await self.performStoppedResume(other, using: wire, selectsResult: false) {
+                    failures.append(error)
+                }
+            }
+            if failures.count == 1 {
+                self.present(failures[0])
+            } else if failures.count > 1 {
+                self.present(NSError(domain: "WarrenRemote", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "\(failures.count) Sessions could not be resumed.",
+                ]))
+            }
+        }
+    }
+
+    /// Marks one stopped Session's resume as started, or refuses when it is not
+    /// stopped or already starting.
+    private func beginStoppedResume(_ sessionID: TerminalSessionID) -> Bool {
+        guard projection.session(id: sessionID)?.isStopped == true,
+              stoppedSessionActionInFlight.insert(sessionID).inserted else { return false }
+        stoppedSessionActionFailure.removeValue(forKey: sessionID)
+        return true
+    }
+
+    /// Asks the Host to resume one stopped Session begun with
+    /// `beginStoppedResume`, and answers the error a failure produced.
+    private func performStoppedResume(
+        _ sessionID: TerminalSessionID,
+        using wire: WarrenRemoteClient,
+        selectsResult: Bool
+    ) async -> Error? {
+        defer { stoppedSessionActionInFlight.remove(sessionID) }
+        do {
+            let data = try await wire.request(
+                "session.resume",
+                params: ["session": sessionID.description]
+            )
+            let created = try JSONDecoder().decode(CreatedSession.self, from: data)
+            guard self.wire === wire,
+                  let createdID = TerminalSessionID(uuidString: created.id) else { return nil }
+            try? await refreshRoster(using: wire)
+            guard selectsResult else { return nil }
+            publishNavigationIfChanged(
+                WarrenDesktopNavigationReducer.reduce(
+                    navigation,
+                    action: .selectTab(Self.tabID(createdID)),
+                    in: projection
+                )
+            )
+            await presentSelectedSession(activatingInput: true)
+            return nil
+        } catch {
+            if self.wire === wire {
+                stoppedSessionActionFailure[sessionID] = error.localizedDescription
+            }
+            return error
         }
     }
 

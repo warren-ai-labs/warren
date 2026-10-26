@@ -116,6 +116,53 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.34.0",
+        dateISO: "2026-10-26",
+        date: "October 26, 2026",
+        title: "Warren runs work on a schedule and shows a Lead's Crew.",
+        summary:
+          "A minor release that lets a Host run Agent prompts and commands on a cron or one-off schedule, keeps a stopped Session's last output and resumes it from its Tab or all at once, presents a Lead Agent's references, decisions, checks and Crew on the Conversation, splits the Desktop sidebar into Projects and Tasks tabs with a new rhythm and ink ladder, and asks before installing a mounted disk image. The JSON control protocol remains at 4.0 with additive `session.history`, `session.resume`, and `schedule.*` methods, and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Run Agent prompts and commands on a Host schedule with `warren schedule create|list|view|remove|pause|resume|run|runs`: a cron expression or one instant in the Host's local time zone, kept in `schedules.json` across daemon restarts. An agent action starts one turn and holds the prompt while the Agent is mid-turn; a command action runs a new shell Session in a Workspace. `--provider` creates a fresh Agent per run, with `--when-busy` and `--keep N` to bound the runs.",
+              "Keep a stopped Session: the Host records why it ended, retains its last output through `session.history`, and shows it as a quiet Tab with Resume for an Agent or Restart in the same directory for a shell. A stopped banner's Resume All resumes the Session on screen first, then the others in place.",
+              "Present a Lead Agent's markers as structure: `#agent` references become inline Session capsules, `#ask` a decision panel, `#accept` a checklist, and its Crew a strip on the Conversation. A LEAD word marks the Session and only an unanswered request raises the attention dot.",
+              "Split the sidebar into Projects and Tasks tabs with their counts, a waiting dot for the hidden list, the add action and the fold-all action.",
+              "Ask before installing a mounted disk image: the window names the image's version beside the installed one, says whether it is newer, the same or older, and spells out a downgrade.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Give the sidebar four steps of rhythm and a five-step ink ladder: Agent rows at 44pt, a plain shell on one 28pt line, branch labels at 11.5pt, Task and project tiles, and sentence-case section headings with a quiet count.",
+              "Draw group names at one optical size per script, with wide scripts half a step down, and read a tooltip's anchor when it opens instead of on every scroll frame.",
+              "Shape the provider permission dock like the Lead's panels: the attention hue is only the eyebrow's dot, choices are rows, and one filled default action.",
+              "Drop the sample-session chip from the web hero.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Resolve `warren project add PATH` at the client, so `.`, `..`, and `~/repo` name the repository the user meant.",
+              "Open a stopped Session from its sidebar row, draw its title in the quiet ink, and put a resumed Session in the stopped Tab's place.",
+              "Keep Task links and worktrees marked by a quiet badge, keep a Task's long external ID in its tooltip, and overlay Agent message actions without shifting the layout.",
+              "Show provider diagnostics as quiet warnings, align the composer caret with its placeholder, and keep Lead replies and Tab titles distinct.",
+              "Refuse a second resume writer inside the state transaction, so two clients cannot resume one conversation into two running Sessions.",
+              "Stop re-measuring the window and rebuilding sidebar rows on every scroll frame, and pause sidebar hover while it scrolls.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0; the Host adds `session.history`, `session.resume`, and `schedule.*` methods, and the Host state schema is unchanged. This release migrates no state.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.33.0",
         dateISO: "2026-10-21",
         date: "October 21, 2026",
@@ -1713,6 +1760,53 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.34.0",
+        dateISO: "2026-10-26",
+        date: "2026 年 10 月 26 日",
+        title: "Warren 按计划执行工作，并呈现 Lead 的 Crew。",
+        summary:
+          "次版本：Host 可按 cron 或一次性时间运行 Agent 提示与命令；停下的 Session 保留最后输出，可从 Tab 或一次性全部恢复；Lead Agent 的引用、决定、检查与 Crew 呈现在会话里；Desktop 侧栏分为 Projects 与 Tasks 两个 Tab，并采用新的间距与墨色层级；挂载的磁盘映像安装前会先询问。JSON 控制协议仍为 4.0，新增 `session.history`、`session.resume` 与 `schedule.*` 方法，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "用 `warren schedule create|list|view|remove|pause|resume|run|runs` 按 Host 本地时区的 cron 表达式或一次性时间运行 Agent 提示与命令；计划保存在 state 文件旁的 `schedules.json`，daemon 重启后继续触发。agent 动作启动一轮，并在 Agent 忙碌时挂起提示；command 动作在工作区里新建 shell Session。`--provider` 每次运行新建 Agent，`--when-busy` 与 `--keep N` 用来约束运行。",
+              "保留停下的 Session：Host 记录结束原因，通过 `session.history` 保留最后输出，并以安静的 Tab 展示；Agent 提供 Resume，shell 在同一目录提供 Restart。停下横幅的 Resume All 先恢复当前 Session，再原地恢复其余。",
+              "把 Lead Agent 的标记呈现为结构：`#agent` 引用变成内联 Session 胶囊，`#ask` 成为决定面板，`#accept` 成为检查清单，Crew 成为会话上的条带。LEAD 字样标记该 Session，只有未回答的请求点亮注意力圆点。",
+              "侧栏分为 Projects 与 Tasks 两个 Tab，带各自计数、隐藏列表的等待圆点、添加动作与全部折叠动作。",
+              "安装挂载的磁盘映像前先询问：窗口并列显示映像版本与已安装版本，说明更新、相同或更旧，并明确写出降级。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "侧栏采用四级间距与五级墨色：Agent 行 44pt，普通 shell 占一行 28pt，分支标签 11.5pt，Task 与项目使用方块图标，分区标题为句首大写并带安静计数。",
+              "组名按文字脚本各自取同一视觉字号，宽字符脚本低半级；tooltip 在打开时读取锚点，而不是每个滚动帧都跟踪。",
+              "provider 权限停靠栏采用 Lead 面板的形状：注意力色只用于眉标的圆点，选项为行，只有一个填充的默认动作。",
+              "网站首屏移除示例 Session 芯片。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "在客户端解析 `warren project add PATH`，让 `.`、`..` 与 `~/repo` 指向用户所指的仓库。",
+              "可从侧栏行打开停下的 Session，其标题使用安静墨色，恢复后的 Session 放回停下 Tab 的位置。",
+              "Task 链接与工作树用安静徽标标记，Task 的长外部 ID 放进 tooltip，Agent 消息动作浮层不再挤动布局。",
+              "provider 诊断显示为安静警告，composer 光标与占位符对齐，Lead 回复与 Tab 标题保持区分。",
+              "在追加新 Session 的状态事务内拒绝第二个 resume 写入者，两个客户端无法把同一段对话恢复成两个运行中的 Session。",
+              "不再在每个滚动帧重新测量窗口或重建侧栏行，侧栏滚动时暂停悬停处理。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0；Host 新增 `session.history`、`session.resume` 与 `schedule.*` 方法，Host 状态 schema 不变。本版本不迁移任何状态。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.33.0",
         dateISO: "2026-10-21",

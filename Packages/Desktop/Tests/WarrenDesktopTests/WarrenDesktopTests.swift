@@ -279,7 +279,7 @@ final class WarrenDesktopTests: XCTestCase {
             turnCounts: ["Edited 3 files", "Ran 5 commands"]
         )
         let resting = WarrenDesktopWorkspaceSessionRow.secondLine(for: counted, now: now)
-        XCTAssertEqual(resting.tone, .idle)
+        XCTAssertEqual(resting.tone, .done, "A finished turn not yet seen keeps the brighter ink")
         XCTAssertEqual(
             resting.primary,
             "Edited 3 files",
@@ -460,7 +460,7 @@ final class WarrenDesktopTests: XCTestCase {
     /// The fade covers the line's last points and nothing else, so a title that
     /// fits keeps every glyph it has.
     func testOverflowFadeCoversTheLinesTail() {
-        XCTAssertEqual(WarrenDesktopFadingLine<EmptyView>.fadeStart(in: 28), 0)
+        XCTAssertEqual(WarrenDesktopFadingLine<EmptyView>.fadeStart(in: WarrenDesktopSidebarMetrics.sessionLineFadeWidth), 0)
         XCTAssertEqual(WarrenDesktopFadingLine<EmptyView>.fadeStart(in: 10), 0)
         XCTAssertEqual(
             WarrenDesktopFadingLine<EmptyView>.fadeStart(in: 128),
@@ -579,10 +579,10 @@ final class WarrenDesktopTests: XCTestCase {
 
         let quiet = WarrenDesktopLeafDisclosure(isExpanded: false, marks: [nil, .exited, nil], toggle: {})
         XCTAssertEqual(quiet.visibleMarks, [])
-        XCTAssertEqual(
+        XCTAssertGreaterThan(
             quiet.accessoryWidth,
             WarrenDesktopLeafDisclosure.chevronWidth,
-            "A folded row of idle Sessions holds no room for dots"
+            "A folded row of idle Sessions still counts its Sessions"
         )
         XCTAssertFalse(WarrenDesktopTreeFoldDots.drawsAny([nil, .exited]))
         XCTAssertTrue(WarrenDesktopTreeFoldDots.drawsAny([nil, .ready]))
@@ -863,20 +863,16 @@ final class WarrenDesktopTests: XCTestCase {
         let localWorkspaceID = "workspace.host.local.\(sharedWorkspaceID.description)"
         let remoteWorkspaceID = "workspace.host.remote.\(sharedWorkspaceID.description)"
         let initialSnapshot = recorder.snapshot()
-        XCTAssertEqual(initialSnapshot.node(id: "sidebar.projects.hosts")?.value, "2 hosts")
-        guard let projectsHeader = initialSnapshot.node(id: "sidebar.projects.hosts"),
-              let localHostHeader = initialSnapshot.node(id: "host.local.toggle") else {
-            XCTFail("Multi-host sidebar must expose its Projects and Host headers")
+        // The tab bar names the list; the Host rows no longer carry a
+        // Projects heading of their own.
+        XCTAssertNil(initialSnapshot.node(id: "sidebar.projects.hosts"))
+        guard let localHostHeader = initialSnapshot.node(id: "host.local.toggle") else {
+            XCTFail("Multi-host sidebar must expose its Host headers")
             return
         }
         XCTAssertEqual(
             localHostHeader.frame.height,
             Double(WarrenLayoutMetrics.sidebarHostHeaderHeight),
-            accuracy: 0.01
-        )
-        XCTAssertEqual(
-            localHostHeader.frame.y,
-            projectsHeader.frame.y + projectsHeader.frame.height + Double(WarrenSpacing.xs),
             accuracy: 0.01
         )
         // Every project starts open; folding one Host's copy leaves the other
@@ -1222,23 +1218,6 @@ final class WarrenDesktopTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         hostingView.layoutSubtreeIfNeeded()
         XCTAssertNil(recorder.snapshot().node(id: workspaceID))
-    }
-
-    func testMultiHostProjectsHeaderShowsTheCountOnHover() {
-        XCTAssertEqual(
-            WarrenDesktopSidebarHostsSectionPresentation.title(
-                hostCount: 2,
-                isHovered: false
-            ),
-            "Projects · Hosts"
-        )
-        XCTAssertEqual(
-            WarrenDesktopSidebarHostsSectionPresentation.title(
-                hostCount: 2,
-                isHovered: true
-            ),
-            "Projects · 2"
-        )
     }
 
     func testHostTintAssignmentIsStableAcrossOrderAndResolvesCollisions() {
@@ -2648,20 +2627,20 @@ final class WarrenDesktopTests: XCTestCase {
             path: "/tmp/api-available"
         )
         let groups = [WarrenDesktopProjectGroup(project: project, workspaces: [assigned, available])]
-        let recorder = WarrenSemanticRecorder()
         var selectedTaskID: TaskID?
         var selectedWorkspaceID: WorkspaceID?
         var taskTree = WarrenDesktopSidebarTreeState(
             tasksCollapsed: true
         )
+        func mount(_ tab: WarrenDesktopSidebarTab) -> WarrenSemanticSnapshot {
+        let recorder = WarrenSemanticRecorder()
         let rows = WarrenDesktopSidebarRows(
             taskGroups: [WarrenDesktopTaskGroup(task: task, workspaces: [assigned])],
             groups: groups,
             workspaceActivitySummaries: [:],
             // A Session keeps the project out of the inactive list.
             activeWorkspaceIDs: [available.id],
-            tree: .constant(WarrenDesktopSidebarTreeState(
-            )),
+            tree: .constant(WarrenDesktopSidebarTreeState(selectedTab: tab)),
             selection: nil,
             deletingProjectIDs: [],
             deletingWorkspaceIDs: [],
@@ -2689,8 +2668,10 @@ final class WarrenDesktopTests: XCTestCase {
         hostingView.frame = NSRect(x: 0, y: 0, width: 420, height: 500)
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        return recorder.snapshot()
+        }
 
-        let snapshot = recorder.snapshot()
+        var snapshot = mount(.projects)
         // A Task's Workspace is listed under the Task only: the Projects
         // section neither repeats it nor links back to the Task.
         XCTAssertNil(snapshot.node(id: "workspace.project-list.\(assigned.id.description)"))
@@ -2705,6 +2686,7 @@ final class WarrenDesktopTests: XCTestCase {
         XCTAssertFalse(availableProjectNode?.value?.contains("Belongs to task") == true)
         XCTAssertNil(snapshot.node(id: "workspace-task.project-list.\(available.id.description)"))
 
+        snapshot = mount(.tasks)
         let assignedTaskNode = snapshot.node(
             id: "workspace.task-list.\(assigned.id.description)"
         )
@@ -2731,11 +2713,15 @@ final class WarrenDesktopTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            WarrenDesktopSidebar.workspaceScrollTarget(for: assigned),
+            WarrenDesktopSidebar.workspaceScrollTarget(for: assigned, tab: .tasks),
             "workspace.task-list.\(assigned.id.description)"
         )
         XCTAssertEqual(
-            WarrenDesktopSidebar.workspaceScrollTarget(for: available),
+            WarrenDesktopSidebar.workspaceScrollTarget(for: assigned, tab: .projects),
+            "workspace.project-list.\(assigned.id.description)"
+        )
+        XCTAssertEqual(
+            WarrenDesktopSidebar.workspaceScrollTarget(for: available, tab: .tasks),
             "workspace.project-list.\(available.id.description)"
         )
     }
@@ -5507,6 +5493,7 @@ final class WarrenDesktopTests: XCTestCase {
             activeSessionsByWorkspaceID: projection.activeSessionsByWorkspaceID,
                 workspaceDisplayMode: .rich,
                 tree: .constant(WarrenDesktopSidebarTreeState(
+                    selectedTab: .tasks,
                     collapsedTaskIDs: isTaskFolded ? [task.id] : []
                 )),
                 selection: nil,
@@ -6094,6 +6081,7 @@ final class WarrenDesktopTests: XCTestCase {
             workspaceActivitySummaries: projection.workspaceActivitySummaries,
             activeWorkspaceIDs: [],
             tree: .constant(WarrenDesktopSidebarTreeState(
+                selectedTab: .tasks,
                 showsActiveOnly: true
             )),
             selection: nil,

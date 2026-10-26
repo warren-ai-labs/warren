@@ -39,9 +39,10 @@ struct WarrenDesktopWorkspaceRow: View {
     /// glyph on a Task's worktree: the colour matches the project's avatar in
     /// Projects, so one glance says which project the worktree is in.
     var projectIdentity: String? = nil
-    /// False when the branch repeats the one its sibling worktrees share, so
-    /// the row names only its project.
-    var showsBranch: Bool = true
+    /// Whether a new Session opens here: the worktree of the selected
+    /// Session, in the Tasks list. Its names read a step brighter and it
+    /// carries the `⌘T` hint.
+    var isNewSessionTarget: Bool = false
     let mark: WarrenActivityMark?
     let activeTabCount: Int
     let isSelected: Bool
@@ -135,72 +136,80 @@ struct WarrenDesktopWorkspaceRow: View {
                 guard !isSelectionDisabled, !showsSessionChildren else { return }
                 onSelect()
             }) {
-                HStack(spacing: WarrenDesktopSidebarMetrics.worktreeIconSpacing) {
-                    if let projectLabel, let projectIdentity {
-                        WarrenDesktopProjectAvatar(
-                            name: projectLabel,
-                            identity: projectIdentity,
-                            size: WarrenDesktopSidebarMetrics.worktreeProjectTileSize
-                        )
-                    } else {
-                        workspaceGlyph(tokens: tokens)
-                            .frame(width: 12, height: 12)
+                HStack(spacing: 0) {
+                    // Every leading icon sits centred in the tree's icon
+                    // column, so the name starts at the same x on every row.
+                    Group {
+                        if let projectLabel, let projectIdentity {
+                            WarrenDesktopProjectAvatar(
+                                name: projectLabel,
+                                identity: projectIdentity,
+                                size: WarrenDesktopSidebarMetrics.worktreeProjectTileSize,
+                                cornerRadius: WarrenDesktopSidebarMetrics.worktreeProjectTileRadius
+                            )
+                        } else {
+                            workspaceGlyph(tokens: tokens)
+                        }
                     }
+                    .frame(width: WarrenDesktopSidebarMetrics.iconColumnWidth)
+                    .padding(.trailing, WarrenDesktopSidebarMetrics.iconTextSpacing)
 
-                    // A branch name stays quiet whatever it holds; the
-                    // selected Session below says where the work is. Its
-                    // type prefix is dimmer still, so the eye lands on the
-                    // rest.
                     if let projectLabel {
+                        // A Task's worktree is "project, branch glyph,
+                        // branch". The one a new Session opens in reads a
+                        // step brighter.
                         Text(projectLabel)
                             .font(WarrenDesktopTreeTypography.worktreeProjectName)
-                            .foregroundStyle(isSelectionDisabled ? tokens.treeQuietText : tokens.treeSecondaryText)
+                            .foregroundStyle(isNewSessionTarget
+                                ? tokens.sidebarInk.t2 : tokens.sidebarInk.t3)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
+                        WarrenDesktopViewBoxGlyph.worktreeBranch(size: 10)
+                            .foregroundStyle(tokens.treeFaintText)
+                            .padding(.leading, 8)
+                            .padding(.trailing, 4)
                     }
-                    if projectLabel == nil || showsBranch {
-                        if projectLabel != nil {
-                            Text("·")
-                                .font(WarrenDesktopTreeTypography.worktreeBranchSuffix)
-                                .foregroundStyle(tokens.treeFaintText)
+                    WarrenDesktopBranchNameLabel(
+                        name: workspace.name.isEmpty ? "Workspace" : workspace.name,
+                        leafColor: projectLabel != nil && isNewSessionTarget
+                            ? tokens.sidebarInk.t3 : tokens.treeBranchText,
+                        prefixColor: tokens.treeFaintText
+                    )
+                    .layoutPriority(-1)
+
+                    HStack(spacing: 6) {
+                        if isDeleting {
+                            deletionStatus(tokens: tokens)
                         }
-                        WarrenDesktopBranchNameLabel(
-                            name: workspace.name.isEmpty ? "Workspace" : workspace.name,
-                            leafColor: projectLabel != nil || isSelectionDisabled
-                                ? tokens.treeQuietText : tokens.treeBranchText,
-                            prefixColor: tokens.treeFaintText,
-                            font: projectLabel == nil
-                                ? WarrenDesktopTreeTypography.branchName
-                                : WarrenDesktopTreeTypography.worktreeBranchSuffix,
-                            wideFont: projectLabel == nil
-                                ? WarrenDesktopTreeTypography.branchNameWide
-                                : WarrenDesktopTreeTypography.worktreeBranchSuffixWide
-                        )
-                    }
 
-                    if isDeleting {
-                        deletionStatus(tokens: tokens)
-                    }
+                        // With no Session leaves under it, the row itself says
+                        // how its Sessions are doing.
+                        if let mark, !showsSessionChildren, leafDisclosure == nil {
+                            WarrenDesktopStatusDot(
+                                mark: mark,
+                                size: WarrenDesktopSidebarMetrics.foldDotSize,
+                                ring: nil,
+                                tokens: tokens
+                            )
+                        }
 
-                    // With no Session leaves under it, the row itself says how
-                    // its Sessions are doing.
-                    if let mark, !showsSessionChildren, leafDisclosure == nil {
-                        WarrenDesktopStatusDot(
-                            mark: mark,
-                            size: WarrenDesktopSidebarMetrics.foldDotSize,
-                            ring: nil,
-                            tokens: tokens
-                        )
+                        if isPinned {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(tokens.treeFaintText)
+                                .accessibilityHidden(true)
+                        }
                     }
+                    .padding(.leading, isDeleting || isPinned
+                        || (mark != nil && !showsSessionChildren && leafDisclosure == nil) ? 6 : 0)
 
-                    if isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(tokens.treeQuietText)
-                            .accessibilityHidden(true)
+                    Spacer(minLength: 6)
+
+                    // A worktree that lists no Session says when it was last
+                    // used, where a listed one keeps its fold.
+                    if leafDisclosure == nil, let lastActiveAt = workspace.lastActiveAt {
+                        WarrenDesktopActivityAgeText(date: lastActiveAt, color: tokens.treeFaintText)
                     }
-
-                    Spacer(minLength: 0)
                 }
                 .frame(height: rowHeight)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -232,6 +241,19 @@ struct WarrenDesktopWorkspaceRow: View {
             // receives the click on macOS.
             editorEntry
             taskLinkButton
+            if isNewSessionTarget, leafDisclosure != nil {
+                Text("⌘T")
+                    .font(WarrenDesktopTreeTypography.keyHint)
+                    .foregroundStyle(tokens.treeFaintText)
+                    .padding(.horizontal, 4)
+                    .frame(height: 14)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .strokeBorder(tokens.cardBorder, lineWidth: 1)
+                    )
+                    .help("New Sessions open here")
+                    .accessibilityLabel("New Sessions open here")
+            }
             if let leafDisclosure {
                 WarrenDesktopLeafDisclosureAccessory(
                     disclosure: leafDisclosure,
@@ -454,8 +476,7 @@ struct WarrenDesktopWorkspaceRow: View {
     }
 }
 
-/// The main workspace gets a laptop glyph, a merged worktree the merge glyph,
-/// and any other worktree the branch glyph.
+/// Every workspace draws the branch glyph; a merged worktree tints it.
 struct WarrenDesktopWorkspaceGlyphView: View {
     let workspace: Workspace
     var isDisabled = false
@@ -466,23 +487,14 @@ struct WarrenDesktopWorkspaceGlyphView: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let disabledColor = tokens.mutedForeground.opacity(0.62)
-        switch WarrenDesktopWorkspaceGlyph(workspace) {
-        case .checkout:
-            Image(systemName: "laptopcomputer")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(isDisabled ? disabledColor : tokens.treeQuietText)
-                .accessibilityHidden(true)
-        case .mergedWorktree:
-            Image(systemName: "arrow.triangle.merge")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(
-                    isDisabled ? disabledColor : tokens.success.opacity(0.8)
-                )
-                .accessibilityHidden(true)
-        case .worktree:
-            WarrenDesktopViewBoxGlyph.worktreeBranch(size: WarrenDesktopSidebarMetrics.worktreeIconSize)
-                .foregroundStyle(isDisabled ? disabledColor : tokens.treeQuietText)
+        // One branch glyph for every branch row, the main checkout included;
+        // a merged worktree only changes its colour.
+        let color: Color = switch WarrenDesktopWorkspaceGlyph(workspace) {
+        case .mergedWorktree: tokens.success.opacity(0.8)
+        case .checkout, .worktree: tokens.treeFaintText
         }
+        WarrenDesktopViewBoxGlyph.worktreeBranch(size: WarrenDesktopSidebarMetrics.worktreeIconSize)
+            .foregroundStyle(isDisabled ? disabledColor : color)
     }
 }
 

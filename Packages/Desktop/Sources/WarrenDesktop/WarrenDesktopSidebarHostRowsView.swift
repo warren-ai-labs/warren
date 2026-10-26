@@ -40,6 +40,9 @@ struct WarrenDesktopSidebarHostRows: View {
     var onSplitDropSession: ((String, String, SplitDropTarget) -> Void)? = nil
     /// Shows a marked Workspace's editor. Only the window's Host runs one.
     var onOpenEditor: ((WorkspaceID) -> Void)? = nil
+    /// Bumped by the tab bar's fold action: every visible project, on every
+    /// Host, folds or opens together.
+    var toggleAllProjectsRequest: Int = 0
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
@@ -49,7 +52,6 @@ struct WarrenDesktopSidebarHostRows: View {
     @State private var collapsedHostIDs: Set<String> = []
     /// Workspaces whose Session leaves the user folded away, keyed per Host.
     @State private var collapsedWorkspaceKeys: Set<String> = []
-    @State private var singleHostProjectsCollapsed = false
     /// Projects, keyed per Host, whose idle-worktrees row the user opened.
     /// That row starts folded.
     @State private var expandedIdleWorkspaceKeys: Set<String> = []
@@ -83,8 +85,10 @@ struct WarrenDesktopSidebarHostRows: View {
         onToggleActiveOnly: @escaping () -> Void,
         onRetry: @escaping (String) -> Void,
         onSplitDropSession: ((String, String, SplitDropTarget) -> Void)? = nil,
-        onOpenEditor: ((WorkspaceID) -> Void)? = nil
+        onOpenEditor: ((WorkspaceID) -> Void)? = nil,
+        toggleAllProjectsRequest: Int = 0
     ) {
+        self.toggleAllProjectsRequest = toggleAllProjectsRequest
         self.hosts = hosts
         self.showsActiveOnly = showsActiveOnly
         self.workspaceDisplayMode = workspaceDisplayMode
@@ -108,19 +112,16 @@ struct WarrenDesktopSidebarHostRows: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
-            if usesHostSectionPresentation {
-                WarrenDesktopSidebarHostsSectionHeader(hostCount: hosts.count)
-            }
-            // Hosts are one list, so the gap between two of them is the section
-            // rhythm. The flat single-Host tree keeps its tighter spacing.
-            VStack(alignment: .leading, spacing: hostSectionSpacing) {
-                ForEach(hosts, id: \.endpointID) { host in
-                    hostSection(host)
-                        .id(host.endpointID)
-                }
+        // Hosts are one list, so the gap between two of them is the section
+        // rhythm. The tab bar above names the list.
+        VStack(alignment: .leading, spacing: hostSectionSpacing) {
+            ForEach(hosts, id: \.endpointID) { host in
+                hostSection(host)
+                    .id(host.endpointID)
             }
         }
+        .preference(key: WarrenDesktopAllProjectsExpandedKey.self, value: areAllProjectsExpanded)
+        .onChange(of: toggleAllProjectsRequest) { _ in toggleAllProjects() }
         .onChange(of: hosts) { nextHosts in
             let valid = Set(nextHosts.flatMap { host in
                 host.projectGroups.map { projectKey(host, $0.project.id) }
@@ -186,46 +187,8 @@ struct WarrenDesktopSidebarHostRows: View {
     }
 
     private func singleHostSection(_ host: WarrenDesktopSidebarHostProjection) -> some View {
-        VStack(alignment: .leading, spacing: WarrenDesktopSidebarMetrics.sectionHeaderSpacing) {
-            singleHostProjectsHeader(host)
-            if !singleHostProjectsCollapsed {
-                hostProjectRows(for: host)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func singleHostProjectsHeader(
-        _ host: WarrenDesktopSidebarHostProjection
-    ) -> some View {
-        let groups = visibleGroups(for: host)
-        let allProjectsExpanded = !groups.isEmpty && groups.allSatisfy {
-            isProjectExpanded($0.project.id, in: host)
-        }
-        return WarrenDesktopSidebarSectionHeader(
-            title: "Projects",
-            count: host.projectGroups.count,
-            disclosureExpanded: !singleHostProjectsCollapsed,
-            actionImage: "plus",
-            actionLabel: "Add Project…",
-            actionVisible: host.endpointID == activeEndpointID,
-            actionEnabled: host.connectionState.isConnected,
-            onToggle: toggleSingleHostProjects,
-            onAction: { onAction(.addProject) },
-            additionalActions: [
-                WarrenDesktopSidebarSectionAction(
-                    id: "single-host-toggle-all-projects",
-                    image: allProjectsExpanded
-                        ? "rectangle.compress.vertical"
-                        : "rectangle.expand.vertical",
-                    label: allProjectsExpanded
-                        ? "Collapse all projects"
-                        : "Expand all projects",
-                    isEnabled: host.connectionState.isConnected && !groups.isEmpty,
-                    action: { toggleAllProjects(in: host, groups: groups) }
-                ),
-            ]
-        )
+        hostProjectRows(for: host)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func expandedHostSection(_ host: WarrenDesktopSidebarHostProjection) -> some View {
@@ -402,7 +365,7 @@ struct WarrenDesktopSidebarHostRows: View {
                                 if split.showsIdleRow {
                                     hostIdleWorkspaceRows(split.idle, project: group.project, host: host)
                                         .padding(.top, WarrenDesktopWorktreeGap.aboveIdleRow(
-                                            followsWorktrees: !split.live.isEmpty
+                                            lastLeafCount: leafCounts.last
                                         ))
                                 }
                             }
@@ -436,7 +399,6 @@ struct WarrenDesktopSidebarHostRows: View {
         host: WarrenDesktopSidebarHostProjection
     ) -> [WarrenDesktopSession] {
         workspaceDisplayMode.isRich
-            && !routesSelectionToTaskRow(workspace, in: host)
             && !isWorkspaceLeavesCollapsed(workspace.id, in: host)
             ? host.activeSessions(in: workspace.id)
             : []
@@ -487,13 +449,12 @@ struct WarrenDesktopSidebarHostRows: View {
             if isExpanded {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(workspaces) { workspace in
-                        let routesToTask = routesSelectionToTaskRow(workspace, in: host)
                         let isProjectDeleting = canWrite && deletingProjectIDs.contains(project.id)
                         WarrenDesktopIdleWorktreeRow(
                             workspace: workspace,
                             semanticScope: "host.\(host.endpointID)",
-                            isSelected: isSelected(workspace: workspace.id, in: host) && !routesToTask,
-                            isEnabled: enabled && !isProjectDeleting && !routesToTask,
+                            isSelected: isSelected(workspace: workspace.id, in: host),
+                            isEnabled: enabled && !isProjectDeleting,
                             isMutationDisabled: !canWrite,
                             contextMenuActions: WarrenDesktopWorkspaceRow.contextMenuActions(
                                 workspace: workspace,
@@ -555,6 +516,7 @@ struct WarrenDesktopSidebarHostRows: View {
                 isExpanded: isExpanded,
                 semanticID: "host.\(host.endpointID).projects-inactive",
                 isEnabled: enabled,
+                stackedProjects: inactive.map(\.project),
                 onToggle: { toggleInactiveProjects(host.endpointID) }
             )
             if isExpanded {
@@ -669,7 +631,6 @@ struct WarrenDesktopSidebarHostRows: View {
         guard workspaceDisplayMode.isRich,
               group.workspaces.count == 1,
               let workspace = group.workspaces.first,
-              !routesSelectionToTaskRow(workspace, in: host),
               !host.activeSessions(in: workspace.id).isEmpty,
               !(canMutate(host) && deletingWorkspaceIDs.contains(workspace.id)),
               !editorActivity.isEditorMarked(workspace.id, hostId: host.endpointID)
@@ -741,7 +702,6 @@ struct WarrenDesktopSidebarHostRows: View {
                 ))
             },
             foldMarks: group.workspaces
-                .filter { !routesSelectionToTaskRow($0, in: host) }
                 .flatMap { host.activeSessions(in: $0.id) }
                 .map(\.activityMark),
             branchName: soloWorkspace.map { $0.branch ?? $0.name },
@@ -797,16 +757,13 @@ struct WarrenDesktopSidebarHostRows: View {
         let canWrite = canMutate(host)
         let isProjectDeleting = canWrite && deletingProjectIDs.contains(project.id)
         let isDeleting = canWrite && deletingWorkspaceIDs.contains(workspace.id)
-        // A task-linked workspace normally delegates navigation to its Task
-        // row. Tasks are current-Host-only in this release, however, so a
-        // background Host must leave this row selectable to provide an
-        // activation path. Once it becomes current, the existing Task row
-        // again owns navigation.
-        let isSelectionDisabled = routesSelectionToTaskRow(workspace, in: host)
+        // The Projects and Tasks lists are never on screen together, so this
+        // row owns its selection and its leaves whether or not a Task holds
+        // the worktree.
         let taskName = workspace.taskID.flatMap { taskID in
             host.tasks.first(where: { $0.id == taskID })?.name
         }
-        let ownsLeaves = workspaceDisplayMode.isRich && !isSelectionDisabled
+        let ownsLeaves = workspaceDisplayMode.isRich
         let leafSessions = host.activeSessions(in: workspace.id)
         let isLeavesCollapsed = isWorkspaceLeavesCollapsed(workspace.id, in: host)
         return WarrenDesktopWorkspaceRow(
@@ -814,10 +771,8 @@ struct WarrenDesktopSidebarHostRows: View {
             semanticScope: "host.\(host.endpointID)",
             mark: summary?.mark,
             activeTabCount: summary?.activeTabCount ?? 0,
-            isSelected: isWorkspaceRowSelected(workspace.id, in: host)
-                && !isSelectionDisabled,
-            containsSelection: workspaceRowContainsSelection(workspace.id, in: host)
-                && !isSelectionDisabled,
+            isSelected: isWorkspaceRowSelected(workspace.id, in: host),
+            containsSelection: workspaceRowContainsSelection(workspace.id, in: host),
             isPinned: workspace.pinned,
             isEditorMarked: editorActivity.isEditorMarked(
                 workspace.id,
@@ -829,10 +784,7 @@ struct WarrenDesktopSidebarHostRows: View {
             isDeleting: isDeleting,
             isInteractionDisabled: !enabled || isProjectDeleting || isDeleting,
             isMutationDisabled: !canWrite,
-            isSelectionDisabled: isSelectionDisabled,
-            // Same rule as the current-Host tree: a row that cannot be acted on
-            // owns no leaves. The active endpoint's task-linked row routes to
-            // its Task copy, which the Tasks section renders with the leaves.
+            isSelectionDisabled: false,
             // The flag also gates click navigation, so it claims a leaf that is
             // actually drawn.
             showsSessionChildren: ownsLeaves
@@ -892,17 +844,6 @@ struct WarrenDesktopSidebarHostRows: View {
     /// Whether a Host's copy of this Workspace is context-only because its Task
     /// row owns navigation.
     ///
-    /// A Task-linked Workspace on the active Host routes selection to the Task
-    /// row, which the Tasks section renders with the Session leaves. A
-    /// background Host keeps its own row as the activation path, so it keeps its
-    /// leaves as well.
-    private func routesSelectionToTaskRow(
-        _ workspace: Workspace,
-        in host: WarrenDesktopSidebarHostProjection
-    ) -> Bool {
-        workspace.taskID != nil && host.endpointID == activeEndpointID
-    }
-
     private func canMutate(_ host: WarrenDesktopSidebarHostProjection) -> Bool {
         host.endpointID == activeEndpointID
             && host.connectionState.isConnected
@@ -1192,18 +1133,23 @@ struct WarrenDesktopSidebarHostRows: View {
         }
     }
 
-    private func toggleSingleHostProjects() {
-        withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
-            singleHostProjectsCollapsed.toggle()
+    /// The keys of every project the tree shows, on every Host.
+    private var visibleProjectKeys: [String] {
+        hosts.flatMap { host in
+            visibleGroups(for: host).map { projectKey(host, $0.project.id) }
         }
     }
 
-    private func toggleAllProjects(
-        in host: WarrenDesktopSidebarHostProjection,
-        groups: [WarrenDesktopProjectGroup]
-    ) {
+    /// Whether every visible project is open; nil while there is none.
+    private var areAllProjectsExpanded: Bool? {
+        let keys = visibleProjectKeys
+        guard !keys.isEmpty else { return nil }
+        return !keys.contains(where: collapsedProjectKeys.contains)
+    }
+
+    private func toggleAllProjects() {
         withAnimation(WarrenMotion.animation(.stateChange, reduceMotion: reduceMotion)) {
-            let keys = groups.map { projectKey(host, $0.project.id) }
+            let keys = visibleProjectKeys
             if !keys.contains(where: collapsedProjectKeys.contains) {
                 collapsedProjectKeys.formUnion(keys)
             } else {
@@ -1286,60 +1232,6 @@ struct WarrenDesktopSidebarHostRows: View {
     private struct ScopedWorkspace: Identifiable {
         let id: String
         let workspace: Workspace
-    }
-}
-
-enum WarrenDesktopSidebarHostsSectionPresentation {
-    static func title(hostCount: Int, isHovered: Bool) -> String {
-        isHovered ? "Projects · \(hostCount)" : "Projects · Hosts"
-    }
-
-    static func accessibilityLabel(hostCount: Int) -> String {
-        "Projects, \(hostCount) \(hostCount == 1 ? "host" : "hosts")"
-    }
-}
-
-private struct WarrenDesktopSidebarHostsSectionHeader: View {
-    let hostCount: Int
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isHovered = false
-
-    var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        Text(WarrenDesktopSidebarHostsSectionPresentation.title(
-            hostCount: hostCount,
-            isHovered: isHovered
-        ))
-        .font(WarrenDesktopTreeTypography.sectionTitle)
-        .foregroundStyle(tokens.treeQuietText)
-        .lineLimit(1)
-        // The count replaces the word in place; the two cross-fade.
-        .animation(
-            WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
-            value: isHovered
-        )
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: WarrenDesktopSidebarMetrics.sectionHeaderHeight)
-        // A Host heading shares the section labels' leading edge:
-        // TASKS, PROJECTS, and every Host line up on one column.
-        .padding(.leading, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
-        .padding(.trailing, WarrenSpacing.compact)
-        .contentShape(.rect)
-        .onHover { isHovered = $0 }
-        .accessibilityLabel(
-            WarrenDesktopSidebarHostsSectionPresentation.accessibilityLabel(
-                hostCount: hostCount
-            )
-        )
-        .warrenSemanticElement(
-            id: "sidebar.projects.hosts",
-            role: .group,
-            label: "Projects",
-            value: "\(hostCount) \(hostCount == 1 ? "host" : "hosts")"
-        )
     }
 }
 

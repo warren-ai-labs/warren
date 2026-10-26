@@ -42,9 +42,9 @@ struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
 
 /// The gap above one worktree among its group's worktrees.
 ///
-/// Worktrees that list Sessions are 12pt apart, so the gap alone says which
-/// Sessions belong to which branch; two that list none pack with no gap,
-/// since an empty worktree is one line of a list, not a block.
+/// Worktrees that list Sessions are 6pt apart, so the gap says which Sessions
+/// belong to which branch; two that list none pack with no gap, since an
+/// empty worktree is one line of a list, not a block.
 enum WarrenDesktopWorktreeGap {
     static func above(_ index: Int, leafCounts: [Int]) -> CGFloat {
         guard index > 0, index < leafCounts.count else { return 0 }
@@ -53,9 +53,11 @@ enum WarrenDesktopWorktreeGap {
             : WarrenDesktopSidebarMetrics.worktreeSpacing
     }
 
-    /// Above the idle-worktrees row: close to the worktrees it follows.
-    static func aboveIdleRow(followsWorktrees: Bool) -> CGFloat {
-        followsWorktrees ? WarrenDesktopSidebarMetrics.idleRowSpacing : 0
+    /// Above the idle-worktrees row, which packs like an empty worktree:
+    /// the worktree gap after one that lists Sessions, none otherwise.
+    static func aboveIdleRow(lastLeafCount: Int?) -> CGFloat {
+        guard let lastLeafCount, lastLeafCount > 0 else { return 0 }
+        return WarrenDesktopSidebarMetrics.worktreeSpacing
     }
 }
 
@@ -86,15 +88,13 @@ struct WarrenDesktopLeafDisclosure {
     /// The width the accessory takes at the row's trailing edge, so the title
     /// truncates before it instead of running underneath.
     var accessoryWidth: CGFloat {
-        let dots = CGFloat(visibleMarks.count)
-        guard dots > 0 else { return Self.chevronWidth }
-        return Self.chevronWidth + WarrenDesktopSidebarMetrics.foldDotSpacing
-            + dots * Self.dotSize
-            + (dots - 1) * WarrenDesktopSidebarMetrics.foldDotSpacing
+        guard !isExpanded else { return Self.chevronWidth }
+        let summary = WarrenDesktopFoldSummary.width(marks: marks, count: marks.count)
+        return Self.chevronWidth + (summary > 0 ? WarrenDesktopFoldSummary.spacing + summary : 0)
     }
 }
 
-/// The trailing chevron, plus one dot per Session while folded.
+/// The trailing chevron, plus the fold summary while folded.
 struct WarrenDesktopLeafDisclosureAccessory: View {
     let disclosure: WarrenDesktopLeafDisclosure
     /// Kept for callers; the chevron is always drawn now, because it is the
@@ -106,9 +106,9 @@ struct WarrenDesktopLeafDisclosureAccessory: View {
     var chevronColor: Color? = nil
 
     var body: some View {
-        HStack(spacing: WarrenDesktopSidebarMetrics.foldDotSpacing) {
-            if !disclosure.visibleMarks.isEmpty {
-                WarrenDesktopTreeFoldDots(marks: disclosure.visibleMarks)
+        HStack(spacing: WarrenDesktopFoldSummary.spacing) {
+            if !disclosure.isExpanded {
+                WarrenDesktopFoldSummary(marks: disclosure.marks, count: disclosure.marks.count)
             }
             Button(action: disclosure.toggle) {
                 WarrenDesktopTreeChevron(isExpanded: disclosure.isExpanded, color: chevronColor)

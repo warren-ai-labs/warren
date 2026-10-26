@@ -77,8 +77,8 @@ struct WarrenDesktopTaskRow: View {
             // a resting row spends that room on the name.
             HStack(spacing: showsAddMenu ? WarrenDesktopSidebarMetrics.groupIconSpacing : 0) {
                 taskAddMenu(tokens: tokens)
-                if !isExpanded, WarrenDesktopTreeFoldDots.drawsAny(foldMarks) {
-                    WarrenDesktopTreeFoldDots(marks: foldMarks)
+                if !isExpanded {
+                    WarrenDesktopFoldSummary(marks: foldMarks, count: foldMarks.count)
                 }
             }
 
@@ -93,6 +93,9 @@ struct WarrenDesktopTaskRow: View {
             .buttonStyle(.plain)
             .disabled(isInteractionDisabled)
             .focused($isToggleFocused)
+            // Open, the chevron waits for the pointer; folded, it stays as the
+            // sign of the fold.
+            .opacity(isExpanded && !(isHovered || isFocused || isToggleFocused || forceHover) ? 0 : 1)
             .accessibilityLabel(isExpanded ? "Collapse task \(task.name)" : "Expand task \(task.name)")
             .warrenSemanticElement(
                 id: "task.\(task.id.description).toggle",
