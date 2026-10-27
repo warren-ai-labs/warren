@@ -116,6 +116,40 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.34.1",
+        dateISO: "2026-10-27",
+        date: "October 27, 2026",
+        title: "Warren gives a shell row its command and the sidebar one right edge.",
+        summary:
+          "A patch release that finishes the new Desktop sidebar: a plain shell row leads with the command it runs, its second line says where and how it went, every row ends at one right edge, worktrees with Sessions come first, and branch names keep a readable ink on the dark Ember sidebar. The JSON control protocol remains at 4.0 and this release migrates no state.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Lead a plain shell's sidebar row with the command it runs or last ran, and its directory before anything runs. The second line says where it runs relative to the worktree and whether it is running, done, stopped, or failed with an exit code; the Tab and pane header keep naming where the shell is, and a name the user gave still wins.",
+              "End every Session's second line at the age column so rows share one right edge, draw project names a half step larger, and keep the bright title ink for Sessions that are working, waiting, or failed.",
+              "Space the tree in four steps - 0 inside a block, 2 between one-line summaries, 10 between blocks, and 20 between projects and Tasks - and order worktrees with Sessions first.",
+              "Seat branch rows closer to their Sessions in a quieter 11pt face, fade a long branch instead of cutting its prefix, give every chevron one column, and drop a lone default branch from its project row.",
+              "Show the pin and Task link on hover only, keep an inactive row's avatars as plain swatches, and let a Task lead with a drawn flag. A project whose worktrees all belong to Tasks now says so and leads to the Tasks tab.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Give the dark sidebar's branch names their own ink, so a branch and its prefix stay legible on Ember instead of sitting below 3:1 contrast.",
+              "Lift the pi tile off its card.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0 and this release migrates no state.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.34.0",
         dateISO: "2026-10-26",
         date: "October 26, 2026",
@@ -1760,6 +1794,40 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.34.1",
+        dateISO: "2026-10-27",
+        date: "2026 年 10 月 27 日",
+        title: "Warren 让 shell 行以命令为主，并给侧栏一条右缘。",
+        summary:
+          "补丁版本：完善新版 Desktop 侧栏——普通 shell 行以正在或最后运行的命令为主，第二行说明运行位置与结果，所有行共用一条右缘，含 Session 的工作树排在前面，深色 Ember 侧栏中的分支名也有可读的墨色。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "普通 shell 的侧栏行以正在或最后运行的命令为主，未运行任何命令前显示所在目录。第二行说明相对工作树的运行位置，以及正在运行、完成、停止或因失败退出码；Tab 与窗格标题仍标明 shell 所在位置，用户自定义名称仍然优先。",
+              "所有 Session 第二行在年龄列收束，使各行共用一条右缘；项目名放大半级；只有工作中、等待中或失败的 Session 使用明亮标题墨色。",
+              "树采用四级间距：块内 0、单行摘要之间 2、块之间 10、项目与 Task 之间 20；含 Session 的工作树排在前面。",
+              "分支行更靠近其 Session，使用更安静的 11pt 字面；长分支名淡出而不是截断前缀；每个折叠箭头占一列；项目行不再显示唯一的默认分支。",
+              "仅在悬停时显示固定与 Task 链接；非活动行的头像改为纯色块；Task 以绘制的小旗开头。工作树全部属于 Task 的项目会说明并跳到 Tasks Tab。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "深色侧栏的分支名使用专属墨色，使分支及其前缀在 Ember 上保持可读，而不是低于 3:1 对比度。",
+              "把 pi 图标移出卡片。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.34.0",
         dateISO: "2026-10-26",

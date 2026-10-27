@@ -151,7 +151,8 @@ struct WarrenDesktopProjectRow: View {
                         deletionStatus(tokens: tokens, kind: deletionKind)
                     }
 
-                    if isPinned {
+                    // The pin is a detail of the row, not a fact to scan for.
+                    if isPinned, isHovered || isFocused || forceHover {
                         Image(systemName: "pin.fill")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(tokens.treeQuietText)

@@ -23,7 +23,7 @@ enum WarrenDesktopSidebarMetrics {
     static let sectionHeaderSpacing: CGFloat = 6
     /// Between two groups of one list, and from the last project to the
     /// inactive-projects row.
-    static let groupSpacing: CGFloat = 14
+    static let groupSpacing: CGFloat = 20
     /// Above and below a folded group, so two folded neighbours sit 2pt apart.
     static let foldedGroupInset: CGFloat = 1
     /// Between a group row and its first worktree: the rows' heights carry it.
@@ -31,7 +31,12 @@ enum WarrenDesktopSidebarMetrics {
     /// Between two worktrees of one group when either lists Sessions. Two
     /// worktrees with none pack with no gap, so a group of idle branches
     /// reads as one short list rather than a column of islands.
-    static let worktreeSpacing: CGFloat = 6
+    static let worktreeSpacing: CGFloat = 10
+    /// Between one-line summary rows (a folded worktree, an empty one, the
+    /// idle row), which read together as one list.
+    static let summarySpacing: CGFloat = 2
+    /// A one-line summary row's height.
+    static let summaryRowHeight: CGFloat = 22
     /// Between a worktree row and its Sessions, and between two Sessions:
     /// the rows' own padding is the gap.
     static let sessionSpacing: CGFloat = 0
@@ -93,7 +98,9 @@ enum WarrenDesktopSidebarMetrics {
     static let foldDotSize: CGFloat = 6
     static let foldDotSpacing: CGFloat = 3
     static let maximumFoldDots = 6
-    static let chevronSize: CGFloat = 10
+    /// The trailing chevron's column. Every foldable row draws its chevron in
+    /// this width, so fold summaries and chevrons line up down the tree.
+    static let chevronSize: CGFloat = 14
 
     static let headerTrafficRowHeight: CGFloat = 30
     static let headerHostRowHeight: CGFloat = 44
@@ -132,7 +139,11 @@ extension WarrenColorTokens {
     /// The quietest tier: times, counts, a branch's prefix, glyphs, a
     /// resting Session's second line.
     var treeFaintText: Color { sidebarInk.t5 }
-    var treeBranchText: Color { sidebarInk.t4 }
+    /// A branch name sits a step under the Session lines it heads: the rows
+    /// carry the content, the branch only says which checkout they are in.
+    var treeBranchText: Color { sidebarInk.branch }
+    /// The branch's `release/…/` prefix, one more step down.
+    var treeBranchPrefixText: Color { sidebarInk.branch.opacity(0.7) }
     var treeGroupIcon: Color { sidebarInk.t5 }
     var treeRowHover: Color { sidebarInk.hover }
     var treeRowSelected: Color { sidebarInk.selected }
@@ -147,11 +158,11 @@ extension WarrenColorTokens {
 /// name a person chose, so it is proportional and bold; a worktree is a git
 /// branch, so it is monospaced and regular.
 enum WarrenDesktopTreeTypography {
-    static let groupNameSize: CGFloat = 13
+    static let groupNameSize: CGFloat = 13.5
     /// Chinese characters fill their em box, so at the Latin size a Chinese
     /// run reads a step larger than an English one beside it. Every mixed
     /// line in the tree draws its wide runs half a point down.
-    static let groupNameWideSize: CGFloat = 12.5
+    static let groupNameWideSize: CGFloat = 13
     static let groupName = Font.system(size: groupNameSize, weight: .semibold)
     static let groupNameWide = Font.system(size: groupNameWideSize, weight: .semibold)
     /// A Session's title, the group name's size in regular weight.
@@ -159,8 +170,8 @@ enum WarrenDesktopTreeTypography {
     static let sessionTitleWide = Font.system(size: 12.5, weight: .regular)
     /// A branch name: a git ref, so monospaced. Its Chinese runs keep the
     /// proportional face, a step down, since a monospaced CJK run is uneven.
-    static let branchName = Font.system(size: 11.5, weight: .regular, design: .monospaced)
-    static let branchNameWide = Font.system(size: 11, weight: .regular)
+    static let branchName = Font.system(size: 11, weight: .regular, design: .monospaced)
+    static let branchNameWide = Font.system(size: 10.5, weight: .regular)
     /// The project a Task's worktree belongs to, ahead of its branch.
     static let worktreeProjectName = Font.system(size: 12, weight: .medium)
     /// "N idle worktrees" and "N inactive projects": the words in SF Pro,
@@ -252,27 +263,16 @@ struct WarrenDesktopTreeGroupSeparator: ViewModifier {
 
     func body(content: Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Groups are 20 apart; folded groups in a run pack 2 apart and
+            // read as one list.
             if !isFirst {
-                if isFolded && followsFolded {
-                    Color.clear
-                        .frame(height: 2 * WarrenDesktopSidebarMetrics.foldedGroupInset)
-                        .accessibilityHidden(true)
-                } else {
-                    Color.clear
-                        .frame(height: WarrenDesktopSidebarMetrics.groupSpacing)
-                        .accessibilityHidden(true)
-                }
-            } else if isFolded {
                 Color.clear
-                    .frame(height: WarrenDesktopSidebarMetrics.foldedGroupInset)
+                    .frame(height: isFolded && followsFolded
+                        ? WarrenDesktopSidebarMetrics.summarySpacing
+                        : WarrenDesktopSidebarMetrics.groupSpacing)
                     .accessibilityHidden(true)
             }
             content
-            if isLast && isFolded {
-                Color.clear
-                    .frame(height: WarrenDesktopSidebarMetrics.foldedGroupInset)
-                    .accessibilityHidden(true)
-            }
         }
     }
 }
@@ -595,6 +595,9 @@ struct WarrenDesktopProjectAvatar: View {
     var size: CGFloat = WarrenDesktopSidebarMetrics.groupIconSize
     /// The corner, 5/18 of the size unless a row's design gives its own.
     var cornerRadius: CGFloat? = nil
+    /// Whether the tile carries the name's initial. A tile too small to read
+    /// it is a solid swatch of the project's colour instead.
+    var showsInitial = true
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
@@ -602,12 +605,12 @@ struct WarrenDesktopProjectAvatar: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let tint = Self.tint(for: identity, in: tokens)
-        Text(String(name.prefix(1)).uppercased())
+        Text(showsInitial ? String(name.prefix(1)).uppercased() : "")
             .font(.system(size: size * 0.56, weight: .bold))
             .foregroundStyle(tint)
             .frame(width: size, height: size)
             .background(
-                tint.opacity(colorScheme == .dark ? 0.18 : 0.14),
+                tint.opacity(showsInitial ? (colorScheme == .dark ? 0.18 : 0.14) : 0.55),
                 in: RoundedRectangle(cornerRadius: cornerRadius ?? size * 5 / 18, style: .continuous)
             )
             .accessibilityHidden(true)
@@ -667,7 +670,7 @@ public struct WarrenDesktopSessionKindBadge: View {
             .overlay { glyph }
             // Keeps a near-black tile's edge on the dark card. One device
             // pixel: 0.5pt is a pixel on Retina but a blurred half pixel at 1x.
-            .overlay { shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 1 / displayScale) }
+            .overlay { shape.strokeBorder(Color.white.opacity(0.14), lineWidth: 1 / displayScale) }
             .frame(width: size, height: size)
             .accessibilityHidden(true)
     }
@@ -774,27 +777,7 @@ struct WarrenDesktopFadingName: View {
     }
 }
 
-/// A Task's leading tile: the project avatar's size and corner on a neutral
-/// ground, so a Task and a project head line up as one kind of group.
-struct WarrenDesktopTaskTile: View {
-    var size: CGFloat = WarrenDesktopSidebarMetrics.groupIconSize
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-
-    var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        WarrenDesktopTaskGlyph(size: size * 0.56, color: tokens.ink3)
-            .frame(width: size, height: size)
-            .background(
-                tokens.foreground.opacity(colorScheme == .dark ? 0.07 : 0.06),
-                in: RoundedRectangle(cornerRadius: size * 5 / 18, style: .continuous)
-            )
-            .accessibilityHidden(true)
-    }
-}
-
-/// The Task mark: a flag. On the Task tile, and alone beside a Projects
+/// The Task mark: a flag. It leads a Task's row, and marks a Projects
 /// worktree that belongs to a Task.
 struct WarrenDesktopTaskGlyph: View {
     var size: CGFloat = 11

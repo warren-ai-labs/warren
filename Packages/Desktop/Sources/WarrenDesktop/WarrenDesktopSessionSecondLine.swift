@@ -55,9 +55,9 @@ struct WarrenDesktopSessionSecondLine: Equatable {
     /// Whether an overflowing primary fades at its start. A location keeps its
     /// tail; a command keeps its verb.
     var isLocation = false
-    /// Whether the primary is a shell command. A command draws in the monospaced
-    /// face, so the row says "this is a command" without spelling out a verb.
-    var isCommand = false
+    /// Whether the primary is a command or a path, drawn in the monospaced
+    /// face so the row says "this is a terminal line" without a verb.
+    var isMonospaced = false
 
     /// The line as assistive technology hears it, and the whole of it on hover.
     /// The primary is included as the Session reported it; the row shortens a
@@ -185,7 +185,7 @@ enum WarrenDesktopSessionSecondLineLayout {
     ) -> Result {
         // A command is already summarized to the words a person would name it
         // by; a step or a count is not a command, so it only loses its paths.
-        let primary = line.isLocation || line.isCommand
+        let primary = line.isLocation || line.isMonospaced
             ? line.primary
             : WarrenDesktopActivityText.shortened(line.primary)
         let leadWidth = line.lead.map {
@@ -193,8 +193,8 @@ enum WarrenDesktopSessionSecondLineLayout {
         } ?? 0
         let primaryWidth = leadWidth + textWidth(
             primary,
-            fontSize: line.isCommand ? commandFontSize : primaryFontSize,
-            monospaced: line.isCommand
+            fontSize: line.isMonospaced ? commandFontSize : primaryFontSize,
+            monospaced: line.isMonospaced
         )
         let metaWidth = self.metaWidth(of: line.meta)
         let reserved = metaWidth + (metaWidth > 0 ? primaryMetaSpacing : 0)
@@ -312,7 +312,7 @@ struct WarrenDesktopSecondLineView: View {
         fit: WarrenDesktopSessionSecondLineLayout.Result,
         tint: WarrenDesktopSessionSecondLine.Tint
     ) -> some View {
-        let primaryText = line.isLocation || line.isCommand
+        let primaryText = line.isLocation || line.isMonospaced
             ? line.primary
             : WarrenDesktopActivityText.shortened(line.primary)
         return HStack(spacing: 0) {
@@ -326,7 +326,7 @@ struct WarrenDesktopSecondLineView: View {
                     .frame(width: WarrenDesktopSessionSecondLineLayout.separatorWidth)
             }
             Group {
-                if line.isCommand {
+                if line.isMonospaced {
                     Text(primaryText)
                         .font(.system(
                             size: WarrenDesktopSessionSecondLineLayout.commandFontSize,
@@ -390,9 +390,10 @@ extension WarrenDesktopWorkspaceSessionRow {
     /// appends carry the context reminder and the quieter counts.
     static func secondLine(
         for session: WarrenDesktopSession,
-        now: Date = Date()
+        now: Date = Date(),
+        worktreeRoot: String = ""
     ) -> WarrenDesktopSessionSecondLine {
-        if let shell = shellSecondLine(for: session, now: now) {
+        if let shell = shellSecondLine(for: session, now: now, worktreeRoot: worktreeRoot) {
             return shell
         }
         let isRunning = session.activity == .working
@@ -480,7 +481,7 @@ extension WarrenDesktopWorkspaceSessionRow {
                 meta: line.meta,
                 isPlaceholder: false,
                 isLocation: line.isLocation,
-                isCommand: line.isCommand
+                isMonospaced: line.isMonospaced
             )
         }
         switch mark {
@@ -504,50 +505,58 @@ extension WarrenDesktopWorkspaceSessionRow {
     /// foreground-command fallback rather than inventing a prompt state, and an
     /// Agent bound inside the shell keeps the Agent rule.
     ///
-    /// The four states are the design's: a running command, the last command
-    /// after it succeeded or failed, and the full directory before anything
-    /// ran. A Session that has ended is not one of them: the sidebar lists only
-    /// active Sessions, so an ended shell has no row to draw.
+    /// The title line already names the command (see `shellTitle`), so this
+    /// line says where it runs and how it went: the directory, then
+    /// `running`, `done`, `stopped` or the failure's `exit N`. Before anything
+    /// has run, the title is the directory's name and this line is the whole
+    /// path. A Session that has ended is not one of these: the sidebar lists
+    /// only active Sessions, so an ended shell has no row to draw.
     static func shellSecondLine(
         for session: WarrenDesktopSession,
-        now: Date
+        now: Date,
+        worktreeRoot: String = ""
     ) -> WarrenDesktopSessionSecondLine? {
         guard session.presentedKind == .shell,
               !session.isAgentSession,
               let shell = session.shellState else {
             return nil
         }
-        if shell.isRunningCommand, session.state.isActive {
-            let command = WarrenDesktopActivityText.withoutLaunchPrefix(
-                shell.runningCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        let location = shellLocation(directory: session.workingDirectory, worktreeRoot: worktreeRoot)
+        func line(
+            tone: WarrenDesktopSessionSecondLine.Tone,
+            status: WarrenDesktopSessionSecondLine.Extra,
+            since: Date?
+        ) -> WarrenDesktopSessionSecondLine {
+            WarrenDesktopSessionSecondLine(
+                tone: tone,
+                primary: location ?? status.text,
+                extras: location == nil ? [] : [status],
+                meta: shellDuration(from: since, now: now),
+                isLocation: location != nil,
+                isMonospaced: location != nil
             )
-            if !command.isEmpty {
-                return WarrenDesktopSessionSecondLine(
-                    tone: .running,
-                    primary: CommandSummary.summarize(command),
-                    extras: [],
-                    meta: shellDuration(from: shell.commandStartedAt ?? shell.lastExitAt, now: now),
-                    isCommand: true
-                )
-            }
         }
-        let last = WarrenDesktopActivityText.withoutLaunchPrefix(
-            shell.lastCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-        if !last.isEmpty {
-            var extras: [WarrenDesktopSessionSecondLine.Extra] = []
+        if runningCommand(of: session) != nil {
+            return line(
+                tone: .running,
+                status: .init(text: "running"),
+                since: shell.commandStartedAt ?? shell.lastExitAt
+            )
+        }
+        if lastCommand(of: session) != nil {
+            let status: WarrenDesktopSessionSecondLine.Extra
             if let code = shell.displayedExitCode {
-                extras.append(.init(text: "exit \(code)", isFailure: true))
+                status = .init(text: "exit \(code)", isFailure: true)
+            } else if let code = shell.lastExitCode, code != 0 {
+                // An interrupt or a signal: it did not fail, but it did not
+                // finish either.
+                status = .init(text: "stopped")
+            } else {
+                status = .init(text: "done")
             }
-            return WarrenDesktopSessionSecondLine(
-                tone: .idle,
-                primary: CommandSummary.summarize(last),
-                extras: extras,
-                meta: shellDuration(from: shell.lastExitAt, now: now),
-                isCommand: true
-            )
+            return line(tone: .idle, status: status, since: shell.lastExitAt)
         }
-        // Nothing has run yet: the line still says where the shell is, in full,
+        // Nothing has run yet: the line says where the shell is, in full,
         // with the session's own age on the right.
         let directory = TerminalSessionPresentation.abbreviatedPath(session.workingDirectory)
         let fallback = shell.shellName.isEmpty ? "Shell" : shell.shellName
@@ -556,8 +565,67 @@ extension WarrenDesktopWorkspaceSessionRow {
             primary: directory.isEmpty ? fallback : directory,
             extras: [],
             meta: shellDuration(from: session.createdAt, now: now),
-            isLocation: true
+            isLocation: true,
+            isMonospaced: !directory.isEmpty
         )
+    }
+
+    /// A plain shell's row title: the command it runs, else the one it last
+    /// ran, else the name of the directory it is in. A name the person gave
+    /// the Session wins, and so does a shell the Host reports no prompt state
+    /// for: both return nil, and the row keeps its shared title.
+    ///
+    /// Only the sidebar row leads with the command. The Tab and the pane
+    /// header keep naming where the shell is, because they sit beside the
+    /// terminal that already shows what runs.
+    static func shellTitle(for session: WarrenDesktopSession) -> (text: String, isCommand: Bool)? {
+        guard session.presentedKind == .shell,
+              !session.isAgentSession,
+              session.shellState != nil,
+              TerminalSessionPresentation.sessionName(
+                  customTitle: session.customTitle,
+                  title: session.title,
+                  kind: session.presentedKind
+              ).isEmpty else { return nil }
+        if let command = runningCommand(of: session) ?? lastCommand(of: session) {
+            return (CommandSummary.summarize(command), true)
+        }
+        let name = TerminalSessionPresentation.directoryName(session.workingDirectory)
+        return name.isEmpty ? nil : (name, false)
+    }
+
+    /// The command running now, while the Session is live.
+    private static func runningCommand(of session: WarrenDesktopSession) -> String? {
+        guard let shell = session.shellState, shell.isRunningCommand, session.state.isActive else {
+            return nil
+        }
+        let command = WarrenDesktopActivityText.withoutLaunchPrefix(
+            shell.runningCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        return command.isEmpty ? nil : command
+    }
+
+    private static func lastCommand(of session: WarrenDesktopSession) -> String? {
+        guard let shell = session.shellState else { return nil }
+        let command = WarrenDesktopActivityText.withoutLaunchPrefix(
+            shell.lastCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        return command.isEmpty ? nil : command
+    }
+
+    /// Where a shell is, short: the worktree's own name at its root, the path
+    /// inside it relative to the root, and a `~`-shortened path outside.
+    static func shellLocation(directory: String, worktreeRoot: String) -> String? {
+        let path = TerminalSessionPresentation.normalizedPath(directory)
+        guard !path.isEmpty else { return nil }
+        let root = TerminalSessionPresentation.normalizedPath(worktreeRoot)
+        if !root.isEmpty, path == root {
+            return TerminalSessionPresentation.directoryName(path)
+        }
+        if !root.isEmpty, path.hasPrefix(root + "/") {
+            return String(path.dropFirst(root.count + 1))
+        }
+        return TerminalSessionPresentation.abbreviatedPath(path)
     }
 
     /// A short duration from a recorded instant, or `.none` when there is no

@@ -4,6 +4,47 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.34.1] - 2026-10-27
+
+A patch release that finishes the new sidebar: a plain shell row leads with the
+command it runs, every row ends at one right edge, worktrees with Sessions come
+first, and branch names keep a readable ink on the dark Ember sidebar. The JSON
+control protocol remains at 4.0 and this release migrates no state.
+
+### Changed
+
+- Lead a plain shell's sidebar row with the command it runs or last ran, in the
+  same face as an Agent's title, and its directory before anything runs. The
+  second line says where it runs relative to the worktree and how it went:
+  running, done, stopped, or a failure's exit code. The Tab and pane header keep
+  naming where the shell is, and a name the user gave the Session still wins.
+- End every Session's second line at the age column so rows share one right
+  edge, draw project names a half step larger, and keep the bright title ink for
+  Sessions that are working, waiting, or failed.
+- Space the tree in four steps: 0 inside a block, 2 between one-line summaries,
+  10 between blocks, and 20 between projects and Tasks. Order worktrees with
+  Sessions first so a folded worktree does not sit between two open ones.
+- Seat branch rows closer to their Sessions in a quieter 11pt face, fade a long
+  branch name instead of cutting its prefix, and give every chevron one column.
+- Drop a lone default branch from its project row, show the pin and Task link on
+  hover only, and keep an inactive row's avatars as plain swatches.
+- Say when a project's worktrees all belong to Tasks and lead to the Tasks tab;
+  a Task worktree names a branch only where it differs from the Task's, and a
+  Task leads with a drawn flag.
+
+### Fixed
+
+- Give the dark sidebar's branch names their own ink, so a branch and its prefix
+  stay legible on Ember instead of sitting below 3:1 contrast.
+- Lift the pi tile off its card.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0 and this release migrates no state.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.34.0] - 2026-10-26
 
 A minor release: a Host can run scheduled Agent prompts and commands on its

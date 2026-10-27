@@ -4,10 +4,10 @@ import WarrenDomain
 
 /// A shell Session's two lines, from the OSC 133 prompt state the Host reports.
 ///
-/// The design gives five states, and the row must reach the right one from the
-/// state alone: what is running, what ran, whether it failed in a way that is
-/// worth saying, what an empty shell shows instead, and how an ended shell
-/// reads. The title is separate: it says where the shell is, never what it ran.
+/// The row must reach the right state from the prompt state alone: what is
+/// running, what ran, whether it failed in a way that is worth saying, and
+/// what an empty shell shows instead. The row's title names the command; the
+/// second line says where it runs and how it went.
 final class WarrenDesktopShellRowTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
@@ -42,27 +42,35 @@ final class WarrenDesktopShellRowTests: XCTestCase {
         )
     }
 
+    private let root = "/work/warren"
+
     private func line(
         _ session: WarrenDesktopSession,
         at time: Date? = nil
     ) -> WarrenDesktopSessionSecondLine {
-        WarrenDesktopWorkspaceSessionRow.secondLine(for: session, now: time ?? now)
+        WarrenDesktopWorkspaceSessionRow.secondLine(for: session, now: time ?? now, worktreeRoot: root)
     }
 
-    func testARunningCommandDrawsRunningAndItsElapsedTime() {
+    private func title(_ session: WarrenDesktopSession) -> String? {
+        WarrenDesktopWorkspaceSessionRow.shellTitle(for: session)?.text
+    }
+
+    func testARunningCommandIsTheTitleAndTheLineSaysWhereAndRunning() {
         let session = shell(
             state: WarrenDesktopShellState(
                 atPrompt: false,
                 runningCommand: "npm run dev",
                 commandStartedAt: now.addingTimeInterval(-3 * 60)
-            )
+            ),
+            directory: root
         )
+        XCTAssertEqual(title(session), "npm run dev")
         let line = line(session)
         XCTAssertEqual(line.tone, .running)
-        XCTAssertEqual(line.primary, "npm run dev", "A shell line names the command, with no verb")
-        XCTAssertTrue(line.isCommand, "A command draws in the monospaced face")
+        XCTAssertEqual(line.primary, "warren", "At the worktree root the line names the worktree")
+        XCTAssertEqual(line.extras, [.init(text: "running")])
+        XCTAssertTrue(line.isMonospaced, "A path draws in the monospaced face")
         XCTAssertEqual(line.meta, .time("3m"))
-        XCTAssertTrue(line.extras.isEmpty)
         XCTAssertEqual(session.rowStatusMark, .working, "A running shell's dot is green")
     }
 
@@ -77,34 +85,38 @@ final class WarrenDesktopShellRowTests: XCTestCase {
         XCTAssertEqual(line(session).meta, .time("1m"))
     }
 
-    func testAFinishedCommandDrawsRanWithItsDistance() {
+    func testAFinishedCommandIsTheTitleAndTheLineSaysDone() {
         let session = shell(
             state: WarrenDesktopShellState(
                 atPrompt: true,
-                lastCommand: "swift build",
+                lastCommand: "git push",
                 lastExitCode: 0,
                 lastExitAt: now.addingTimeInterval(-2 * 60)
-            )
+            ),
+            directory: root + "/apps/studio"
         )
+        XCTAssertEqual(title(session), "git push")
         let line = line(session)
         XCTAssertEqual(line.tone, .idle)
-        XCTAssertEqual(line.primary, "swift build")
+        XCTAssertEqual(line.primary, "apps/studio", "Inside the worktree the path is relative to it")
+        XCTAssertEqual(line.extras, [.init(text: "done")])
         XCTAssertEqual(line.meta, .time("2m"))
-        XCTAssertTrue(line.extras.isEmpty, "A zero exit code is not appended")
         XCTAssertNil(session.rowStatusMark, "A successful shell has no dot")
     }
 
-    func testAFailedCommandAppendsTheExitCodeAndTurnsTheDotRed() {
+    func testAFailedCommandEndsWithItsExitCodeAndTurnsTheDotRed() {
         let session = shell(
             state: WarrenDesktopShellState(
                 atPrompt: true,
                 lastCommand: "swift test",
                 lastExitCode: 1,
                 lastExitAt: now.addingTimeInterval(-5 * 60)
-            )
+            ),
+            directory: root + "/Packages/Desktop"
         )
+        XCTAssertEqual(title(session), "swift test")
         let line = line(session)
-        XCTAssertEqual(line.primary, "swift test")
+        XCTAssertEqual(line.primary, "Packages/Desktop")
         XCTAssertEqual(line.extras, [.init(text: "exit 1", isFailure: true)])
         XCTAssertEqual(line.meta, .time("5m"))
         XCTAssertEqual(session.rowStatusMark, .failed, "A failed shell's dot is red")
@@ -118,10 +130,11 @@ final class WarrenDesktopShellRowTests: XCTestCase {
                     lastCommand: "tail -f relay.log",
                     lastExitCode: code,
                     lastExitAt: now.addingTimeInterval(-10)
-                )
+                ),
+                directory: root
             )
             let line = line(session)
-            XCTAssertTrue(line.extras.isEmpty, "exit \(code) must not be appended")
+            XCTAssertEqual(line.extras, [.init(text: "stopped")], "exit \(code) must not read as a failure")
             XCTAssertNil(session.rowStatusMark, "exit \(code) must not draw a red dot")
         }
     }
@@ -133,13 +146,14 @@ final class WarrenDesktopShellRowTests: XCTestCase {
             createdAt: now.addingTimeInterval(-3600)
         )
         let line = line(session)
+        XCTAssertEqual(title(session), "warren", "Before anything runs the title is the directory's name")
         XCTAssertEqual(line.primary, "/work/warren-ai-labs/warren")
         XCTAssertEqual(line.meta, .time("1h"))
         XCTAssertTrue(line.isLocation, "A location keeps its tail and fades its start")
         XCTAssertNil(session.rowStatusMark)
     }
 
-    func testAFailedLastCommandDrawsTheCommandAndItsExitCode() {
+    func testAPathOutsideTheWorktreeIsShortenedWithTilde() {
         let session = shell(
             state: WarrenDesktopShellState(
                 atPrompt: true,
@@ -147,13 +161,12 @@ final class WarrenDesktopShellRowTests: XCTestCase {
                 lastExitCode: 2,
                 lastExitAt: now.addingTimeInterval(-86400)
             ),
-            directory: "/work/ak"
+            directory: FileManager.default.homeDirectoryForCurrentUser.path + "/src/ak"
         )
         let line = line(session)
-        XCTAssertEqual(line.primary, "make install")
+        XCTAssertEqual(line.primary, "~/src/ak")
         XCTAssertEqual(line.extras, [.init(text: "exit 2", isFailure: true)])
         XCTAssertEqual(line.meta, .time("24h"))
-        XCTAssertEqual(session.rowStatusMark, .failed, "A failed command is the state the dot carries")
     }
 
     func testAShellWithoutOSC133StateKeepsTheForegroundFallback() {
@@ -165,6 +178,7 @@ final class WarrenDesktopShellRowTests: XCTestCase {
         )
         let line = line(session)
         XCTAssertEqual(line.primary, "npm run dev")
+        XCTAssertNil(title(session), "Without prompt state the row keeps its shared title")
         XCTAssertNil(session.rowStatusMark)
     }
 
@@ -238,34 +252,25 @@ final class WarrenDesktopShellRowTests: XCTestCase {
         XCTAssertTrue(narrow.extras.isEmpty, "An exit code is never drawn truncated")
     }
 
-    func testTheTitleNeverRepeatsTheCommand() {
+    func testANamedShellKeepsItsName() {
         let session = shell(
-            state: WarrenDesktopShellState(
-                atPrompt: false,
-                runningCommand: "npm run dev",
-                shellName: "zsh"
-            ),
-            directory: "/work/warren"
+            state: WarrenDesktopShellState(atPrompt: false, runningCommand: "npm run dev"),
+            directory: root,
+            customTitle: "dev server"
         )
-        let title = WarrenDesktopWorkspaceSessionRow.rowTitle(for: session, worktreeRoot: "/work/warren")
-        XCTAssertEqual(title, "zsh")
-        XCTAssertFalse(title.contains("npm run dev"))
+        XCTAssertNil(title(session), "A name the person gave wins over the command")
     }
 
-    func testTheRowAndTheTabNameAShellTheSameWay() {
+    func testOnlyTheRowLeadsWithTheCommand() {
         let session = shell(
             state: WarrenDesktopShellState(atPrompt: false, runningCommand: "npm run dev", shellName: "zsh"),
-            directory: "/work/warren"
+            directory: root
         )
-        XCTAssertTrue(WarrenDesktopWorkspaceSessionRow.usesLocationTitle(for: session))
-        // The row, the tab, and the pane header all ask the one title function.
-        // The command travels beside the title, never inside it.
+        XCTAssertEqual(title(session), "npm run dev")
+        // The Tab and the pane header sit beside the terminal that shows the
+        // command, so they keep naming where the shell is.
         XCTAssertEqual(
-            WarrenDesktopWorkspaceSessionRow.rowTitle(for: session, worktreeRoot: "/work/warren"),
-            "zsh"
-        )
-        XCTAssertEqual(
-            WarrenDesktopTabTitle.sessionTitle(for: session, worktreeRoot: "/work/warren").title,
+            WarrenDesktopTabTitle.sessionTitle(for: session, worktreeRoot: root).title,
             "zsh"
         )
     }
@@ -319,30 +324,5 @@ final class WarrenDesktopShellRowTests: XCTestCase {
             WarrenDesktopWorkspaceSessionRow.secondLine(for: session, now: now).primary,
             "Editing SplitLayout.swift"
         )
-    }
-
-    // MARK: - One line
-
-    func testAPlainShellIsAlwaysOneLine() {
-        let resting = shell(state: WarrenDesktopShellState(atPrompt: true, shellName: "zsh"))
-        let running = shell(state: WarrenDesktopShellState(
-            atPrompt: false, runningCommand: "npm run dev",
-            lastExitAt: now.addingTimeInterval(-3600)
-        ))
-        XCTAssertTrue(WarrenDesktopWorkspaceSessionRow.isOneLine(resting))
-        XCTAssertTrue(WarrenDesktopWorkspaceSessionRow.isOneLine(running))
-        XCTAssertNil(WarrenDesktopWorkspaceSessionRow.oneLineTitle(for: resting))
-        XCTAssertEqual(WarrenDesktopWorkspaceSessionRow.oneLineTitle(for: running), "npm run dev")
-    }
-
-    func testAnAgentInsideAShellKeepsTwoLines() {
-        let session = shell(
-            state: WarrenDesktopShellState(atPrompt: true, shellName: "zsh"),
-            kind: .shell,
-            activity: .ready,
-            createdAt: now.addingTimeInterval(-3600),
-            agentProvider: .claude
-        )
-        XCTAssertFalse(WarrenDesktopWorkspaceSessionRow.isOneLine(session))
     }
 }

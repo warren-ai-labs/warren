@@ -248,17 +248,14 @@ struct WarrenDesktopBranchNameLabel: View {
 
     var body: some View {
         let whole = WarrenDesktopBranchName.wholeParts(name)
+        // A name that does not fit fades at its end, before whatever the
+        // row keeps at its trailing edge, rather than losing its prefix.
         ViewThatFits(in: .horizontal) {
             line(prefix: whole.prefix, leaf: whole.leaf)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
-            if !whole.prefix.isEmpty {
-                line(prefix: "…/", leaf: whole.leaf)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
             WarrenDesktopFadingLine {
-                line(prefix: whole.prefix.isEmpty ? "" : "…/", leaf: whole.leaf)
+                line(prefix: whole.prefix, leaf: whole.leaf)
             }
         }
     }
@@ -377,6 +374,9 @@ struct WarrenDesktopFoldedCountRow: View {
     /// Projects whose avatars lead the row, overlapping, as the inactive row
     /// shows the first few of the projects it holds.
     var stackedProjects: [Project] = []
+    /// A row that leads elsewhere rather than folding: a forward chevron that
+    /// never turns, after the Task glyph.
+    var leadsToTasks = false
     let onToggle: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -389,7 +389,11 @@ struct WarrenDesktopFoldedCountRow: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         Button(action: onToggle) {
             HStack(spacing: WarrenDesktopSidebarMetrics.iconTextSpacing) {
-                if isWorktreeLevel {
+                if leadsToTasks {
+                    WarrenDesktopTaskGlyph(size: 11, color: tokens.treeFaintText)
+                        .frame(width: WarrenDesktopSidebarMetrics.iconColumnWidth)
+                        .accessibilityHidden(true)
+                } else if isWorktreeLevel {
                     WarrenDesktopViewBoxGlyph.worktreeBranch(size: WarrenDesktopSidebarMetrics.worktreeIconSize)
                         .foregroundStyle(tokens.treeFaintText)
                         .frame(width: WarrenDesktopSidebarMetrics.iconColumnWidth)
@@ -402,7 +406,8 @@ struct WarrenDesktopFoldedCountRow: View {
                                 name: project.name,
                                 identity: project.id.description,
                                 size: WarrenDesktopSidebarMetrics.inactiveProjectIconSize,
-                                cornerRadius: 4
+                                cornerRadius: 4,
+                                showsInitial: false
                             )
                             .background(
                                 RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -434,12 +439,12 @@ struct WarrenDesktopFoldedCountRow: View {
         .disabled(!isEnabled)
         .onHover { isHovered = $0 }
         .accessibilityLabel("\(count) \(noun)")
-        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        .accessibilityValue(leadsToTasks ? "Show in Tasks" : (isExpanded ? "Expanded" : "Collapsed"))
         .warrenSemanticElement(
             id: semanticID,
             role: .button,
             label: "\(count) \(noun)",
-            value: isExpanded ? "Expanded" : "Collapsed",
+            value: leadsToTasks ? "Show in Tasks" : (isExpanded ? "Expanded" : "Collapsed"),
             isEnabled: isEnabled,
             action: { if isEnabled { onToggle() } }
         )
@@ -482,7 +487,7 @@ struct WarrenDesktopIdleWorktreeRow: View {
                 WarrenDesktopBranchNameLabel(
                     name: name,
                     leafColor: tokens.treeBranchText,
-                    prefixColor: tokens.treeFaintText
+                    prefixColor: tokens.treeBranchPrefixText
                 )
                 Spacer(minLength: 6)
                 if let ageDate {
