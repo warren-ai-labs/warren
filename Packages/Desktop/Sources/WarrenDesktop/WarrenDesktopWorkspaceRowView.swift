@@ -43,6 +43,11 @@ struct WarrenDesktopWorkspaceRow: View {
     /// Session, in the Tasks list. Its names read a step brighter and it
     /// carries the `⌘T` hint.
     var isNewSessionTarget: Bool = false
+    /// Whether a Task copy names the branch after its project. The Task's
+    /// shared branch is left out.
+    var showsBranch: Bool = true
+    /// A Task copy with no Session: its project name a step quieter.
+    var isQuiet: Bool = false
     let mark: WarrenActivityMark?
     let activeTabCount: Int
     let isSelected: Bool
@@ -161,21 +166,26 @@ struct WarrenDesktopWorkspaceRow: View {
                         Text(projectLabel)
                             .font(WarrenDesktopTreeTypography.worktreeProjectName)
                             .foregroundStyle(isNewSessionTarget
-                                ? tokens.sidebarInk.t2 : tokens.sidebarInk.t3)
+                                ? tokens.sidebarInk.t2
+                                : (isQuiet ? tokens.sidebarInk.t5 : tokens.sidebarInk.t3))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
-                        WarrenDesktopViewBoxGlyph.worktreeBranch(size: 10)
-                            .foregroundStyle(tokens.treeFaintText)
-                            .padding(.leading, 8)
-                            .padding(.trailing, 4)
+                        if showsBranch {
+                            WarrenDesktopViewBoxGlyph.worktreeBranch(size: 10)
+                                .foregroundStyle(tokens.treeFaintText)
+                                .padding(.leading, 8)
+                                .padding(.trailing, 4)
+                        }
                     }
-                    WarrenDesktopBranchNameLabel(
-                        name: workspace.name.isEmpty ? "Workspace" : workspace.name,
-                        leafColor: projectLabel != nil && isNewSessionTarget
-                            ? tokens.sidebarInk.t3 : tokens.treeBranchText,
-                        prefixColor: tokens.treeFaintText
-                    )
-                    .layoutPriority(-1)
+                    if projectLabel == nil || showsBranch {
+                        WarrenDesktopBranchNameLabel(
+                            name: workspace.name.isEmpty ? "Workspace" : workspace.name,
+                            leafColor: projectLabel != nil && isNewSessionTarget
+                                ? tokens.sidebarInk.t3 : tokens.treeBranchText,
+                            prefixColor: tokens.treeBranchPrefixText
+                        )
+                        .layoutPriority(-1)
+                    }
 
                     HStack(spacing: 6) {
                         if isDeleting {
@@ -240,7 +250,10 @@ struct WarrenDesktopWorkspaceRow: View {
             // its label: a Button nested in another Button's label never
             // receives the click on macOS.
             editorEntry
+            // The Task link keeps its place and shows on hover; the Task tab
+            // already lists the worktree.
             taskLinkButton
+                .opacity(isHovered || isFocused || forceHover ? 1 : 0)
             if isNewSessionTarget, leafDisclosure != nil {
                 Text("⌘T")
                     .font(WarrenDesktopTreeTypography.keyHint)

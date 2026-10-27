@@ -40,24 +40,41 @@ struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
     }
 }
 
-/// The gap above one worktree among its group's worktrees.
+/// The order and gaps of one group's worktrees.
 ///
-/// Worktrees that list Sessions are 6pt apart, so the gap says which Sessions
-/// belong to which branch; two that list none pack with no gap, since an
-/// empty worktree is one line of a list, not a block.
+/// The tree spaces by four steps: 0 inside a block, 2 between one-line
+/// summary rows, 10 between blocks within a group, 20 between groups. A
+/// worktree that lists Sessions is a block; one that lists none (folded, or
+/// with no Session) is a one-line summary, as is the idle row. Blocks come
+/// first and summaries after, so a summary never sits between two blocks
+/// where neither gap would fit it.
 enum WarrenDesktopWorktreeGap {
+    /// `items` with the blocks first, each part keeping its order.
+    static func ordered<Item>(
+        _ items: [Item],
+        leafCount: (Item) -> Int
+    ) -> (items: [Item], leafCounts: [Int]) {
+        let counted = items.map { ($0, leafCount($0)) }
+        let ordered = counted.filter { $0.1 > 0 } + counted.filter { $0.1 == 0 }
+        return (ordered.map(\.0), ordered.map(\.1))
+    }
+
+    /// The gap above the worktree at `index` of an ordered list.
     static func above(_ index: Int, leafCounts: [Int]) -> CGFloat {
         guard index > 0, index < leafCounts.count else { return 0 }
         return leafCounts[index - 1] == 0 && leafCounts[index] == 0
-            ? 0
+            ? WarrenDesktopSidebarMetrics.summarySpacing
             : WarrenDesktopSidebarMetrics.worktreeSpacing
     }
 
-    /// Above the idle-worktrees row, which packs like an empty worktree:
-    /// the worktree gap after one that lists Sessions, none otherwise.
+    /// Above the idle-worktrees row, the last summary: the block gap after a
+    /// worktree that lists Sessions, the summary gap after one that lists
+    /// none, and none at all directly under the group's own row.
     static func aboveIdleRow(lastLeafCount: Int?) -> CGFloat {
-        guard let lastLeafCount, lastLeafCount > 0 else { return 0 }
-        return WarrenDesktopSidebarMetrics.worktreeSpacing
+        guard let lastLeafCount else { return 0 }
+        return lastLeafCount > 0
+            ? WarrenDesktopSidebarMetrics.worktreeSpacing
+            : WarrenDesktopSidebarMetrics.summarySpacing
     }
 }
 
@@ -76,7 +93,7 @@ struct WarrenDesktopLeafDisclosure {
     /// More dots than this stop reading as individual Sessions.
     static let maximumDots = WarrenDesktopSidebarMetrics.maximumFoldDots
     static let dotSize: CGFloat = WarrenDesktopSidebarMetrics.foldDotSize
-    static let chevronWidth: CGFloat = 16
+    static let chevronWidth: CGFloat = WarrenDesktopSidebarMetrics.chevronSize
 
     /// The marks a folded row draws, capped at `maximumDots`. An idle or
     /// exited Session draws nothing.

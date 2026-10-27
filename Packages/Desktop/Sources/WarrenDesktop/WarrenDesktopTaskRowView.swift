@@ -46,7 +46,8 @@ struct WarrenDesktopTaskRow: View {
                     WarrenDesktopFadingName(text: WarrenDesktopTreeTypography.groupNameText(task.name))
                         .foregroundStyle(tokens.treeGroupText)
 
-                    if task.pinned {
+                    // The pin is a detail of the row, not a fact to scan for.
+                    if task.pinned, isHovered || isFocused || forceHover {
                         Image(systemName: "pin.fill")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(tokens.treeQuietText)
@@ -133,8 +134,11 @@ struct WarrenDesktopTaskRow: View {
     /// one icon column and their names one start.
     static let taskIconWidth: CGFloat = WarrenDesktopSidebarMetrics.groupIconSize
 
+    /// A drawn flag in the icon column: a Task heads a list as a project
+    /// does, so it takes a mark, not a filled tile that reads as a button.
     private func taskIcon(tokens: WarrenColorTokens) -> some View {
-        WarrenDesktopTaskTile()
+        WarrenDesktopTaskGlyph(size: 13, color: tokens.treeQuietText)
+            .frame(width: Self.taskIconWidth, height: Self.taskIconWidth)
     }
 
     private func taskAddMenu(tokens: WarrenColorTokens) -> some View {

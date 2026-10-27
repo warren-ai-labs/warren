@@ -337,10 +337,12 @@ struct WarrenDesktopSidebarHostRows: View {
                                 )
                             }
                         } else if split.hasRows {
-                            let scoped = scopedWorkspaces(split.live, host: host)
-                            let leafCounts = scoped.map { hostLeafSessions($0.workspace, host: host).count }
+                            let ordered = WarrenDesktopWorktreeGap.ordered(scopedWorkspaces(split.live, host: host)) {
+                                hostLeafSessions($0.workspace, host: host).count
+                            }
+                            let leafCounts = ordered.leafCounts
                             VStack(alignment: .leading, spacing: 0) {
-                                ForEach(Array(scoped.enumerated()), id: \.element.id) { index, scopedWorkspace in
+                                ForEach(Array(ordered.items.enumerated()), id: \.element.id) { index, scopedWorkspace in
                                     let sessions = hostLeafSessions(scopedWorkspace.workspace, host: host)
                                     // The same group the single-Host tree draws; see
                                     // WarrenDesktopSessionLeafGroup.
@@ -350,7 +352,8 @@ struct WarrenDesktopSidebarHostRows: View {
                                         hostWorkspaceRow(
                                             scopedWorkspace.workspace,
                                             project: group.project,
-                                            host: host
+                                            host: host,
+                                            isSummary: leafCounts[index] == 0
                                         )
                                     } leaves: {
                                         hostSessionRows(
@@ -439,7 +442,7 @@ struct WarrenDesktopSidebarHostRows: View {
                 count: workspaces.count,
                 singular: "idle worktree",
                 plural: "idle worktrees",
-                height: WarrenDesktopSidebarMetrics.worktreeRowHeight,
+                height: WarrenDesktopSidebarMetrics.summaryRowHeight,
                 isExpanded: isExpanded,
                 semanticID: "\(key).idle-worktrees",
                 isEnabled: enabled,
@@ -704,7 +707,10 @@ struct WarrenDesktopSidebarHostRows: View {
             foldMarks: group.workspaces
                 .flatMap { host.activeSessions(in: $0.id) }
                 .map(\.activityMark),
-            branchName: soloWorkspace.map { $0.branch ?? $0.name },
+            // A lone default branch says nothing the project row does not.
+                branchName: soloWorkspace.flatMap {
+                    WarrenDesktopWorkspaceSplit.isDefaultBranch($0) ? nil : ($0.branch ?? $0.name)
+                },
             workspaceMenu: soloWorkspace.map { workspace in
                 WarrenDesktopWorkspaceRow.contextMenuActions(
                     workspace: workspace,
@@ -749,7 +755,8 @@ struct WarrenDesktopSidebarHostRows: View {
     private func hostWorkspaceRow(
         _ workspace: Workspace,
         project: Project,
-        host: WarrenDesktopSidebarHostProjection
+        host: WarrenDesktopSidebarHostProjection,
+        isSummary: Bool = false
     ) -> some View {
         let key = workspaceKey(host, workspace.id)
         let summary = host.workspaceActivitySummaries[workspace.id]
@@ -797,7 +804,9 @@ struct WarrenDesktopSidebarHostRows: View {
                     toggle: { toggleWorkspaceLeaves(workspace.id, in: host) }
                 )
                 : nil,
-            rowHeight: WarrenDesktopSidebarMetrics.worktreeRowHeight,
+            rowHeight: isSummary
+                ? WarrenDesktopSidebarMetrics.summaryRowHeight
+                : WarrenDesktopSidebarMetrics.worktreeRowHeight,
             taskName: taskName,
             taskID: workspace.taskID,
             tasks: host.tasks,

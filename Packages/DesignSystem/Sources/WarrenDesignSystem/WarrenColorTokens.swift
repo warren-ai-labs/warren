@@ -41,6 +41,9 @@ public struct WarrenSidebarInk: Sendable {
     public let t4: Color
     /// Times, counts, branch prefixes, glyphs, a resting second line.
     public let t5: Color
+    /// A worktree's branch name. On Ember it sits above `t5`, because the
+    /// quietest tier is too faint for the name that heads a block.
+    public let branch: Color
     public let hover: Color
     public let selected: Color
 }
@@ -274,6 +277,7 @@ public struct WarrenColorTokens: Sendable {
             t3: hex(0x9999_99),
             t4: hex(0x7A7A_7A),
             t5: hex(0x5757_57),
+            branch: hex(0x6B6B_6B),
             hover: hex(0xEDED_ED).opacity(0.05),
             selected: hex(0xEDED_ED).opacity(0.085)
         ),
@@ -337,6 +341,7 @@ public struct WarrenColorTokens: Sendable {
             t3: hex(0x6E68_62),
             t4: hex(0x8A83_7C),
             t5: hex(0xABA4_9D),
+            branch: hex(0xABA4_9D),
             hover: hex(0x1C19_17).opacity(0.045),
             selected: hex(0x1C19_17).opacity(0.07)
         ),

@@ -121,6 +121,9 @@ enum WarrenDesktopAppIcon: Hashable, Sendable {
             switch kind {
             case .claude: Color(warrenHex: 0xD97757)
             case .codex: Color(warrenHex: 0x5B6CF0)
+            // A step above the card, so a dark mark's tile does not read as
+            // a hole beside the coloured ones.
+            case .pi: Color(warrenHex: 0x2E2A26)
             // Marks drawn in more than one colour, or in a colour too light
             // for a white glyph, keep their artwork on a near-black tile.
             default: Color(warrenHex: 0x26221F)
