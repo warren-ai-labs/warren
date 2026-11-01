@@ -73,14 +73,6 @@ contract and operational policy.
 
 ## Notes
 
-- The first screen carries a working fragment of the product instead of a
-  screenshot: a session list with a Quit / Reopen control that shows the session
-  still producing output while the app is closed. It is marked `data-ui` and
-  follows the desktop's own interface conventions; the rest of the page uses the
-  site's type and colour scale.
-- Scroll reveals are armed by script and only ever hide content that this
-  script will reveal: with JavaScript off, or under
-  `prefers-reduced-motion: reduce`, everything is visible from the first frame.
 - The site lives in `Onboarding/` inside the Warren repository. It is
   self-contained and does not touch other source trees.
 - `ghostty-web` inlines its WASM bundle, so no extra static asset is needed.
