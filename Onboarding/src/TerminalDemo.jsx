@@ -35,6 +35,10 @@ const reset = "\x1b[0m";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Glyphs the real CLI prints inside the terminal: terminal output, not page copy.
+const GLYPH = { prompt: "❯", ok: "✓", done: "✔", play: "▶", live: "●" }; // taste-skill-ignore emoji
+
+
 const helpText = [
   `${dim}usage: warren <command>${reset}`,
   ``,
@@ -51,7 +55,7 @@ const helpText = [
 
 function printPrompt(term) {
   term.write(
-    `\r\n${bold}${green}warren@mac-studio${reset} ${dim}~/workspace/warren${reset} ${green}main${reset}\r\n${bold}${green}❯${reset} `,
+    `\r\n${bold}${green}warren@mac-studio${reset} ${dim}~/workspace/warren${reset} ${green}main${reset}\r\n${bold}${green}${GLYPH.prompt}${reset} `,
   );
 }
 
@@ -85,11 +89,12 @@ export default function TerminalDemo() {
     const host = hostRef.current;
 
     async function boot() {
+      // Lines stay under about 40 columns so a phone does not wrap them mid-word.
       const lines = [
-        `${dim}warren-headless${reset} v0.12.0 ${dim}(ghostline v1.1.3 runtime)${reset}`,
-        `${dim}host${reset} ${cyan}mac-studio${reset} ${dim}· ws://127.0.0.1:8789${reset}`,
-        `${green}✓${reset} ${dim}restored${reset} ${cyan}warren/dev${reset} ${dim}· survived 2 detaches${reset}`,
-        `${dim}terminal${reset} ${cyan}ghostty-wasm${reset} ${dim}· same VT parser as desktop${reset}`,
+        `${dim}warren-headless${reset} v0.12.0`,
+        `${dim}ghostline${reset} v1.1.3 ${dim}· ${reset}${cyan}mac-studio${reset}`,
+        `${dim}ws://127.0.0.1:8789${reset}`,
+        `${green}${GLYPH.ok}${reset} ${dim}restored${reset} ${cyan}warren/dev${reset} ${dim}· 2 detaches${reset}`,
         ``,
         `${dim}type ${bold}help${reset}${dim} to explore${reset}`,
       ];
@@ -137,19 +142,19 @@ export default function TerminalDemo() {
         const target = args[0] || "warren/dev";
         term.write(`${dim}attaching to${reset} ${cyan}${target}${reset} ...\r\n`);
         await sleep(280);
-        term.write(`${green}✓${reset} attached — scrollback restored, cursor at line 1184\r\n`);
+        term.write(`${green}${GLYPH.ok}${reset} attached — scrollback restored, cursor at line 1184\r\n`);
         term.write(`${dim}warren/dev${reset} $ git status\r\n`);
         term.write(`${dim}On branch main${reset}\r\n${green}nothing to commit, working tree clean${reset}\r\n`);
       } else if (cmd === "detach") {
         const target = args[0] || "warren/dev";
         term.write(`${dim}detaching${reset} ${cyan}${target}${reset} ...\r\n`);
         await sleep(360);
-        term.write(`${green}✓${reset} detached — session retained by host\r\n`);
+        term.write(`${green}${GLYPH.ok}${reset} detached — session retained by host\r\n`);
         await sleep(360);
         term.write(`${dim}reattaching${reset} ...\r\n`);
         await sleep(280);
         term.write(
-          `${green}✓${reset} resumed in 1.2s — work kept running while you were away:\r\n` +
+          `${green}${GLYPH.ok}${reset} resumed in 1.2s — work kept running while you were away:\r\n` +
             `${dim}  [00:00:04] npm test — 24 passed, 0 failed${reset}\r\n` +
             `${dim}  [00:00:11] git worktree add docs/cleanup${reset}\r\n`,
         );
@@ -157,25 +162,25 @@ export default function TerminalDemo() {
         term.write(
           [
             `${dim}warren codex${reset}`,
-            `${yellow}▶${reset} task: add durable session restore test`,
-            `${cyan}●${reset} agent working in warren/dev · attached`,
-            `${green}✔${reset} 3 files changed, 1 test added`,
-            `${green}✔${reset} session kept running after tab close`,
+            `${yellow}${GLYPH.play}${reset} task: add durable session restore test`,
+            `${cyan}${GLYPH.live}${reset} agent working in warren/dev · attached`,
+            `${green}${GLYPH.done}${reset} 3 files changed, 1 test added`,
+            `${green}${GLYPH.done}${reset} session kept running after tab close`,
           ].join("\r\n") + "\r\n",
         );
       } else if (cmd === "claude") {
         term.write(
           [
             `${dim}warren claude${reset}`,
-            `${yellow}▶${reset} task: workspace-first git worktrees`,
-            `${cyan}●${reset} writing design note · 6 min`,
-            `${green}✔${reset} PR #128 ready for review`,
+            `${yellow}${GLYPH.play}${reset} task: workspace-first git worktrees`,
+            `${cyan}${GLYPH.live}${reset} writing design note · 6 min`,
+            `${green}${GLYPH.done}${reset} PR #128 ready for review`,
           ].join("\r\n") + "\r\n",
         );
       } else if (cmd === "import") {
         term.write(`${dim}importing Superset metadata${reset} ...\r\n`);
         await sleep(360);
-        term.write(`${green}✓${reset} 3 projects, 12 workspaces imported\r\n`);
+        term.write(`${green}${GLYPH.ok}${reset} 3 projects, 12 workspaces imported\r\n`);
         term.write(`${dim}receipt: import-2026-08-18 · runs once, no re-import${reset}\r\n`);
       } else if (cmd === "neofetch") {
         term.write(
@@ -252,7 +257,8 @@ export default function TerminalDemo() {
           window.location.hash === "" || window.location.hash === "#terminal";
         term = new Terminal({
           fontSize: 13,
-          fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
+          // The terminal is a real code surface, so it keeps the mono face.
+          fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace', // taste-skill-ignore mono
           cursorBlink: true,
           cursorStyle: "block",
           scrollback: 2000,
@@ -301,11 +307,11 @@ export default function TerminalDemo() {
 
   return (
     <figure>
-      <div className="pane terminal" onClick={() => termRef.current?.focus()}>
+      <div className="pane terminal" data-ui="" onClick={() => termRef.current?.focus()}>
         <div className="pane-head">
           <span className="pane-title">{t("terminal.title")}</span>
           <span className="pane-path">~/workspace/warren</span>
-          <span className="pane-tag">Ghostty WASM</span>
+          <span className="pane-path">Ghostty WASM</span>
         </div>
         <div className="terminal-screen" ref={hostRef}>
           {status !== "ready" && (

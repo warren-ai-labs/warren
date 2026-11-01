@@ -3,3 +3,4 @@ dist/
 .wrangler/
 .DS_Store
 npm-debug.log*
+.taste-skill/
