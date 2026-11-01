@@ -378,10 +378,12 @@ resource.
 ## 11. Web/PWA Interaction Design
 
 The Web client mirrors the Desktop resource model:
-- Desktop view displays fixed Sidebar, Tab Bar, and Terminal.
-- Mobile view provides a slide-out drawer, scrollable Tabs, and a bottom shortcut bar for terminal control keys (Esc, Tab, Ctrl-C, Ctrl-D, arrows).
+- Desktop view displays fixed Sidebar, Tab Bar, and Terminal, and reads like the Desktop's sidebar: the Host's name and connection head it, each Workspace lists its Sessions on two lines (what it is, then what it is waiting for or running), and Workspaces with nothing running fold behind "N idle worktrees". The header names the one Session the window holds: the Web has no split panes, so there is no strip of Tabs to arrange. New Sessions start from the header's `+`, a terminal Agent's Terminal/Agent switch sits beside it, the sidebar's Session rows move between Sessions, and the compact title template names the browser tab and the installed app's window.
+- Mobile view opens on an inbox of every Session on the Host, grouped by what it asks of the person (Needs you, Running, Idle) or by Project, mirroring the iOS inbox. Tapping a row slides the inbox away to that Session's full-screen view, whose header names the Session over its Project and branch and whose back button returns to the inbox. The Session view keeps scrollable Tabs for the same Workspace and a bottom shortcut bar for terminal control keys (Esc, Tab, Ctrl-C, Ctrl-D, arrows). The inbox stays mounted underneath, so returning keeps its scroll position, and a link that names a target opens straight on that Session.
 - Web Attachments acquire the Control Lease on active input or resize using last-writer-wins semantics.
 - Agent view toggle switches between raw xterm.js terminal and structured conversation view.
+- A browser holding no working link sees the Welcome screen over the whole window, not an error inside the terminal pane. A browser with no link at all opens no socket; pasting a link starts the connection. The Welcome screen explains where a link comes from on first use and says the link stopped working when this browser had one.
+- The installed PWA is the primary phone form. On iPhone and iPad Safari, which has no install prompt, the Welcome screen and a dismissible hint (quiet for 14 days once dismissed) explain Share › Add to Home Screen. A Home Screen app keeps storage separate from Safari tabs, so a link is pasted inside the installed app. The app icon badge counts Sessions waiting on a person, and an installed app asks for persistent storage.
 
 ## 12. Appearance
 

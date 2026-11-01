@@ -132,9 +132,10 @@ import {
   ConfirmationDialog,
   EmptyTerminal,
   ContextMenu,
+  InstallHint,
+  MobileInbox,
   MobileShell,
   MobileKeys,
-  PresetBar,
   SearchPanel,
   SessionSheet,
   SettingsPage,
@@ -143,11 +144,23 @@ import {
   TextInputDialog,
   TopBar,
   TransientFeedback,
+  WelcomeScreen,
   WorktreeImportDialog,
 } from "./components.jsx";
+import {
+  actionableSessionCount,
+  isAppleMobileWebKit,
+  isStandaloneDisplay,
+  readInstallHintDismissedAt,
+  requestPersistentStorage,
+  shouldOfferInstallHint,
+  syncAppBadge,
+  writeInstallHintDismissedAt,
+} from "./pwa.js";
 import { GitPanel } from "./gitpanel.jsx";
 import { loadGitPanelUI, saveGitPanelUI, gitPanelUIFileView } from "./gitui.js";
 import {
+  hasNavigationQuery,
   navigationLocationKey,
   replaceNavigationQuery,
   uiStateFromQuery,
@@ -176,21 +189,23 @@ const REQUEST_TIMEOUT_MS = 30_000;
 
 const defaultFontFamily = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
 const defaultFontSize = matchMedia("(max-width: 767px)").matches ? 12 : 13;
+// The Desktop's dark terminal (GhosttySurface and TerminalPalette.ember), so a
+// Session looks the same in either client.
 const terminalTheme = {
-  background: "#151110",
-  foreground: "#eae8e6",
+  background: "#0b0b0b",
+  foreground: "#ededed",
   cursor: "#e07850",
-  cursorAccent: "#151110",
+  cursorAccent: "#0b0b0b",
   selectionBackground: "rgba(224, 120, 80, 0.25)",
-  black: "#151110",
+  black: "#0b0b0b",
   red: "#dc6b6b",
   green: "#7ec699",
   yellow: "#e5c07b",
   blue: "#61afef",
   magenta: "#c678dd",
   cyan: "#56b6c2",
-  white: "#eae8e6",
-  brightBlack: "#5c5856",
+  white: "#ededed",
+  brightBlack: "#5c5c5c",
   brightRed: "#e88888",
   brightGreen: "#98d1a8",
   brightYellow: "#ecd08f",
@@ -304,6 +319,26 @@ export default function App() {
   const [creatingWorkspaceIDs, setCreatingWorkspaceIDs] = useState(() => new Set());
   const [focusedSessionID, setFocusedSessionID] = useState(null);
   const [emptyOverride, setEmptyOverride] = useState(null);
+  // Whether this browser arrived holding a link. Without one the Welcome
+  // screen explains where links come from; with one that stopped working it
+  // says so instead.
+  const [credentialAtLaunch] = useState(() => runtime.usesControlPlane || Boolean(runtime.token));
+  const [hostReached, setHostReached] = useState(false);
+  // On a phone the app opens on the inbox, unless the link names a target.
+  const [inboxOpen, setInboxOpen] = useState(() => !hasNavigationQuery(window.location.search));
+  const [inboxGrouping, setInboxGrouping] = useState(() => {
+    try {
+      return localStorage.getItem("warren.inbox.grouping") === "project" ? "project" : "status";
+    } catch {
+      return "status";
+    }
+  });
+  const closeInboxOnNextSessionRef = useRef(false);
+  const [installHintVisible, setInstallHintVisible] = useState(() => shouldOfferInstallHint({
+    standalone: isStandaloneDisplay(),
+    appleMobile: isAppleMobileWebKit(),
+    dismissedAt: readInstallHintDismissedAt(),
+  }));
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -389,6 +424,7 @@ export default function App() {
   // Names the machine in the waiting copy. Learned from a welcome, so it is
   // available on every reconnect but not on a cold first load.
   const hostNameRef = useRef("");
+  const [hostName, setHostName] = useState("");
   const hostWaitCopyTimerRef = useRef(null);
   const maintenanceTimeoutRef = useRef(null);
   const feedbackTimerRef = useRef(null);
@@ -397,7 +433,6 @@ export default function App() {
   // created ACP Session, or one whose subscribe answered without a terminal.
   const terminalFreeSessionsRef = useRef(new Set());
   const attachSessionRef = useRef(null);
-  const pendingSessionFeedbackRef = useRef(false);
   const creatingSessionKindRef = useRef(null);
   const renamePendingRef = useRef(false);
   const deletePendingRef = useRef(false);
@@ -633,7 +668,6 @@ export default function App() {
 
   const clearPendingSession = useCallback(() => {
     pendingSessionRef.current = null;
-    pendingSessionFeedbackRef.current = false;
     setPendingSessionID(null);
     setFeedback(previous => previous?.kind === "pending" ? null : previous);
   }, []);
@@ -742,12 +776,14 @@ export default function App() {
   useEffect(() => {
     saveActivityAcknowledgments(localStorage, webSocketURL(), activityAcknowledgments);
   }, [activityAcknowledgments]);
+  // The browser tab and the installed app's window carry the compact title,
+  // as the Desktop's pane header does; "Copy" there keeps the full one.
   const paneTitle = selectedSession
-    ? renderTerminalTitle(titleTemplate, selectedSession, selectedWorkspace, catalog.host)
-    : "";
-  const paneDisplayTitle = selectedSession
     ? renderCompactTerminalTitle(titleTemplate, selectedSession, selectedWorkspace, catalog.host)
     : "";
+  useEffect(() => {
+    document.title = paneTitle ? `${paneTitle} — Warren` : "Warren";
+  }, [paneTitle]);
   const titlePreview = renderTerminalTitle(
     titleTemplate,
     selectedSession || previewSession,
@@ -1414,10 +1450,8 @@ export default function App() {
     if (pendingSessionRef.current === sessionID) {
       pendingSessionRef.current = null;
       setPendingSessionID(null);
-      if (pendingSessionFeedbackRef.current) announceFeedback("Session ready", "success");
-      pendingSessionFeedbackRef.current = false;
     }
-  }, [announceFeedback]);
+  }, []);
 
   const clearRecoveryTimeout = useCallback(() => {
     if (recoveryTimeoutRef.current !== null) {
@@ -1531,7 +1565,6 @@ export default function App() {
         if (pendingSessionRef.current === sessionID) {
           pendingSessionRef.current = null;
           setPendingSessionID(null);
-          pendingSessionFeedbackRef.current = false;
           announceFeedback(detail || "Session unavailable", "error");
         }
       });
@@ -1541,7 +1574,6 @@ export default function App() {
         if (pendingSessionRef.current === sessionID) {
           pendingSessionRef.current = null;
           setPendingSessionID(null);
-          pendingSessionFeedbackRef.current = false;
           announceFeedback("Session switch unavailable", "error");
         }
         connectionRef.current?.reconnectNow();
@@ -1555,7 +1587,6 @@ export default function App() {
         if (pendingSessionRef.current === sessionID) {
           pendingSessionRef.current = null;
           setPendingSessionID(null);
-          pendingSessionFeedbackRef.current = false;
           announceFeedback("Session recovery timed out", "error");
         }
         connectionRef.current?.reset();
@@ -2388,8 +2419,6 @@ export default function App() {
     pendingSessionRef.current = sessionID;
     setPendingSessionID(sessionID);
     setHasNewTerminalOutput(false);
-    pendingSessionFeedbackRef.current = explicit;
-    if (explicit) announceFeedback("Switching session…", "pending", 0);
     const changed = sessionID !== state.activeSession;
     state.activeSession = sessionID;
     state.attachedSession = null;
@@ -2819,8 +2848,10 @@ export default function App() {
     switch (message.t) {
     case "welcome":
       clearHostWaitCopy();
+      setHostReached(true);
       if (typeof message.host?.name === "string" && message.host.name.trim()) {
         hostNameRef.current = message.host.name.trim();
+        setHostName(hostNameRef.current);
       }
       try {
         if (!message.host?.id || !message.accessScopeId) throw new Error("Host welcome is missing host.id or accessScopeId");
@@ -3754,6 +3785,14 @@ export default function App() {
         onState: state => connectionStateHandlerRef.current(state),
       });
       connectionRef.current = connection;
+      // A browser with no link has nothing to authenticate with, and on a page
+      // not served by a Host there is no socket to try either. Go straight to
+      // the Welcome screen; pasting a link starts the connection.
+      if (!runtime.token && !runtime.usesControlPlane) {
+        setEmptyOverride({ loading: false, message: "unauthorized" });
+        setConnectionStatus({ message: "unauthorized", online: false });
+        return;
+      }
       connection.start();
     });
     return () => {
@@ -3786,6 +3825,54 @@ export default function App() {
       window.removeEventListener("pageshow", resumeIfVisible);
       window.removeEventListener("focus", resumeIfVisible);
     };
+  }, []);
+
+  // The Home Screen icon carries how many Sessions are waiting on a person.
+  const actionableCount = useMemo(() => actionableSessionCount(catalog.tabs), [catalog.tabs]);
+  useEffect(() => {
+    syncAppBadge(actionableCount);
+  }, [actionableCount]);
+
+  useEffect(() => {
+    if (isStandaloneDisplay()) requestPersistentStorage();
+  }, []);
+
+  const changeInboxGrouping = useCallback(value => {
+    setInboxGrouping(value);
+    try {
+      localStorage.setItem("warren.inbox.grouping", value);
+    } catch {
+      // The grouping is a convenience; losing it costs one tap.
+    }
+  }, []);
+
+  const openSessionFromInbox = useCallback((workspaceID, sessionID) => {
+    if (!workspaceID) return;
+    chooseWorkspace(workspaceID, sessionID);
+    setInboxOpen(false);
+  }, [chooseWorkspace]);
+
+  // A Session started from the inbox opens once the Host has created it; a
+  // cancelled picker leaves the inbox where it was.
+  const newSessionFromInbox = useCallback(() => {
+    if (!selectedWorkspaceID && catalog.workspaces[0]) chooseWorkspace(catalog.workspaces[0].id);
+    closeInboxOnNextSessionRef.current = true;
+    openSessionSheet();
+  }, [catalog.workspaces, chooseWorkspace, openSessionSheet, selectedWorkspaceID]);
+
+  useEffect(() => {
+    if (!closeInboxOnNextSessionRef.current || !creatingSessionKind) return;
+    closeInboxOnNextSessionRef.current = false;
+    setInboxOpen(false);
+  }, [creatingSessionKind]);
+
+  useEffect(() => {
+    if (!sessionSheetOpen && !creatingSessionKind) closeInboxOnNextSessionRef.current = false;
+  }, [creatingSessionKind, sessionSheetOpen]);
+
+  const dismissInstallHint = useCallback(() => {
+    writeInstallHintDismissedAt();
+    setInstallHintVisible(false);
   }, []);
 
   useEffect(() => {
@@ -4372,7 +4459,6 @@ export default function App() {
     };
   }, [catalog]);
   const openNewSessionInWorkspace = useCallback(workspaceID => openWorkspace(workspaceID, true), [openWorkspace]);
-  const createShellSession = useCallback(() => createSession("shell"), [createSession]);
   const openSearchPanel = useCallback(() => setSearchOpen(true), []);
   const toggleGitPanel = useCallback(() => setGitOpenState(open => !open), [setGitOpenState]);
   const isAgentSession = isSupportedAgentSession(selectedSession);
@@ -4554,6 +4640,8 @@ export default function App() {
   // While settling, the copy stays on the last thing the user was told. The
   // dot breathes; the words do not change, because a word change reads as an
   // event and a 900ms flap is not one.
+  const needsPairing = emptyOverride?.message === "unauthorized";
+
   const connectionView = useMemo(() => {
     const settling = connectionPresentation.state === connectionSettling;
     if (!settling) settledConnectionRef.current = connectionStatus;
@@ -4567,11 +4655,23 @@ export default function App() {
     <ActivityAcknowledgmentsContext.Provider value={activityAcknowledgments}>
       <TransientFeedback feedback={feedback} />
       <h1 className="visually-hidden">Warren</h1>
-      <div className={`app${drawerOpen ? " drawer-open" : ""}${gitOpen && !isMobile ? " git-panel-open" : ""}`} hidden={settingsOpen}>
+      {needsPairing && (
+        <WelcomeScreen
+          onConnect={reconnectWithAuth}
+          expired={credentialAtLaunch || hostReached}
+          installHint={installHintVisible}
+        />
+      )}
+      {!needsPairing && !isMobile && hostReached && installHintVisible && <InstallHint onDismiss={dismissInstallHint} />}
+      <div className={`app${drawerOpen ? " drawer-open" : ""}${gitOpen && !isMobile ? " git-panel-open" : ""}`} hidden={settingsOpen || needsPairing}>
         <a className="skip-link" href="#main">Skip to content</a>
         <Sidebar
           catalog={catalog}
           activeWorkspace={selectedWorkspaceID}
+          activeSession={activeSession}
+          hostName={hostName}
+          onOpenSession={chooseWorkspace}
+          onSessionContextMenu={sessionContextMenu}
           expandedProjects={expandedProjects}
           tabsForWorkspace={tabsForWorkspace}
           connection={connectionView}
@@ -4579,7 +4679,8 @@ export default function App() {
           onChooseWorkspace={chooseWorkspace}
           onOpenWorkspace={openWorkspace}
           onNewSessionInWorkspace={openNewSessionInWorkspace}
-          onNewSession={createShellSession}
+          onNewSession={() => openSessionSheet()}
+          onOpenSearch={openSearchPanel}
           onOpenSettings={openSettings}
           onProjectContextMenu={projectContextMenu}
           onWorkspaceContextMenu={workspaceContextMenu}
@@ -4609,56 +4710,25 @@ export default function App() {
               onSessionContextMenu={sessionContextMenu}
               pendingSessionID={pendingSessionID}
               creatingSession={Boolean(creatingSessionKind)}
+              onBack={() => setInboxOpen(true)}
             />
           ) : (
             <>
               <TopBar
-                tabs={tabs}
-                activeSession={activeSession}
+                session={selectedSession}
                 workspace={selectedWorkspace}
-                onAttachSession={attachSession}
-                onNewSession={createShellSession}
+                onNewSession={() => openSessionSheet()}
                 onOpenMenu={openDrawer}
                 onOpenSearch={openSearchPanel}
                 onToggleGit={toggleGitPanel}
                 gitActive={gitOpen}
-                onTabContextMenu={sessionContextMenu}
-                pendingSessionID={pendingSessionID}
                 creatingSession={Boolean(creatingSessionKind)}
+                agentToggle={isAgentSession && !isConversationSession ? {
+                  active: agentViewActive,
+                  attention: Boolean(agentStateBySession[selectedSession?.id]?.status?.attention),
+                  onSelect: toggleAgentView,
+                } : null}
               />
-              <PresetBar
-                presets={visiblePresets}
-                onCreateSession={createSession}
-                onConfigureSession={openSessionSheet}
-                creatingKind={creatingSessionKind}
-              />
-              <div className="pane-title">
-                <span
-                  title={paneTitle}
-                  aria-label={paneTitle}
-                  onCopy={event => {
-                    if (!paneTitle || !event.clipboardData) return;
-                    event.preventDefault();
-                    event.clipboardData.setData("text/plain", paneTitle);
-                  }}
-                >
-                  {paneDisplayTitle}
-                </span>
-                {isAgentSession && !isConversationSession && (agentViewActive ? (
-                  <button type="button" className="pane-action" onClick={() => toggleAgentView("terminal")}>
-                    Terminal
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className={`pane-action${agentStateBySession[selectedSession?.id]?.status?.attention ? " has-attention" : ""}`}
-                    onClick={() => toggleAgentView("agent")}
-                    title={agentStateBySession[selectedSession?.id]?.status?.attention ? "Agent needs attention" : "Switch to Agent"}
-                  >
-                    Agent{agentStateBySession[selectedSession?.id]?.status?.attention ? " •" : ""}
-                  </button>
-                ))}
-              </div>
             </>
           )}
           <section
@@ -4775,6 +4845,24 @@ export default function App() {
             )}
           </section>
           {!agentViewActive && <MobileKeys onInput={sendInput} />}
+          {isMobile && (
+            <MobileInbox
+              open={inboxOpen}
+              catalog={catalog}
+              hostName={hostName}
+              connection={connectionView}
+              activeSession={activeSession}
+              grouping={inboxGrouping}
+              onGroupingChange={changeInboxGrouping}
+              onOpenSession={openSessionFromInbox}
+              onNewSession={newSessionFromInbox}
+              onOpenSearch={openSearchPanel}
+              onOpenSettings={openSettings}
+              onSessionContextMenu={sessionContextMenu}
+              creatingSession={Boolean(creatingSessionKind)}
+              installHint={installHintVisible ? <InstallHint inline onDismiss={dismissInstallHint} /> : null}
+            />
+          )}
         </main>
         {gitOpen && (!isMobile || !fileView) && (
           <GitPanel

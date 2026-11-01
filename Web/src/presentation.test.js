@@ -73,9 +73,10 @@ test("chrome scroll edges use the 7-stop ramp and drift with the scroll offset",
   // The fade distance is a registered length so the offset can interpolate it.
   assert.match(css, /@property --scroll-fade-top \{[\s\S]*?syntax: "<length>"/);
   // Zero-JS scroll-driven masks, gated on real overflow so a short list is
-  // never faded.
+  // never faded. Only the sidebar scrolls vertically since the desktop header
+  // stopped carrying a horizontal strip of Tabs.
   assert.match(css, /animation-timeline: scroll\(self block\)/);
-  assert.match(css, /animation-timeline: scroll\(self inline\)/);
+  assert.equal(css.includes("animation-timeline: scroll(self inline)"), false);
   assert.match(css, /\.sidebar-scroll\[data-overflow="true"\]/);
 });
 
@@ -94,10 +95,11 @@ test("composite chrome strips expose a single roving tab stop", () => {
   assert.match(components, /import \{ rovingIndex, rovingTabIndex \} from "\.\/roving\.js";/);
   assert.match(components, /function useRovingFocus\(/);
   assert.match(components, /node\.tabIndex = index === active \? 0 : -1;/);
-  // Desktop and mobile tab strips are both ARIA tablists; exactly the selected
-  // tab stays in the Tab order.
+  // The phone pill strip is the only ARIA tablist left; the desktop header
+  // names the one Session and holds no Tabs. Exactly the selected pill stays
+  // in the Tab order.
   const stops = components.match(/tabIndex=\{active \? 0 : -1\}/g) || [];
-  assert.equal(stops.length, 2);
+  assert.equal(stops.length, 1);
   assert.match(components, /data-overflow=\{scrollOverflows \? "true" : undefined\}/);
 });
 
@@ -196,7 +198,7 @@ test("web attachment mutations use canonical command identities", () => {
 
 test("context-menu Escape handling does not depend on sheet-only state", () => {
   const components = read("components.jsx");
-  const contextMenu = components.slice(components.indexOf("export function ContextMenu"), components.indexOf("export function PresetBar"));
+  const contextMenu = components.slice(components.indexOf("export function ContextMenu"), components.indexOf("const shareIcon"));
   assert.doesNotMatch(contextMenu, /pendingKind/);
 });
 

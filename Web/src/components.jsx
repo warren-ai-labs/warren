@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { webAssetURL } from "./runtime.js";
 import { terminalSearchSummary } from "./terminal.js";
 import { terminalTabTitle } from "./title.js";
@@ -8,6 +8,9 @@ import { connectionSettling } from "./connection.js";
 import { createSearch, fieldRole, highlightSegments } from "./search.js";
 import { acpProviders } from "./conversation.js";
 import { placeMenu } from "./contextmenu.js";
+import { sessionProvider } from "./search.js";
+import { branchParts, identityTint, monogram, partitionWorkspaces, projectBands, projectLastActiveAt, sessionRowSummary } from "./sidebar.js";
+import { inboxSections, inboxSummary } from "./inbox.js";
 import {
   activityMarkIsAnimated,
   activityMarkLabel,
@@ -81,15 +84,11 @@ const MenuIcon = (
   </svg>
 );
 
-const ChevronLeftIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-    <path d="m15 6-6 6 6 6" />
-  </svg>
-);
-
-const ChevronRightIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-    <path d="m9 6 6 6-6 6" />
+// The Desktop's disclosure mark: a small chevron pointing down while open,
+// turned a quarter to the left while folded.
+const ChevronDownSmallIcon = (
+  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 4.5 6 7.5 9 4.5" />
   </svg>
 );
 
@@ -100,13 +99,6 @@ const GitIcon = (
     <circle cx="12" cy="6" r="1.6" />
     <path d="M4 5.6v4.8M4 5.6c2.5.4 4.5 1.8 5.2 4.1" />
     <path d="M12 7.6v.2a2.2 2.2 0 0 1-2.2 2.2" />
-  </svg>
-);
-
-const lockIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <rect x="5" y="11" width="14" height="10" rx="2" />
-    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
   </svg>
 );
 
@@ -392,6 +384,87 @@ function SessionPresetIcon({ kind }) {
   );
 }
 
+const foldStorageKeys = {
+  idleWorktrees: "warren.sidebar.idleWorktrees",
+  inactiveProjects: "warren.sidebar.inactiveProjects",
+};
+
+/// The folds this browser last left open, so a reload lands on the same tree.
+function readRevealedFold(key) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(key) || "[]");
+    return new Set(Array.isArray(stored) ? stored.filter(value => typeof value === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeRevealedFold(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify([...value]));
+  } catch {
+    // Private browsing may refuse storage; the fold then starts closed.
+  }
+}
+
+/// A Session under its Workspace, on the Desktop's grid: the app tile in the
+/// 18px icon column with its status dot on the corner, then the title and,
+/// when there is something to say, a second line. State only changes colour;
+/// a row keeps its height.
+function SidebarSessionRow({ session, workspace, active, acknowledgedLifecycle, onOpen, onContextMenu }) {
+  const summary = sessionRowSummary(session);
+  const mark = resolveDrawnActivityMark(session.agentStatus, acknowledgedLifecycle);
+  // Working, waiting, failed, or done and not yet seen: the title steps up a
+  // tier so the rows that want something stand out of a long list.
+  const live = Boolean(mark && mark !== "exited");
+  const lineTone = { attention: "ask", danger: "fail", live: "work" }[summary.tone] || (live ? "lively" : "rest");
+  return (
+    <button
+      type="button"
+      className={`session-row${active ? " active" : ""}${live ? " live" : ""}${summary.text ? " two" : ""}`}
+      aria-current={active ? "page" : undefined}
+      onClick={onOpen}
+      onContextMenu={onContextMenu}
+    >
+      <span className="tree-icon session-row-icon">
+        <SessionPresetIcon kind={sessionProvider(session)} />
+        <ActivityDot session={session} />
+      </span>
+      <span className="session-row-text">
+        <span className="session-row-title">{terminalTabTitle(session, workspace)}</span>
+        {summary.text && <span className={`session-row-summary ${lineTone}`}>{summary.text}</span>}
+      </span>
+    </button>
+  );
+}
+
+/// A branch in monospace with its `feat/…/` prefix a step quieter.
+function BranchName({ branch }) {
+  const { prefix, name } = branchParts(branch);
+  return (
+    <span className="branch lane-branch">
+      {prefix && <span className="branch-prefix">{prefix}</span>}
+      {name}
+    </span>
+  );
+}
+
+/// What a folded Project keeps of what it hides: a dot per Session with a
+/// state, then how many Sessions there are.
+function FoldSummary({ sessions, acknowledgments }) {
+  const marks = sessions
+    .map(session => resolveDrawnActivityMark(session.agentStatus, acknowledgments[session.id] ?? null))
+    .filter(mark => mark && mark !== "exited")
+    .slice(0, 6);
+  if (!sessions.length) return null;
+  return (
+    <span className="fold-summary" aria-label={`${sessions.length} session${sessions.length === 1 ? "" : "s"}`}>
+      {marks.map((mark, index) => <ActivityDot key={index} mark={mark} />)}
+      <span className="fold-count">{sessions.length}</span>
+    </span>
+  );
+}
+
 // Memoized: App re-renders on every terminal and Agent update, and the
 // navigation only changes with the roster, the selection, or a drag.
 export const Sidebar = memo(SidebarView);
@@ -399,14 +472,19 @@ export const Sidebar = memo(SidebarView);
 function SidebarView({
   catalog,
   activeWorkspace,
+  activeSession = null,
+  hostName = "",
   expandedProjects,
   tabsForWorkspace,
   connection,
+  onOpenSession,
+  onSessionContextMenu,
   onToggleProject,
   onChooseWorkspace,
   onOpenWorkspace,
   onNewSessionInWorkspace,
   onNewSession,
+  onOpenSearch,
   onOpenSettings,
   onProjectContextMenu,
   onWorkspaceContextMenu,
@@ -425,6 +503,39 @@ function SidebarView({
   const [dragState, setDragState] = useState(null);
   const [dragOverID, setDragOverID] = useState(null);
   const [dragOverPosition, setDragOverPosition] = useState(null);
+  // Which folds the person opened. These are view preferences of this browser,
+  // so they live here and persist locally instead of round-tripping through
+  // App state.
+  const [revealedIdle, setRevealedIdle] = useState(() => readRevealedFold(foldStorageKeys.idleWorktrees));
+  const [revealedInactive, setRevealedInactive] = useState(() => readRevealedFold(foldStorageKeys.inactiveProjects));
+
+  const toggleIdle = projectID => setRevealedIdle(previous => {
+    const next = new Set(previous);
+    if (next.has(projectID)) next.delete(projectID);
+    else next.add(projectID);
+    return next;
+  });
+
+  // A Project is active while one of its Workspaces holds a Session, or while
+  // it is the one on screen; the rest fold behind one row, as on the Desktop.
+  const bands = useMemo(() => projectBands(catalog.projects, {
+    isActive: project => {
+      const workspaces = catalog.workspacesByProject.get(project.id) || [];
+      return workspaces.some(workspace => workspace.id === activeWorkspace)
+        || workspaces.some(workspace => tabsForWorkspace(workspace.id).length > 0);
+    },
+    lastActiveAt: project => projectLastActiveAt(catalog.workspacesByProject.get(project.id) || []),
+  }), [activeWorkspace, catalog, tabsForWorkspace]);
+  const inactiveOpen = revealedInactive.has("all") || Boolean(dragState);
+  const listed = inactiveOpen ? [...bands.pinned, ...bands.active, ...bands.inactive] : [...bands.pinned, ...bands.active];
+
+  useEffect(() => {
+    writeRevealedFold(foldStorageKeys.idleWorktrees, revealedIdle);
+  }, [revealedIdle]);
+
+  useEffect(() => {
+    writeRevealedFold(foldStorageKeys.inactiveProjects, revealedInactive);
+  }, [revealedInactive]);
 
   const beginDrag = (kind, id, projectID, event) => {
     event.dataTransfer.effectAllowed = "move";
@@ -489,13 +600,38 @@ function SidebarView({
 
   return (
     <aside className="sidebar" aria-label="Projects and workspaces">
-      <div className="brand">
-        <img className="brand-mark" src={webAssetURL("icon.svg")} alt="Warren" />
-        {isBuild && <span className="build-badge">Build</span>}
-        <span className={connectionClassName("connection", connection)}>
+      <div className={connectionClassName("host-identity", connection)}>
+        <span className="host-tile" aria-hidden="true">
+          {monogram(hostName || "Warren").toLowerCase()}
           <span className="connection-dot" />
-          <span>{connection.message}</span>
         </span>
+        <span className="host-text">
+          <span className="host-name">{hostName || "Warren"}</span>
+          <span className="host-status">{connection.message}</span>
+        </span>
+        {isBuild && <span className="build-badge">Build</span>}
+        {onOpenSearch && (
+          <button type="button" className="tree-icon-button" aria-label="Search projects" title="Search" onClick={onOpenSearch}>
+            <SearchIcon />
+          </button>
+        )}
+      </div>
+      <div className="sidebar-tabs">
+        <h2 className="sidebar-tab">
+          Projects
+          {catalog.projects.length > 0 && <span className="sidebar-tab-count">{catalog.projects.length}</span>}
+        </h2>
+        <button
+          type="button"
+          className="tree-icon-button"
+          disabled={!activeWorkspace || creatingSession}
+          aria-busy={creatingSession || undefined}
+          aria-label="New session"
+          title="New session"
+          onClick={onNewSession}
+        >
+          <PlusIcon />
+        </button>
       </div>
       <div
         className="sidebar-scroll"
@@ -504,12 +640,16 @@ function SidebarView({
         onFocus={roving.onFocus}
         onKeyDown={roving.onKeyDown}
       >
-        <div className="section-label">Projects</div>
-        {catalog.projects.length ? catalog.projects.map(project => {
+        {listed.length ? listed.map((project, projectIndex) => {
           const workspaces = catalog.workspacesByProject.get(project.id) || [];
           const open = expandedProjects.has(project.id);
+          const previousOpen = projectIndex > 0 && expandedProjects.has(listed[projectIndex - 1].id);
+          const projectSessions = open ? [] : workspaces.flatMap(workspace => tabsForWorkspace(workspace.id));
           return (
-            <section className={`project${open ? " open" : ""}`} key={project.id}>
+            <section
+              className={`project${open ? " open" : ""}${!open && projectIndex > 0 && !previousOpen ? " packed" : ""}`}
+              key={project.id}
+            >
               <div
                 className={`project-toggle${dragOverID === project.id ? " drag-over" : ""}${dragOverID === project.id && dragOverPosition === "before" ? " drag-before" : ""}${dragOverID === project.id && dragOverPosition === "after" ? " drag-after" : ""}`}
                 onContextMenu={event => onProjectContextMenu(event, project)}
@@ -525,9 +665,11 @@ function SidebarView({
                   aria-expanded={open}
                   onClick={() => onToggleProject(project.id)}
                 >
-                  <span className="branch">{project.name}</span>
+                  <span className="tree-icon">
+                    <span className="project-tile" style={{ "--tint": identityTint(project.id) }} aria-hidden="true">{monogram(project.name)}</span>
+                  </span>
+                  <span className="group-name">{project.name}</span>
                   {project.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
-                  <span className="project-count">({workspaces.length})</span>
                 </button>
                 {workspaces[0] && (
                   <button
@@ -545,22 +687,34 @@ function SidebarView({
                     <PlusIcon />
                   </button>
                 )}
+                {!open && <FoldSummary sessions={projectSessions} acknowledgments={acknowledgments} />}
                 <button
                   type="button"
                   className="project-chevron"
                   aria-label={open ? `Collapse ${project.name}` : `Expand ${project.name}`}
                   onClick={() => onToggleProject(project.id)}
                 >
-                  <span className="chevron">{ChevronRightIcon}</span>
+                  <span className="chevron">{ChevronDownSmallIcon}</span>
                 </button>
               </div>
               <div className="workspace-list">
-                {workspaces.map(workspace => {
-                  const creating = creatingWorkspaceIDs.has(workspace.id);
+                {(() => {
+                  const { shown, idle } = partitionWorkspaces(
+                    workspaces,
+                    workspaceID => tabsForWorkspace(workspaceID).length,
+                    activeWorkspace,
+                  );
+                  const idleOpen = revealedIdle.has(project.id) || Boolean(dragState);
+                  const visible = idleOpen ? workspaces : shown;
                   return (
+                    <>
+                {visible.map(workspace => {
+                  const creating = creatingWorkspaceIDs.has(workspace.id);
+                  const sessions = tabsForWorkspace(workspace.id);
+                  return (
+                    <div className={`lane${sessions.length ? " has-sessions" : ""}`} key={workspace.id}>
                     <div
-                      className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}${creating ? " pending" : ""}${dragOverID === workspace.id ? " drag-over" : ""}`}
-                      key={workspace.id}
+                      className={`workspace-row${workspace.id === activeWorkspace ? " active" : ""}${sessions.length ? " has-sessions" : ""}${creating ? " pending" : ""}${dragOverID === workspace.id ? " drag-over" : ""}`}
                       aria-busy={creating || undefined}
                       onContextMenu={event => onWorkspaceContextMenu(event, workspace)}
                       draggable
@@ -577,16 +731,47 @@ function SidebarView({
                         onClick={() => onChooseWorkspace(workspace.id)}
                         onDoubleClick={() => onOpenWorkspace(workspace.id)}
                       >
-                        {workspace.mergeState === "merged"
-                          ? <MergedBadge tabs={tabsForWorkspace(workspace.id)} />
-                          : <ActivityDot mark={highestMark(tabsForWorkspace(workspace.id), acknowledgments)} />}
+                        <span className="tree-icon">
+                          {workspace.mergeState === "merged"
+                            ? <MergedBadge tabs={sessions} />
+                            : <BranchIcon />}
+                        </span>
+                        <BranchName branch={workspace.branch || workspace.name || "Workspace"} />
                         {workspace.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
-                        <span className="branch">{workspace.branch || workspace.name || "Workspace"}</span>
                       </button>
                       {creating && <span className="workspace-pending" role="status">Creating…</span>}
                     </div>
+                    {sessions.map(session => (
+                      <SidebarSessionRow
+                        key={session.id}
+                        session={session}
+                        workspace={workspace}
+                        active={session.id === activeSession && workspace.id === activeWorkspace}
+                        acknowledgedLifecycle={acknowledgments[session.id] ?? null}
+                        onOpen={() => onOpenSession?.(workspace.id, session.id)}
+                        onContextMenu={event => onSessionContextMenu?.(event, session)}
+                      />
+                    ))}
+                    </div>
                   );
                 })}
+                {idle.length > 0 && !dragState && (
+                  <button
+                    type="button"
+                    className="idle-worktrees"
+                    aria-expanded={idleOpen}
+                    onClick={() => toggleIdle(project.id)}
+                  >
+                    <span className="tree-icon"><BranchIcon /></span>
+                    {idleOpen
+                      ? <span className="idle-label">Hide idle worktrees</span>
+                      : <span className="idle-label"><b>{idle.length}</b> idle worktree{idle.length === 1 ? "" : "s"}</span>}
+                    <span className={`idle-chevron${idleOpen ? " open" : ""}`}>{ChevronDownSmallIcon}</span>
+                  </button>
+                )}
+                    </>
+                  );
+                })()}
                 {dragState?.kind === "workspace" && dragState.projectID === project.id && (
                   <div
                     className={`sidebar-drop-end${dragOverID === "__workspace_end" ? " drag-over" : ""}`}
@@ -606,7 +791,29 @@ function SidebarView({
               </div>
             </section>
           );
-        }) : <div className="workspace-row">No projects</div>}
+        }) : <div className="sidebar-empty">No projects</div>}
+        {bands.inactive.length > 0 && (
+          <button
+            type="button"
+            className="idle-worktrees inactive-projects"
+            aria-expanded={inactiveOpen}
+            onClick={() => setRevealedInactive(inactiveOpen ? new Set() : new Set(["all"]))}
+          >
+            <span className="tree-icon">
+              <span className="project-stack" aria-hidden="true">
+                {bands.inactive.slice(0, 3).map(project => (
+                  <span className="project-tile" style={{ "--tint": identityTint(project.id) }} key={project.id}>
+                    {monogram(project.name)}
+                  </span>
+                ))}
+              </span>
+            </span>
+            {inactiveOpen
+              ? <span className="idle-label">Hide inactive projects</span>
+              : <span className="idle-label"><b>{bands.inactive.length}</b> inactive project{bands.inactive.length === 1 ? "" : "s"}</span>}
+            <span className={`idle-chevron${inactiveOpen ? " open" : ""}`}>{ChevronDownSmallIcon}</span>
+          </button>
+        )}
         {dragState?.kind === "project" && (
           <div
             className={`sidebar-drop-end${dragOverID === "__project_end" ? " drag-over" : ""}`}
@@ -625,18 +832,9 @@ function SidebarView({
         )}
       </div>
       <footer className="sidebar-footer">
-        <button
-          type="button"
-          className="footer-new-session"
-          disabled={!activeWorkspace || creatingSession}
-          aria-busy={creatingSession || undefined}
-          onClick={onNewSession}
-        >
-          <PlusIcon />
-          <span>{creatingSession ? "Starting…" : "New session"}</span>
-        </button>
-        <button type="button" className="chrome-button" aria-label="Settings" onClick={onOpenSettings}>
-          <SettingsIcon />
+        <button type="button" className="footer-settings" onClick={onOpenSettings}>
+          <span className="footer-tile" aria-hidden="true"><SettingsIcon /></span>
+          <span>Settings</span>
         </button>
       </footer>
     </aside>
@@ -645,153 +843,208 @@ function SidebarView({
 
 export const TopBar = memo(TopBarView);
 
+/// The one Session this window shows.
+///
+/// The Web client has no split panes, so this header names the Session and
+/// holds what acts on it; moving between Sessions is the sidebar's and the
+/// phone pill strip's job, and there is no strip of Tabs here pretending the
+/// window holds more than one.
 function TopBarView({
-  tabs,
-  activeSession,
-  workspace,
-  onAttachSession,
+  session = null,
+  workspace = null,
   onNewSession,
   onOpenMenu,
   onOpenSearch,
   onToggleGit,
   gitActive,
-  onTabContextMenu,
-  pendingSessionID = null,
   creatingSession = false,
+  agentToggle = null,
 }) {
-  const tabRefs = useRef(new Map());
-  const tabsRef = useRef(null);
-  const [hasOverflow, setHasOverflow] = useState(false);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(false);
-
-  const updateOverflow = useCallback(() => {
-    const el = tabsRef.current;
-    if (!el) return;
-    const maxScrollLeft = el.scrollWidth - el.clientWidth;
-    setHasOverflow(maxScrollLeft > 1);
-    setCanScrollLeft(el.scrollLeft > 1);
-    setCanScrollRight(el.scrollLeft < maxScrollLeft - 1);
-  }, []);
-
-  useEffect(() => {
-    const el = tabsRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver(updateOverflow);
-    observer.observe(el);
-    el.addEventListener("scroll", updateOverflow, { passive: true });
-    window.addEventListener("resize", updateOverflow);
-    updateOverflow();
-    return () => {
-      observer.disconnect();
-      el.removeEventListener("scroll", updateOverflow);
-      window.removeEventListener("resize", updateOverflow);
-    };
-  }, [updateOverflow, tabs]);
-
-  useEffect(() => {
-    if (!activeSession) return;
-    const node = tabRefs.current.get(activeSession);
-    node?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" });
-  }, [activeSession, tabs]);
-
-  const scrollTabs = useCallback(direction => {
-    const el = tabsRef.current;
-    if (!el) return;
-    const distance = Math.max(160, el.clientWidth * 0.8);
-    el.scrollBy({ left: direction === "left" ? -distance : distance, behavior: "smooth" });
-  }, []);
-
-  const handleTabListKeyDown = event => {
-    if (!tabs.length) return;
-    const focused = tabs.findIndex(session => tabRefs.current.get(session.id) === event.target);
-    const current = focused >= 0 ? focused : Math.max(0, tabs.findIndex(session => session.id === activeSession));
-    const next = rovingIndex(event.key, current, tabs.length, { orientation: "horizontal" });
-    if (next < 0) return;
-    event.preventDefault();
-    const session = tabs[next];
-    if (!session) return;
-    if (pendingSessionID || creatingSession) return;
-    onAttachSession(session.id);
-    tabRefs.current.get(session.id)?.focus();
-  };
+  const sessionTitle = session ? terminalTabTitle(session, workspace || {}) : "";
+  const fallbackTitle = workspace?.branch || workspace?.name || "";
 
   return (
     <header className="topbar">
       <button type="button" className="menu-button" aria-label="Open navigation" onClick={onOpenMenu}>{MenuIcon}</button>
-      <div className="tabs-wrap">
-        {hasOverflow && canScrollLeft && (
-          <button
-            type="button"
-            className="tabs-chevron tabs-chevron-left"
-            aria-label="Earlier tabs"
-            onClick={() => scrollTabs("left")}
-          >
-            {ChevronLeftIcon}
-          </button>
-        )}
-        <div
-          ref={tabsRef}
-          className={`tabs${canScrollLeft ? " fade-left" : ""}${canScrollRight ? " fade-right" : ""}`}
-          role="tablist"
-          aria-label="Sessions"
-          onKeyDown={handleTabListKeyDown}
-        >
-          {tabs.map(session => {
-            const active = session.id === activeSession;
-            const pending = session.id === pendingSessionID;
-            return (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={active}
-                tabIndex={active ? 0 : -1}
-                className={`tab${active ? " active" : ""}${pending ? " pending" : ""}`}
-                disabled={Boolean(pendingSessionID) || creatingSession}
-                aria-busy={pending || undefined}
-                key={session.id}
-                onClick={() => onAttachSession(session.id)}
-                onContextMenu={event => onTabContextMenu(event, session)}
-                ref={node => {
-                  if (node) tabRefs.current.set(session.id, node);
-                  else tabRefs.current.delete(session.id);
-                }}
-              >
-                <ActivityDot session={session} />
-                {session.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
-                <span className="tab-title">{terminalTabTitle(session, workspace)}</span>
-              </button>
-            );
-          })}
-        </div>
-        {hasOverflow && canScrollRight && (
-          <button
-            type="button"
-            className="tabs-chevron tabs-chevron-right"
-            aria-label="More tabs"
-            onClick={() => scrollTabs("right")}
-          >
-            {ChevronRightIcon}
-          </button>
-        )}
+      <div className="topbar-title" title={sessionTitle || fallbackTitle || "Session"}>
+        <span className="topbar-session">{sessionTitle || fallbackTitle || "Session"}</span>
       </div>
-      <button type="button" className="new-session" aria-label="New shell" disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={onNewSession}>
-        <PlusIcon />
-      </button>
       <div className="chrome-spacer" />
-      <button
-        type="button"
-        className={`chrome-button${gitActive ? " active" : ""}`}
-        aria-label="Toggle Git panel"
-        aria-pressed={gitActive}
-        onClick={onToggleGit}
-      >
-        {GitIcon}
-      </button>
-      <button type="button" className="chrome-button" aria-label="Search projects" onClick={onOpenSearch}>
-        <SearchIcon />
-      </button>
+      {agentToggle && (
+        <div className="view-toggle" role="group" aria-label="Session view">
+          <button type="button" aria-pressed={!agentToggle.active} onClick={() => agentToggle.onSelect("terminal")}>Terminal</button>
+          <button
+            type="button"
+            aria-pressed={agentToggle.active}
+            className={agentToggle.attention ? "has-attention" : undefined}
+            title={agentToggle.attention ? "Agent needs attention" : undefined}
+            onClick={() => agentToggle.onSelect("agent")}
+          >
+            Agent
+          </button>
+        </div>
+      )}
+      {/* The panels and "+" sit in one capsule, as on the Desktop. */}
+      <div className="chrome-capsule">
+        <button type="button" className="chrome-button topbar-search" aria-label="Search projects" onClick={onOpenSearch}>
+          <SearchIcon />
+        </button>
+        <button
+          type="button"
+          className={`chrome-button${gitActive ? " active" : ""}`}
+          aria-label="Toggle Git panel"
+          aria-pressed={gitActive}
+          onClick={onToggleGit}
+        >
+          {GitIcon}
+        </button>
+        <button type="button" className="new-session" aria-label="New session" title="New session" disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={onNewSession}>
+          <PlusIcon />
+        </button>
+      </div>
     </header>
+  );
+}
+
+const backChevron = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M15 5l-7 7 7 7" />
+  </svg>
+);
+
+const rowChevron = (
+  <svg className="inbox-row-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M6 3.5 10.5 8 6 12.5" />
+  </svg>
+);
+
+/// The phone's home: every Session on the Host, by what it asks of you or by
+/// Project. Tapping a row pushes that Session's full-screen view over it.
+///
+/// It stays mounted while a Session is open so coming back keeps the scroll
+/// position, and it is inert then so it cannot take focus or taps.
+export function MobileInbox({
+  open,
+  catalog,
+  hostName = "",
+  connection,
+  activeSession = null,
+  grouping = "status",
+  onGroupingChange,
+  onOpenSession,
+  onNewSession,
+  onOpenSearch,
+  onOpenSettings,
+  onSessionContextMenu,
+  creatingSession = false,
+  installHint = null,
+}) {
+  const acknowledgments = useContext(ActivityAcknowledgmentsContext);
+  const sections = useMemo(
+    () => inboxSections(catalog, grouping),
+    [catalog, grouping],
+  );
+  const summary = useMemo(() => inboxSummary(catalog), [catalog]);
+  const empty = sections.length === 0;
+
+  return (
+    <section
+      className={`mobile-inbox${open ? " open" : ""}`}
+      aria-label="Sessions"
+      aria-hidden={open ? undefined : true}
+      inert={open ? undefined : true}
+    >
+      <header className="inbox-bar">
+        <span className={connectionClassName("inbox-host", connection)} title={connection.message}>
+          <span className="inbox-host-tile" aria-hidden="true">
+            {monogram(hostName || "Warren")}
+            <span className="connection-dot" />
+          </span>
+          <span className="inbox-host-text">
+            <span className="inbox-host-name">{hostName || "Warren"}</span>
+            <span className="inbox-host-status">{connection.message}</span>
+          </span>
+        </span>
+        <button type="button" className="inbox-icon-button" aria-label="Search" onClick={onOpenSearch}>
+          <SearchIcon />
+        </button>
+        <button type="button" className="inbox-icon-button" aria-label="Settings" onClick={onOpenSettings}>
+          <SettingsIcon />
+        </button>
+        <button
+          type="button"
+          className="inbox-new"
+          disabled={creatingSession}
+          aria-busy={creatingSession || undefined}
+          onClick={onNewSession}
+        >
+          <PlusIcon />
+          <span>{creatingSession ? "Starting…" : "New"}</span>
+        </button>
+      </header>
+      <div className="inbox-scroll">
+        <div className="inbox-heading">
+          <h2>Sessions</h2>
+          <p>{summary}</p>
+        </div>
+        {installHint}
+        <div className="inbox-grouping" role="radiogroup" aria-label="Group sessions">
+          {[["status", "By status"], ["project", "By project"]].map(([value, label]) => (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={grouping === value}
+              key={value}
+              onClick={() => onGroupingChange?.(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {empty ? (
+          <div className="inbox-empty">
+            <p className="inbox-empty-title">Nothing running yet</p>
+            <p className="inbox-empty-hint">Start a shell or an Agent in one of this Host's Projects.</p>
+          </div>
+        ) : sections.map(section => (
+          <section className={`inbox-section inbox-section-${section.id.split(":")[0]}`} key={section.id} aria-label={section.title}>
+            <h3 className="inbox-section-title">
+              <span>{section.title}</span>
+              <span className="inbox-section-count">{section.rows.length}</span>
+            </h3>
+            <ul className="inbox-list">
+              {section.rows.map(({ session, workspace, project }) => {
+                const summaryLine = sessionRowSummary(session);
+                const context = grouping === "project"
+                  ? (workspace?.branch || workspace?.name || "")
+                  : [project?.name, workspace?.branch || workspace?.name].filter(Boolean).join(" · ");
+                return (
+                  <li key={session.id}>
+                    <button
+                      type="button"
+                      className={`inbox-row${session.id === activeSession ? " current" : ""}`}
+                      onClick={() => onOpenSession?.(session.workspace, session.id)}
+                      onContextMenu={event => onSessionContextMenu?.(event, session)}
+                    >
+                      <span className="inbox-row-icon">
+                        <SessionPresetIcon kind={sessionProvider(session)} />
+                        <ActivityDot session={session} />
+                      </span>
+                      <span className="inbox-row-text">
+                        <span className="inbox-row-title">{terminalTabTitle(session, workspace || {})}</span>
+                        {summaryLine.text && <span className={`inbox-row-status ${summaryLine.tone}`}>{summaryLine.text}</span>}
+                        {context && <span className="inbox-row-context">{context}</span>}
+                      </span>
+                      {rowChevron}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -811,6 +1064,7 @@ export function MobileShell({
   onSessionContextMenu,
   pendingSessionID = null,
   creatingSession = false,
+  onBack = null,
 }) {
   const handleTabListKeyDown = event => {
     if (!tabs.length) return;
@@ -829,7 +1083,27 @@ export function MobileShell({
   return (
     <header className="mobile-shell">
       <div className="mobile-command">
-        <button type="button" className="menu-button" aria-label="Open navigation" onClick={onOpenMenu}>{MenuIcon}</button>
+        {onBack
+          ? <button type="button" className="menu-button back-button" aria-label="All sessions" onClick={onBack}>{backChevron}</button>
+          : <button type="button" className="menu-button" aria-label="Open navigation" onClick={onOpenMenu}>{MenuIcon}</button>}
+        {onBack ? (
+          // Pushed from the inbox, the header names the Session first and
+          // where it lives second, like a detail view's two-line title.
+          <div className="mobile-session-title" title={connection.message}>
+            <span className="mobile-session-name">
+              {(() => {
+                const current = tabs.find(session => session.id === activeSession);
+                return current ? terminalTabTitle(current, workspace || {}) : (workspace?.branch || workspace?.name || "Session");
+              })()}
+              <span className={connectionClassName("mobile-connection", connection)} aria-label={connection.message}>
+                <span className="connection-dot" />
+              </span>
+            </span>
+            <span className="mobile-session-place">
+              {[projectName, workspace?.branch || workspace?.name].filter(Boolean).join(" · ")}
+            </span>
+          </div>
+        ) : (
         <div className="mobile-workspace" title={connection.message}>
           <div className="mobile-workspace-context" aria-label="Project, workspace and branch">
             {projectName && (
@@ -850,6 +1124,7 @@ export function MobileShell({
             <span className="connection-dot" />
           </span>
         </div>
+        )}
         {agentSession && (
           <div className="agent-view-toggle" role="group" aria-label="View">
             <button
@@ -1030,30 +1305,19 @@ export function ContextMenu({ menu, onClose }) {
   );
 }
 
-export function PresetBar({ presets, onCreateSession, onConfigureSession, creatingKind = null }) {
-  return (
-    <nav className="presetbar" aria-label="Session presets">
-      {presets.map(preset => (
-        <button
-          type="button"
-          className={`preset${creatingKind === preset.kind ? " pending" : ""}`}
-          key={preset.kind}
-          disabled={Boolean(creatingKind)}
-          aria-busy={creatingKind === preset.kind || undefined}
-          onClick={() => {
-            if (preset.isAgent && onConfigureSession) onConfigureSession(preset.kind);
-            else onCreateSession(preset.kind);
-          }}
-        >
-          <SessionPresetIcon kind={preset.kind} />
-          <span>{creatingKind === preset.kind ? "Starting…" : preset.label}</span>
-        </button>
-      ))}
-    </nav>
-  );
-}
+const shareIcon = (
+  <svg className="share-glyph" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M8 1.5v8.5M5 4.5l3-3 3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M5.5 7H4a1 1 0 0 0-1 1v5.5a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-1.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+  </svg>
+);
 
-export function UnauthorizedScreen({ onReconnect }) {
+/// The whole screen when this browser holds no working link to a Host.
+///
+/// It is the first thing a new device sees, so it explains where a link comes
+/// from rather than only asking for one. `expired` is the returning case: this
+/// browser had a link and the Host no longer accepts it.
+export function WelcomeScreen({ onConnect, expired = false, installHint = false }) {
   const [inputValue, setInputValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -1065,45 +1329,80 @@ export function UnauthorizedScreen({ onReconnect }) {
     setError("");
     setSubmitting(true);
     try {
-      await onReconnect?.(trimmed);
+      await onConnect?.(trimmed);
     } catch (err) {
-      setError(err?.message || "Authentication failed");
+      setError(err?.message || "Warren could not connect with that link");
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div className="empty-state auth-state">
-      {lockIcon}
-      <div className="empty-title">Authentication Required</div>
-      <p className="empty-hint">
-        Your Web link is missing, expired, or invalid. Copy a fresh Web link from the Warren menu bar, or paste a new link or token below.
-      </p>
-      <form className="auth-form" onSubmit={handleSubmit}>
-        <input
-          type="text"
-          className="auth-token-input"
-          placeholder="Paste Web link or token (#t=…)"
-          value={inputValue}
-          onChange={event => {
-            setInputValue(event.target.value);
-            if (error) setError("");
-          }}
-          autoFocus
-          spellCheck={false}
-          autoComplete="off"
-        />
-        <button
-          type="submit"
-          className="empty-action auth-action"
-          disabled={!inputValue.trim() || submitting}
-        >
-          {submitting ? "Connecting…" : "Reconnect"}
-        </button>
-      </form>
-      {error && <p className="auth-error" role="alert">{error}</p>}
+    <div className="welcome-screen" role="main" aria-labelledby="welcome-title">
+      <div className="welcome-card">
+        <img className="welcome-icon" src={webAssetURL("icon.svg")} alt="" width="56" height="56" />
+        <h2 id="welcome-title" className="welcome-title">
+          {expired ? "This link no longer works" : "Connect to your Warren Host"}
+        </h2>
+        <p className="welcome-lead">
+          {expired
+            ? "The Host stopped accepting this browser's link. Copy a fresh one from Warren (Web › Copy Secure Web URL) and paste it below."
+            : "Warren runs on your own Mac or server. Open a Web link from it, and this browser connects straight to that Host."}
+        </p>
+        {!expired && (
+          <ol className="welcome-steps">
+            <li>Open Warren on your Mac.</li>
+            <li>In the menu bar, choose <strong>Web › Copy Secure Web URL</strong>.</li>
+            <li>Open the link here, or paste it below.</li>
+          </ol>
+        )}
+        <form className="welcome-form" onSubmit={handleSubmit}>
+          <input
+            type="text"
+            className="welcome-input"
+            placeholder="Paste a Web link"
+            aria-label="Web link"
+            value={inputValue}
+            onChange={event => {
+              setInputValue(event.target.value);
+              if (error) setError("");
+            }}
+            autoFocus={!installHint}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            autoComplete="off"
+            enterKeyHint="go"
+          />
+          <button type="submit" className="welcome-action" disabled={!inputValue.trim() || submitting}>
+            {submitting ? "Connecting…" : "Connect"}
+          </button>
+        </form>
+        {error && <p className="welcome-error" role="alert">{error}</p>}
+        {installHint && (
+          <p className="welcome-install">
+            On iPhone, add Warren to your Home Screen first: tap {shareIcon} Share, then <strong>Add to Home Screen</strong>.
+            The installed app keeps its own link, so paste it there.
+          </p>
+        )}
+      </div>
     </div>
+  );
+}
+
+/// A one-line invitation to install, for an iPhone or iPad Safari tab that is
+/// already connected. Dismissing it keeps it away for two weeks.
+export function InstallHint({ onDismiss, inline = false }) {
+  return (
+    <aside className={`install-hint${inline ? " inline" : ""}`} aria-label="Install Warren">
+      <img src={webAssetURL("icon.svg")} alt="" width="28" height="28" />
+      <p>
+        Install Warren: tap {shareIcon} Share, then <strong>Add to Home Screen</strong>.
+      </p>
+      <button type="button" className="install-hint-close" aria-label="Dismiss" onClick={onDismiss}>
+        <CloseIcon />
+      </button>
+    </aside>
   );
 }
 
@@ -1121,8 +1420,10 @@ export function EmptyTerminal({
   let hidden = false;
 
   if (override) {
+    // The Welcome screen covers the whole window for this case.
     if (override.message === "unauthorized") {
-      content = <UnauthorizedScreen onReconnect={onReconnect} />;
+      hidden = true;
+      content = null;
     } else {
       content = override.loading ? <Loading message={override.message} /> : <span>{override.message}</span>;
     }

@@ -94,8 +94,10 @@ struct WarrenDesktopSidebarHeader: View {
                     hostTile(tokens: tokens)
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 4) {
+                            // 13 rather than the design's 13.5, like a
+                            // Session title: a Chinese name sets larger.
                             Text(host?.name ?? "This Mac")
-                                .font(.system(size: 13.5, weight: .semibold))
+                                .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(tokens.foreground.opacity(0.92))
                                 .lineLimit(1)
                                 .truncationMode(.tail)

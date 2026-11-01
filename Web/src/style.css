@@ -1,17 +1,19 @@
 :root {
   color-scheme: dark;
 
-  /* Tier 1: Ember primitives. Values mirror WarrenDesignSystem + Ember
-     terminal palette so Web chrome and terminals share one color family. */
-  --ember-bg: #151110;
-  --ember-chrome: #1c1918;
-  --ember-popover: #201e1c;
-  --ember-input: #181615;
-  --ember-muted: #2a2827;
-  --ember-ring: #3a3837;
+  /* Tier 1: primitives. Values mirror WarrenColorTokens.dark, the Desktop's
+     Workbench palette: #0B0B0B cards on a black window, #1F1F1F hairlines and
+     an #EDEDED ink, so Web chrome, Desktop chrome and terminals share one
+     neutral family. */
+  --ember-bg: #0b0b0b;
+  --ember-chrome: #121212;
+  --ember-popover: #1a1a1a;
+  --ember-input: #111111;
+  --ember-muted: #1c1c1c;
+  --ember-ring: #3a3a3a;
   --ember-border-strong: #4b4b4b;
-  --ember-fg: #eae8e6;
-  --ember-sub: #a8a5a3;
+  --ember-fg: #ededed;
+  --ember-sub: #8a8a8a;
   --ember-highlight: #e07850;
   --ember-amber: #f59e0b;
   --ember-red: #dc6b6b;
@@ -22,29 +24,47 @@
   --ember-info: #61afef;
   --ember-white: #ffffff;
 
+  /* The Workbench: a black window with cards on it, and the sidebar tree's
+     five ink tiers (WarrenSidebarInk). */
+  --workbench-backdrop: #000000;
+  --workbench-card: var(--ember-bg);
+  --workbench-line: #1f1f1f;
+  --workbench-raised: #1a1a1a;
+  --workbench-track: rgba(237, 237, 237, 0.055);
+  --workbench-pill-line: rgba(255, 255, 255, 0.06);
+  --tree-t1: #ededed;
+  --tree-t2: #d4d4d4;
+  --tree-t3: #999999;
+  --tree-t4: #7a7a7a;
+  --tree-t5: #575757;
+  --tree-branch: #6b6b6b;
+  --tree-hover: rgba(237, 237, 237, 0.05);
+  --tree-selected: rgba(237, 237, 237, 0.085);
+  --tree-tile: rgba(237, 237, 237, 0.07);
+
   /* Tier 2: semantic roles — the only tier components reference. */
   --color-bg-page: var(--ember-bg);
   --color-bg-surface: var(--ember-chrome);
-  --color-bg-sidebar: var(--ember-chrome);
+  --color-bg-sidebar: var(--workbench-card);
   --color-bg-raised: var(--ember-popover);
   --color-bg-sunken: var(--ember-input);
   --color-bg-overlay: rgba(0, 0, 0, 0.5);
   --color-bg-scrim-soft: rgba(0, 0, 0, 0.35);
-  --color-bg-chrome-translucent: rgba(28, 25, 24, 0.96);
+  --color-bg-chrome-translucent: rgba(18, 18, 18, 0.96);
   --color-text-primary: var(--ember-fg);
   --color-text-secondary: var(--ember-sub);
   --color-text-tertiary: color-mix(in srgb, var(--ember-sub) 68%, transparent);
-  --color-text-selected: rgba(234, 232, 230, 0.92);
+  --color-text-selected: rgba(237, 237, 237, 0.92);
   --color-text-disabled: color-mix(in srgb, var(--ember-fg) 42%, transparent);
   --color-text-on-accent: var(--ember-bg);
   --color-text-on-danger: var(--ember-white);
   --color-text-danger: var(--ember-red-bright);
   --color-text-link: var(--ember-blue);
   --color-shimmer-highlight: var(--ember-white);
-  --color-border-subtle: var(--ember-muted);
+  --color-border-subtle: var(--workbench-line);
   --color-border-default: var(--ember-ring);
   --color-border-strong: var(--ember-border-strong);
-  --color-border-separator: var(--ember-muted);
+  --color-border-separator: var(--workbench-line);
   --color-focus-ring: var(--ember-highlight);
   --color-accent-text: var(--ember-highlight);
   /* Compatibility aliases for older surfaces; components should prefer the
@@ -59,9 +79,9 @@
   --fill-status-success: rgba(126, 198, 153, 0.14);
   --color-brand-solid: var(--ember-amber);
   --color-selection: rgba(224, 120, 80, 0.32);
-  --color-status-working: var(--ember-amber);
-  --color-status-waiting: var(--ember-yellow);
-  --color-status-ready: var(--ember-green);
+  --color-status-working: var(--ember-green);
+  --color-status-waiting: var(--ember-highlight);
+  --color-status-ready: var(--ember-info);
   --color-status-failed: var(--ember-red);
   --color-status-exited: var(--ember-sub);
   --color-status-connecting: var(--ember-sub);
@@ -70,10 +90,10 @@
   --color-status-danger: var(--ember-red);
   --color-status-info: var(--ember-info);
 
-  --fill-hover: rgba(234, 232, 230, 0.07);
-  --fill-selected: rgba(234, 232, 230, 0.1);
-  --fill-active: rgba(234, 232, 230, 0.14);
-  --fill-tertiary: rgba(234, 232, 230, 0.05);
+  --fill-hover: rgba(237, 237, 237, 0.07);
+  --fill-selected: rgba(237, 237, 237, 0.1);
+  --fill-active: rgba(237, 237, 237, 0.14);
+  --fill-tertiary: rgba(237, 237, 237, 0.05);
 
   /* Component aliases. Keep Agent, card, input, and mobile surfaces on the
      same semantic palette so a visual adjustment never creates a client-only
@@ -267,6 +287,9 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
+  /* The app scrolls inside its own regions. Without this, iOS rubber-bands the
+     whole page, and an installed app shows the canvas behind it. */
+  overscroll-behavior: none;
   background: var(--color-bg-page);
   color: var(--color-text-primary);
 }
@@ -307,11 +330,9 @@ button:disabled {
   .menu-button,
   .chrome-button,
   .new-session,
-  .tabs-chevron,
-  .section-add,
   .project-add,
   .project-chevron,
-  .footer-new-session,
+  .footer-settings,
   .workspace-row-main,
   .project-toggle-main
 ):focus-visible {
@@ -382,25 +403,147 @@ button:disabled {
   border-inline-end: var(--border-hairline) solid var(--color-border-separator);
 }
 
-.brand {
+/* The sidebar's head names the Host this browser is connected to, as the
+   Desktop's does (WarrenDesktopSidebarMetrics): a 44px row, a 26px lettered
+   tile carrying the connection dot, the Host's name and the connection's own
+   words under it. */
+.host-identity {
   display: flex;
-  flex: 0 0 40px;
+  flex: 0 0 44px;
   align-items: center;
-  gap: 9px;
-  height: 40px;
-  padding-inline: var(--space-lg);
-  border-bottom: var(--border-hairline) solid var(--color-border-separator);
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
+  gap: 10px;
+  height: 44px;
+  margin-top: 6px;
+  padding: 0 10px 0 14px;
 }
 
-.brand-mark {
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  object-fit: cover;
-  outline: var(--outline-image);
-  outline-offset: -1px;
+.host-tile {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--tree-tile);
+  color: rgba(237, 237, 237, 0.8);
+  font: var(--weight-medium) 14px/1 var(--font-mono);
+}
+
+.host-tile .connection-dot {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 0 2px var(--color-bg-sidebar);
+}
+
+.host-identity.online .connection-dot {
+  background: var(--color-status-success);
+}
+
+.host-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.host-name,
+.host-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-name {
+  color: var(--tree-t1);
+  font-size: 13px;
+  font-weight: var(--weight-semibold);
+  line-height: 16px;
+}
+
+.host-status {
+  color: var(--tree-t4);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+/* A 24px quiet icon button: the head's search, the tab row's "+". */
+.tree-icon-button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--tree-t4);
+  cursor: pointer;
+}
+
+.tree-icon-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.tree-icon-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The Projects heading drawn as the Desktop's Projects / Tasks tab: 13px
+   semibold over a 1.5px rule that sits on the row's hairline. The Web has no
+   Tasks yet, so it is the one tab. */
+.sidebar-tabs {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  justify-content: space-between;
+  height: 36px;
+  margin: 0 8px 10px;
+  padding: 6px 2px 0 0;
+  border-bottom: 1px solid var(--workbench-line);
+}
+
+.sidebar-tab {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  height: 30px;
+  margin: 0;
+  padding: 8px 8px 0;
+  color: var(--tree-t1);
+  font-size: 13px;
+  font-weight: var(--weight-semibold);
+  line-height: 16px;
+  letter-spacing: -0.006em;
+}
+
+.sidebar-tab::after {
+  content: "";
+  position: absolute;
+  inset-inline: 8px;
+  bottom: -1px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--tree-t1);
+}
+
+.sidebar-tab-count {
+  color: var(--tree-t4);
+  font: var(--weight-medium) 10px var(--font-mono);
+  letter-spacing: 0;
+}
+
+.sidebar-tabs .tree-icon-button {
+  align-self: center;
+  margin-top: 4px;
 }
 
 .build-badge {
@@ -433,7 +576,7 @@ button:disabled {
 }
 
 .connection.online .connection-dot {
-  background: var(--color-status-ready);
+  background: var(--color-status-success);
 }
 
 /* A settling connection is retrying but not yet lost. The dot breathes instead
@@ -448,6 +591,12 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .mobile-inbox,
+  .mobile-inbox.open {
+    transition: none;
+    transform: none;
+  }
+
   .settling .connection-dot {
     animation: none;
     opacity: 0.55;
@@ -463,13 +612,11 @@ button:disabled {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
-  padding: var(--space-md) var(--space-lg) var(--space-lg);
+  padding: 0 8px 12px;
 }
 
 /* Edge fades are driven by the scroll offset itself, not by JavaScript.
-   `--scroll-fade-*` are registered as lengths so they can interpolate; the
-   keyframes below run on `animation-timeline: scroll(self ...)`, which keeps
-   the fade in step with the thumb for free and costs no per-frame renders.
+
    Browsers without scroll-driven animations simply keep a clean edge. */
 @property --scroll-fade-top {
   syntax: "<length>";
@@ -483,18 +630,6 @@ button:disabled {
   initial-value: 0px;
 }
 
-@property --scroll-fade-left {
-  syntax: "<length>";
-  inherits: false;
-  initial-value: 0px;
-}
-
-@property --scroll-fade-right {
-  syntax: "<length>";
-  inherits: false;
-  initial-value: 0px;
-}
-
 @keyframes scroll-fade-top-in {
   from { --scroll-fade-top: 0px; }
   to { --scroll-fade-top: var(--scroll-fade-size); }
@@ -503,16 +638,6 @@ button:disabled {
 @keyframes scroll-fade-bottom-out {
   from { --scroll-fade-bottom: var(--scroll-fade-size); }
   to { --scroll-fade-bottom: 0px; }
-}
-
-@keyframes scroll-fade-left-in {
-  from { --scroll-fade-left: 0px; }
-  to { --scroll-fade-left: var(--scroll-fade-size); }
-}
-
-@keyframes scroll-fade-right-out {
-  from { --scroll-fade-right: var(--scroll-fade-size); }
-  to { --scroll-fade-right: 0px; }
 }
 
 @supports (animation-timeline: scroll(self block)) {
@@ -570,80 +695,42 @@ button:disabled {
   }
 }
 
-.section-label {
-  padding: var(--space-md) 10px 5px;
-  color: var(--color-text-secondary);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-medium);
-  letter-spacing: 0.08em;
-  opacity: 0.7;
-  text-transform: uppercase;
-}
-
-.section-label-row {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-}
-
-.section-label-row .section-label {
-  flex: 1;
-}
-
-.section-label-toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  min-width: 0;
-  flex: 1;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  text-align: start;
-  cursor: pointer;
-  color: inherit;
-}
-
-.section-label-toggle .chevron {
-  opacity: 0.7;
-}
-
-.section-label-toggle .chevron.open {
-  transform: rotate(90deg);
-}
-
-.section-add {
+/* The tree, on the Desktop's grid (WarrenDesktopSidebarMetrics): every row has
+   8px of inner padding and a 7px corner, every leading icon sits centred in
+   one 18px column, and text starts 8px after it, 34px into the row at every
+   level. Nothing indents; the rows' heights and gaps carry the hierarchy. */
+.tree-icon {
+  position: relative;
   display: grid;
-  width: 24px;
-  height: 24px;
-  margin-bottom: 1px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
+  flex: none;
   place-items: center;
+  width: 18px;
 }
 
-.section-add:hover,
-.section-add:focus-visible {
-  background: var(--fill-hover);
-  color: var(--color-text-primary);
+.sidebar-empty {
+  padding: 6px 8px;
+  color: var(--tree-t4);
+  font-size: 12px;
 }
 
-.section-add svg {
-  width: 14px;
-  height: 14px;
+/* Groups sit 20px apart with no rule between them; a run of folded groups
+   packs 2px apart and reads as one list. */
+.project + .project {
+  margin-top: 20px;
+}
+
+.project.packed {
+  margin-top: 2px;
 }
 
 .project-toggle {
   display: flex;
   align-items: center;
-  gap: var(--space-xxs);
+  gap: 4px;
   width: 100%;
   height: 30px;
-  padding-inline: var(--space-sm) var(--space-md);
-  border-radius: var(--radius-sm);
+  padding-inline: 8px 4px;
+  border-radius: 7px;
 }
 
 .project-toggle.drag-over {
@@ -662,76 +749,141 @@ button:disabled {
 .project-toggle-main {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: 8px;
   min-width: 0;
   height: 100%;
   flex: 1;
+  padding: 0;
   border: 0;
   background: transparent;
+  color: inherit;
   text-align: start;
   cursor: pointer;
 }
 
-.project-toggle-main .branch {
-  color: var(--color-text-primary);
-  font-size: var(--text-base);
+/* A Project's lettered tile: a wash of its identity hue with the letter in
+   it. A Session's app icon is a solid tile, so solid reads as a program and
+   the wash as the place it lives. */
+.project-tile {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--tint, var(--tree-t4)) 18%, transparent);
+  color: var(--tint, var(--tree-t3));
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
 }
 
-.project-count {
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-regular);
-  font-variant-numeric: tabular-nums;
+.group-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tree-t1);
+  font-size: 13.5px;
+  font-weight: var(--weight-semibold);
   white-space: nowrap;
-  opacity: 0;
-  transition-property: opacity;
-  transition-duration: var(--duration-fast);
-  transition-timing-function: var(--ease-out);
+  /* The fade lives in a 24px end padding the text only reaches when it
+     overflows, so a name that fits is never dimmed (WarrenDesktopFadingName). */
+  padding-inline-end: 24px;
+  margin-inline-end: -24px;
+  mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
 }
 
+/* The chevron and "+" stay out of sight until the row is pointed at; a
+   folded group keeps its chevron so it reads as openable. */
 .project-add,
 .project-chevron {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
   flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-xs);
+  border-radius: 5px;
   background: transparent;
-  color: var(--color-text-secondary);
+  color: var(--tree-t4);
   cursor: pointer;
 }
 
-.project-add svg,
-.project-chevron svg {
-  width: 14px;
-  height: 14px;
+.project-add svg {
+  width: 13px;
+  height: 13px;
+}
+
+.project-add {
+  opacity: 0;
 }
 
 .project-add:disabled {
   cursor: default;
-  opacity: 0.45;
+}
+
+.project-chevron {
+  width: 14px;
+  color: var(--tree-t5);
+  opacity: 0;
+}
+
+.project:not(.open) .project-chevron,
+.project-toggle:hover .project-add:not(:disabled),
+.project-toggle:hover .project-chevron,
+.project-toggle:focus-within .project-add:not(:disabled),
+.project-toggle:focus-within .project-chevron {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .project-add:not(:disabled),
+  .project-chevron {
+    opacity: 1;
+  }
 }
 
 .chevron {
-  display: inline-grid;
+  display: grid;
   place-items: center;
   width: 12px;
   height: 12px;
-  color: var(--color-text-secondary);
+  transform: rotate(-90deg);
   transition-property: transform;
   transition-duration: var(--duration-base);
   transition-timing-function: var(--ease-out);
 }
 
 .chevron svg {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
 }
 
 .project.open .chevron {
-  transform: rotate(90deg);
+  transform: none;
+}
+
+/* What a folded group keeps of what it hides: a dot per Session with a
+   state, then the count in mono. */
+.fold-summary {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  margin-inline-start: 2px;
+}
+
+.fold-summary .activity {
+  width: 6px;
+  height: 6px;
+}
+
+.fold-count {
+  min-width: 10px;
+  margin-inline-start: 3px;
+  color: var(--tree-t5);
+  font: var(--weight-medium) 10.5px var(--font-mono);
+  text-align: end;
 }
 
 .workspace-list {
@@ -742,26 +894,31 @@ button:disabled {
   display: block;
 }
 
+/* Worktrees with Sessions sit 10px apart; two with none pack together. */
+.lane.has-sessions + .lane,
+.lane + .lane.has-sessions {
+  margin-top: 10px;
+}
+
 .workspace-row {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: 8px;
   width: 100%;
-  height: 28px;
-  padding-inline: var(--space-lg) var(--space-lg);
-  padding-inline-start: 26px;
+  height: 24px;
+  padding-inline: 8px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 7px;
   background: transparent;
+  color: var(--tree-branch);
   text-align: start;
   cursor: pointer;
-  color: var(--color-text-secondary);
 }
 
 .workspace-row-main {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: 8px;
   min-width: 0;
   height: 100%;
   flex: 1;
@@ -771,6 +928,68 @@ button:disabled {
   color: inherit;
   text-align: start;
   cursor: pointer;
+}
+
+.workspace-row-main .tree-icon,
+.idle-worktrees .tree-icon {
+  color: var(--tree-t5);
+}
+
+/* Folded Projects lead with their own tiles, overlapped as the Desktop stacks
+   them, so the row still says which Projects it hid. */
+.inactive-projects .tree-icon {
+  width: 28px;
+  justify-items: start;
+}
+
+.project-stack {
+  display: flex;
+  align-items: center;
+}
+
+.project-stack .project-tile {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  font-size: 8px;
+  box-shadow: 0 0 0 1.5px var(--workbench-card);
+}
+
+.project-stack .project-tile + .project-tile {
+  margin-inline-start: -5px;
+}
+
+.workspace-row-main .tree-icon svg,
+.idle-worktrees .tree-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.lane-branch {
+  min-width: 0;
+  overflow: hidden;
+  font: var(--weight-regular) 11px var(--font-mono);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  padding-inline-end: 20px;
+  margin-inline-end: -20px;
+  mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);
+}
+
+.branch-prefix {
+  opacity: 0.7;
+}
+
+/* A lone worktree the person picked, with no Session under it, carries the
+   selection itself; with Sessions listed, the selected Session does. */
+.workspace-row.active {
+  background: var(--tree-selected);
+  color: var(--tree-t3);
+}
+
+.workspace-row.active.has-sessions {
+  background: transparent;
 }
 
 .workspace-row.drag-over {
@@ -789,13 +1008,8 @@ button:disabled {
   opacity: 0.35;
 }
 
-.workspace-row.active {
-  background: var(--fill-selected);
-  color: var(--color-text-selected);
-}
-
 .workspace-row.pending {
-  color: var(--color-text-primary);
+  color: var(--tree-t3);
 }
 
 .workspace-row.pending .workspace-row-main {
@@ -803,17 +1017,164 @@ button:disabled {
   opacity: 0.62;
 }
 
-.branch {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: var(--weight-medium);
+/* A Session: 6px above and below a 16px tile, so a shell is 28px and an
+   Agent with its second line 44px. */
+.session-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--tree-t3);
+  text-align: start;
+  cursor: pointer;
 }
 
-.workspace-row .branch {
-  font-size: var(--text-base);
-  font-weight: var(--weight-regular);
+.session-row.two {
+  min-height: 44px;
+}
+
+.session-row.live {
+  color: var(--tree-t2);
+}
+
+.session-row.active {
+  background: var(--tree-selected);
+  color: var(--tree-t1);
+}
+
+.session-row-icon .activity {
+  position: absolute;
+  right: -2px;
+  bottom: -3px;
+  box-shadow: 0 0 0 2px var(--color-bg-sidebar);
+}
+
+.session-row.active .session-row-icon .activity {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-bg-sidebar), var(--tree-t1) 8.5%);
+}
+
+.session-row-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.session-row-title,
+.session-row-summary {
+  overflow: hidden;
+  white-space: nowrap;
+  mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+}
+
+.session-row-title {
+  font-size: 13px;
+  line-height: 16px;
+}
+
+.session-row-summary {
+  color: var(--tree-t5);
+  font-size: 11.5px;
+  line-height: 15px;
+}
+
+.session-row-summary.lively {
+  color: var(--tree-t4);
+}
+
+.session-row-summary.ask {
+  color: var(--color-status-waiting);
+}
+
+.session-row-summary.fail {
+  color: var(--color-text-danger);
+}
+
+/* A working line has light moving across it, the Desktop's activity
+   shimmer, so progress shows without another mark. */
+.session-row-summary.work {
+  background: linear-gradient(90deg, var(--tree-t4) 0%, var(--tree-t4) 40%, var(--tree-t2) 50%, var(--tree-t4) 60%, var(--tree-t4) 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: tree-shimmer 2.6s linear infinite;
+}
+
+@keyframes tree-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-row-summary.work {
+    animation: none;
+    background: none;
+    color: var(--tree-t4);
+  }
+}
+
+.idle-worktrees {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 24px;
+  margin-top: 2px;
+  padding-inline: 8px 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--tree-t4);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.lane.has-sessions + .idle-worktrees {
+  margin-top: 10px;
+}
+
+.idle-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.idle-label b {
+  font: var(--weight-medium) 11px var(--font-mono);
+}
+
+/* A folded row turns its chevron the same quarter as a Project row, at the
+   same size and over the same duration: one disclosure mark, two rows. */
+.idle-chevron {
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  color: var(--tree-t5);
+  transform: rotate(-90deg);
+  transition-property: transform;
+  transition-duration: var(--duration-base);
+  transition-timing-function: var(--ease-out);
+}
+
+.idle-chevron svg {
+  width: 10px;
+  height: 10px;
+}
+
+.idle-chevron.open {
+  transform: none;
 }
 
 .pin-icon {
@@ -821,12 +1182,7 @@ button:disabled {
   width: 10px;
   height: 10px;
   flex: 0 0 auto;
-  color: var(--color-text-secondary);
-}
-
-.pin-icon svg {
-  width: 100%;
-  height: 100%;
+  color: var(--tree-t5);
 }
 
 .merge-badge {
@@ -834,8 +1190,17 @@ button:disabled {
   width: 10px;
   height: 10px;
   flex: 0 0 auto;
-  color: var(--color-status-ready);
+  color: var(--color-status-success);
   opacity: 0.8;
+}
+
+/* A merged worktree wears the merge mark where its branch glyph would be, at
+   the icon column's own size and full strength: it is the row's identity, not
+   a secondary badge. */
+.tree-icon .merge-badge {
+  width: 14px;
+  height: 14px;
+  opacity: 1;
 }
 
 .merge-badge svg {
@@ -897,51 +1262,54 @@ button:disabled {
   }
 }
 
+/* The foot of the card: a 40px row over a hairline, where the Desktop lists
+   its other Hosts. The Web follows one Host, so it holds Settings. */
 .sidebar-footer {
   display: flex;
-  gap: var(--space-xxs);
-  flex: 0 0 auto;
-  padding: var(--space-sm) var(--space-md);
-  border-top: var(--border-hairline) solid var(--color-border-separator);
+  flex: 0 0 40px;
+  align-items: center;
+  padding: 0 8px;
+  border-top: 1px solid var(--workbench-line);
 }
 
-.footer-new-session {
+.footer-settings {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: var(--space-sm);
-  min-width: 0;
-  flex: 1;
+  gap: 8px;
+  width: 100%;
   height: 30px;
+  padding-inline: 6px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 7px;
   background: transparent;
-  color: var(--color-text-secondary);
-  font-size: var(--text-base);
-  font-weight: var(--weight-regular);
+  color: var(--tree-t3);
+  font-size: 12px;
   cursor: pointer;
 }
 
-.footer-new-session:disabled {
-  opacity: 0.45;
-  cursor: default;
+.footer-tile {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: var(--tree-tile);
+  color: var(--tree-t3);
 }
 
-.footer-new-session svg {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-}
-
-.sidebar-footer .chrome-button {
-  flex: 0 0 32px;
+.footer-tile svg {
+  width: 13px;
+  height: 13px;
 }
 
 .main {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 36px 28px 28px minmax(0, 1fr);
+  /* One track that may shrink below its content. An implicit column sizes to
+     the widest child, and the phone shortcut row is wider than a phone. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 36px minmax(0, 1fr);
   overflow: hidden;
   overscroll-behavior: contain;
 }
@@ -952,6 +1320,26 @@ button:disabled {
   min-width: 0;
   background: var(--color-bg-surface);
   border-bottom: var(--border-hairline) solid var(--color-border-separator);
+}
+
+/* The Web client holds one Session at a time, so the header names it instead of
+   listing Tabs the way the Desktop's split panes do. */
+.topbar-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 1 auto;
+  padding-inline: var(--space-lg);
+  overflow: hidden;
+}
+
+.topbar-session {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
 }
 
 .menu-button {
@@ -969,283 +1357,27 @@ button:disabled {
   height: 18px;
 }
 
-.tabs-wrap {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  min-width: 0;
-  flex: 100 1 auto;
-}
-
-.tabs {
-  --scroll-fade-size: 36px;
-  display: flex;
-  align-items: stretch;
-  min-width: 0;
-  height: 36px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  flex: 1 1 auto;
-}
-
-.tabs::-webkit-scrollbar {
-  display: none;
-}
-
-/* 7-stop non-linear alpha ramp (borrowed from the Claude Design System). A
-   plain `transparent -> black` pair bands on Retina; sampling the alpha at
-   .15/.30/.45/.60/.75/.87 of the fade distance follows the eye's curve and
-   keeps the edge clean. The class still marks which edges are scrollable,
-   so the fallback never fades an edge that has nothing hidden behind it. */
-.tabs.fade-left {
-  mask-image: linear-gradient(to right,
-    transparent,
-    #0000000d calc(var(--scroll-fade-size) * 0.15),
-    #00000026 calc(var(--scroll-fade-size) * 0.30),
-    #0000004d calc(var(--scroll-fade-size) * 0.45),
-    #00000080 calc(var(--scroll-fade-size) * 0.60),
-    #000000b3 calc(var(--scroll-fade-size) * 0.75),
-    #000000d9 calc(var(--scroll-fade-size) * 0.87),
-    #000 var(--scroll-fade-size),
-    #000 100%);
-  -webkit-mask-image: linear-gradient(to right,
-    transparent,
-    #0000000d calc(var(--scroll-fade-size) * 0.15),
-    #00000026 calc(var(--scroll-fade-size) * 0.30),
-    #0000004d calc(var(--scroll-fade-size) * 0.45),
-    #00000080 calc(var(--scroll-fade-size) * 0.60),
-    #000000b3 calc(var(--scroll-fade-size) * 0.75),
-    #000000d9 calc(var(--scroll-fade-size) * 0.87),
-    #000 var(--scroll-fade-size),
-    #000 100%);
-}
-
-.tabs.fade-right {
-  mask-image: linear-gradient(to right,
-    #000 0,
-    #000 calc(100% - var(--scroll-fade-size)),
-    #000000d9 calc(100% - var(--scroll-fade-size) * 0.87),
-    #000000b3 calc(100% - var(--scroll-fade-size) * 0.75),
-    #00000080 calc(100% - var(--scroll-fade-size) * 0.60),
-    #0000004d calc(100% - var(--scroll-fade-size) * 0.45),
-    #00000026 calc(100% - var(--scroll-fade-size) * 0.30),
-    #0000000d calc(100% - var(--scroll-fade-size) * 0.15),
-    transparent 100%);
-  -webkit-mask-image: linear-gradient(to right,
-    #000 0,
-    #000 calc(100% - var(--scroll-fade-size)),
-    #000000d9 calc(100% - var(--scroll-fade-size) * 0.87),
-    #000000b3 calc(100% - var(--scroll-fade-size) * 0.75),
-    #00000080 calc(100% - var(--scroll-fade-size) * 0.60),
-    #0000004d calc(100% - var(--scroll-fade-size) * 0.45),
-    #00000026 calc(100% - var(--scroll-fade-size) * 0.30),
-    #0000000d calc(100% - var(--scroll-fade-size) * 0.15),
-    transparent 100%);
-}
-
-.tabs.fade-left.fade-right {
-  mask-image: linear-gradient(to right,
-    transparent,
-    #0000000d calc(var(--scroll-fade-size) * 0.15),
-    #00000026 calc(var(--scroll-fade-size) * 0.30),
-    #0000004d calc(var(--scroll-fade-size) * 0.45),
-    #00000080 calc(var(--scroll-fade-size) * 0.60),
-    #000000b3 calc(var(--scroll-fade-size) * 0.75),
-    #000000d9 calc(var(--scroll-fade-size) * 0.87),
-    #000 var(--scroll-fade-size),
-    #000 calc(100% - var(--scroll-fade-size)),
-    #000000d9 calc(100% - var(--scroll-fade-size) * 0.87),
-    #000000b3 calc(100% - var(--scroll-fade-size) * 0.75),
-    #00000080 calc(100% - var(--scroll-fade-size) * 0.60),
-    #0000004d calc(100% - var(--scroll-fade-size) * 0.45),
-    #00000026 calc(100% - var(--scroll-fade-size) * 0.30),
-    #0000000d calc(100% - var(--scroll-fade-size) * 0.15),
-    transparent 100%);
-  -webkit-mask-image: linear-gradient(to right,
-    transparent,
-    #0000000d calc(var(--scroll-fade-size) * 0.15),
-    #00000026 calc(var(--scroll-fade-size) * 0.30),
-    #0000004d calc(var(--scroll-fade-size) * 0.45),
-    #00000080 calc(var(--scroll-fade-size) * 0.60),
-    #000000b3 calc(var(--scroll-fade-size) * 0.75),
-    #000000d9 calc(var(--scroll-fade-size) * 0.87),
-    #000 var(--scroll-fade-size),
-    #000 calc(100% - var(--scroll-fade-size)),
-    #000000d9 calc(100% - var(--scroll-fade-size) * 0.87),
-    #000000b3 calc(100% - var(--scroll-fade-size) * 0.75),
-    #00000080 calc(100% - var(--scroll-fade-size) * 0.60),
-    #0000004d calc(100% - var(--scroll-fade-size) * 0.45),
-    #00000026 calc(100% - var(--scroll-fade-size) * 0.30),
-    #0000000d calc(100% - var(--scroll-fade-size) * 0.15),
-    transparent 100%);
-}
-
-/* Where scroll-driven animations exist, the fade tracks the scroll offset
-   instead of being pinned on: the near edge fades in only once the strip has
-   actually moved and the far edge fades out as it reaches the end. The class
-   gate (overflow exists) is kept because an inactive scroll timeline cannot
-   distinguish "no overflow" from "at the start". */
-@supports (animation-timeline: scroll(self inline)) {
-  .tabs.fade-left,
-  .tabs.fade-right,
-  .tabs.fade-left.fade-right {
-    --scroll-fade-left: 0px;
-    --scroll-fade-right: var(--scroll-fade-size);
-    animation-name: scroll-fade-left-in, scroll-fade-right-out;
-    animation-timeline: scroll(self inline), scroll(self inline);
-    animation-range: 0 var(--scroll-fade-size), calc(100% - var(--scroll-fade-size)) 100%;
-    animation-fill-mode: both;
-    animation-timing-function: linear;
-    mask-image: linear-gradient(to right,
-      transparent,
-      #0000000d calc(var(--scroll-fade-left) * 0.15),
-      #00000026 calc(var(--scroll-fade-left) * 0.30),
-      #0000004d calc(var(--scroll-fade-left) * 0.45),
-      #00000080 calc(var(--scroll-fade-left) * 0.60),
-      #000000b3 calc(var(--scroll-fade-left) * 0.75),
-      #000000d9 calc(var(--scroll-fade-left) * 0.87),
-      #000 var(--scroll-fade-left),
-      #000 calc(100% - var(--scroll-fade-right)),
-      #000000d9 calc(100% - var(--scroll-fade-right) * 0.87),
-      #000000b3 calc(100% - var(--scroll-fade-right) * 0.75),
-      #00000080 calc(100% - var(--scroll-fade-right) * 0.60),
-      #0000004d calc(100% - var(--scroll-fade-right) * 0.45),
-      #00000026 calc(100% - var(--scroll-fade-right) * 0.30),
-      #0000000d calc(100% - var(--scroll-fade-right) * 0.15),
-      transparent 100%);
-    -webkit-mask-image: linear-gradient(to right,
-      transparent,
-      #0000000d calc(var(--scroll-fade-left) * 0.15),
-      #00000026 calc(var(--scroll-fade-left) * 0.30),
-      #0000004d calc(var(--scroll-fade-left) * 0.45),
-      #00000080 calc(var(--scroll-fade-left) * 0.60),
-      #000000b3 calc(var(--scroll-fade-left) * 0.75),
-      #000000d9 calc(var(--scroll-fade-left) * 0.87),
-      #000 var(--scroll-fade-left),
-      #000 calc(100% - var(--scroll-fade-right)),
-      #000000d9 calc(100% - var(--scroll-fade-right) * 0.87),
-      #000000b3 calc(100% - var(--scroll-fade-right) * 0.75),
-      #00000080 calc(100% - var(--scroll-fade-right) * 0.60),
-      #0000004d calc(100% - var(--scroll-fade-right) * 0.45),
-      #00000026 calc(100% - var(--scroll-fade-right) * 0.30),
-      #0000000d calc(100% - var(--scroll-fade-right) * 0.15),
-      transparent 100%);
-  }
-}
-
-/* Reduced motion stops the scroll timeline above, so fall back to the edges
-   the overflow classes already report. */
-@media (prefers-reduced-motion: reduce) {
-  .tabs.fade-left:not(.fade-right) {
-    --scroll-fade-left: var(--scroll-fade-size);
-    --scroll-fade-right: 0px;
-  }
-
-  .tabs.fade-right:not(.fade-left) {
-    --scroll-fade-left: 0px;
-    --scroll-fade-right: var(--scroll-fade-size);
-  }
-
-  .tabs.fade-left.fade-right {
-    --scroll-fade-left: var(--scroll-fade-size);
-    --scroll-fade-right: var(--scroll-fade-size);
-  }
-}
-
-.tabs-chevron {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: var(--layer-inline);
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-circle);
-  background: var(--color-bg-surface);
-  color: var(--color-text-primary);
-  box-shadow: var(--shadow-border);
-  cursor: pointer;
-}
-
-.tabs-chevron:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.tabs-chevron svg {
-  width: 14px;
-  height: 14px;
-}
-
-.tabs-chevron-left {
-  inset-inline-start: var(--space-xs);
-}
-
-.tabs-chevron-right {
-  inset-inline-end: var(--space-xs);
-}
-
-.tab {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 150px;
-  min-width: 150px;
-  max-width: 150px;
-  flex: 0 0 150px;
-  height: 36px;
-  padding-inline: var(--space-lg);
-  border: 0;
-  border-inline-end: var(--border-hairline) solid var(--color-border-separator);
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition-property: background-color, color, border-color;
-  transition-duration: var(--duration-fast);
-  transition-timing-function: var(--ease-out);
-}
-
-/* The strip scrolls, so an outset ring would be clipped top and bottom; draw
-   it inside the tab instead. */
-.tab:focus-visible,
+/* The phone pill strip scrolls, so an outset ring would be clipped top and
+   bottom; draw it inside the pill instead. */
 .mobile-tab:focus-visible {
   outline-offset: -2px;
 }
 
-.tab.active,
-.tab.active:hover {
-  background: var(--color-bg-page);
-  color: var(--color-text-selected);
-  border-inline-end-color: transparent;
-  box-shadow:
-    inset 0 1px 0 var(--color-border-subtle),
-    inset 1px 0 0 var(--color-border-subtle),
-    inset -1px 0 0 var(--color-border-subtle);
-}
-
-.tab.pending,
 .mobile-tab.pending {
   color: var(--color-text-primary);
   background: var(--fill-active);
 }
 
-.tab:disabled,
 .mobile-tab:disabled,
-.new-session:disabled,
-.preset:disabled {
+.new-session:disabled {
   cursor: default;
   opacity: 0.62;
 }
 
-.tab-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-light);
+.chrome-capsule {
+  display: flex;
+  flex: none;
+  align-items: center;
 }
 
 .new-session {
@@ -1292,16 +1424,14 @@ button:disabled {
 
 /* Press feedback for compact chrome controls. The independent `scale`
    property is used rather than `transform` so it composes with controls that
-   already translate (the tab chevrons) and never clobbers a component's own
+   already translate and never clobbers a component's own
    transform. The release rides the 15-stop spring token. */
 .menu-button,
 .new-session,
-.section-add,
+.tree-icon-button,
 .project-add,
 .project-chevron,
-.footer-new-session,
-.tabs-chevron {
-  scale: 1;
+
   transition-property: scale;
   transition-duration: var(--duration-spring);
   transition-timing-function: var(--ease-spring);
@@ -1310,11 +1440,10 @@ button:disabled {
 .menu-button:active:not(:disabled),
 .chrome-button:active:not(:disabled),
 .new-session:active:not(:disabled),
-.section-add:active:not(:disabled),
+.tree-icon-button:active:not(:disabled),
 .project-add:active:not(:disabled),
 .project-chevron:active:not(:disabled),
-.footer-new-session:active:not(:disabled),
-.tabs-chevron:active:not(:disabled) {
+
   scale: 0.94;
   transition-duration: var(--duration-fast);
   transition-timing-function: var(--ease-out);
@@ -1323,33 +1452,6 @@ button:disabled {
 .chrome-button svg {
   width: 15px;
   height: 15px;
-}
-
-.presetbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  min-width: 0;
-  padding-inline: var(--space-md);
-  overflow-x: auto;
-  border-bottom: var(--border-hairline) solid var(--color-border-separator);
-  background: var(--color-bg-page);
-}
-
-.preset {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  height: 20px;
-  padding-inline: var(--space-sm);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-size: var(--text-md);
-  font-weight: var(--weight-regular);
-  white-space: nowrap;
-  cursor: pointer;
 }
 
 /* A Session's app icon, as on the Desktop: the mark at 62% of a tile in the
@@ -1386,10 +1488,6 @@ button:disabled {
   -webkit-mask-position: center;
 }
 
-.preset.pending {
-  color: var(--color-text-primary);
-}
-
 .workspace-pending {
   margin-inline-start: auto;
   color: var(--color-text-secondary);
@@ -1397,47 +1495,39 @@ button:disabled {
   white-space: nowrap;
 }
 
-.pane-title {
+/* Terminal or Agent, for a terminal Agent Session: one control in the tab
+   bar instead of a row of its own. */
+.view-toggle {
   display: flex;
-  align-items: center;
-  min-width: 0;
-  height: 28px;
-  padding-inline: var(--space-lg);
-  border-bottom: var(--border-hairline) solid var(--color-border-separator);
-  background: var(--fill-tertiary);
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-light);
+  flex: none;
+  gap: 2px;
+  margin-inline-end: var(--space-sm);
+  padding: 2px;
+  border: var(--border-hairline) solid var(--color-border-separator);
+  border-radius: var(--radius-sm);
 }
 
-.pane-title > span:first-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  user-select: text;
-}
-
-.pane-title .pane-action {
-  flex: 0 0 auto;
-  height: 20px;
-  margin-inline-start: auto;
+.view-toggle button {
+  height: 22px;
   padding-inline: var(--space-md);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--color-text-secondary);
-  box-shadow: var(--shadow-border);
   font-size: var(--text-xs);
   cursor: pointer;
-  transition-property: color, background-color, box-shadow;
+  transition-property: color, background-color;
   transition-duration: var(--duration-fast);
   transition-timing-function: var(--ease-out);
 }
 
-.pane-title .pane-action.has-attention {
+.view-toggle button[aria-pressed="true"] {
+  background: var(--fill-selected);
+  color: var(--color-text-primary);
+}
+
+.view-toggle button.has-attention {
   color: var(--color-status-waiting);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-waiting) 48%, transparent);
-  background: color-mix(in srgb, var(--color-status-waiting) 12%, transparent);
 }
 
 .terminal-shell {
@@ -3018,62 +3108,199 @@ button:disabled {
   transition-timing-function: var(--ease-out);
 }
 
-.auth-state {
-  max-width: 480px;
-  text-align: center;
+/* The whole window while this browser holds no working link to a Host. It
+   sits above the app shell, which stays mounted but hidden underneath. */
+.welcome-screen {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-modal);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding:
+    calc(var(--space-3xl) + env(safe-area-inset-top))
+    calc(var(--space-2xl) + env(safe-area-inset-right))
+    calc(var(--space-3xl) + env(safe-area-inset-bottom))
+    calc(var(--space-2xl) + env(safe-area-inset-left));
+  background: var(--color-bg-page);
 }
 
-.auth-state .empty-hint {
-  max-width: 46ch;
-}
-
-.auth-form {
+.welcome-card {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: var(--space-md);
+  align-items: flex-start;
+  gap: var(--space-xl);
   width: 100%;
-  max-width: 360px;
-  margin-top: var(--space-sm);
+  max-width: 400px;
 }
 
-.auth-token-input {
+.welcome-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-xl);
+}
+
+.welcome-title {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.welcome-lead {
+  margin: calc(-1 * var(--space-sm)) 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-2md);
+  line-height: var(--leading-normal);
+}
+
+.welcome-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin: 0;
+  padding: var(--space-lg) var(--space-xl) var(--space-lg) calc(var(--space-xl) + 18px);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-border);
+  color: var(--color-text-primary);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+}
+
+.welcome-steps li::marker {
+  color: var(--color-text-secondary);
+}
+
+.welcome-form {
+  display: flex;
+  gap: var(--space-md);
   width: 100%;
-  height: 36px;
-  padding: var(--space-sm) var(--space-md);
+}
+
+.welcome-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 var(--space-lg);
   border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--color-bg-sunken);
   color: var(--color-text-primary);
-  font-size: var(--text-sm);
-  font-family: var(--font-sans);
-  text-align: center;
+  font-size: var(--text-md);
   outline: none;
   transition: border-color var(--duration-base) var(--ease-out);
 }
 
-.auth-token-input:focus {
+.welcome-input:focus {
   border-color: var(--color-focus-ring);
   box-shadow: var(--shadow-focus-ring);
 }
 
-.auth-token-input::placeholder {
-  color: var(--color-text-secondary);
+.welcome-input::placeholder {
+  color: var(--color-text-tertiary);
 }
 
-.auth-action {
-  min-width: 120px;
+.welcome-action {
+  flex: none;
+  height: 40px;
+  padding-inline: var(--space-xl);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-text-primary);
+  color: var(--color-bg-page);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
 }
 
-.auth-action:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.welcome-action:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
-.auth-error {
+.welcome-error {
+  margin: calc(-1 * var(--space-sm)) 0 0;
   color: var(--color-text-danger);
   font-size: var(--text-sm);
-  margin-top: -4px;
+}
+
+.welcome-install {
+  margin: 0;
+  padding-top: var(--space-xl);
+  border-top: var(--border-hairline) solid var(--color-border-separator);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.share-glyph {
+  display: inline-block;
+  width: 1.1em;
+  height: 1.1em;
+  vertical-align: -0.15em;
+  color: var(--color-accent-text);
+}
+
+/* Invites an iPhone or iPad Safari tab to install. It floats under the top
+   chrome so it never covers the shortcut row or the soft keyboard. */
+.install-hint {
+  position: fixed;
+  z-index: var(--layer-popover);
+  top: calc(52px + env(safe-area-inset-top));
+  left: calc(var(--space-lg) + env(safe-area-inset-left));
+  right: calc(var(--space-lg) + env(safe-area-inset-right));
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  max-width: 420px;
+  margin-inline: auto;
+  padding: var(--space-md) var(--space-sm) var(--space-md) var(--space-lg);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-raised);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-primary);
+  font-size: var(--text-2sm);
+  line-height: var(--leading-normal);
+}
+
+/* Inside the phone inbox it is a card in the list's flow, not a float. */
+.install-hint.inline {
+  position: static;
+  max-width: none;
+  margin: 0 0 var(--space-xl);
+  box-shadow: var(--shadow-border);
+}
+
+.install-hint img {
+  flex: none;
+  border-radius: var(--radius-sm);
+}
+
+.install-hint p {
+  flex: 1;
+  margin: 0;
+}
+
+.install-hint-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.install-hint-close svg {
+  width: 14px;
+  height: 14px;
 }
 
 .settings-page {
@@ -4332,6 +4559,10 @@ button:disabled {
   display: none;
 }
 
+.mobile-inbox {
+  display: none;
+}
+
 .backdrop {
   display: none;
 }
@@ -4339,6 +4570,13 @@ button:disabled {
 .xterm,
 .xterm-viewport {
   height: 100%;
+}
+
+/* xterm.css paints the viewport black, and the terminal's own background only
+   covers whole rows. The leftover pixels under the last row showed as a black
+   strip, so the viewport takes the terminal's ground instead. */
+.xterm .xterm-viewport {
+  background-color: var(--color-bg-page);
 }
 
 @media (max-width: 1023px) {
@@ -4349,7 +4587,7 @@ button:disabled {
   .sidebar {
     position: fixed;
     z-index: var(--layer-drawer);
-    inset-block: 0 auto 0 0;
+    inset: 0 auto 0 0;
     width: min(78vw, 360px);
     padding-top: env(safe-area-inset-top);
     padding-inline-start: env(safe-area-inset-left);
@@ -4385,7 +4623,7 @@ button:disabled {
 
   .main {
     height: 100%;
-    grid-template-rows: calc(40px + env(safe-area-inset-top)) 26px 28px minmax(0, 1fr) auto;
+    grid-template-rows: calc(40px + env(safe-area-inset-top)) minmax(0, 1fr) auto;
     transition-property: padding-bottom;
     transition-duration: 0.12s;
     transition-timing-function: var(--ease-out);
@@ -4402,14 +4640,6 @@ button:disabled {
     height: 40px;
   }
 
-  .tabs {
-    height: 40px;
-  }
-
-  .tab {
-    height: 40px;
-  }
-
   .new-session {
     width: 40px;
     height: 40px;
@@ -4421,22 +4651,124 @@ button:disabled {
   }
 }
 
+/* The Desktop's window (WarrenLayoutMetrics): a black backdrop with rounded
+   cards on it, 8px from the edge and 8px apart. The sidebar is one card; beside
+   it a 32px header holding the Session's name and one capsule of panels and "+" over the
+   pane card that holds the terminal. */
+@media (min-width: 1024px) {
+  .app {
+    grid-template-columns: 300px minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px calc(8px + env(safe-area-inset-right)) 8px calc(8px + env(safe-area-inset-left));
+    background: var(--workbench-backdrop);
+  }
+
+  .app.git-panel-open {
+    grid-template-columns: 300px minmax(0, 1fr) 340px;
+  }
+
+  .sidebar,
+  .git-panel {
+    border: 1px solid var(--workbench-line);
+    border-radius: 12px;
+    background: var(--workbench-card);
+  }
+
+  .main {
+    grid-template-rows: 32px minmax(0, 1fr);
+    row-gap: 8px;
+    overflow: visible;
+  }
+
+  .topbar {
+    gap: 8px;
+    background: transparent;
+    border-bottom: 0;
+  }
+
+  .topbar-title {
+    padding-inline: 6px;
+  }
+
+  .topbar-session {
+    font-size: 13px;
+  }
+
+  .chrome-capsule {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+    height: 32px;
+    padding: 3px;
+    border: 1px solid var(--workbench-line);
+    border-radius: 9px;
+    background: var(--workbench-card);
+  }
+
+  .chrome-capsule .chrome-button,
+  .chrome-capsule .new-session {
+    width: 26px;
+    height: 24px;
+    border: 0;
+    border-radius: 7px;
+  }
+
+  .chrome-capsule .chrome-button.active {
+    background: var(--ember-muted);
+    color: var(--color-text-primary);
+  }
+
+  .chrome-capsule .chrome-button svg,
+  .chrome-capsule .new-session svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* Search lives in the sidebar's head on a wide window. */
+  .topbar-search {
+    display: none;
+  }
+
+  .view-toggle {
+    height: 32px;
+    margin: 0;
+    padding: 3px;
+    border: 1px solid var(--workbench-line);
+    border-radius: 9px;
+    background: var(--workbench-card);
+    box-shadow: none;
+  }
+
+  .view-toggle button {
+    height: 24px;
+    padding-inline: 10px;
+    border-radius: 7px;
+    font-size: 12px;
+  }
+
+  .view-toggle button[aria-pressed="true"] {
+    background: var(--ember-muted);
+    box-shadow: 0 0 0 0.5px var(--workbench-pill-line);
+  }
+
+  .terminal-shell {
+    overflow: hidden;
+    border: 1px solid var(--workbench-line);
+    border-radius: 12px;
+    background: var(--workbench-card);
+  }
+
+  #terminal {
+    inset: 10px 8px 6px 12px;
+  }
+}
+
 /* Narrow tablets keep the desktop information architecture but use a
    slightly calmer measure before the full mobile shell takes over. */
 @media (min-width: 768px) and (max-width: 900px) {
   .sidebar {
     width: min(68vw, 320px);
-  }
-
-  .tabs {
-    min-width: 0;
-  }
-
-  .tab {
-    width: 132px;
-    min-width: 132px;
-    max-width: 132px;
-    flex-basis: 132px;
   }
 
   .agent-events,
@@ -4632,13 +4964,435 @@ button:disabled {
 }
 
 @media (max-width: 767px) {
+  .mobile-session-title {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+    line-height: var(--leading-tight);
+  }
+
+  .mobile-session-name {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    min-width: 0;
+    font-size: var(--text-2md);
+    font-weight: var(--weight-semibold);
+  }
+
+  .mobile-session-name,
+  .mobile-session-place {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-session-place {
+    margin-top: 1px;
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
+  }
+
+  /* The phone inbox lies over the Session view and slides away to reveal it,
+     the way a list hands over to its detail on iOS. The Session view stays
+     mounted underneath, so its terminal never has to rebuild. */
+  .main {
+    position: relative;
+  }
+
+  .mobile-inbox {
+    position: absolute;
+    inset: 0;
+    z-index: var(--layer-inline-overlay);
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg-page);
+    transform: translateX(-24%);
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      transform var(--duration-spring) cubic-bezier(0.32, 0.72, 0, 1),
+      opacity var(--duration-slow) var(--ease-out),
+      visibility 0s linear var(--duration-spring);
+  }
+
+  .mobile-inbox.open {
+    transform: none;
+    opacity: 1;
+    visibility: visible;
+    transition-delay: 0s;
+  }
+
+  .inbox-bar {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-xs);
+    padding:
+      calc(var(--space-sm) + env(safe-area-inset-top))
+      calc(var(--space-sm) + env(safe-area-inset-right))
+      var(--space-sm)
+      calc(var(--space-xl) + env(safe-area-inset-left));
+    border-bottom: var(--border-hairline) solid transparent;
+    background: var(--color-bg-page);
+  }
+
+  .inbox-host {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .inbox-host-tile {
+    position: relative;
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    background: var(--color-bg-raised);
+    box-shadow: var(--shadow-border);
+    color: var(--color-text-primary);
+    font-size: var(--text-2md);
+    font-weight: var(--weight-semibold);
+  }
+
+  .inbox-host-tile .connection-dot {
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    width: 10px;
+    height: 10px;
+    box-shadow: 0 0 0 2.5px var(--color-bg-page);
+  }
+
+  .inbox-host.online .connection-dot {
+    background: var(--color-status-success);
+  }
+
+  .inbox-host-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: var(--leading-tight);
+  }
+
+  .inbox-host-name,
+  .inbox-host-status {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .inbox-host-name {
+    font-size: var(--text-2md);
+    font-weight: var(--weight-semibold);
+  }
+
+  .inbox-host-status {
+    margin-top: 2px;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+  }
+
+  .inbox-icon-button {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--color-text-secondary);
+  }
+
+  .inbox-icon-button svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .inbox-icon-button:active {
+    background: var(--fill-hover);
+  }
+
+  .inbox-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    padding:
+      0
+      calc(var(--space-xl) + env(safe-area-inset-right))
+      calc(var(--space-2xl) + env(safe-area-inset-bottom))
+      calc(var(--space-xl) + env(safe-area-inset-left));
+  }
+
+  .inbox-heading {
+    padding: var(--space-md) var(--space-xxs) var(--space-lg);
+  }
+
+  .inbox-heading h2 {
+    margin: 0;
+    font-size: var(--text-display);
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.02em;
+    line-height: var(--leading-tight);
+  }
+
+  .inbox-heading p {
+    margin: var(--space-xs) 0 0;
+    color: var(--color-text-secondary);
+    font-size: var(--text-2md);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* A segmented control, drawn the way iOS draws one. */
+  .inbox-grouping {
+    display: flex;
+    gap: 2px;
+    margin-bottom: var(--space-xl);
+    padding: 2px;
+    border-radius: 9px;
+    background: var(--fill-hover);
+  }
+
+  .inbox-grouping button {
+    flex: 1;
+    height: 30px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: var(--text-2sm);
+    font-weight: var(--weight-medium);
+    transition-property: background-color, color, box-shadow;
+    transition-duration: var(--duration-base);
+    transition-timing-function: var(--ease-out);
+  }
+
+  .inbox-grouping button[aria-checked="true"] {
+    background: var(--color-bg-raised);
+    color: var(--color-text-primary);
+    box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.35);
+  }
+
+  .inbox-section + .inbox-section {
+    margin-top: var(--space-2xl);
+  }
+
+  .inbox-section-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    margin: 0 0 var(--space-md);
+    padding-inline: var(--space-xs);
+    color: var(--color-text-secondary);
+    font-size: var(--text-2sm);
+    font-weight: var(--weight-semibold);
+  }
+
+  .inbox-section-attention .inbox-section-title {
+    color: var(--color-status-waiting);
+  }
+
+  .inbox-section-count {
+    min-width: 18px;
+    padding: 1px 6px;
+    border-radius: var(--radius-full);
+    background: var(--fill-hover);
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+
+  /* Inset grouped list: one card per section, rows divided by a hairline that
+     starts under the text, not under the icon. */
+  .inbox-list {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 14px;
+    background: var(--color-bg-surface);
+    box-shadow: var(--shadow-border);
+    list-style: none;
+  }
+
+  .inbox-list li + li .inbox-row::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 60px;
+    border-top: var(--border-hairline) solid var(--color-border-separator);
+  }
+
+  .inbox-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--space-lg);
+    width: 100%;
+    min-height: 64px;
+    padding: 10px var(--space-lg) 10px 14px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-primary);
+    text-align: start;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    transition: background-color 80ms var(--ease-out);
+  }
+
+  .inbox-row:active {
+    background: var(--fill-hover);
+  }
+
+  .inbox-row-icon {
+    position: relative;
+    flex: none;
+    align-self: flex-start;
+    margin-top: 2px;
+  }
+
+  .inbox-row-icon .preset-brand-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+  }
+
+  .inbox-row-icon .activity {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    width: 10px;
+    height: 10px;
+    box-shadow: 0 0 0 2.5px var(--color-bg-surface);
+  }
+
+  .inbox-row-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .inbox-row-title,
+  .inbox-row-status,
+  .inbox-row-context {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .inbox-row-title {
+    font-size: var(--text-2md);
+    font-weight: var(--weight-medium);
+    line-height: 20px;
+  }
+
+  .inbox-row-status {
+    color: var(--color-text-secondary);
+    font-size: var(--text-2sm);
+    line-height: 17px;
+  }
+
+  .inbox-row-status.attention {
+    color: var(--color-status-waiting);
+  }
+
+  .inbox-row-status.danger {
+    color: var(--color-text-danger);
+  }
+
+  .inbox-row-context {
+    color: var(--color-text-tertiary);
+    font-size: var(--text-sm);
+    line-height: 16px;
+  }
+
+  .inbox-row-chevron {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    color: var(--color-text-tertiary);
+  }
+
+  .inbox-empty {
+    padding: var(--space-4xl) var(--space-xl);
+    text-align: center;
+  }
+
+  .inbox-empty-title {
+    margin: 0;
+    font-size: var(--text-lg);
+    font-weight: var(--weight-medium);
+  }
+
+  .inbox-empty-hint {
+    margin: var(--space-sm) 0 0;
+    color: var(--color-text-secondary);
+    font-size: var(--text-md);
+  }
+
+  /* The one primary action, in the header and out of the list's way: a
+     floating button would cover the last rows it sits on. */
+  .inbox-new {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-xs);
+    height: 32px;
+    margin-inline-start: var(--space-xxs);
+    padding-inline: var(--space-lg);
+    border: 0;
+    border-radius: var(--radius-full);
+    background: var(--color-accent);
+    color: var(--color-text-on-accent);
+    font-size: var(--text-2md);
+    font-weight: var(--weight-semibold);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.12) inset;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 120ms var(--ease-out), filter 120ms var(--ease-out);
+  }
+
+  .inbox-new svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .inbox-new:active {
+    transform: scale(0.96);
+    filter: brightness(0.92);
+  }
+
+  .inbox-new:disabled {
+    opacity: 0.7;
+  }
+
+  .back-button svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  /* iOS zooms into any focused field under 16px and does not zoom back. */
+  .welcome-input {
+    font-size: 16px;
+  }
+
   .main {
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
 
-  .topbar,
-  .presetbar,
-  .pane-title {
+  .topbar {
     display: none;
   }
 
@@ -4746,7 +5500,7 @@ button:disabled {
   }
 
   .mobile-connection.online .connection-dot {
-    background: var(--color-status-ready);
+    background: var(--color-status-success);
   }
 
   .agent-view-toggle {
@@ -5350,39 +6104,31 @@ button:disabled {
   }
 }
 
-@media (pointer: coarse) {
-  .project-count {
-    opacity: 1;
-  }
-}
-
 /* Hover treatments opt in on devices that actually hover, so a tap never
    leaves a latched hover state behind. */
 @media (hover: hover) {
-  .project-toggle:hover,
   .settings-back:hover,
   .settings-nav-item:hover {
     background: var(--fill-hover);
   }
 
-  .project-toggle:hover .project-count,
-  .project-toggle:focus-within .project-count {
-    opacity: 1;
+  /* The tree's hover is the Desktop's 5% wash, under its 8.5% selection. */
+  .project-toggle:hover,
+  .workspace-row:hover,
+  .idle-worktrees:hover,
+  .footer-settings:hover {
+    background: var(--tree-hover);
+  }
+
+  .session-row:hover:not(.active) {
+    background: var(--tree-hover);
   }
 
   .project-add:hover,
-  .project-chevron:hover {
-    color: var(--color-text-primary);
-    background: var(--fill-hover);
-  }
-
-  .workspace-row:hover {
-    background: var(--fill-hover);
-  }
-
-  .footer-new-session:hover:not(:disabled) {
-    color: var(--color-text-primary);
-    background: var(--fill-hover);
+  .project-chevron:hover,
+  .tree-icon-button:hover:not(:disabled) {
+    color: var(--tree-t2);
+    background: var(--tree-hover);
   }
 
   .chrome-button:hover,
@@ -5391,15 +6137,7 @@ button:disabled {
     background: var(--fill-hover);
   }
 
-  .tabs-chevron:hover {
-    background: var(--color-border-subtle);
-  }
-
-  .tab:hover {
-    background: var(--fill-hover);
-  }
-
-  .pane-title .pane-action:hover {
+  .view-toggle button:hover {
     color: var(--color-text-primary);
     background: var(--fill-hover);
     box-shadow: var(--shadow-border-hover);

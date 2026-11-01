@@ -235,6 +235,9 @@ function sessionToTab(session = {}) {
     agentModel: session.agentModel || "",
     agentStatus: session.agentStatus || null,
     agentTurn: session.agentTurn || null,
+    // The Host's one-line account of what the last completed turn did. It is
+    // what a resting Agent row reads as its second line, as on the Desktop.
+    resultSentence: session.resultSentence || "",
     pinned: session.pinned || false,
   };
   if (Object.prototype.hasOwnProperty.call(session, "agentHandler")) {
