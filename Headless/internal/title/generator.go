@@ -326,8 +326,12 @@ func chatBaseURL(base string) (string, error) {
 // titleRules is the label both title prompts ask for. Only the evidence they
 // are written from differs.
 const titleRules = "Create a short label for a coding session, the way the sidebar draws it: " +
-	"one line of a narrow row. Stay within about 30 latin characters or 16 CJK characters. " +
-	"Start with the verb (inspect, debug, fix, implement, rename, migrate). Drop filler words: " +
+	"one line of a narrow row. The whole title must fit the row: at most 30 latin characters " +
+	"or 16 CJK characters, and shorter is better. Start with a verb in the user's language " +
+	"(inspect, debug, fix, implement, rename, migrate; 检查、分析、修复、实现、重命名、迁移), " +
+	"and never mix languages inside one title: a Chinese request gets a Chinese title. " +
+	"When the subject does not fit, drop secondary clauses instead of the request's main " +
+	"object, and never cut a word in half. Drop filler words: " +
 	"的, 方法, 功能, 相关, and their equivalents. Write a space between CJK and latin text."
 
 // titleOutputRules is the output contract both title prompts share.

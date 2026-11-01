@@ -522,11 +522,12 @@ function atomicWrite(filePath: string, data: string) {
 // A binding belongs to the agent CLI its Session is running, but the bind
 // environment is inherited by every descendant of the Session's shell. A CLI
 // that another agent starts is therefore reachable from here through nothing
-// but shells, and would otherwise take the Session over: its provider, its
-// transcript, and its icon. Stopping at the first thing that is neither a shell
-// nor an agent draws the line where the Session's own CLI lives: the PTY daemon
-// that allocated it, a terminal emulator, or init. Every step fails open, so an
-// unreadable process table leaves binding exactly as it was.
+// but shells and the scripts those shells launch, and would otherwise take the
+// Session over: its provider, its transcript, and its icon. Only a process that
+// is neither a shell, an interpreter launcher, nor an agent ends the walk: that
+// is where the Session's own CLI lives -- the PTY daemon that allocated it, a
+// terminal emulator, or init. Every step fails open, so an unreadable process
+// table leaves binding exactly as it was.
 function nestedInAnotherAgent(): boolean {
   const agents = ["claude", "codex", "pi", "opencode", "qoder", "antigravity", "agy"]
   const shells = ["sh", "bash", "zsh", "fish", "dash", "ksh"]
@@ -537,13 +538,18 @@ function nestedInAnotherAgent(): boolean {
   let pid = process.ppid
   for (let hops = 0; hops < 32 && pid > 1; hops++) {
     const argv = ps(["-o", "command=", "-p", String(pid)]).split(/\s+/)
-    let program = path.basename(argv[0] || "")
-    const isShell = shells.includes(program)
+    const raw = path.basename(argv[0] || "")
+    const isShell = shells.includes(raw)
+    const isInterpreter = interpreters.includes(raw)
     // A process started through an interpreter or a shell script is unwrapped
     // to the program it runs, which is how 'node /path/codex' reads as Codex.
-    if ((isShell || interpreters.includes(program)) && argv[1]) program = path.basename(argv[1])
+    let program = raw
+    if ((isShell || isInterpreter) && argv[1]) program = path.basename(argv[1])
     if (agents.includes(program)) return true
-    if (!isShell) return false
+    // An interpreter running a script started the CLI that fired this hook, so
+    // the agent that started that script is still above it: 'node probe.mjs' is
+    // walked through rather than treated as the boundary.
+    if (!isShell && !isInterpreter) return false
     pid = Number.parseInt(ps(["-o", "ppid=", "-p", String(pid)]), 10) || 0
   }
   return false
@@ -707,17 +713,18 @@ bind_session() {
 # and would take that Session over: its provider, its transcript, its icon, and
 # even the exit notice that clears the projection.
 #
-# Such a CLI is always reachable from here through nothing but shells, so this
-# walks the ancestry and refuses every write once a second agent CLI is found.
-# Reaching anything that is neither a shell nor an agent means the chain has
-# left the shell layer, which is where a Session's own CLI lives: the PTY daemon
-# that allocated the Session, a terminal emulator, or init. Every step fails
-# open, so an unreadable process table leaves binding exactly as it was.
+# Such a CLI is always reachable from here through nothing but shells and the
+# scripts those shells launch, so this walks the ancestry and refuses every
+# write once a second agent CLI is found. Reaching anything that is neither a
+# shell, an interpreter launcher, nor an agent means the chain has left the
+# shell layer, which is where a Session's own CLI lives: the PTY daemon that
+# allocated the Session, a terminal emulator, or init. Every step fails open, so
+# an unreadable process table leaves binding exactly as it was.
 AGENT_NAMES=' claude codex pi opencode qoder antigravity agy '
 SHELL_NAMES=' sh bash zsh fish dash ksh '
 INTERPRETER_NAMES=' node bun deno python python3 '
 
-# process_info prints "<parent> <program> <is-shell> <is-interpreter-unwrapped>"
+# process_info prints "<parent> <program> <is-shell> <is-interpreter-launcher>"
 # for one pid. The script runs on every tool call, so it stays at one process
 # (ps) per level: the parent, the program, and the interpreter unwrapping below
 # use only shell builtins. A process started through an interpreter or a shell
@@ -732,18 +739,14 @@ process_info() {
   raw=${raw##*/}
   program=$raw
   shell_state=no
-  interpolated_state=no
-  case " $SHELL_NAMES " in *" $program "*) shell_state=yes ;; esac
-  case " $SHELL_NAMES $INTERPRETER_NAMES " in
-    *" $raw "*)
-      if [ -n "${3:-}" ]; then
-        program=${3##*/}
-        case " $INTERPRETER_NAMES " in *" $raw "*) interpolated_state=yes ;; esac
-      fi
-      ;;
-  esac
+  launcher_state=no
+  case " $SHELL_NAMES " in *" $raw "*) shell_state=yes ;; esac
+  case " $INTERPRETER_NAMES " in *" $raw "*) launcher_state=yes ;; esac
+  if [ "$shell_state" = yes ] || [ "$launcher_state" = yes ]; then
+    [ -n "${3:-}" ] && program=${3##*/}
+  fi
   [ -n "$program" ] || program=unknown
-  printf '%s %s %s %s' "$parent" "$program" "$shell_state" "$interpolated_state"
+  printf '%s %s %s %s' "$parent" "$program" "$shell_state" "$launcher_state"
 }
 
 nested_in_another_agent() {
@@ -772,7 +775,14 @@ nested_in_another_agent() {
         caller_seen=yes
         ;;
       *)
-        [ "${3:-}" = yes ] || return 1
+        # A shell is walked through to reach the CLI started at its prompt, and
+        # so is an interpreter running a script: 'node probe.mjs' starts the
+        # agent that fired this hook, so the agent that started that script is
+        # still above it. Treating such a launcher as the boundary let a probe
+        # script an agent ran take over the Session it ran in.
+        if [ "${3:-}" != yes ] && [ "${4:-}" != yes ]; then
+          return 1
+        fi
         ;;
     esac
     last_program=$program
@@ -877,11 +887,12 @@ function atomicWrite(filePath: string, data: string) {
 // A binding belongs to the agent CLI its Session is running, but the bind
 // environment is inherited by every descendant of the Session's shell. A Pi
 // that another agent starts is therefore reachable from here through nothing
-// but shells, and would otherwise take that Session over: its provider, its
-// transcript, and its icon. Stopping at the first thing that is neither a shell
-// nor an agent draws the line where the Session's own CLI lives: the PTY daemon
-// that allocated it, a terminal emulator, or init. Every step fails open, so an
-// unreadable process table leaves binding exactly as it was.
+// but shells and the scripts those shells launch, and would otherwise take that
+// Session over: its provider, its transcript, and its icon. Only a process that
+// is neither a shell, an interpreter launcher, nor an agent ends the walk: that
+// is where the Session's own CLI lives -- the PTY daemon that allocated it, a
+// terminal emulator, or init. Every step fails open, so an unreadable process
+// table leaves binding exactly as it was.
 function nestedInAnotherAgent(): boolean {
   const agents = ["claude", "codex", "pi", "opencode", "qoder", "antigravity", "agy"]
   const shells = ["sh", "bash", "zsh", "fish", "dash", "ksh"]
@@ -892,13 +903,18 @@ function nestedInAnotherAgent(): boolean {
   let pid = process.ppid
   for (let hops = 0; hops < 32 && pid > 1; hops++) {
     const argv = ps(["-o", "command=", "-p", String(pid)]).split(/\s+/)
-    let program = path.basename(argv[0] || "")
-    const isShell = shells.includes(program)
+    const raw = path.basename(argv[0] || "")
+    const isShell = shells.includes(raw)
+    const isInterpreter = interpreters.includes(raw)
     // A process started through an interpreter or a shell script is unwrapped
     // to the program it runs, which is how 'node /path/codex' reads as Codex.
-    if ((isShell || interpreters.includes(program)) && argv[1]) program = path.basename(argv[1])
+    let program = raw
+    if ((isShell || isInterpreter) && argv[1]) program = path.basename(argv[1])
     if (agents.includes(program)) return true
-    if (!isShell) return false
+    // An interpreter running a script started the CLI that fired this hook, so
+    // the agent that started that script is still above it: 'node probe.mjs' is
+    // walked through rather than treated as the boundary.
+    if (!isShell && !isInterpreter) return false
     pid = Number.parseInt(ps(["-o", "ppid=", "-p", String(pid)]), 10) || 0
   }
   return false

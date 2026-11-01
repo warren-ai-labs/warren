@@ -19,6 +19,7 @@ const (
 	hookHelperEnv     = "WARREN_BIND_HOOK_HELPER"
 	hookHelperScript  = "WARREN_BIND_HOOK_HELPER_SCRIPT"
 	hookHelperPayload = "WARREN_BIND_HOOK_HELPER_PAYLOAD"
+	hookHelperEntry   = "WARREN_BIND_HOOK_HELPER_ENTRY"
 )
 
 // TestBindHookHelperProcess is not a test: it is the process a chain below
@@ -32,6 +33,11 @@ func TestBindHookHelperProcess(t *testing.T) {
 	script := os.Getenv(hookHelperScript)
 	payload := os.Getenv(hookHelperPayload)
 	command := exec.Command("bash", script, hookCommandMarker, "codex")
+	// A boundary sometimes has to run a chain instead of the hook itself, so a
+	// test can put a script between the Session's own CLI and the boundary.
+	if entry := os.Getenv(hookHelperEntry); entry != "" {
+		command = exec.Command(entry)
+	}
 	command.Stdin = strings.NewReader(payload)
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
@@ -50,6 +56,19 @@ func writeAgentWrapper(t *testing.T, directory, name, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// writeInterpreterHop writes an executable script and a launcher that wears an
+// interpreter's process name and takes that script as its first argument, so
+// the hook's ancestry walk sees exactly what `node probe.mjs` looks like.
+func writeInterpreterHop(t *testing.T, directory, scriptName, body string) string {
+	t.Helper()
+	script := filepath.Join(directory, scriptName)
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return writeAgentWrapper(t, directory, "node",
+		"exec bash -c 'exec -a node /bin/sh \"$1\"' _ '"+script+"'")
 }
 
 func sessionStartPayload() string {
@@ -216,6 +235,51 @@ func TestBindHookRefusesAProviderTheSessionWasNotCreatedFor(t *testing.T) {
 	if chain.anyWrite() {
 		t.Fatalf("a foreign provider wrote into a claude Session: binding=%v state=%s",
 			chain.bindingWritten(), readFileOrEmpty(chain.statePath))
+	}
+}
+
+// TestBindHookRefusesAnAgentStartedByAScript covers the shape a probe script
+// produces: the agent that fired the hook is a direct child of an interpreter
+// running a file, and that interpreter is a child of the agent whose Session is
+// being taken over. Treating the interpreter hop as the boundary let a
+// `node probe.mjs` that an agent ran rebind the Session to the agent the probe
+// started -- reported as a Claude Session in the `vireo` project whose icon
+// became Pi after a nested probe.
+func TestBindHookRefusesAnAgentStartedByAScript(t *testing.T) {
+	chain := newBindHookChain(t)
+	codex := writeAgentWrapper(t, chain.chainDir, "codex",
+		"printf '%s' \"$"+hookHelperPayload+"\" | bash '"+chain.script+"' "+hookCommandMarker+" codex")
+	probe := writeInterpreterHop(t, chain.chainDir, "probe.mjs", "/bin/sh '"+codex+"'")
+	shellHop := writeAgentWrapper(t, chain.chainDir, "shellhop", "/bin/sh '"+probe+"'")
+	pi := writeAgentWrapper(t, chain.chainDir, "pi", "/bin/sh '"+shellHop+"'")
+
+	chain.run(t, sessionStartPayload(), pi)
+	if chain.bindingWritten() {
+		t.Fatalf("an agent a nested script started took the Session over: %s",
+			readFileOrEmpty(chain.bindPath))
+	}
+}
+
+// TestBindHookBindsThroughAScriptWhenNoAgentIsAbove keeps the walk from ending
+// at the script: a probe run at the Session's prompt is its own CLI to bind, and
+// the daemon above the shell is still the boundary.
+func TestBindHookBindsThroughAScriptWhenNoAgentIsAbove(t *testing.T) {
+	chain := newBindHookChain(t)
+	codex := writeAgentWrapper(t, chain.chainDir, "codex",
+		"printf '%s' \"$"+hookHelperPayload+"\" | bash '"+chain.script+"' "+hookCommandMarker+" codex")
+	probe := writeInterpreterHop(t, chain.chainDir, "probe.mjs", "/bin/sh '"+codex+"'")
+	// The test binary plays the daemon that allocated the PTY, one hop above the
+	// script the Session's shell started.
+	boundary := writeAgentWrapper(t, chain.chainDir, "session-shell",
+		hookHelperEntry+"='"+probe+"' '"+os.Args[0]+"' -test.run=TestBindHookHelperProcess")
+
+	chain.run(t, sessionStartPayload(), boundary,
+		hookHelperEnv+"=1", hookHelperScript+"="+chain.script)
+	if !chain.bindingWritten() {
+		t.Fatal("a Session whose CLI is reached through a script must still bind")
+	}
+	if !strings.Contains(readFileOrEmpty(chain.bindPath), `"provider":"codex"`) {
+		t.Fatalf("binding = %s", readFileOrEmpty(chain.bindPath))
 	}
 }
 

@@ -215,8 +215,25 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
     }
 
     @MainActor
+    func testSettingsOpenLandsOnAppearanceAndShowsTheVersion() {
+        let recorder = WarrenSemanticRecorder()
+        let hostingView = makeUsageHostingView(recorder: recorder)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let snapshot = recorder.snapshot()
+        // A plain Settings… carries no section, so the page opens on the one
+        // preference that most often brings someone here.
+        XCTAssertTrue(snapshot.node(id: "settings.section.Appearance")?.isSelected == true)
+        let version = snapshot.node(id: "settings.version")
+        XCTAssertEqual(version?.label.hasPrefix("Warren version "), true)
+        XCTAssertFalse(version?.label == "Warren version ")
+    }
+
+    @MainActor
     private func makeUsageHostingView(
-        initialSection: WarrenDesktopSettingsSection,
+        initialSection: WarrenDesktopSettingsSection? = nil,
         recorder: WarrenSemanticRecorder
     ) -> NSHostingView<AnyView> {
         let settings = WarrenDesktopSettingsView(

@@ -294,7 +294,15 @@ struct WarrenDesktopSettingsView: View {
 
     private typealias SettingsSection = WarrenDesktopSettingsSection
 
-    @State private var selectedSection: SettingsSection = .terminal
+    /// The running bundle's marketing version. Read once: it cannot change
+    /// while the process runs, and the page redraws on every settings event.
+    private static let appVersion: String = {
+        guard let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              !version.isEmpty else { return "development" }
+        return version
+    }()
+
+    @State private var selectedSection: SettingsSection = .appearance
     @State private var searchQuery = ""
     @FocusState private var searchFocused: Bool
     @State private var installedIDEs: [InstalledIDE] = []
@@ -404,7 +412,7 @@ struct WarrenDesktopSettingsView: View {
         self.hostOptions = hostOptions
         self.selectedHostID = selectedHostID ?? hostOptions.first?.id
         self.onSelectHost = onSelectHost
-        _selectedSection = State(initialValue: initialSettingsSection ?? .terminal)
+        _selectedSection = State(initialValue: initialSettingsSection ?? .appearance)
     }
 
     private var visibleSections: [SettingsSection] {
@@ -482,6 +490,8 @@ struct WarrenDesktopSettingsView: View {
                 .padding(.bottom, 16)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            versionFooter(palette: palette)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(palette.card)
@@ -491,6 +501,32 @@ struct WarrenDesktopSettingsView: View {
                 .strokeBorder(palette.cardBorder, lineWidth: 1)
         }
         .animation(WarrenMotion.selection(reduceMotion: reduceMotion), value: selectedSection)
+    }
+
+    /// The running bundle's version at the foot of the navigation, so a
+    /// screenshot of Settings says which build is being configured without
+    /// opening About.
+    private func versionFooter(palette: WarrenSettingsPalette) -> some View {
+        HStack(spacing: 5) {
+            Text("Version")
+                .foregroundStyle(palette.inkFaint)
+            Text(Self.appVersion)
+                .foregroundStyle(palette.inkQuiet)
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 10.5, weight: .medium))
+        .lineLimit(1)
+        // Lines up with the section headings above, not with the card edge.
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 14)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("settings.version")
+        .warrenSemanticElement(
+            id: "settings.version",
+            role: .text,
+            label: "Warren version \(Self.appVersion)"
+        )
     }
 
     private func searchField(palette: WarrenSettingsPalette) -> some View {
