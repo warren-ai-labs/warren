@@ -4,6 +4,15 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep a terminal recoverable after it is narrowed while a full-screen app
+  runs with line wrapping off. The resize could leave a wide character without
+  its second half in scrollback, and every later attach then failed to capture
+  the screen and showed a blank pane. Warren now builds on Ghostty v1.4.0
+  through ghostline v1.6.1 and GhosttyKit v1.1.0, which clear that character.
+  A terminal already in this state stays blank until its scrollback is cleared.
+
 ## [0.34.1] - 2026-10-27
 
 A patch release that finishes the new sidebar: a plain shell row leads with the
