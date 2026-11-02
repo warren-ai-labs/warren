@@ -117,6 +117,7 @@ function sessionAgentCapabilities(catalog, connectionCapabilities, sessionID) {
 }
 const FileDiffView = lazy(() => import("./filediff.jsx").then(module => ({ default: module.FileDiffView })));
 import { handleUnixTextEditingKey, InputQueue, MobileInputDeduper } from "./input.js";
+import { sessionTargetLabel } from "./presentation.js";
 import { OutputBatcher } from "./output.js";
 import { decodeFrame, isBinaryEnvelope } from "./wire.js";
 import { useKeyboardInset } from "./keyboard.js";
@@ -752,6 +753,11 @@ export default function App() {
     () => catalog.workspaces.find(workspace => workspace.id === selectedWorkspaceID) || null,
     [catalog.workspaces, selectedWorkspaceID],
   );
+  const sessionSheetTarget = useMemo(() => {
+    if (!selectedWorkspace) return "";
+    const projectName = catalog.projectsByID.get(selectedWorkspace.project)?.name || "";
+    return sessionTargetLabel(projectName, selectedWorkspace.branch || selectedWorkspace.name || "");
+  }, [catalog.projectsByID, selectedWorkspace]);
   const tabs = useMemo(
     () => selectedWorkspaceID ? workspaceTabs(catalog, selectedWorkspaceID) : [],
     [catalog, selectedWorkspaceID],
@@ -4932,6 +4938,7 @@ export default function App() {
           onClose={closeSessionSheet}
           pendingKind={creatingSessionKind}
           initialKind={sessionSheetInitialKind}
+          target={sessionSheetTarget}
         />
       )}
       <WorktreeImportDialog

@@ -7,6 +7,7 @@ import {
   popRole,
   presentationLayer,
   pushRole,
+  sessionTargetLabel,
   shouldDismissOnBackdrop,
   shouldDismissOnEscape,
   topRole,
@@ -292,4 +293,19 @@ test("semantic layer map matches the plan", () => {
   assert.equal(presentationLayer("commandSurface"), 40);
   assert.equal(presentationLayer("menu"), 60);
   assert.equal(presentationLayer("popover"), 30);
+});
+
+test("new session target names the project and workspace once", () => {
+  assert.equal(sessionTargetLabel("warren", "main"), "warren · main");
+  assert.equal(sessionTargetLabel("warren", ""), "warren");
+  assert.equal(sessionTargetLabel("", "main"), "main");
+  assert.equal(sessionTargetLabel("warren", "warren"), "warren");
+  assert.equal(sessionTargetLabel("", ""), "");
+});
+
+test("agent transcript uses the reading type scale", () => {
+  const css = read("style.css");
+  assert.match(css, /--text-reading:\s*16px/);
+  assert.match(css, /\.conversation-markdown \{[\s\S]*?font-size: var\(--text-reading\)/);
+  assert.match(css, /\.conversation-prompt-text \{[\s\S]*?font-size: var\(--text-reading\)/);
 });

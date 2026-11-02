@@ -48,3 +48,14 @@ export function presentationLayer(role) {
       return presentationLayers.content;
   }
 }
+
+/// The one line under a New Session title that says where the Session will be
+/// created. Project first, then branch (or workspace name); no duplicate when
+/// both carry the same label.
+export function sessionTargetLabel(projectName, workspaceName) {
+  const project = String(projectName || "").trim();
+  const workspace = String(workspaceName || "").trim();
+  if (!project) return workspace;
+  if (!workspace || workspace === project) return project;
+  return `${project} · ${workspace}`;
+}

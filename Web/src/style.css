@@ -169,6 +169,8 @@
   --text-base: 13px;
   --text-md: 14px;
   --text-2md: 15px;
+  /* Long Agent answers and their composer read a step above chrome text. */
+  --text-reading: 16px;
   --text-lg: 17px;
   --text-dialog: 18px;
   --text-xl: 20px;
@@ -1793,7 +1795,7 @@ button:disabled {
 }
 
 .agent-bubble .agent-markdown {
-  font-size: var(--text-base);
+  font-size: var(--text-reading);
 }
 
 /* Timestamps and provider labels are reference detail, not a heading for every
@@ -1918,7 +1920,7 @@ button:disabled {
   border-radius: var(--radius-md);
   background: var(--color-bg-scrim-soft);
   color: var(--color-text-primary);
-  font: var(--text-sm)/1.5 var(--font-mono);
+  font: var(--text-2sm)/1.5 var(--font-mono);
   white-space: pre;
 }
 
@@ -1936,7 +1938,7 @@ button:disabled {
   border-radius: var(--radius-xs);
   background: var(--color-bg-sunken);
   color: var(--color-text-primary);
-  font: var(--text-base) / 1 var(--font-mono);
+  font: 0.9em / 1.35 var(--font-mono);
   border: 1px solid var(--color-border-subtle);
 }
 
@@ -2906,7 +2908,7 @@ button:disabled {
   border: 0;
   background: transparent;
   color: var(--color-text-primary);
-  font: var(--text-md)/1.45 var(--font-sans);
+  font: var(--text-reading)/1.5 var(--font-sans);
   outline: 0;
 }
 
@@ -4816,21 +4818,27 @@ button:disabled {
     display: none;
   }
 
-  .session-sheet-title {
+  .session-sheet-head {
     padding: 0 4px 14px;
-    color: var(--color-text-secondary);
-    font-size: var(--text-2sm);
-    font-weight: var(--weight-regular);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+  }
+
+  .session-sheet-head.with-back .session-sheet-context {
+    padding-inline-start: calc(32px + 20px + 2 * var(--space-sm));
+  }
+
+  .session-sheet-title {
+    padding: 0;
+    color: var(--color-text-primary);
+    font-size: var(--text-2md);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0;
+    text-transform: none;
   }
 
   .session-sheet-title-with-back {
     display: flex;
     align-items: center;
     gap: var(--space-sm);
-    text-transform: none;
-    letter-spacing: 0;
     font-size: var(--text-2md);
     color: var(--color-text-primary);
   }
@@ -5854,21 +5862,27 @@ button:disabled {
     background: var(--color-border-default);
   }
 
-  .session-sheet-title {
+  .session-sheet-head {
     padding: var(--space-xxs) var(--space-md) 10px;
-    color: var(--color-text-secondary);
-    font-size: var(--text-2sm);
-    font-weight: var(--weight-regular);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+  }
+
+  .session-sheet-head.with-back .session-sheet-context {
+    padding-inline-start: calc(32px + 20px + 2 * var(--space-sm));
+  }
+
+  .session-sheet-title {
+    padding: 0;
+    color: var(--color-text-primary);
+    font-size: var(--text-2md);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0;
+    text-transform: none;
   }
 
   .session-sheet-title-with-back {
     display: flex;
     align-items: center;
     gap: var(--space-sm);
-    text-transform: none;
-    letter-spacing: 0;
     font-size: var(--text-2md);
     color: var(--color-text-primary);
   }
@@ -7403,8 +7417,8 @@ button:disabled {
 }
 
 .conversation-prompt-text {
-  font-size: var(--text-md);
-  line-height: var(--leading-normal);
+  font-size: var(--text-reading);
+  line-height: var(--leading-relaxed);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -7660,8 +7674,14 @@ button:disabled {
 }
 
 .conversation-markdown {
-  font-size: var(--text-md);
+  font-size: var(--text-reading);
   line-height: var(--leading-relaxed);
+}
+
+/* Prose keeps a comfortable measure inside the transcript's wider pane;
+   tables, code and diffs can still use the full width. */
+.conversation-markdown > :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
+  max-width: 68ch;
 }
 
 .conversation-notice {
@@ -7699,6 +7719,14 @@ button:disabled {
 }
 
 /* Answers are list rows with a numbered key, the recommended one first. */
+
+.session-sheet-context {
+  margin-top: 2px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-2sm);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
 
 .session-sheet-interface {
   display: grid;

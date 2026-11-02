@@ -1,5 +1,7 @@
 github.com/abcdlsj/bolthole v0.0.0-20261101024726-9bf92190ada0 h1:NDREUcwzLPPX00DN0kUm7Ai5dySPHzwtzIOaP+K9iW8=
 github.com/abcdlsj/bolthole v0.0.0-20261101024726-9bf92190ada0/go.mod h1:0Azk1b0KtpwO+F++obw6Z8gNoyYm0XWuwrYJdxRymTc=
+github.com/abcdlsj/bolthole v0.0.0-20261102072911-82c03ffc384d h1:Zyf03P/xv1fbZ3+B2JbWvwhljj4quaD9zyUL4Hgj0No=
+github.com/abcdlsj/bolthole v0.0.0-20261102072911-82c03ffc384d/go.mod h1:0Azk1b0KtpwO+F++obw6Z8gNoyYm0XWuwrYJdxRymTc=
 github.com/abcdlsj/ghostline v1.6.1 h1:HtOkhZkwX+GvFXSCwCksDLTM2QGalD+pAyBEjasPIb0=
 github.com/abcdlsj/ghostline v1.6.1/go.mod h1:akYpGp2xSuvml6f0u3wzDIjQRJEcyiTMa3kgF4mV69c=
 github.com/coder/websocket v1.8.12 h1:5bUXkEPPIbewrnkU8LTCLVaxi4N4J8ahufH2vlo4NAo=

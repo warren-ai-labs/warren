@@ -1595,7 +1595,7 @@ export function MobileKeys({ onInput }) {
   );
 }
 
-export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = null, initialKind = "" }) {
+export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = null, initialKind = "", target = "" }) {
   const firstItemRef = useRef(null);
   const cancelRef = useRef(null);
   const sheetRef = useRef(null);
@@ -1673,7 +1673,8 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
         className="session-sheet"
         role="dialog"
         aria-modal="true"
-        aria-label="New session"
+        aria-label={target ? `New session in ${target}` : "New session"}
+        aria-describedby={target ? "session-sheet-target" : undefined}
         onClick={event => event.stopPropagation()}
       >
         <div
@@ -1706,18 +1707,21 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
         />
         {selectedPreset ? (
           <>
-            <div className="session-sheet-title session-sheet-title-with-back">
-              <button
-                type="button"
-                className="session-sheet-back"
-                disabled={Boolean(pendingKind)}
-                onClick={() => setSelectedKind("")}
-                aria-label="Choose another session type"
-              >
-                ‹
-              </button>
-              <SessionPresetIcon kind={selectedPreset.kind} />
-              <span>{selectedPreset.label}</span>
+            <div className="session-sheet-head with-back">
+              <div className="session-sheet-title session-sheet-title-with-back">
+                <button
+                  type="button"
+                  className="session-sheet-back"
+                  disabled={Boolean(pendingKind)}
+                  onClick={() => setSelectedKind("")}
+                  aria-label="Choose another session type"
+                >
+                  ‹
+                </button>
+                <SessionPresetIcon kind={selectedPreset.kind} />
+                <span>{selectedPreset.label}</span>
+              </div>
+              {target && <div className="session-sheet-context" id="session-sheet-target">in {target}</div>}
             </div>
             {offersChat && (
               <div className="session-sheet-interface" role="radiogroup" aria-label="Interface">
@@ -1795,7 +1799,10 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
           </>
         ) : (
           <>
-            <div className="session-sheet-title">New session</div>
+            <div className="session-sheet-head">
+              <div className="session-sheet-title">New session</div>
+              {target && <div className="session-sheet-context" id="session-sheet-target">in {target}</div>}
+            </div>
             {presets.map((preset, index) => (
               <button
                 type="button"
