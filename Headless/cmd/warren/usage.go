@@ -36,6 +36,7 @@ Usage:
   warren [--endpoint NAME | --server URL --token TOKEN] [--json] [-q] <command>
 
 Commands:
+  remote status|enable|disable|share|rotate  serverless remote access (Bolthole)
   relay connect|share
   agent create|list|current|send|read|wait|attach|remove|rename|pin|move
   schedule create|list|view|remove|pause|resume|run|runs  Host-owned timers

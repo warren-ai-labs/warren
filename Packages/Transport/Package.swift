@@ -15,6 +15,7 @@ let package = Package(
         .package(path: "../Domain"),
         .package(path: "../Protocol"),
         .package(path: "../ClientCore"),
+        .package(url: "https://github.com/abcdlsj/bolthole", branch: "main"),
     ],
     targets: [
         .target(
@@ -23,6 +24,7 @@ let package = Package(
                 .product(name: "WarrenDomain", package: "Domain"),
                 .product(name: "WarrenProtocol", package: "Protocol"),
                 .product(name: "WarrenClientCore", package: "ClientCore"),
+                .product(name: "Bolthole", package: "bolthole"),
             ],
             path: "Sources/WarrenTransport"
         ),

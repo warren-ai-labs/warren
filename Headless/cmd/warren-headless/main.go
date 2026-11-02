@@ -27,12 +27,14 @@ import (
 	"syscall"
 	"time"
 
+	boltagent "github.com/abcdlsj/bolthole/agent"
 	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/acp"
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/discovery"
 	"github.com/abcdlsj/warren/Headless/internal/relay"
+	"github.com/abcdlsj/warren/Headless/internal/remote"
 	"github.com/abcdlsj/warren/Headless/internal/runtime"
 	"github.com/abcdlsj/warren/Headless/internal/server"
 	"github.com/abcdlsj/warren/Headless/internal/settings"
@@ -44,6 +46,10 @@ var (
 	version  = "dev"
 	revision = "unknown"
 	dirty    = "false"
+	// defaultRemoteRelayURL is the official Bolthole relay used when remote
+	// access is enabled without an explicit URL. Release builds may override it
+	// with -ldflags "-X main.defaultRemoteRelayURL=https://…".
+	defaultRemoteRelayURL = "https://bolthole.warrenai.xyz"
 )
 
 const tokenRepairInterval = time.Second
@@ -98,6 +104,9 @@ func main() {
 	logFile := flag.String("log-file", env("WARREN_LOG_FILE", filepath.Join(configDir, "headless.log")), "daemon log file (empty disables file logging)")
 	worktreeRoot := flag.String("worktree-root", env("WARREN_WORKTREE_ROOT", "~/.warren/worktrees"), "worktree root")
 	outputDir := flag.String("output-dir", env("WARREN_OUTPUT_DIR", filepath.Join(configDir, "output")), "runtime output directory")
+	remoteRelayURL := flag.String("remote-relay-url", env("WARREN_REMOTE_RELAY_URL", defaultRemoteRelayURL), "default Bolthole relay for serverless remote access")
+	remoteCodePath := flag.String("remote-code-file", env("WARREN_REMOTE_CODE_FILE", filepath.Join(configDir, "remote.code")), "Bolthole connect code file (secret, 0600)")
+	remoteRelayKey := flag.String("remote-relay-key", env("WARREN_REMOTE_RELAY_KEY", ""), "registration key or JWT for relays that gate enrollment (secret, keep it in the environment)")
 	relayURL := flag.String("relay-url", env("WARREN_RELAY_URL", ""), "owned Relay URL (optional)")
 	relayEnrollmentKey := flag.String("relay-enrollment-key", env("WARREN_RELAY_ENROLLMENT_KEY", ""), "short-lived Relay enrollment key (optional)")
 	showVersion := flag.Bool("version", false, "print version")
@@ -330,6 +339,36 @@ func main() {
 	})
 	discoverySupervisor.Refresh()
 	go discoverySupervisor.Run(serviceContext)
+	remoteSupervisor := remote.New(serviceContext, remote.Config{
+		CodePath:  *remoteCodePath,
+		Name:      state.Snapshot().Host.Name,
+		HTTP:      httpHandler.Handler(),
+		WebSocket: httpHandler.ServeRemoteWebSocket,
+		RelayKey:  strings.TrimSpace(*remoteRelayKey),
+		DirectURLs: func() []string {
+			// Direct candidates only make sense when the main listener is
+			// reachable from other machines.
+			if address, ok := listener.Addr().(*net.TCPAddr); ok && !address.IP.IsLoopback() {
+				return boltagent.LocalURLs(address.Port)
+			}
+			return nil
+		},
+		Logger: logger,
+	})
+	httpHandler.Remote = remoteSupervisor
+	httpHandler.RemoteDirect = remoteSupervisor.DirectHandler()
+	if value, err := remote.NormalizeRelayURL(*remoteRelayURL); err == nil {
+		httpHandler.RemoteDefaultRelayURL = value
+	}
+	if remoteSettings := service.RemoteSettingsSnapshot(); remoteSettings.Enabled {
+		relay := remoteSettings.RelayURL
+		if strings.TrimSpace(relay) == "" {
+			relay = httpHandler.RemoteDefaultRelayURL
+		}
+		if err := remoteSupervisor.Start(relay); err != nil {
+			logger.Warn("remote access disabled", "error", err)
+		}
+	}
 	relaySupervisor := newRelaySupervisor(service, httpHandler, serviceContext, token, state.Snapshot().Host.Name, strings.TrimSpace(*relayURL), "", logger)
 	service.SetLiveActivityPublisher(func(ctx context.Context, snapshot server.LiveActivitySnapshot) error {
 		return relaySupervisor.PublishLiveActivity(ctx, snapshot)
@@ -393,6 +432,7 @@ func main() {
 		_ = lanHTTPServer.Close()
 	}
 	discoverySupervisor.Stop()
+	remoteSupervisor.Stop()
 	relaySupervisor.Stop()
 	stopService()
 	service.Shutdown()

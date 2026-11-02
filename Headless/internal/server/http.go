@@ -21,6 +21,7 @@ import (
 	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/relay"
+	"github.com/abcdlsj/warren/Headless/internal/remote"
 	"github.com/gorilla/websocket"
 )
 
@@ -92,6 +93,16 @@ type HTTPServer struct {
 	// pairing and requires an explicit Host-side action again.
 	pairingMu     sync.Mutex
 	pairingWindow *lanPairingWindow
+	// remoteShareWindow is the open remote pairing invite, guarded by
+	// pairingMu so LAN and remote issuance serialize on one lock.
+	remoteShareWindow *remoteShareWindow
+
+	// Remote is the Bolthole supervisor (serverless remote access); nil
+	// disables the /v1/remote API. RemoteDirect serves its E2E entry point on
+	// this listener, and RemoteDefaultRelayURL is the build's default relay.
+	Remote                RemoteAccess
+	RemoteDirect          http.Handler
+	RemoteDefaultRelayURL string
 	// ordered runs per-session requests off the WebSocket reader without
 	// reordering them. Shared by the local and Relay control paths so a session
 	// keeps one ordering domain no matter which transport a client arrives on.
@@ -230,8 +241,9 @@ func (s *HTTPServer) Handler() http.Handler {
 			"ghostlineRPCVersion": rpcVersion,
 			"ghostlineTagVersion": s.GhostlineTagVersion,
 			"status": api.HealthSubsystems{
-				Store: storeStatus,
-				Relay: relayHealth,
+				Store:  storeStatus,
+				Relay:  relayHealth,
+				Remote: s.remoteHealth(),
 			},
 		})
 	})
@@ -245,6 +257,12 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/pairing/status", s.handlePairingStatus)
 	mux.HandleFunc("POST /v1/pairing/disable", s.handlePairingDisable)
 	mux.HandleFunc("POST /v1/pairing/request", s.handlePairingRequest)
+	mux.HandleFunc("GET /v1/remote", s.handleRemoteStatus)
+	mux.HandleFunc("POST /v1/remote/enable", s.handleRemoteEnable)
+	mux.HandleFunc("POST /v1/remote/disable", s.handleRemoteDisable)
+	mux.HandleFunc("POST /v1/remote/rotate", s.handleRemoteRotate)
+	mux.HandleFunc("POST /v1/remote/share", s.handleRemoteShare)
+	mux.HandleFunc("GET "+remote.DirectPath, s.handleRemoteDirect)
 	mux.HandleFunc("POST /v1/relay/join", s.handleRelayJoin)
 	mux.HandleFunc("POST /v1/relay/pairing", s.handleRelayPairing)
 	mux.HandleFunc("POST /v1/maintenance", s.handleMaintenance)
@@ -358,68 +376,90 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 		s.unregisterPeer(peer)
 		peer.closeWithReason(closeReason)
 	}()
-	_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
+	closeReason = s.servePeer(request.Context(), peer, peerTransport{
+		read: func() (bool, []byte, error) {
+			messageType, data, err := connection.ReadMessage()
+			return messageType == websocket.BinaryMessage, data, err
+		},
+		authDeadline: func(deadline time.Time) { _ = connection.SetReadDeadline(deadline) },
+		// A public Relay route may intentionally arrive without a bearer token.
+		allowAnonymous: relay.IsPublicRoute(request.Context()) && request.URL.Path == "/v1/ws",
+	})
+}
+
+// peerTransport is the message source behind one wsPeer session: a local
+// gorilla WebSocket or a Bolthole `ws` stream. Writes go through the peer's
+// own connection or transport callback.
+type peerTransport struct {
+	read func() (binary bool, data []byte, err error)
+	// authDeadline bounds the wait for the auth envelope; the zero time
+	// clears it once the peer is authenticated.
+	authDeadline func(time.Time)
+	// allowAnonymous accepts an empty token as a non-owner session. Only a
+	// public Relay route sets it.
+	allowAnonymous bool
+}
+
+// servePeer authenticates one client and serves its commands until the
+// transport fails. It returns the close reason for diagnostics; the caller
+// owns unregistering and closing the peer.
+func (s *HTTPServer) servePeer(ctx context.Context, peer *wsPeer, transport peerTransport) string {
+	transport.authDeadline(time.Now().Add(10 * time.Second))
 	var envelope api.Envelope
-	publicRelayWebSocket := relay.IsPublicRoute(request.Context()) && request.URL.Path == "/v1/ws"
-	if err := connection.ReadJSON(&envelope); err != nil || envelope.Type != "auth" {
-		closeReason = "auth_rejected"
+	isBinary, data, err := transport.read()
+	if err != nil || isBinary || json.Unmarshal(data, &envelope) != nil || envelope.Type != "auth" {
 		_ = peer.writeJSON(api.Response{Type: "error", OK: false, Error: "unauthorized"})
-		return
+		return "auth_rejected"
 	}
-	clientID, authenticated := s.authenticatedClient(envelope.Token)
-	if !authenticated && !(publicRelayWebSocket && strings.TrimSpace(envelope.Token) == "") {
-		closeReason = "auth_rejected"
+	clientID, owner, authenticated := s.authenticatedPeer(envelope.Token)
+	if !authenticated && !(transport.allowAnonymous && strings.TrimSpace(envelope.Token) == "") {
 		_ = peer.writeJSON(api.Response{Type: "error", OK: false, Error: "unauthorized"})
-		return
+		return "auth_rejected"
 	}
 	s.registerPeer(peer)
 	peer.clientID = clientID
-	// A public Relay route may intentionally arrive without a bearer token.
-	// That anonymous transport is never an owner session, even though its
-	// client ID is empty just like the static Host token's client ID.
-	peer.ownerAuthenticated = authenticated && clientID == ""
+	// An anonymous public-route transport is never an owner session, even
+	// though its client ID is empty just like the static Host token's.
+	peer.ownerAuthenticated = authenticated && owner
 	// Protocol 4 changes terminal recovery from a replayable byte stream to an
 	// atomically installable terminal state.  A missing version is therefore not
 	// an older-but-compatible client: it is an unauthenticated protocol shape
 	// that must be rejected before any roster or session data is exposed.
 	if envelope.Version != api.Version {
-		closeReason = "protocol_rejected"
 		_ = peer.writeJSON(api.Response{Type: "error", OK: false, Error: fmt.Sprintf(
 			"incompatible protocol version: client=%s server=%s", envelope.Version, api.Version,
 		)})
-		return
+		return "protocol_rejected"
 	}
 	peer.terminalStateFormat = selectTerminalStateFormat(envelope.TerminalStateFormats)
 	if peer.terminalStateFormat == "" {
-		closeReason = "terminal_format_rejected"
 		_ = peer.writeJSON(api.Response{
 			Type:  "error",
 			OK:    false,
 			Error: "upgrade required: client does not support a compatible atomic terminal state format",
 		})
-		return
+		return "terminal_format_rejected"
 	}
-	_ = connection.SetReadDeadline(time.Time{})
+	transport.authDeadline(time.Time{})
 	peer.accessScopeID = s.accessScopeID(clientID)
 	peer.setCapabilities(api.NegotiateCapabilities(s.Service.AgentViewCapabilities(), envelope.Capabilities))
-	state, revision := s.Service.RosterVersion(request.Context())
+	state, revision := s.Service.RosterVersion(ctx)
 	state = projectRosterCapabilities(state, peer.capabilitiesList())
 	if err := peer.writeJSON(api.WelcomeMessage{
 		Type: "welcome", Version: api.Version, Host: state.Host,
 		AccessScopeID: peer.accessScopeID, Capabilities: peer.capabilitiesList(),
 	}); err != nil {
-		return
+		return "client_disconnect"
 	}
 	_ = peer.writeJSON(makeRoster(state))
-	peer.startRoster(request.Context(), state, revision, supportsRosterDeltas(envelope.Capabilities))
+	peer.startRoster(ctx, state, revision, supportsRosterDeltas(envelope.Capabilities))
 	for {
-		messageType, data, err := connection.ReadMessage()
+		isBinary, data, err := transport.read()
 		if err != nil {
-			closeReason = "read_error"
-			return
+			return "read_error"
 		}
-		if messageType == websocket.BinaryMessage {
-			writeInputFailure(peer, peer.input(request.Context(), data))
+		if isBinary {
+			writeInputFailure(peer, peer.input(ctx, data))
 			continue
 		}
 		var command api.Envelope
@@ -430,7 +470,7 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 		if command.Type == "ping" {
 			if peer.supportsCapability(api.CapabilityAppHeartbeat) {
 				if err := peer.writeJSON(map[string]any{"t": "pong", "id": command.ID}); err != nil {
-					return
+					return "client_disconnect"
 				}
 			}
 			continue
@@ -444,7 +484,7 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 				// client disconnects. Bound runtime cleanup independently of the
 				// HTTP handler lifetime so a closed socket cannot strand state.
 				mutationContext, cancel := context.WithTimeout(
-					context.WithoutCancel(request.Context()), slowMutationTimeout,
+					context.WithoutCancel(ctx), slowMutationTimeout,
 				)
 				defer cancel()
 				if err := peer.handle(mutationContext, command); err != nil {
@@ -457,7 +497,7 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 			// Git inspection can invoke network-backed fetches and filesystem
 			// scans. Keep those reads off the WebSocket reader so terminal
 			// attach, resize, and input remain responsive on the same client.
-			backgroundContext := backgroundRequestContext(request.Context(), command.Method)
+			backgroundContext := backgroundRequestContext(ctx, command.Method)
 			go func(command api.Envelope, ctx context.Context) {
 				if err := peer.handle(ctx, command); err != nil {
 					_ = peer.writeError(command.ID, err)
@@ -466,7 +506,7 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 			continue
 		}
 		if key := orderedRequestKey(command); key != "" {
-			requestContext := request.Context()
+			requestContext := ctx
 			submitted := s.ordered.submit(key, func() {
 				if err := peer.handle(requestContext, command); err != nil {
 					_ = peer.writeError(command.ID, err)
@@ -478,7 +518,7 @@ func (s *HTTPServer) handleWebSocket(writer http.ResponseWriter, request *http.R
 			continue
 		}
 		handleStartedAt := time.Now()
-		if err := peer.handle(request.Context(), command); err != nil {
+		if err := peer.handle(ctx, command); err != nil {
 			_ = peer.writeError(command.ID, err)
 		}
 		if elapsed := time.Since(handleStartedAt); elapsed >= 500*time.Millisecond {
@@ -671,16 +711,25 @@ func (s *HTTPServer) authorized(value string) bool {
 }
 
 // authenticatedClient accepts either the daemon's owner token or one of the
-// scoped tokens issued by the temporary LAN pairing window. The empty client
-// ID identifies the owner token; paired clients receive their own access
-// scope and are intentionally not treated as Host administrators.
+// scoped tokens issued by a Host-armed pairing window. The empty client ID
+// identifies the owner token.
 func (s *HTTPServer) authenticatedClient(value string) (clientID string, ok bool) {
+	clientID, _, ok = s.authenticatedPeer(value)
+	return clientID, ok
+}
+
+// authenticatedPeer is authenticatedClient plus whether the credential carries
+// Host owner authority: the static Host token always does, and a paired client
+// does only when its pairing window was armed with an owner grant (remote
+// sharing from Desktop or `warren remote share`). LAN PIN pairings stay
+// non-owner, so a pairing never silently becomes an owner login.
+func (s *HTTPServer) authenticatedPeer(value string) (clientID string, owner bool, ok bool) {
 	if s.authorized(value) {
-		return "", true
+		return "", true, true
 	}
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" || s.Service == nil {
-		return "", false
+		return "", false, false
 	}
 	hash := hashLANPairingToken(trimmed)
 	for _, client := range s.Service.PairedClientsSnapshot() {
@@ -690,9 +739,9 @@ func (s *HTTPServer) authenticatedClient(value string) (clientID string, ok bool
 		if strings.TrimSpace(client.ClientID) == "" {
 			continue
 		}
-		return client.ClientID, true
+		return client.ClientID, client.Owner, true
 	}
-	return "", false
+	return "", false, false
 }
 
 func (p *wsPeer) requireOwner() error {

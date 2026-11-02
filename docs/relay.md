@@ -1,5 +1,9 @@
 # Remote access with Warren Relay
 
+> Warren Relay is being replaced by [remote.md](remote.md), a serverless relay
+> that only forwards end-to-end encrypted traffic. This document stays while
+> Desktop and Web still use Relay; new deployments should use remote access.
+
 Warren Relay is how a phone or browser reaches a Warren Host that is not on the
 same network. The Host keeps every Project, Workspace, Session, and Agent;
 Relay only stores Host identity, presence, and revocation state, and forwards

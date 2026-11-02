@@ -205,11 +205,15 @@ public struct WarrenRemoteEndpointConfiguration: Codable, Hashable, Identifiable
     }
 
     public var effectiveDirectURL: String? {
-        directURL ?? (!isRelay ? url : nil)
+        // A remote (Bolthole) endpoint's `url` is its relay; Bolthole picks
+        // LAN or relay itself, so it exposes no separate routes here.
+        if isRemote { return nil }
+        return directURL ?? (!isRelay ? url : nil)
     }
 
     public var effectiveRelayURL: String? {
-        relayURL ?? (isRelay ? url : nil)
+        if isRemote { return nil }
+        return relayURL ?? (isRelay ? url : nil)
     }
 
     public var hasBothRoutes: Bool {

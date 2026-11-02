@@ -74,6 +74,22 @@ func (s *Service) RelaySettingsSnapshot() settings.RelaySettings {
 	return s.Settings.Relay
 }
 
+func (s *Service) RemoteSettingsSnapshot() settings.RemoteSettings {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.Settings.Remote
+}
+
+func (s *Service) UpdateRemoteSettings(value settings.RemoteSettings) error {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	s.Settings.Remote = value
+	if s.SettingsPath != "" {
+		return settings.Save(s.SettingsPath, s.Settings)
+	}
+	return nil
+}
+
 func (s *Service) PublicTunnelSettingsSnapshot() settings.PublicTunnelSettings {
 	s.settingsMu.RLock()
 	defer s.settingsMu.RUnlock()

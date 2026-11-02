@@ -22,6 +22,9 @@ type HealthSubsystems struct {
 	// independent of Connected: a host can be configured but disconnected
 	// while the daemon retries.
 	Relay RelayHealth `json:"relay"`
+	// Remote is serverless remote access through a Bolthole relay. It uses
+	// the same states as Relay.
+	Remote RelayHealth `json:"remote"`
 }
 
 const (

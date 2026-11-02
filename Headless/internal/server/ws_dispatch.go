@@ -198,6 +198,30 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, map[string]bool{"revoked": true})
+	case "remote.status", "remote.enable", "remote.disable", "remote.rotate", "remote.share":
+		if err := p.requireOwner(); err != nil {
+			return err
+		}
+		var (
+			value any
+			err   error
+		)
+		switch command.Method {
+		case "remote.status":
+			value, err = p.server.remoteState()
+		case "remote.enable":
+			value, err = p.server.remoteEnable(stringParam(params, "relayUrl"))
+		case "remote.disable":
+			value, err = p.server.remoteDisable()
+		case "remote.rotate":
+			value, err = p.server.remoteRotate()
+		case "remote.share":
+			value, err = p.server.remoteShare(stringParam(params, "relayUrl"))
+		}
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, value)
 	case "pairing.enable":
 		if err := p.requireOwner(); err != nil {
 			return err

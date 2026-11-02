@@ -1,3 +1,4 @@
+import Bolthole
 import Foundation
 import WarrenDomain
 import WarrenProtocol
@@ -1050,6 +1051,10 @@ public actor WarrenRemoteClient {
 
     private let configuration: WarrenRemoteEndpointConfiguration
     private let urlSession: URLSession
+    /// The Bolthole client of a remote endpoint. It outlives individual
+    /// sockets so the encrypted session, and the LAN-or-relay path it found,
+    /// is reused across reconnects.
+    private var boltholeClient: BoltholeClient?
     /// Hard deadline for the authenticated welcome on this endpoint. Loopback
     /// endpoints retry faster because they have no DNS, TLS, or proxy step.
     private let welcomeTimeout: Duration
@@ -1263,12 +1268,29 @@ public actor WarrenRemoteClient {
         running = false
         connectionTask?.cancel()
         connectionTask = nil
+        if let boltholeClient {
+            self.boltholeClient = nil
+            Task { await boltholeClient.close() }
+        }
         backoffWaitTask?.cancel()
         backoffWaitTask = nil
         let socket = socket
         self.socket = nil
         Task { await socket?.close() }
         setConnectionState(.stopped)
+    }
+
+    /// Creates (once) the Bolthole client for a remote endpoint. Nil when the
+    /// endpoint's connect code is missing or malformed.
+    private func remoteBoltholeClient() -> BoltholeClient? {
+        if let boltholeClient { return boltholeClient }
+        guard let connectionString = configuration.remoteConnectionString else { return nil }
+        var options = BoltholeClient.Options()
+        options.mode = configuration.remoteMode
+        options.name = clientID
+        guard let client = try? BoltholeClient(connectionString, options: options) else { return nil }
+        boltholeClient = client
+        return client
     }
 
     public func reconnectNow() {
@@ -2181,6 +2203,13 @@ public actor WarrenRemoteClient {
             let adapter: any WarrenWebSocketTaskAdapter
             if !injectedTasks.isEmpty {
                 adapter = injectedTasks.removeFirst()
+            } else if configuration.isRemote {
+                guard let client = remoteBoltholeClient() else {
+                    setConnectionState(.disconnected)
+                    emit(.disconnected(reason: WarrenRemoteClientError.invalidEndpoint.localizedDescription))
+                    return
+                }
+                adapter = WarrenBoltholeWebSocketAdapter(client: client)
             } else {
                 let observer = connectionPhaseObserver
                 adapter = WarrenRemoteSocket.adapter(

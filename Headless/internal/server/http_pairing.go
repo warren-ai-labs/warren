@@ -123,6 +123,9 @@ func (s *HTTPServer) handlePairingRequest(writer http.ResponseWriter, request *h
 		ClientID   string `json:"client_id"`
 		ClientName string `json:"client_name"`
 		PIN        string `json:"pin"`
+		// Invite is the remote share secret from a Bolthole link. It replaces
+		// the PIN and grants owner authority (see authenticatedPeer).
+		Invite string `json:"invite"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16*1024))
 	decoder.DisallowUnknownFields()
@@ -134,7 +137,9 @@ func (s *HTTPServer) handlePairingRequest(writer http.ResponseWriter, request *h
 	clientID := strings.TrimSpace(body.ClientID)
 	clientName := strings.TrimSpace(body.ClientName)
 	pin := strings.TrimSpace(body.PIN)
-	if hostID == "" || clientID == "" || len(clientID) > 256 || len(pin) != 6 || !allASCIIDigits(pin) {
+	invite := strings.TrimSpace(body.Invite)
+	validCredential := (invite == "" && len(pin) == 6 && allASCIIDigits(pin)) || (invite != "" && pin == "" && len(invite) <= 128)
+	if hostID == "" || clientID == "" || len(clientID) > 256 || !validCredential {
 		http.Error(writer, "invalid pairing request", http.StatusBadRequest)
 		return
 	}
@@ -150,11 +155,21 @@ func (s *HTTPServer) handlePairingRequest(writer http.ResponseWriter, request *h
 	// Serialize validation and issuance so two simultaneous requests cannot
 	// race a window expiry or replace the same client credential unexpectedly.
 	s.pairingMu.Lock()
-	status := s.pairingStatusLocked(time.Now())
-	if !status.Enabled || subtle.ConstantTimeCompare([]byte(pin), []byte(status.PIN)) != 1 {
-		s.pairingMu.Unlock()
-		http.Error(writer, "pairing is closed or the PIN is invalid", http.StatusConflict)
-		return
+	owner, via := false, "lan"
+	if invite != "" {
+		if !s.remoteInviteValidLocked(invite, time.Now()) {
+			s.pairingMu.Unlock()
+			http.Error(writer, "the share link has expired or was replaced", http.StatusConflict)
+			return
+		}
+		owner, via = true, pairedViaRemote
+	} else {
+		status := s.pairingStatusLocked(time.Now())
+		if !status.Enabled || subtle.ConstantTimeCompare([]byte(pin), []byte(status.PIN)) != 1 {
+			s.pairingMu.Unlock()
+			http.Error(writer, "pairing is closed or the PIN is invalid", http.StatusConflict)
+			return
+		}
 	}
 	token, err := newLANPairingToken()
 	if err != nil {
@@ -169,6 +184,7 @@ func (s *HTTPServer) handlePairingRequest(writer http.ResponseWriter, request *h
 		if clients[index].ClientID == clientID {
 			clients[index] = settings.PairedClient{
 				ClientID: clientID, Name: clientName, TokenHash: hash, CreatedAt: time.Now().UTC(),
+				Owner: owner, Via: via,
 			}
 			updated = true
 			break
@@ -177,6 +193,7 @@ func (s *HTTPServer) handlePairingRequest(writer http.ResponseWriter, request *h
 	if !updated {
 		clients = append(clients, settings.PairedClient{
 			ClientID: clientID, Name: clientName, TokenHash: hash, CreatedAt: time.Now().UTC(),
+			Owner: owner, Via: via,
 		})
 	}
 	if err := s.Service.UpdatePairedClients(clients); err != nil {

@@ -42,6 +42,10 @@ type wsPeer struct {
 	// socket but is still owned by the peer's writer goroutine, preserving the
 	// same bounded queue and service lifecycle.
 	transport func(outboundMessage) bool
+	// writerDone, when set, is closed once writeLoop has flushed and exited,
+	// so a stream-backed transport can send its close only after the last
+	// queued message (for example an auth error).
+	writerDone chan struct{}
 
 	enqueueMu   sync.Mutex
 	closed      chan struct{}
@@ -142,6 +146,21 @@ func newRelayPeer(server *HTTPServer, transport func(outboundMessage) bool) *wsP
 	peer := &wsPeer{
 		server:          server,
 		transport:       transport,
+		outbound:        make(chan outboundMessage, outboundQueueCapacity),
+		controlOutbound: make(chan outboundMessage, outboundControlQueueCapacity),
+		closed:          make(chan struct{}),
+	}
+	go peer.writeLoop()
+	return peer
+}
+
+// newStreamPeer is newRelayPeer for transports that must know when the
+// writer has drained (see writerDone).
+func newStreamPeer(server *HTTPServer, transport func(outboundMessage) bool) *wsPeer {
+	peer := &wsPeer{
+		server:          server,
+		transport:       transport,
+		writerDone:      make(chan struct{}),
 		outbound:        make(chan outboundMessage, outboundQueueCapacity),
 		controlOutbound: make(chan outboundMessage, outboundControlQueueCapacity),
 		closed:          make(chan struct{}),
@@ -257,6 +276,9 @@ func (p *wsPeer) closeWithReason(reason string) {
 }
 
 func (p *wsPeer) writeLoop() {
+	if p.writerDone != nil {
+		defer close(p.writerDone)
+	}
 	if p.connection == nil && p.transport == nil {
 		return
 	}

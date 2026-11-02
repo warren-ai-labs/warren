@@ -107,6 +107,8 @@ func run(arguments []string) error {
 		return headlessCommand(args[1:])
 	case "relay":
 		return relayCommand(args[1:])
+	case "remote":
+		return remoteCommand(args[1:])
 	case "help", "-h", "--help":
 		usage()
 		return nil

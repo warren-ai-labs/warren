@@ -389,6 +389,7 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 
 **Operating a Host**
 
+- [docs/remote.md](docs/remote.md) — serverless remote access: the connect code, sharing a Host with a phone, and the relay API
 - [docs/relay.md](docs/relay.md) — enrolling a Host, pairing a phone or browser, and revoking access through Relay
 - [docs/relay-http.md](docs/relay-http.md) — Relay control-plane HTTP API, trusted-network setup, and iOS transport constraints
 - [docs/update-service.md](docs/update-service.md) — Cloudflare release proxy, caching, and updater endpoint contract

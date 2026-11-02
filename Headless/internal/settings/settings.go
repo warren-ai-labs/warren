@@ -41,6 +41,9 @@ type Settings struct {
 	// never duplicated here.
 	Relay        RelaySettings        `json:"relay,omitempty"`
 	PublicTunnel PublicTunnelSettings `json:"publicTunnel,omitempty"`
+	// Remote configures serverless remote access through a Bolthole relay.
+	// The connect code itself lives in its own 0600 file, never here.
+	Remote RemoteSettings `json:"remote,omitempty"`
 	// AutoOpenShell controls whether opening an empty workspace creates a
 	// default Shell session. Explicit New Session/Shell actions are unaffected.
 	AutoOpenShell bool `json:"autoOpenShell"`
@@ -71,6 +74,11 @@ type PairedClient struct {
 	Name      string    `json:"name,omitempty"`
 	TokenHash string    `json:"tokenHash"`
 	CreatedAt time.Time `json:"createdAt"`
+	// Owner grants Host owner authority (settings, remote access management)
+	// to this client. Only a pairing window armed with an owner grant sets it.
+	Owner bool `json:"owner,omitempty"`
+	// Via records how the client paired ("lan" or "remote"), for display.
+	Via string `json:"via,omitempty"`
 }
 
 var reservedRuntimeEnvKeys = map[string]struct{}{
@@ -123,6 +131,12 @@ type RelaySettings struct {
 	RelayKeyID string `json:"relayKeyID,omitempty"`
 	RelayKey   string `json:"relayKey,omitempty"`
 	LastError  string `json:"lastError,omitempty"`
+}
+
+// RemoteSettings is the non-secret Bolthole remote-access configuration.
+type RemoteSettings struct {
+	Enabled  bool   `json:"enabled"`
+	RelayURL string `json:"relayURL,omitempty"`
 }
 
 type PublicTunnelSettings struct {
