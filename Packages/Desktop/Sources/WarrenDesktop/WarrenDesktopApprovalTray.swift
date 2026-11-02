@@ -451,13 +451,13 @@ struct WarrenDesktopApprovalTrayPanel: View {
         decision: WarrenDesktopPendingDecision,
         palette: WarrenDesktopMenuPalette
     ) -> some View {
-        // The first of the dock's ordered options is its recommendation, so
-        // the tray fills that keycap the same way.
+        // The first of the dock's ordered options is its recommendation, so it
+        // reads at full strength while the rest stay one step quieter. The key
+        // that answers it is plain dim text: a boxed number beside a label was
+        // a keycap inside a button, the one thing the menus no longer draw.
         let recommended = index == 0
         let inFlight = submitting[decision.id]
         let chosen = inFlight == option.id
-        let filled = recommended && !chosen
-        let keycap = RoundedRectangle(cornerRadius: 5, style: .continuous)
         return Button {
             choose(option, of: decision, in: entry)
         } label: {
@@ -469,12 +469,10 @@ struct WarrenDesktopApprovalTrayPanel: View {
                     } else {
                         Text("\(index + 1)")
                             .font(WarrenTypography.monoSmall)
-                            .foregroundStyle(recommended ? palette.surface : palette.keycapText)
+                            .foregroundStyle(palette.meta)
                     }
                 }
-                .frame(width: 18, height: 18)
-                .background(filled ? palette.rowText : Color.clear, in: keycap)
-                .overlay(keycap.strokeBorder(filled ? Color.clear : palette.keycapBorder, lineWidth: 1))
+                .frame(minWidth: 10, minHeight: 18)
                 Text(option.label)
                     .font(.system(size: 13, weight: recommended ? .semibold : .medium))
                     .foregroundStyle(option.isReject ? palette.secondaryGlyph : palette.rowText)

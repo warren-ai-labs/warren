@@ -2873,52 +2873,6 @@ struct WarrenDesktopDeleteProjectConfirmation: View {
     }
 }
 
-/// The shared Cancel / primary footer for a destructive confirmation.
-/// Primary is rightmost and carries its shortcut as a keycap, read from the
-/// same definition the button binds, so a destructive confirm shows and takes
-/// Command-Return.
-struct WarrenDesktopDialogFooter: View {
-    let confirmLabel: String
-    var isDestructive = false
-    var isConfirmEnabled = true
-    let onCancel: () -> Void
-    let onConfirm: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Spacer(minLength: 0)
-            Button(action: onCancel) {
-                HStack(spacing: 6) {
-                    Text("Cancel")
-                    WarrenDialogKeycap("esc")
-                }
-            }
-            .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-            .keyboardShortcut(.cancelAction)
-            Button(action: onConfirm) {
-                HStack(spacing: 6) {
-                    Text(confirmLabel)
-                    WarrenDialogKeycap(
-                        WarrenDialogConfirmButtonStyle.keycap(isDestructive: isDestructive),
-                        isOnPrimary: !isDestructive
-                    )
-                }
-            }
-            .modifier(WarrenDialogConfirmButtonStyle(
-                isDestructive: isDestructive,
-                isEnabled: isConfirmEnabled
-            ))
-            .warrenSemanticElement(
-                id: "dialog.confirm",
-                role: .button,
-                label: confirmLabel,
-                isEnabled: isConfirmEnabled,
-                action: onConfirm
-            )
-        }
-    }
-}
-
 /// The branch a Task's worktrees share, so each row need not repeat it.
 enum WarrenDesktopTaskBranch {
     static func name(of workspace: Workspace) -> String {

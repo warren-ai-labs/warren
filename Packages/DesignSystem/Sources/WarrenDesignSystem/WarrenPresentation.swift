@@ -309,6 +309,10 @@ public struct WarrenInputField: View {
                             lineWidth: WarrenSpacing.hairline
                         )
                 }
+                // A neutral ring on a sunken field is quieter than the accent
+                // was, so focus also carries a soft halo: the field still reads
+                // as the one holding the keyboard without an orange outline.
+                .shadow(color: isFocused ? tokens.focusRing.opacity(0.55) : .clear, radius: 3)
                 .onSubmit {
                     onSubmit?()
                 }
@@ -326,20 +330,28 @@ public struct WarrenInputField: View {
 public struct WarrenSecondaryButtonStyle: ButtonStyle {
     public var isFocused: Bool
     public var font: Font
+    /// A dialog passes `dialogControlHeight` so its buttons match its field.
+    public var height: CGFloat
 
-    public init(isFocused: Bool = false, font: Font = WarrenTypography.body) {
+    public init(
+        isFocused: Bool = false,
+        font: Font = WarrenTypography.body,
+        height: CGFloat = WarrenLayoutMetrics.compactControlHeight
+    ) {
         self.isFocused = isFocused
         self.font = font
+        self.height = height
     }
 
     public func makeBody(configuration: Configuration) -> some View {
-        SecondaryBody(configuration: configuration, isFocused: isFocused, font: font)
+        SecondaryBody(configuration: configuration, isFocused: isFocused, font: font, height: height)
     }
 
     private struct SecondaryBody: View {
         let configuration: Configuration
         let isFocused: Bool
         let font: Font
+        let height: CGFloat
         @Environment(\.isEnabled) private var isEnabled
         // The button's own keyboard focus, OR'd with the caller's flag.
         @Environment(\.isFocused) private var environmentFocused
@@ -359,8 +371,8 @@ public struct WarrenSecondaryButtonStyle: ButtonStyle {
             configuration.label
                 .font(font)
                 .foregroundStyle(tokens.foreground)
-                .padding(.horizontal, WarrenSpacing.medium)
-                .frame(minHeight: WarrenLayoutMetrics.compactControlHeight)
+                .padding(.horizontal, Self.horizontalPadding)
+                .frame(minHeight: height)
                 .background(
                     state == .pressed
                         ? tokens.fillSelected
@@ -380,6 +392,10 @@ public struct WarrenSecondaryButtonStyle: ButtonStyle {
                 .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: state)
                 .onHover { hovered = $0 }
         }
+
+        /// One step wider than the old 12: the label gets room to breathe and
+        /// every button in a dialog lands on the same width rhythm.
+        static let horizontalPadding: CGFloat = 14
     }
 }
 
@@ -387,20 +403,27 @@ public struct WarrenSecondaryButtonStyle: ButtonStyle {
 public struct WarrenDestructiveButtonStyle: ButtonStyle {
     public var isFocused: Bool
     public var font: Font
+    public var height: CGFloat
 
-    public init(isFocused: Bool = false, font: Font = WarrenTypography.bodyEmphasis) {
+    public init(
+        isFocused: Bool = false,
+        font: Font = WarrenTypography.bodyEmphasis,
+        height: CGFloat = WarrenLayoutMetrics.compactControlHeight
+    ) {
         self.isFocused = isFocused
         self.font = font
+        self.height = height
     }
 
     public func makeBody(configuration: Configuration) -> some View {
-        DestructiveBody(configuration: configuration, isFocused: isFocused, font: font)
+        DestructiveBody(configuration: configuration, isFocused: isFocused, font: font, height: height)
     }
 
     private struct DestructiveBody: View {
         let configuration: Configuration
         let isFocused: Bool
         let font: Font
+        let height: CGFloat
         @Environment(\.isEnabled) private var isEnabled
         // The button's own keyboard focus, OR'd with the caller's flag.
         @Environment(\.isFocused) private var environmentFocused
@@ -420,8 +443,8 @@ public struct WarrenDestructiveButtonStyle: ButtonStyle {
             configuration.label
                 .font(font)
                 .foregroundStyle(.white)
-                .padding(.horizontal, WarrenSpacing.medium)
-                .frame(minHeight: WarrenLayoutMetrics.compactControlHeight)
+                .padding(.horizontal, 14)
+                .frame(minHeight: height)
                 .background(
                     WarrenDialogPalette.destructive(for: colorScheme, tokens: tokens)
                         .opacity(state == .pressed ? 0.82 : 1)
@@ -480,31 +503,13 @@ public struct WarrenTextInputDialog: View {
                 onSubmit: onConfirm
             )
         } footer: {
-            HStack(spacing: 8) {
-                Spacer(minLength: 0)
-                Button(action: onCancel) {
-                    HStack(spacing: 6) {
-                        Text("Cancel")
-                        WarrenDialogKeycap("esc")
-                    }
-                }
-                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                .keyboardShortcut(.cancelAction)
-                Button(action: onConfirm) {
-                    HStack(spacing: 6) {
-                        Text(confirmLabel)
-                        WarrenDialogKeycap(
-                            WarrenDialogConfirmButtonStyle.keycap(isDestructive: isDestructive),
-                            isOnPrimary: !isDestructive
-                        )
-                    }
-                }
-                .modifier(WarrenDialogConfirmButtonStyle(
-                    isDestructive: isDestructive,
-                    isEnabled: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ))
-                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
+            WarrenDialogFooter(
+                confirmLabel: confirmLabel,
+                isDestructive: isDestructive,
+                isConfirmEnabled: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                onCancel: onCancel,
+                onConfirm: onConfirm
+            )
         }
 #if os(macOS)
         .onExitCommand(perform: onCancel)

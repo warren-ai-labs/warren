@@ -238,32 +238,19 @@ struct WarrenDesktopTaskCreatorView: View {
                 }
             }
         } footer: {
-            HStack(spacing: 8) {
+            WarrenDialogFooter(
+                confirmLabel: "Create",
+                isConfirmEnabled: coordinator.canSubmit,
+                isCancelEnabled: !coordinator.isSubmitting,
+                onCancel: onCancel,
+                onConfirm: submit
+            ) {
                 if coordinator.isSubmitting {
                     WarrenLoadingIndicator(size: 16, accessibilityLabel: "Creating task")
                     Text("Creating task…")
-                        .font(WarrenTypography.dialogBody)
+                        .font(WarrenTypography.dialogMeta)
                         .foregroundStyle(tokens.mutedForeground)
                 }
-                Spacer(minLength: 0)
-                Button(action: onCancel) {
-                    HStack(spacing: 6) {
-                        Text("Cancel")
-                        WarrenDialogKeycap("esc")
-                    }
-                }
-                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                .keyboardShortcut(.cancelAction)
-                .disabled(coordinator.isSubmitting)
-                Button(action: submit) {
-                    HStack(spacing: 6) {
-                        Text("Create")
-                        WarrenDialogKeycap("\u{23CE}", isOnPrimary: true)
-                    }
-                }
-                .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
-                .keyboardShortcut(.defaultAction)
-                .disabled(!coordinator.canSubmit)
             }
         }
         .onExitCommand {

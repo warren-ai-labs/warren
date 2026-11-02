@@ -533,12 +533,15 @@ public struct WarrenDesktopUsagePanel: View {
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
-            .background(selectedAgentFilter != nil ? tokens.highlight.opacity(0.12) : tokens.cardSurface)
-            .foregroundStyle(selectedAgentFilter != nil ? tokens.highlight : tokens.foreground)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            // A filter that is on is a selection, and a selection in Warren is
+            // the neutral wash — the accent belongs to agent activity and to a
+            // destructive confirm, nowhere else.
+            .background(selectedAgentFilter != nil ? tokens.fillSelected : tokens.cardSurface)
+            .foregroundStyle(tokens.foreground)
+            .clipShape(RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(selectedAgentFilter != nil ? tokens.highlight.opacity(0.4) : tokens.border.opacity(0.4), lineWidth: WarrenSpacing.hairline)
+                RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
+                    .strokeBorder(selectedAgentFilter != nil ? tokens.ring : tokens.border.opacity(0.4), lineWidth: WarrenSpacing.hairline)
             )
             .warrenMenuButton(agentFilterActions)
             .accessibilityIdentifier("usage.filter.agent")
@@ -555,12 +558,12 @@ public struct WarrenDesktopUsagePanel: View {
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
-            .background(selectedModelFilter != nil ? tokens.highlight.opacity(0.12) : tokens.cardSurface)
-            .foregroundStyle(selectedModelFilter != nil ? tokens.highlight : tokens.foreground)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(selectedModelFilter != nil ? tokens.fillSelected : tokens.cardSurface)
+            .foregroundStyle(tokens.foreground)
+            .clipShape(RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(selectedModelFilter != nil ? tokens.highlight.opacity(0.4) : tokens.border.opacity(0.4), lineWidth: WarrenSpacing.hairline)
+                RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
+                    .strokeBorder(selectedModelFilter != nil ? tokens.ring : tokens.border.opacity(0.4), lineWidth: WarrenSpacing.hairline)
             )
             .warrenMenuButton(modelFilterActions)
             .accessibilityIdentifier("usage.filter.model")
@@ -1161,7 +1164,9 @@ public struct WarrenDesktopUsagePanel: View {
 
                 Text(group.displayName)
                     .font(WarrenTypography.settingsSupporting)
-                    .foregroundStyle(isSelected ? tokens.highlight : tokens.foreground)
+                    // The wash and the ring already say "chosen"; the label
+                    // only steps up rather than changing hue.
+                    .foregroundStyle(isSelected ? tokens.foreground : tokens.ink2)
                     .lineLimit(1)
                     .truncationMode(.middle)
 
@@ -1217,9 +1222,9 @@ public struct WarrenDesktopUsagePanel: View {
             }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                 .strokeBorder(
-                    isSelected ? tokens.highlight.opacity(0.55) : Color.clear,
+                    isSelected ? tokens.ring : Color.clear,
                     lineWidth: WarrenSpacing.hairline
                 )
         )

@@ -199,20 +199,28 @@ public struct WarrenChromeButtonStyle: ButtonStyle {
 public struct WarrenPrimaryButtonStyle: ButtonStyle {
     public var isFocused: Bool
     public var font: Font
+    /// A dialog passes `dialogControlHeight` so its buttons match its field.
+    public var height: CGFloat
 
-    public init(isFocused: Bool = false, font: Font = WarrenTypography.body) {
+    public init(
+        isFocused: Bool = false,
+        font: Font = WarrenTypography.body,
+        height: CGFloat = WarrenLayoutMetrics.compactControlHeight
+    ) {
         self.isFocused = isFocused
         self.font = font
+        self.height = height
     }
 
     public func makeBody(configuration: Configuration) -> some View {
-        PrimaryBody(configuration: configuration, isFocused: isFocused, font: font)
+        PrimaryBody(configuration: configuration, isFocused: isFocused, font: font, height: height)
     }
 
     private struct PrimaryBody: View {
         let configuration: ButtonStyle.Configuration
         let isFocused: Bool
         let font: Font
+        let height: CGFloat
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.isFocused) private var environmentFocused
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -232,8 +240,8 @@ public struct WarrenPrimaryButtonStyle: ButtonStyle {
             configuration.label
                 .font(font)
                 .foregroundStyle(tokens.background)
-                .padding(.horizontal, WarrenSpacing.medium)
-                .frame(minHeight: WarrenLayoutMetrics.compactControlHeight)
+                .padding(.horizontal, 14)
+                .frame(minHeight: height)
                 .background(fill(for: state, tokens: tokens))
                 .clipShape(.rect(cornerRadius: WarrenRadius.small))
                 .warrenFocusRing(state == .focused)

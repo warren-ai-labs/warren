@@ -7,7 +7,7 @@ import WarrenObservation
 enum WarrenDesktopMenuMetrics {
     static let radius: CGFloat = 10
     static let inset: CGFloat = 4
-    static let rowRadius: CGFloat = 6
+    static let rowRadius: CGFloat = 7
     /// A one-line row.
     static let rowHeight: CGFloat = 30
     /// A row with a title and a second line.
@@ -26,12 +26,6 @@ enum WarrenDesktopMenuMetrics {
     /// Between the control that opens a surface and the surface.
     static let anchorGap: CGFloat = 4
 
-    /// A shortcut key: one cap per key.
-    static let keycapHeight: CGFloat = 18
-    static let keycapMinWidth: CGFloat = 18
-    static let keycapPadding: CGFloat = 4
-    static let keycapRadius: CGFloat = 4
-    static let keycapSpacing: CGFloat = 2
 
     /// The leading column a single-choice list keeps for its checkmark.
     static let checkColumnWidth: CGFloat = 14
@@ -129,9 +123,11 @@ struct WarrenDesktopMenuDivider: View {
         Rectangle()
             .fill(WarrenDesktopMenuPalette.resolved(for: colorScheme).divider)
             .frame(height: 1)
-            // Full-bleed: the surface's own inset is cancelled so the hairline
-            // reaches both container edges, as the spec draws it.
-            .padding(.horizontal, -WarrenDesktopMenuMetrics.inset)
+            // Inset to the row's own margin rather than full-bleed. A hairline
+            // that reaches the surface edge cuts the card in two; one that
+            // starts where the rows start names the group and leaves the
+            // surface whole.
+            .padding(.horizontal, WarrenDesktopMenuMetrics.rowHorizontalPadding)
             .padding(.vertical, WarrenDesktopMenuMetrics.dividerSpacing)
             .accessibilityHidden(true)
     }

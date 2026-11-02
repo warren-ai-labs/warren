@@ -493,8 +493,8 @@ struct WarrenDesktopSidebar: View {
                 .truncationMode(.tail)
             Spacer(minLength: 0)
             HStack(spacing: WarrenSpacing.xxs) {
-                // The menus' own keycaps, one per key, rather than a
-                // hand-drawn cap that matched nothing else in the app.
+                // The menus' own shortcut text, rather than a hand-drawn cap
+                // that matched nothing else in the app.
                 WarrenDesktopMenuKeycaps(keys: "\u{2318}B")
                 Text("pin")
                     .font(WarrenTypography.navigationMeta)

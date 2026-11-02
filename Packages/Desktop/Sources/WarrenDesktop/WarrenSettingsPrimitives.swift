@@ -216,6 +216,8 @@ struct WarrenSettingsStatusLine: View {
 enum WarrenSettingsMetrics {
     /// Every text field that sits at the end of a row.
     static let fieldWidth: CGFloat = 320
+    /// Every drop-down. One width, so the column has one right edge.
+    static let controlWidth: CGFloat = 180
 }
 
 // MARK: - Group
@@ -269,6 +271,19 @@ struct WarrenSettingsGroup<Content: View>: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 content
+                // A group's explanation belongs to the group, inside its box
+                // and on the line its rows use. Under the box it was the one
+                // grey line in the page that started somewhere else, and it
+                // read as a caption for whatever happened to follow it.
+                if let footnote {
+                    Text(footnote)
+                        .font(.system(size: 11.5))
+                        .lineSpacing(3)
+                        .foregroundStyle(palette.meta)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 12)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(palette.box)
@@ -276,16 +291,6 @@ struct WarrenSettingsGroup<Content: View>: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(palette.boxBorder, lineWidth: 1)
-            }
-
-            if let footnote {
-                Text(footnote)
-                    .font(.system(size: 11.5))
-                    .lineSpacing(3)
-                    .foregroundStyle(palette.meta)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 10)
             }
         }
     }
@@ -537,8 +542,11 @@ struct WarrenSettingsPicker<Value: Hashable>: View {
     let options: [(value: Value, label: String, detail: String?)]
     @Binding var selection: Value
     var monospaced = false
-    var minWidth: CGFloat = 120
-    var maxWidth: CGFloat = 240
+    /// One width for every drop-down on every page. It used to open at 120 and
+    /// grow to 240 with its label, so the right edge of the column moved from
+    /// row to row and "Dark" sat in a different box from a font family name.
+    var minWidth: CGFloat = WarrenSettingsMetrics.controlWidth
+    var maxWidth: CGFloat = WarrenSettingsMetrics.controlWidth
     var sourceNote: String? = nil
     var accessibilityID: String? = nil
 
@@ -568,11 +576,12 @@ struct WarrenSettingsPicker<Value: Hashable>: View {
             .padding(.trailing, 8)
             .frame(minWidth: minWidth, maxWidth: maxWidth, minHeight: 28)
             .background(palette.controlFill)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                     .strokeBorder(isFocused ? palette.focusRing : palette.controlBorder, lineWidth: 1)
             }
+            .shadow(color: isFocused ? palette.focusRing.opacity(0.55) : .clear, radius: 3)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -779,11 +788,12 @@ struct WarrenSettingsTextField: View {
                         .onTapGesture { isFocused = true }
                 }
                 .background(palette.field)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                         .strokeBorder(borderColor(palette), lineWidth: 1)
                 }
+                .shadow(color: isFocused ? palette.focusRing.opacity(0.55) : .clear, radius: 3)
 
             if let errorMessage {
                 Text(errorMessage)
@@ -942,7 +952,7 @@ struct WarrenSettingsInlineButton: View {
                 .foregroundStyle(hovering || isActive ? palette.ink : palette.inkQuiet)
                 .frame(width: 22, height: 22)
                 .background {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                         .fill(hovering ? palette.controlSelected : .clear)
                 }
                 .contentShape(Rectangle())
@@ -1106,38 +1116,22 @@ struct WarrenSettingsTokenChip: View {
     }
 }
 
-// MARK: - Keycap
+// MARK: - Shortcut
 
+/// A chord, as one run of quiet text.
+///
+/// It used to be one 18×18 cap per key, which is the same decoration the menus
+/// stopped drawing: two boxes for `⌘D` beside a row label read as a second
+/// control. The glyphs are the key.
 struct WarrenSettingsKeycaps: View {
     let keys: [String]
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(Array(keys.enumerated()), id: \.offset) { _, key in
-                WarrenSettingsKeycap(key: key)
-            }
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-struct WarrenSettingsKeycap: View {
-    let key: String
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let palette = WarrenSettingsPalette.resolved(for: colorScheme)
-        Text(key)
-            .font(.system(size: 11))
-            .foregroundStyle(palette.inkQuiet)
-            .padding(.horizontal, 4)
-            .frame(minWidth: 18, minHeight: 18)
-            .background(palette.controlFill)
-            .overlay {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(palette.controlBorder, lineWidth: 1)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        Text(keys.joined())
+            .font(.system(size: 11.5, design: .monospaced))
+            .foregroundStyle(WarrenSettingsPalette.resolved(for: colorScheme).inkQuiet)
+            .accessibilityHidden(true)
     }
 }

@@ -62,28 +62,12 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
             }
             }
         } footer: {
-            HStack(spacing: 8) {
-                Spacer(minLength: 0)
-                Button(action: onCancel) {
-                    HStack(spacing: 6) {
-                        Text("Cancel")
-                        WarrenDialogKeycap("esc")
-                    }
-                }
-                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                .keyboardShortcut(.cancelAction)
-                Button {
-                    onImport(Array(selectedPaths))
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(selectedPaths.isEmpty ? "Import" : "Import \(selectedPaths.count)")
-                        WarrenDialogKeycap("\u{23CE}", isOnPrimary: true)
-                    }
-                }
-                .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
-                .disabled(isLoading || selectedPaths.isEmpty)
-                .keyboardShortcut(.defaultAction)
-            }
+            WarrenDialogFooter(
+                confirmLabel: selectedPaths.isEmpty ? "Import" : "Import \(selectedPaths.count)",
+                isConfirmEnabled: !isLoading && !selectedPaths.isEmpty,
+                onCancel: onCancel,
+                onConfirm: { onImport(Array(selectedPaths)) }
+            )
         }
         .onExitCommand(perform: onCancel)
     }

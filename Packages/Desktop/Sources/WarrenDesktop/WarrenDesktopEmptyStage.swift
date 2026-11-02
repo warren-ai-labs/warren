@@ -123,9 +123,9 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
         .accessibilityHidden(true)
     }
 
-    /// Shortcuts as the menus draw them: a key cap per key, then what it
-    /// does, side by side on one quiet line. No frame: on an empty stage a
-    /// second box competes with the mark for attention.
+    /// Shortcuts as the menus draw them: the keys in the quiet tier, then what
+    /// they do, side by side on one line. No frame: on an empty stage a box
+    /// competes with the mark for attention.
     private func hintRow(tokens: WarrenColorTokens) -> some View {
         HStack(spacing: 18) {
             ForEach(hints) { hint in

@@ -42,14 +42,8 @@ struct WarrenDesktopMenuPalette {
     let dangerText: Color
     let dangerIcon: Color
 
-    let keycapFill: Color
-    let keycapBorder: Color
-    let keycapText: Color
-
     let tileFill: Color
     let tileBorder: Color
-    let tileFailedText: Color
-    let tileFailedBorder: Color
 
     let addText: Color
 
@@ -62,29 +56,24 @@ struct WarrenDesktopMenuPalette {
         border: WarrenColorTokens.hex(0x262626),
         topHighlight: Color.white.opacity(0.05),
         divider: WarrenColorTokens.hex(0x222222),
-        headerText: WarrenColorTokens.hex(0x6B6B6B),
-        rowText: WarrenColorTokens.hex(0xD4D4D4),
+        headerText: WarrenColorTokens.hex(0x5C5C5C),
+        rowText: WarrenColorTokens.hex(0xEDEDED),
         rowHoverText: WarrenColorTokens.hex(0xF5F5F5),
-        meta: WarrenColorTokens.hex(0x6E6E6E),
+        meta: WarrenColorTokens.hex(0x8A8A8A),
         secondaryGlyph: WarrenColorTokens.hex(0x8A8A8A),
-        value: WarrenColorTokens.hex(0x6B6B6B),
+        value: WarrenColorTokens.hex(0x5C5C5C),
         chevron: WarrenColorTokens.hex(0x5C5C5C),
-        icon: WarrenColorTokens.hex(0x8F8F8F),
+        icon: WarrenColorTokens.hex(0x8A8A8A),
         iconHover: WarrenColorTokens.hex(0xEDEDED),
-        check: WarrenColorTokens.hex(0xD4D4D4),
+        check: WarrenColorTokens.hex(0xEDEDED),
         hoverFill: WarrenColorTokens.dark.fillHover,
         pressFill: WarrenColorTokens.dark.fillSelected,
         hotRing: WarrenColorTokens.hex(0x232323),
         actionGlyph: WarrenColorTokens.hex(0x8A8A8A),
         dangerText: WarrenColorTokens.hex(0xE57B74),
         dangerIcon: WarrenColorTokens.hex(0xE0524A),
-        keycapFill: WarrenColorTokens.hex(0x1B1B1B),
-        keycapBorder: WarrenColorTokens.hex(0x2C2C2C),
-        keycapText: WarrenColorTokens.hex(0x8A8A8A),
         tileFill: WarrenColorTokens.hex(0x1B1B1B),
         tileBorder: WarrenColorTokens.hex(0x333333),
-        tileFailedText: WarrenColorTokens.hex(0x4D4D4D),
-        tileFailedBorder: WarrenColorTokens.hex(0x262626),
         addText: WarrenColorTokens.hex(0x8A8A8A)
     )
 
@@ -101,11 +90,11 @@ struct WarrenDesktopMenuPalette {
         headerText: lightQuiet,
         rowText: WarrenColorTokens.hex(0x1C1917),
         rowHoverText: WarrenColorTokens.hex(0x000000),
-        meta: lightQuiet,
-        secondaryGlyph: lightQuiet,
+        meta: WarrenColorTokens.hex(0x6B6560),
+        secondaryGlyph: WarrenColorTokens.hex(0x6B6560),
         value: lightQuiet,
         chevron: lightQuiet,
-        icon: lightQuiet,
+        icon: WarrenColorTokens.hex(0x6B6560),
         iconHover: WarrenColorTokens.hex(0x1C1917),
         check: WarrenColorTokens.hex(0x1C1917),
         hoverFill: WarrenColorTokens.light.fillHover,
@@ -114,13 +103,8 @@ struct WarrenDesktopMenuPalette {
         actionGlyph: lightQuiet,
         dangerText: WarrenColorTokens.hex(0xB3261E),
         dangerIcon: WarrenColorTokens.hex(0xB3261E),
-        keycapFill: WarrenColorTokens.hex(0xF2EFEC),
-        keycapBorder: WarrenColorTokens.hex(0xE0DBD6),
-        keycapText: WarrenColorTokens.hex(0x6B6560),
         tileFill: WarrenColorTokens.hex(0xF2EFEC),
         tileBorder: WarrenColorTokens.hex(0xD2CCC6),
-        tileFailedText: WarrenColorTokens.hex(0xB3ADA7),
-        tileFailedBorder: WarrenColorTokens.hex(0xE0DBD6),
         addText: WarrenColorTokens.hex(0x6B6560)
     )
 }
@@ -311,50 +295,35 @@ struct WarrenDesktopMenuRowStyle: ButtonStyle {
     }
 }
 
-/// A keyboard shortcut as one keycap per key.
+/// A keyboard shortcut, as one run of quiet text.
+///
+/// It used to be one 18×18 cap per key. Two boxes for `⌘T` were the densest
+/// decoration left in a menu, and they were also why a row's right column never
+/// shared an edge: every cap had its own border and its own width. The glyphs
+/// already read as keys, so a menu says them in the secondary tier and stops
+/// there.
 struct WarrenDesktopMenuKeycaps: View {
-    let caps: [String]
+    /// The keys as written, so `⌘T` stays one word and a chord that was given
+    /// as separate caps keeps its space.
+    let text: String
 
-    /// One cap per character of `keys`.
     init(keys: String) {
-        caps = keys.map(String.init)
+        text = keys
     }
 
-    /// One cap per entry, so a named key such as `esc` sits on one cap.
+    /// One entry per key, joined by a space.
     init(caps: [String]) {
-        self.caps = caps
+        text = caps.joined(separator: " ")
     }
-
-    var body: some View {
-        HStack(spacing: WarrenDesktopMenuMetrics.keycapSpacing) {
-            ForEach(Array(caps.enumerated()), id: \.offset) { _, key in
-                WarrenDesktopMenuKeycap(key: key)
-            }
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-private struct WarrenDesktopMenuKeycap: View {
-    let key: String
 
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
-        Text(key)
-            .font(.system(size: 11, weight: .regular))
-            .foregroundStyle(palette.keycapText)
-            .padding(.horizontal, WarrenDesktopMenuMetrics.keycapPadding)
-            .frame(minWidth: WarrenDesktopMenuMetrics.keycapMinWidth, minHeight: WarrenDesktopMenuMetrics.keycapHeight)
-            .background {
-                RoundedRectangle(cornerRadius: WarrenDesktopMenuMetrics.keycapRadius, style: .continuous)
-                    .fill(palette.keycapFill)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: WarrenDesktopMenuMetrics.keycapRadius, style: .continuous)
-                    .strokeBorder(palette.keycapBorder, lineWidth: 1)
-            }
+        Text(text)
+            .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+            .foregroundStyle(WarrenDesktopMenuPalette.resolved(for: colorScheme).meta)
+            .lineLimit(1)
+            .accessibilityHidden(true)
     }
 }
 
@@ -469,36 +438,6 @@ struct WarrenDesktopMenuStatusDot: View {
     }
 }
 
-/// A Host's tile inside a menu: a neutral square ringed in grey with the
-/// name's lowercase initial, with the probe's result on its corner.
-struct WarrenDesktopMenuTile: View {
-    let initial: String
-    var isFailed = false
-    var status: WarrenDesktopMenuStatus? = nil
-    var isHot = false
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
-        let shape = RoundedRectangle(cornerRadius: WarrenDesktopMenuMetrics.tileRadius, style: .continuous)
-        Text(initial)
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
-            .foregroundStyle(isFailed ? palette.tileFailedText : palette.rowText)
-            .frame(width: WarrenDesktopMenuMetrics.tileSize, height: WarrenDesktopMenuMetrics.tileSize)
-            .background(shape.fill(palette.tileFill))
-            .overlay {
-                shape.strokeBorder(isFailed ? palette.tileFailedBorder : palette.tileBorder, lineWidth: 1)
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if let status {
-                    WarrenDesktopMenuStatusDot(status: status, isHot: isHot)
-                }
-            }
-            .accessibilityHidden(true)
-    }
-}
-
 /// The inline action a menu row reveals on hover: a copy button, a sidebar
 /// membership toggle, and the like.
 struct WarrenDesktopMenuInlineButton: View {
@@ -518,7 +457,7 @@ struct WarrenDesktopMenuInlineButton: View {
                 .foregroundStyle(isHovered ? palette.iconHover : (isActive ? palette.iconHover : palette.actionGlyph))
                 .frame(width: WarrenDesktopMenuMetrics.actionSize, height: WarrenDesktopMenuMetrics.actionSize)
                 .background {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                         .fill(isHovered ? palette.pressFill : .clear)
                 }
                 .contentShape(.rect)

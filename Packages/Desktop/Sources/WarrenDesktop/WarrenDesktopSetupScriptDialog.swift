@@ -55,33 +55,26 @@ public struct WarrenDesktopSetupScriptDialog: View {
                 .accessibilityIdentifier("project.setup-script.path")
                 .onAppear { isEditorFocused = true }
         } footer: {
-            HStack(spacing: 8) {
+            // A text editor keeps plain Return, so this confirm answers
+            // Command-Return and the footer says so.
+            WarrenDialogFooter(
+                confirmLabel: "Save",
+                confirmKey: .commandReturn,
+                onCancel: onCancel,
+                onConfirm: onSave
+            ) {
                 if let onClear {
                     Button("Clear", action: onClear)
-                        .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
+                        .buttonStyle(WarrenSecondaryButtonStyle(
+                            font: WarrenTypography.dialogAction,
+                            height: WarrenLayoutMetrics.dialogControlHeight
+                        ))
                         .disabled(script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("project.setup-script.clear")
                 }
                 Text("Tab switches fields")
                     .font(.system(size: 11.5))
-                    .foregroundStyle(tokens.mutedForeground)
-                Spacer(minLength: 0)
-                Button(action: onCancel) {
-                    HStack(spacing: 6) {
-                        Text("Cancel")
-                        WarrenDialogKeycap("esc")
-                    }
-                }
-                .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-                .keyboardShortcut(.cancelAction)
-                Button(action: onSave) {
-                    HStack(spacing: 6) {
-                        Text("Save")
-                        WarrenDialogKeycap("\u{2318}\u{23CE}", isOnPrimary: true)
-                    }
-                }
-                .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
-                .keyboardShortcut(.return, modifiers: .command)
+                    .foregroundStyle(tokens.ink4)
             }
         }
         .onExitCommand(perform: onCancel)

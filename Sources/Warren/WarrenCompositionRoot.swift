@@ -1730,34 +1730,18 @@ private struct WarrenSupersetImportView: View {
     }
 
     private func footer(tokens: WarrenColorTokens) -> some View {
-        HStack(spacing: 8) {
-            Text("\(selectedProjectIDs.count) of \(preview.readyProjectCount) projects selected")
-                .font(WarrenTypography.dialogMeta)
-                .foregroundStyle(tokens.mutedForeground)
-
-            Spacer(minLength: 0)
-
-            Button(action: onCancel) {
-                HStack(spacing: 6) {
-                    Text("Cancel")
-                    WarrenDialogKeycap("esc")
-                }
-            }
-            .buttonStyle(WarrenSecondaryButtonStyle(font: WarrenTypography.dialogAction))
-            .keyboardShortcut(.cancelAction)
-
-            Button {
+        WarrenDialogFooter(
+            confirmLabel: "Import",
+            isConfirmEnabled: !selectedProjectIDs.isEmpty,
+            onCancel: onCancel,
+            onConfirm: {
                 onCancel()
                 onConfirm(selectedPreview)
-            } label: {
-                HStack(spacing: 6) {
-                    Text("Import")
-                    WarrenDialogKeycap("\u{23CE}", isOnPrimary: true)
-                }
             }
-            .buttonStyle(WarrenPrimaryButtonStyle(font: WarrenTypography.dialogAction))
-            .keyboardShortcut(.defaultAction)
-            .disabled(selectedProjectIDs.isEmpty)
+        ) {
+            Text("\(selectedProjectIDs.count) of \(preview.readyProjectCount) projects selected")
+                .font(WarrenTypography.dialogMeta)
+                .foregroundStyle(tokens.ink4)
         }
     }
 }

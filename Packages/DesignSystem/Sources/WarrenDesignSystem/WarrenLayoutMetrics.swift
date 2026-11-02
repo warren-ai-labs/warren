@@ -126,6 +126,9 @@ public enum WarrenLayoutMetrics {
     public static let tabGroupShelfGap: CGFloat = 4
     /// Compact action controls used by popovers and dense chrome rows.
     public static let compactControlHeight: CGFloat = 28
+    /// The control height inside a dialog, where a field and the buttons that
+    /// confirm it sit on one line and share one height.
+    public static let dialogControlHeight: CGFloat = 32
     public static let paneHeaderHeight: CGFloat = 32
     public static let paneMinimumWidth: CGFloat = 260
     public static let paneMinimumHeight: CGFloat = 160
@@ -236,10 +239,14 @@ public enum WarrenSpacing {
 /// Shared corner-radius tokens. `base` is the confirmed Superset radius
 /// fallback (`0.625rem`, i.e. 10px); the smaller values cover confirmed row
 /// hit areas and compact controls.
+///
+/// The family is deliberately tight: an outer frame and the controls inside it
+/// sit one step apart at most. A dialog is 10, a field, button or row is 7, so
+/// the eye reads one shell rather than a stack of differently rounded boxes.
 public enum WarrenRadius {
     public static let xs: CGFloat = 4
-    public static let row: CGFloat = 6
-    public static let small: CGFloat = 6
+    public static let row: CGFloat = 7
+    public static let small: CGFloat = 7
     public static let medium: CGFloat = 8
     public static let base: CGFloat = 10
     public static let large: CGFloat = 12

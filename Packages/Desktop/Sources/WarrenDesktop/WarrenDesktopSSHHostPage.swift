@@ -169,11 +169,13 @@ struct WarrenDesktopSSHHostListView: View {
         isHot: Bool
     ) -> some View {
         HStack(spacing: Metrics.iconSpacing) {
-            WarrenDesktopMenuTile(
-                initial: String(host.name.prefix(1)).lowercased(),
-                isFailed: !host.isSupported,
-                isHot: isHot
-            )
+            // The alias's initial, in the quiet tier and in no box. The ringed
+            // tile was a fourth surface inside a 40 pt row, and it drew the eye
+            // to the decoration instead of the host name.
+            Text(String(host.name.prefix(1)).lowercased())
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(palette.meta)
+                .frame(width: Metrics.glyphSlot, alignment: .center)
             VStack(alignment: .leading, spacing: 1) {
                 Text(host.name)
                     .font(.system(size: 13, weight: .medium))

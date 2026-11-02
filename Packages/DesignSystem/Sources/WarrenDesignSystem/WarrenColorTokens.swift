@@ -497,9 +497,13 @@ public struct WarrenColorTokens: Sendable {
             ink4: ink4,
             border: border,
             ring: ring,
-            // Focus is an interaction signal, not a passive separator. Keep
-            // it on the same Ember accent as Web and the iOS composer.
-            focusRing: highlight,
+            // Focus is an interaction signal, not a passive separator, so it
+            // stays one step brighter than `ring` — but it is grey. The accent
+            // used to travel here too, which put the app's only orange on a
+            // field that had nothing wrong with it. A neutral wash of the ink
+            // reads as "this holds the keyboard" in both appearances without
+            // competing with a destructive confirm for attention.
+            focusRing: foreground.opacity(0.22),
             primary: primary,
             highlight: highlight,
             destructive: destructive,

@@ -517,7 +517,7 @@ struct WarrenDesktopSettingsView: View {
         .font(.system(size: 10.5, weight: .medium))
         .lineLimit(1)
         // Lines up with the section headings above, not with the card edge.
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 18)
         .padding(.top, 10)
         .padding(.bottom, 14)
         .accessibilityElement(children: .combine)
@@ -555,7 +555,7 @@ struct WarrenDesktopSettingsView: View {
                 .accessibilityLabel("Clear settings search")
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .frame(height: 30)
         // As with every settings field, a click anywhere on the box focuses it.
         .background {
@@ -564,11 +564,12 @@ struct WarrenDesktopSettingsView: View {
                 .onTapGesture { searchFocused = true }
         }
         .background(palette.card)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                 .strokeBorder(searchFocused ? palette.focusRing : palette.cardBorder, lineWidth: 1)
         }
+        .shadow(color: searchFocused ? palette.focusRing.opacity(0.55) : .clear, radius: 3)
         .padding(.horizontal, 10)
         .padding(.top, 8)
         .padding(.bottom, 4)
@@ -584,7 +585,7 @@ struct WarrenDesktopSettingsView: View {
                 .font(.system(size: 10.5, weight: .semibold))
                 .tracking(1.1)
                 .foregroundStyle(palette.inkFaint)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 8)
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(sections) { section in
                     navigationItem(section, palette: palette)
@@ -722,15 +723,12 @@ struct WarrenDesktopSettingsView: View {
                         // The menu's leading check column, so the tiles and
                         // names line up whichever Host is current.
                         WarrenDesktopMenuCheckColumn(isChecked: option.id == selectedHostID)
+                        // The Host's initial, in the quiet tier and in no
+                        // box: the menu's own rows name a Host the same way.
                         Text(String(option.label.prefix(1)).lowercased())
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(palette.inkBody)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(palette.inkFaint)
                             .frame(width: 20, height: 20)
-                            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(palette.controlFill))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .strokeBorder(palette.controlSelectedBorder, lineWidth: 1)
-                            }
                             .overlay(alignment: .bottomTrailing) {
                                 connectionDot(option.probeState, palette: palette)
                             }
@@ -798,17 +796,16 @@ struct WarrenDesktopSettingsView: View {
                 pageHeader(for: selectedSection, palette: palette)
                 pageContent(for: selectedSection, palette: palette)
             }
-            // The column follows the window up to the page's own limit, then
-            // stays centred. A form stops at a reading width, past which a row's
-            // label and its control drift so far apart that the eye loses the
-            // pairing; Usage is charts and figures and keeps growing. The column
-            // used to stop at 656pt for every page and hug the left edge, so a
-            // wider window only added empty space on the right while a year of
-            // the activity calendar still did not fit.
+            // The column stops at the page's own reading width and then stays
+            // where it started: next to the navigation. Centring it put 246 pt
+            // of empty card to the left of the title on a wide window, so the
+            // page began in the middle of the screen and the eye had to find the
+            // form every time the window moved. Usage is charts and figures and
+            // keeps growing; everything else reads label-to-control in one look.
             .frame(maxWidth: selectedSection.contentMaxWidth, alignment: .leading)
             .padding(.horizontal, 28)
             .padding(.vertical, 22)
-            .frame(maxWidth: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .id(selectedSection)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -821,6 +818,10 @@ struct WarrenDesktopSettingsView: View {
     }
 
     private func pageHeader(for section: SettingsSection, palette: WarrenSettingsPalette) -> some View {
+        // Inset to the line the rows already use, so the title, the scope line,
+        // every group label and every row title share one left edge. The header
+        // used to sit on the column's own edge, 14 pt left of everything under
+        // it, which is what made a tidy page look out of square.
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(section.rawValue)
@@ -833,6 +834,7 @@ struct WarrenDesktopSettingsView: View {
 
             headerAccessory(for: section, palette: palette)
         }
+        .padding(.horizontal, 14)
     }
 
     @ViewBuilder
@@ -891,8 +893,10 @@ struct WarrenDesktopSettingsView: View {
             Image(systemName: copied ? "checkmark" : "link")
                 .font(.system(size: 14))
                 .foregroundStyle(palette.inkQuiet)
-                .frame(width: 26, height: 26)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.clear))
+                // The 26 pt box is the hit area; the glyph sits on its trailing
+                // edge so it ends on the same line as every control below it.
+                .frame(width: 26, height: 26, alignment: .trailing)
+                .background(RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous).fill(.clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -924,8 +928,11 @@ struct WarrenDesktopSettingsView: View {
 
     private func appearanceSection(palette: WarrenSettingsPalette) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            WarrenSettingsGroup("Window", footnote: "System follows macOS. Light uses Ember Paper for the window and the terminal, with an ANSI palette tuned for light backgrounds.") {
-                WarrenSettingsRow("Color scheme") {
+            WarrenSettingsGroup("Window") {
+                WarrenSettingsRow(
+                    "Color scheme",
+                    description: "System follows macOS. Light uses Ember Paper for the window and the terminal, with an ANSI palette tuned for light backgrounds."
+                ) {
                     WarrenSettingsPicker(
                         label: "Color scheme",
                         value: appearanceSelection.wrappedValue.displayName,
@@ -950,7 +957,7 @@ struct WarrenDesktopSettingsView: View {
                 )
             }
 
-            WarrenSettingsGroup("App Icon", footnote: "Changes the icon in the Dock and the app switcher while Warren is running. Finder keeps the Caramel icon.") {
+            WarrenSettingsGroup("App Icon") {
                 HStack(spacing: 14) {
                     ForEach(WarrenAppIconColorway.allCases, id: \.self) { colorway in
                         AppIconChoice(
@@ -965,6 +972,13 @@ struct WarrenDesktopSettingsView: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 14)
                 .padding(.bottom, 14)
+
+                Text("Changes the icon in the Dock and the app switcher while Warren is running. Finder keeps the Caramel icon.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(palette.meta)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 14)
             }
 
             WarrenSettingsGroup("Sidebar") {
@@ -1192,7 +1206,7 @@ struct WarrenDesktopSettingsView: View {
             .frame(minHeight: 48)
             .background(
                 draggedPresetID == preset.id ? palette.selected : Color.clear,
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                in: RoundedRectangle(cornerRadius: WarrenRadius.row, style: .continuous)
             )
             .shadow(
                 color: .black.opacity(draggedPresetID == preset.id ? 0.45 : 0),
@@ -2855,9 +2869,12 @@ private struct WarrenSettingsNavItem: View {
         let ring: Color = isSelected ? palette.selected : (hovering ? palette.hover : palette.card)
         Button(action: onSelect) {
             HStack(spacing: 10) {
+                // The glyph sits in the dim tier, never between the label's grey
+                // and the section label's: a rail of four grey values reads as
+                // texture, and the icons are not what a person scans for.
                 Image(systemName: section.symbol)
                     .font(.system(size: 15))
-                    .foregroundStyle(isSelected ? palette.ink : palette.inkQuiet)
+                    .foregroundStyle(isSelected ? palette.ink : palette.inkFaint)
                     .frame(width: 20)
                     .overlay(alignment: .topTrailing) {
                         if let status {
@@ -2878,14 +2895,14 @@ private struct WarrenSettingsNavItem: View {
                 }
             }
             .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity, minHeight: 30)
+            .frame(maxWidth: .infinity, minHeight: 32)
             .background {
                 if isSelected {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                         .fill(palette.selected)
                         .matchedGeometryEffect(id: "settings-selection", in: selectionNamespace)
                 } else if hovering {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                         .fill(palette.hover)
                 }
             }
