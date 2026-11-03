@@ -1,0 +1,272 @@
+{
+  "description": "One turn seen from the wire: a prompt, reasoning, narration, two tool calls, an edit with a diff, and the answer. Both the Swift fold (Transport/WarrenConversation.swift) and the web fold (Web/src/conversation.js) project this stream and must agree on every expectation below.",
+  "events": [
+    {
+      "eventId": "u1",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 1,
+      "turnId": "1",
+      "type": "message.created",
+      "occurredAt": "2026-01-01T00:00:01Z",
+      "recordedAt": "2026-01-01T00:00:01Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {
+        "role": "user",
+        "content": "fix the reaper",
+        "messageId": "u1"
+      }
+    },
+    {
+      "eventId": "e2",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 2,
+      "turnId": "1",
+      "type": "turn.started",
+      "occurredAt": "2026-01-01T00:00:02Z",
+      "recordedAt": "2026-01-01T00:00:02Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {}
+    },
+    {
+      "eventId": "r1",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 3,
+      "turnId": "1",
+      "type": "reasoning.delta",
+      "occurredAt": "2026-01-01T00:00:03Z",
+      "recordedAt": "2026-01-01T00:00:03Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {
+        "content": "think",
+        "messageId": "r1"
+      }
+    },
+    {
+      "eventId": "m1",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 4,
+      "turnId": "1",
+      "type": "message.created",
+      "occurredAt": "2026-01-01T00:00:04Z",
+      "recordedAt": "2026-01-01T00:00:04Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {
+        "role": "assistant",
+        "content": "Looking",
+        "messageId": "m1"
+      }
+    },
+    {
+      "eventId": "e5",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 5,
+      "turnId": "1",
+      "type": "message.delta",
+      "occurredAt": "2026-01-01T00:00:05Z",
+      "recordedAt": "2026-01-01T00:00:05Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {
+        "role": "assistant",
+        "content": " first.",
+        "messageId": "m1"
+      }
+    },
+    {
+      "eventId": "e6",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 6,
+      "turnId": "1",
+      "type": "tool.started",
+      "occurredAt": "2026-01-01T00:00:06Z",
+      "recordedAt": "2026-01-01T00:00:06Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {
+        "callId": "c1",
+        "toolKind": "read",
+        "toolName": "Read",
+        "toolDetail": "a.go"
+      }
+    },
+    {
+      "eventId": "e7",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 7,
+      "turnId": "1",
+      "type": "tool.completed",
+      "occurredAt": "2026-01-01T00:00:07Z",
+      "recordedAt": "2026-01-01T00:00:07Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {
+        "callId": "c1",
+        "toolKind": "read",
+        "output": "package a"
+      }
+    },
+    {
+      "eventId": "e8",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 8,
+      "turnId": "1",
+      "type": "tool.started",
+      "occurredAt": "2026-01-01T00:00:08Z",
+      "recordedAt": "2026-01-01T00:00:08Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {
+        "callId": "c2",
+        "toolKind": "ran",
+        "toolDetail": "go test"
+      }
+    },
+    {
+      "eventId": "e9",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 9,
+      "turnId": "1",
+      "type": "tool.completed",
+      "occurredAt": "2026-01-01T00:00:09Z",
+      "recordedAt": "2026-01-01T00:00:09Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {
+        "callId": "c2",
+        "toolKind": "ran",
+        "output": "ok"
+      }
+    },
+    {
+      "eventId": "e10",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 10,
+      "turnId": "1",
+      "type": "tool.completed",
+      "occurredAt": "2026-01-01T00:00:10Z",
+      "recordedAt": "2026-01-01T00:00:10Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {
+        "callId": "c3",
+        "toolKind": "edit",
+        "toolDetail": "a.go",
+        "diff": {
+          "file": "a.go",
+          "additions": 3,
+          "deletions": 1,
+          "diff": "+x"
+        }
+      }
+    },
+    {
+      "eventId": "m2",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 11,
+      "turnId": "1",
+      "type": "message.created",
+      "occurredAt": "2026-01-01T00:00:11Z",
+      "recordedAt": "2026-01-01T00:00:11Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {
+        "role": "assistant",
+        "content": "Done.",
+        "messageId": "m2"
+      }
+    },
+    {
+      "eventId": "e12",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 12,
+      "turnId": "1",
+      "type": "message.completed",
+      "occurredAt": "2026-01-01T00:00:12Z",
+      "recordedAt": "2026-01-01T00:00:12Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {
+        "role": "assistant",
+        "content": "Done.",
+        "messageId": "m2"
+      }
+    },
+    {
+      "eventId": "e13",
+      "streamId": "stream-1",
+      "executionId": "exec-1",
+      "sequence": 13,
+      "turnId": "1",
+      "type": "turn.completed",
+      "occurredAt": "2026-01-01T00:00:13Z",
+      "recordedAt": "2026-01-01T00:00:13Z",
+      "origin": {
+        "kind": "host",
+        "confidence": "derived"
+      },
+      "payload": {}
+    }
+  ],
+  "expect": {
+    "turns": [
+      {
+        "prompt": "fix the reaper",
+        "answer": "Done.",
+        "answerComplete": true,
+        "status": "completed",
+        "narration": [
+          "Looking first."
+        ],
+        "summary": "Read 1 file · Edited 1 file · Ran 1 command",
+        "files": [
+          {
+            "file": "a.go",
+            "additions": 3,
+            "deletions": 1
+          }
+        ],
+        "reasoningCount": 1
+      }
+    ]
+  }
+}

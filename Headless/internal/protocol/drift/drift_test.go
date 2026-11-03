@@ -20,6 +20,27 @@ type schemaDoc struct {
 		LogicalVersion struct {
 			Const string `json:"const"`
 		} `json:"logicalVersion"`
+		AgentEvents struct {
+			Properties struct {
+				Types struct {
+					Items struct {
+						Enum []string `json:"enum"`
+					} `json:"items"`
+				} `json:"types"`
+				Payloads struct {
+					Common struct {
+						Properties map[string]struct {
+							Type string `json:"type"`
+						} `json:"properties"`
+					} `json:"common"`
+					ByType map[string]struct {
+						Properties map[string]struct {
+							Type string `json:"type"`
+						} `json:"properties"`
+					} `json:"byType"`
+				} `json:"payloads"`
+			} `json:"properties"`
+		} `json:"agentEvents"`
 		BinaryEnvelope struct {
 			Properties struct {
 				Magic struct {

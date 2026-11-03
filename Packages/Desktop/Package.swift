@@ -9,6 +9,7 @@ let package = Package(
     ],
     products: [
         .library(name: "WarrenDesktop", targets: ["WarrenDesktop"]),
+        .library(name: "WarrenDesktopFixtures", targets: ["WarrenDesktopFixtures"]),
     ],
     dependencies: [
         .package(path: "../Domain"),
@@ -30,10 +31,16 @@ let package = Package(
                 .process("Resources"),
             ]
         ),
+        .target(
+            name: "WarrenDesktopFixtures",
+            dependencies: ["WarrenDesktop"],
+            path: "Sources/WarrenDesktopFixtures"
+        ),
         .testTarget(
             name: "WarrenDesktopTests",
             dependencies: [
                 "WarrenDesktop",
+                "WarrenDesktopFixtures",
                 .product(name: "WarrenDesignSystem", package: "DesignSystem"),
             ],
             path: "Tests/WarrenDesktopTests"

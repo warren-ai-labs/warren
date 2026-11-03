@@ -18,6 +18,15 @@ type schema struct {
 		LogicalVersion struct {
 			Const string `json:"const"`
 		} `json:"logicalVersion"`
+		AgentEvents struct {
+			Properties struct {
+				Types struct {
+					Items struct {
+						Enum []string `json:"enum"`
+					} `json:"items"`
+				} `json:"types"`
+			} `json:"properties"`
+		} `json:"agentEvents"`
 		BinaryEnvelope struct {
 			Properties struct {
 				Magic struct {
@@ -117,6 +126,9 @@ func main() {
 	if len(s.Properties.TerminalStateFormats.Items.Enum) == 0 {
 		die("terminalStateFormats enum is empty")
 	}
+	if len(s.Properties.AgentEvents.Properties.Types.Items.Enum) == 0 {
+		die("agentEvents.types enum is empty")
+	}
 
 	magicBytes := byteSlice(be.Magic.Const)
 	caps := s.Properties.Capabilities.Items.Enum
@@ -176,6 +188,13 @@ func main() {
 	fmt.Fprintf(body, "var Capabilities = []string{\n")
 	for _, c := range caps {
 		fmt.Fprintf(body, "\t%q,\n", c)
+	}
+	fmt.Fprintf(body, "}\n")
+	fmt.Fprintf(body, "\n")
+	fmt.Fprintf(body, "// AgentEventTypes is the canonical Agent event type set, in schema order.\n")
+	fmt.Fprintf(body, "var AgentEventTypes = []string{\n")
+	for _, t := range s.Properties.AgentEvents.Properties.Types.Items.Enum {
+		fmt.Fprintf(body, "\t%q,\n", t)
 	}
 	fmt.Fprintf(body, "}\n")
 	fmt.Fprintf(body, "\n")

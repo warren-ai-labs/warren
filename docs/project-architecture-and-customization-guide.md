@@ -119,10 +119,9 @@ The Relay end-to-end path is not source-closed in this checkout. See
 | `Packages/Desktop/` | Pure SwiftUI shell, projections, navigation reducer, and typed actions | Main path |
 | `Packages/GhosttyAdapter/` | Ghostty/AppKit Surface ownership and rendering | Main path |
 | `Packages/Domain/` | Swift identifiers and domain values | Main and foundation |
-| `Packages/ClientCore/` | Generic client state, layout, and reconnect abstractions | Partially integrated |
+| `Packages/ClientCore/` | Generic client state, layout, reconnect abstractions, and Superset import | Partially integrated |
 | `Packages/Protocol/` | Typed Swift control and binary protocol values | Foundation; not the complete live control path |
 | `Packages/Transport/` | DENB codec and generic URLSession WebSocket transport | Codec is used; generic transport is not the whole app path |
-| `Packages/StateStore/` | Swift repositories and Superset import | Import is used; Host state is owned by Go |
 | `Packages/TerminalRenderer/` | Platform-neutral terminal renderer boundary | Used by Ghostty adapter |
 | `Packages/Observation/` | Semantic snapshots, events, and artifact output | Main verification path |
 | `Packages/DesignSystem/` | macOS design tokens and reusable UI primitives | Main path |
@@ -138,17 +137,17 @@ The Relay end-to-end path is not source-closed in this checkout. See
 | `RelayService/` | Relay registry, auth, pairing, and frame routing | Server side exists; Host connector not located |
 | `scripts/` and `mise.toml` | Build, package, install, Relay development, and verification workflows | Tooling |
 
-### 4.1 A naming trap: `StateStore`
+### 4.1 Host state authority
 
-`Packages/StateStore` contains substantial SQLite and JSON repository code,
-but the running Host authority is the Go Store in
-`Headless/internal/store/store.go`, persisted as `~/.warren/state.json`.
-The production macOS application currently uses the Swift StateStore package
-primarily for Superset import support.
+The running Host authority is the Go Store in `Headless/internal/store/store.go`,
+persisted as `~/.warren/state.json`. The macOS client holds no durable Host
+state: `Packages/ClientCore` carries only client-local values (layout, pane
+identity, reconnect bookkeeping) and the one-time Superset import that reads
+Superset's CLI JSON before the Host is told to create the resources.
 
-Do not add Host-owned production state to the Swift SQLite repository unless
-the architecture is intentionally being changed. Doing so would create a
-second resource authority.
+Do not add Host-owned production state to a Swift store. Doing so would create
+a second resource authority; the former `Packages/StateStore` SQLite and JSON
+repositories were removed for exactly that reason.
 
 ## 5. Application Startup
 

@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 import WarrenDesktop
 import WarrenDomain
 import GhosttyAdapter
-import WarrenStateStore
+import WarrenClientCore
 import WarrenDesignSystem
 import WarrenTransport
 

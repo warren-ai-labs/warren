@@ -54,11 +54,17 @@ you change a constant here, all four rows must move together.
 | `terminalStateFormats` | `Headless/internal/server/http.go` (`selectTerminalStateFormat`) | `Packages/Protocol/Sources/WarrenProtocol/ServerMessages.swift` | (sent from `Web/src/connection.js`) |
 | `rpcMethods` | `Headless/internal/server/http.go` (handler switch) | `Packages/Protocol/Sources/WarrenProtocol/ClientMessages.swift` | `Web/src/connection.js` (call sites) |
 | `serverEvents` | `Headless/internal/server/http.go` (writeJSON call sites) | `Packages/Protocol/Sources/WarrenProtocol/ServerMessages.swift` | `Web/src/connection.js` (message dispatch) |
+| `agentEvents.types` | `Headless/internal/protocol/wire.go` (`AgentEventTypes`, generated) | `Sources/Warren/WarrenRemoteApplicationModel+Agent.swift`, `Packages/Transport/Sources/WarrenTransport/WarrenConversation.swift` | `Web/src/agent.js`, `Web/src/conversation.js` |
+| `agentEvents.payloads` | `Headless/internal/protocol/drift/agent_payload_test.go` (declared vs emitted types) | `Packages/Transport/Sources/WarrenTransport/WarrenConversation.swift` (reader), `protocol/fixtures/agent/conversation-basic.json` (fixture) | `Web/src/conversation.js` (reader) |
 | `relayStream` | `RelayService/internal/controlplane/protocol.go` | n/a (relay is server-side) | n/a |
 | `httpRoutes` | `Headless/internal/server/http.go` (`mux.HandleFunc`) | n/a (server-side) | (consumed in `Web/src/connection.js`, `runtime.js`) |
 
 ## Rules for changes
 
+- **A named payload field is a type promise, not a schema for the payload.**
+  `agentEvents.payloads` declares the fields clients read and the JSON type each
+  one carries; a payload stays an open map, so providers may add keys and a
+  client must ignore what it does not read.
 - **Bumping `wireVersion` is a hard break.** No fallback — old clients must
   reject new frames and vice versa. The DENB wire version stays at 1 by
   design; the control protocol's logical version is independent.

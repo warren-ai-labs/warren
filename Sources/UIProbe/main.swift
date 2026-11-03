@@ -1,5 +1,6 @@
 import AppKit
 import WarrenDesktop
+import WarrenDesktopFixtures
 import WarrenObservation
 import Foundation
 import SwiftUI

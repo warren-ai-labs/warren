@@ -1,6 +1,7 @@
 import Foundation
 import WarrenDomain
 import WarrenClientCore
+import WarrenTerminalRenderer
 
 /// Deterministic renderer used by cross-platform tests and previews. It keeps
 /// renderer state only; it has no session-kill operation by design.

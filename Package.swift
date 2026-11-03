@@ -10,7 +10,6 @@ let package = Package(
     dependencies: [
         .package(path: "Packages/Desktop"),
         .package(path: "Packages/GhosttyAdapter"),
-        .package(path: "Packages/StateStore"),
         .package(path: "Packages/Domain"),
         .package(path: "Packages/ClientCore"),
         .package(path: "Packages/Transport"),
@@ -23,7 +22,6 @@ let package = Package(
             dependencies: [
                 .product(name: "WarrenDesktop", package: "Desktop"),
                 .product(name: "GhosttyAdapter", package: "GhosttyAdapter"),
-                .product(name: "WarrenStateStore", package: "StateStore"),
                 .product(name: "WarrenDomain", package: "Domain"),
                 .product(name: "WarrenClientCore", package: "ClientCore"),
                 .product(name: "WarrenTransport", package: "Transport"),
@@ -39,6 +37,7 @@ let package = Package(
             name: "UIProbe",
             dependencies: [
                 .product(name: "WarrenDesktop", package: "Desktop"),
+                .product(name: "WarrenDesktopFixtures", package: "Desktop"),
                 .product(name: "WarrenDomain", package: "Domain"),
                 .product(name: "WarrenObservation", package: "Observation"),
             ],

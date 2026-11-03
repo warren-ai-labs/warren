@@ -36,7 +36,7 @@ echo "==> headless daemon and CLI"
 (cd "$repository_root" && go vet ./Headless/... && go test -race ./Headless/...)
 
 for package in \
-    Domain Protocol StateStore ClientCore Transport \
+    Domain Protocol ClientCore Transport \
     TerminalRenderer DesignSystem Desktop WarrenIOS \
     GhosttyAdapter Observation; do
     echo "==> swift test $package"

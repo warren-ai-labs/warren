@@ -1570,34 +1570,6 @@ final class WarrenRemoteModelTests: XCTestCase {
         ))
     }
 
-    func testLosslessAsyncBufferBackpressuresAndPreservesOrder() async throws {
-        let buffer = WarrenLosslessAsyncBuffer<Int>(capacity: 2)
-        let progress = SendProgress()
-        let producer = Task {
-            for value in 0..<100 {
-                guard await buffer.send(value) else { return false }
-                await progress.recordSend()
-            }
-            return true
-        }
-
-        await progress.waitForSends(2)
-        try await Task.sleep(for: .milliseconds(2))
-        let sentBeforeConsumption = await progress.sentCount
-        XCTAssertEqual(sentBeforeConsumption, 2)
-
-        var iterator = buffer.stream.makeAsyncIterator()
-        var received: [Int] = []
-        for _ in 0..<100 {
-            let next = await iterator.next()
-            received.append(try XCTUnwrap(next))
-        }
-        let completed = await producer.value
-        XCTAssertTrue(completed)
-        buffer.finish()
-        XCTAssertEqual(received, Array(0..<100))
-    }
-
     func testOrderedInputBridgePreservesBracketedPasteFenceposts() async throws {
         let recorder = LockedDataRecorder()
         let bridge = WarrenOrderedInputBridge { data in
@@ -1663,30 +1635,6 @@ final class WarrenRemoteModelTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(5))
         }
         XCTAssertEqual(recorder.data, expected)
-    }
-
-    func testTerminalOutputBufferDeduplicatesOverlapAndKeepsSequenceGaps() {
-        var buffer = WarrenTerminalOutputBuffer()
-        buffer.reset(epoch: 7, sequence: 0)
-        buffer.append(epoch: 7, sequence: 0, payload: Data("abcdef".utf8))
-        buffer.append(epoch: 7, sequence: 0, payload: Data("abcdef".utf8))
-        buffer.append(epoch: 7, sequence: 3, payload: Data("defghi".utf8))
-
-        var slices: [WarrenTerminalOutputSlice] = []
-        while let slice = buffer.take(maxBytes: 4) { slices.append(slice) }
-        XCTAssertEqual(slices.map(\.sequence), [0, 4, 6])
-        XCTAssertEqual(
-            Data(slices.flatMap { $0.payload }),
-            Data("abcdefghi".utf8)
-        )
-        XCTAssertEqual(buffer.enqueuedSequence, 9)
-
-        buffer.append(epoch: 8, sequence: 100, payload: Data("xyz".utf8))
-        XCTAssertEqual(buffer.take(maxBytes: 8), WarrenTerminalOutputSlice(
-            epoch: 8,
-            sequence: 100,
-            payload: Data("xyz".utf8)
-        ))
     }
 
     /// The Host refuses `kind = "browser"` on `session.create`, so a browser
@@ -1823,24 +1771,6 @@ final class WarrenRemoteModelTests: XCTestCase {
     }
 }
 
-private actor SendProgress {
-    private(set) var sentCount = 0
-    private var waiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
-
-    func recordSend() {
-        sentCount += 1
-        let ready = waiters.filter { sentCount >= $0.count }
-        waiters.removeAll { sentCount >= $0.count }
-        for waiter in ready { waiter.continuation.resume() }
-    }
-
-    func waitForSends(_ count: Int) async {
-        guard sentCount < count else { return }
-        await withCheckedContinuation { continuation in
-            waiters.append((count, continuation))
-        }
-    }
-}
 
 private final class LockedDataRecorder: @unchecked Sendable {
     private let lock = NSLock()

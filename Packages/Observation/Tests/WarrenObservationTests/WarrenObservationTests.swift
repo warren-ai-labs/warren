@@ -2,19 +2,6 @@ import XCTest
 @testable import WarrenObservation
 
 final class WarrenObservationTests: XCTestCase {
-    func testLogAssignsMonotonicSequenceAndRetainsCapacity() async {
-        let log = WarrenObservationLog(capacity: 2, clock: { 42 })
-        _ = await log.record(kind: .command, name: "one")
-        _ = await log.record(kind: .resource, name: "two")
-        _ = await log.record(kind: .runtime, name: "three")
-
-        let events = await log.events()
-        XCTAssertEqual(events.map(\.sequence), [1, 2])
-        XCTAssertEqual(events.map(\.name), ["two", "three"])
-        XCTAssertEqual(events.map(\.timestampNanoseconds), [42, 42])
-        let tail = await log.events(since: 2)
-        XCTAssertEqual(tail.map(\.name), ["three"])
-    }
 
     func testSemanticSnapshotSortsAndFindsNodes() {
         let frame = WarrenSemanticRect(x: 1, y: 2, width: 3, height: 4)

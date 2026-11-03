@@ -25,14 +25,30 @@
     "binaryEnvelope": {
       "type": "object",
       "description": "Binary DENB frame used for terminal I/O. Stays on wire version 1 while the logical control protocol moves forward. One DENB frame carries one PTY output chunk, one client input chunk, or one opaque atomic terminal-state snapshot.",
-      "required": ["magic", "wireVersion", "directions", "kinds", "limits", "layout"],
+      "required": [
+        "magic",
+        "wireVersion",
+        "directions",
+        "kinds",
+        "limits",
+        "layout"
+      ],
       "properties": {
         "magic": {
           "type": "array",
-          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          },
           "minItems": 4,
           "maxItems": 4,
-          "const": [68, 69, 78, 66],
+          "const": [
+            68,
+            69,
+            78,
+            66
+          ],
           "description": "ASCII 'D','E','N','B'. Same magic in Go, Swift, and TS."
         },
         "wireVersion": {
@@ -42,18 +58,38 @@
         },
         "directions": {
           "type": "object",
-          "required": ["clientToHost", "hostToClient"],
+          "required": [
+            "clientToHost",
+            "hostToClient"
+          ],
           "properties": {
-            "clientToHost": { "type": "integer", "const": 1 },
-            "hostToClient": { "type": "integer", "const": 2 }
+            "clientToHost": {
+              "type": "integer",
+              "const": 1
+            },
+            "hostToClient": {
+              "type": "integer",
+              "const": 2
+            }
           }
         },
         "kinds": {
           "type": "object",
-          "required": ["input", "output", "atomicState", "browserFrame"],
+          "required": [
+            "input",
+            "output",
+            "atomicState",
+            "browserFrame"
+          ],
           "properties": {
-            "input": { "type": "integer", "const": 1 },
-            "output": { "type": "integer", "const": 2 },
+            "input": {
+              "type": "integer",
+              "const": 1
+            },
+            "output": {
+              "type": "integer",
+              "const": 2
+            },
             "atomicState": {
               "type": "integer",
               "const": 3,
@@ -68,30 +104,74 @@
         },
         "limits": {
           "type": "object",
-          "required": ["maxHeader", "maxPayload", "maxAtomicStatePayload", "maxBrowserFramePayload"],
+          "required": [
+            "maxHeader",
+            "maxPayload",
+            "maxAtomicStatePayload",
+            "maxBrowserFramePayload"
+          ],
           "properties": {
-            "maxHeader": { "type": "integer", "const": 16384 },
-            "maxPayload": { "type": "integer", "const": 8388608 },
-            "maxAtomicStatePayload": { "type": "integer", "const": 67108864 },
-            "maxBrowserFramePayload": { "type": "integer", "const": 4194304 }
+            "maxHeader": {
+              "type": "integer",
+              "const": 16384
+            },
+            "maxPayload": {
+              "type": "integer",
+              "const": 8388608
+            },
+            "maxAtomicStatePayload": {
+              "type": "integer",
+              "const": 67108864
+            },
+            "maxBrowserFramePayload": {
+              "type": "integer",
+              "const": 4194304
+            }
           }
         },
         "layout": {
           "type": "object",
           "description": "Frame layout, big-endian throughout. headerLength covers only the JSON header; payloadLength covers the binary payload. Length fields are u32 BE.",
-          "required": ["prefixLength", "offsets"],
+          "required": [
+            "prefixLength",
+            "offsets"
+          ],
           "properties": {
-            "prefixLength": { "type": "integer", "const": 15 },
+            "prefixLength": {
+              "type": "integer",
+              "const": 15
+            },
             "offsets": {
               "type": "object",
               "properties": {
-                "magic": { "type": "integer", "const": 0 },
-                "version": { "type": "integer", "const": 4 },
-                "direction": { "type": "integer", "const": 5 },
-                "kind": { "type": "integer", "const": 6 },
-                "headerLength": { "type": "integer", "const": 7 },
-                "payloadLength": { "type": "integer", "const": 11 },
-                "headerStart": { "type": "integer", "const": 15 }
+                "magic": {
+                  "type": "integer",
+                  "const": 0
+                },
+                "version": {
+                  "type": "integer",
+                  "const": 4
+                },
+                "direction": {
+                  "type": "integer",
+                  "const": 5
+                },
+                "kind": {
+                  "type": "integer",
+                  "const": 6
+                },
+                "headerLength": {
+                  "type": "integer",
+                  "const": 7
+                },
+                "payloadLength": {
+                  "type": "integer",
+                  "const": 11
+                },
+                "headerStart": {
+                  "type": "integer",
+                  "const": 15
+                }
               }
             }
           }
@@ -102,45 +182,119 @@
           "properties": {
             "input": {
               "type": "object",
-              "required": ["version", "sessionID", "attachmentID", "payloadLength"],
+              "required": [
+                "version",
+                "sessionID",
+                "attachmentID",
+                "payloadLength"
+              ],
               "properties": {
-                "version": { "type": "string", "const": "4.0" },
-                "sessionID": { "type": "string" },
-                "attachmentID": { "type": "string" },
-                "sequence": { "type": "integer", "minimum": 0 },
-                "payloadLength": { "type": "integer", "minimum": 0 }
+                "version": {
+                  "type": "string",
+                  "const": "4.0"
+                },
+                "sessionID": {
+                  "type": "string"
+                },
+                "attachmentID": {
+                  "type": "string"
+                },
+                "sequence": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "payloadLength": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               }
             },
             "output": {
               "type": "object",
-              "required": ["sessionID", "epoch", "sequence", "payloadLength"],
+              "required": [
+                "sessionID",
+                "epoch",
+                "sequence",
+                "payloadLength"
+              ],
               "properties": {
-                "sessionID": { "type": "string" },
-                "epoch": { "type": "integer", "minimum": 0 },
-                "sequence": { "type": "integer", "minimum": 0 },
-                "payloadLength": { "type": "integer", "minimum": 0 }
+                "sessionID": {
+                  "type": "string"
+                },
+                "epoch": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sequence": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "payloadLength": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               }
             },
             "atomicState": {
               "type": "object",
-              "required": ["sessionID", "epoch", "sequence", "format", "payloadLength"],
+              "required": [
+                "sessionID",
+                "epoch",
+                "sequence",
+                "format",
+                "payloadLength"
+              ],
               "properties": {
-                "sessionID": { "type": "string" },
-                "epoch": { "type": "integer", "minimum": 0 },
-                "sequence": { "type": "integer", "minimum": 0 },
-                "format": { "type": "string", "description": "TerminalStateFormat identifier (see terminalStateFormats)." },
-                "payloadLength": { "type": "integer", "minimum": 0 }
+                "sessionID": {
+                  "type": "string"
+                },
+                "epoch": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sequence": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "format": {
+                  "type": "string",
+                  "description": "TerminalStateFormat identifier (see terminalStateFormats)."
+                },
+                "payloadLength": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               }
             },
             "browserFrame": {
               "type": "object",
-              "required": ["sessionID", "epoch", "sequence", "format", "payloadLength"],
+              "required": [
+                "sessionID",
+                "epoch",
+                "sequence",
+                "format",
+                "payloadLength"
+              ],
               "properties": {
-                "sessionID": { "type": "string" },
-                "epoch": { "type": "integer", "minimum": 0 },
-                "sequence": { "type": "integer", "minimum": 0 },
-                "format": { "type": "string", "const": "browser-frame-jpeg-v1" },
-                "payloadLength": { "type": "integer", "minimum": 0 }
+                "sessionID": {
+                  "type": "string"
+                },
+                "epoch": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sequence": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "format": {
+                  "type": "string",
+                  "const": "browser-frame-jpeg-v1"
+                },
+                "payloadLength": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               }
             }
           }
@@ -150,51 +304,119 @@
     "jsonControl": {
       "type": "object",
       "description": "JSON control envelopes carried as WebSocket text frames alongside the binary DENB stream. Every envelope has a 't' (type) discriminator; the shape of the remaining fields depends on the type.",
-      "required": ["envelope", "response"],
+      "required": [
+        "envelope",
+        "response"
+      ],
       "properties": {
         "envelope": {
           "type": "object",
           "description": "Client-to-server envelope. Requests carry a method and id; a negotiated app-heartbeat-v1 probe carries t=ping and id without a method.",
-          "required": ["t"],
+          "required": [
+            "t"
+          ],
           "properties": {
-            "t": { "type": "string", "enum": ["request", "ping"] },
-            "id": { "type": "string" },
-            "token": { "type": "string", "description": "Optional pre-upgrade auth token; not the bearer for the WebSocket itself." },
-            "version": { "type": "string", "const": "4.0" },
-            "capabilities": { "type": "array", "items": { "type": "string" } },
+            "t": {
+              "type": "string",
+              "enum": [
+                "request",
+                "ping"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "token": {
+              "type": "string",
+              "description": "Optional pre-upgrade auth token; not the bearer for the WebSocket itself."
+            },
+            "version": {
+              "type": "string",
+              "const": "4.0"
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "terminalStateFormats": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "Opaque terminal-state formats the client can install atomically. The Host picks one and stores it on the peer; mismatched formats terminate the connection."
             },
-            "method": { "type": "string" },
-            "params": { "type": "object", "additionalProperties": true }
+            "method": {
+              "type": "string"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": true
+            }
           },
           "oneOf": [
             {
-              "required": ["method"],
-              "properties": { "t": { "const": "request" } }
+              "required": [
+                "method"
+              ],
+              "properties": {
+                "t": {
+                  "const": "request"
+                }
+              }
             },
             {
-              "required": ["id"],
-              "properties": { "t": { "const": "ping" } }
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "t": {
+                  "const": "ping"
+                }
+              }
             }
           ]
         },
         "response": {
           "type": "object",
           "description": "Server-to-client response. Discriminated by t; ok=true carries result, ok=false carries error.",
-          "required": ["t", "ok"],
+          "required": [
+            "t",
+            "ok"
+          ],
           "properties": {
-            "t": { "type": "string" },
-            "id": { "type": "string" },
-            "ok": { "type": "boolean" },
-            "result": { "type": "object", "additionalProperties": true },
-            "error": { "type": "string" },
-            "code": { "type": "string" },
-            "details": { "type": "object", "additionalProperties": true },
-            "session": { "type": "string", "description": "Present on an input rejection (code input_rejected): the terminal the refused DENB input frame was aimed at. DENB frames carry no request id, so this is how the client attributes the refusal." },
-            "attachmentId": { "type": "string", "description": "Present on an input rejection (code input_rejected): the attachment identity from the refused frame, or the one the Host expects when it differs." }
+            "t": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "ok": {
+              "type": "boolean"
+            },
+            "result": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "error": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "details": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "session": {
+              "type": "string",
+              "description": "Present on an input rejection (code input_rejected): the terminal the refused DENB input frame was aimed at. DENB frames carry no request id, so this is how the client attributes the refusal."
+            },
+            "attachmentId": {
+              "type": "string",
+              "description": "Present on an input rejection (code input_rejected): the attachment identity from the refused frame, or the one the Host expects when it differs."
+            }
           }
         }
       }
@@ -240,113 +462,521 @@
       "description": "Catalog of JSON-RPC methods handled on the main WebSocket connection. Each entry lists the canonical name, the params it accepts, and a result reference. Result shapes are described by api/types.go structs in Go bindings.",
       "items": {
         "type": "object",
-        "required": ["method", "paramsRef", "resultRef"],
+        "required": [
+          "method",
+          "paramsRef",
+          "resultRef"
+        ],
         "properties": {
-          "method": { "type": "string" },
-          "paramsRef": { "type": "string", "description": "Pointer to the Go struct field shape (or 'free' if the params map is unconstrained)." },
-          "resultRef": { "type": "string", "description": "Pointer to the api/types.go struct (e.g. 'api.State', 'api.AgentEventsHistoryResult')." }
+          "method": {
+            "type": "string"
+          },
+          "paramsRef": {
+            "type": "string",
+            "description": "Pointer to the Go struct field shape (or 'free' if the params map is unconstrained)."
+          },
+          "resultRef": {
+            "type": "string",
+            "description": "Pointer to the api/types.go struct (e.g. 'api.State', 'api.AgentEventsHistoryResult')."
+          }
         }
       },
       "examples": [
-        { "method": "roster", "paramsRef": "free", "resultRef": "api.State (via makeRoster)" },
-        { "method": "agent.execution.get", "paramsRef": "{executionId: string}", "resultRef": "api.AgentExecution" },
-        { "method": "agent.events.history", "paramsRef": "{streamId: string, afterSequence?: uint64, beforeSequence?: uint64, limit?: uint32}", "resultRef": "api.AgentEventsHistoryResult" },
-        { "method": "agent.events.subscribe", "paramsRef": "{streamId: string, afterSequence?: uint64, limit?: uint32}", "resultRef": "api.AgentEventsSubscriptionResult" },
-        { "method": "agent.events.unsubscribe", "paramsRef": "{streamId: string}", "resultRef": "{streamId: string, unsubscribed: bool}" },
-        { "method": "usage.stats", "paramsRef": "api.UsageStatsRequest", "resultRef": "api.UsageStatsResult" },
-        { "method": "usage.rebuild", "paramsRef": "free", "resultRef": "api.UsageRebuildResult" },
-        { "method": "agent.execution.resume", "paramsRef": "api.AgentCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "agent.turn.start", "paramsRef": "api.AgentTurnStartCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "agent.turn.steer", "paramsRef": "api.AgentTurnSteerCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "agent.turn.cancel", "paramsRef": "api.AgentTurnCancelCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "agent.interaction.resolve", "paramsRef": "api.AgentInteractionResolveCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "agent.goal.set", "paramsRef": "api.AgentGoalSetCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "agent.goal.clear", "paramsRef": "api.AgentGoalClearCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "agent.config.set", "paramsRef": "api.AgentConfigSetCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "session.handoff", "paramsRef": "{id: string, command?: string}", "resultRef": "api.Session" },
-        { "method": "session.history", "paramsRef": "api.SessionHistoryRequest", "resultRef": "api.SessionHistoryResult" },
-        { "method": "session.resume", "paramsRef": "api.SessionResumeRequest", "resultRef": "api.Session" },
-        { "method": "agent.attachment.prepare", "paramsRef": "api.AgentAttachmentPrepareCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "agent.attachment.chunk", "paramsRef": "api.AgentAttachmentChunkCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "agent.attachment.complete", "paramsRef": "api.AgentAttachmentCompleteCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "agent.attachment.abort", "paramsRef": "api.AgentAttachmentAbortCommand", "resultRef": "api.AgentCommandReceipt" },
-        { "method": "relay.pairing", "paramsRef": "free", "resultRef": "{pairingCode, expiresAt}" },
-        { "method": "relay.devices.list", "paramsRef": "free", "resultRef": "{devices: any[]}" },
-        { "method": "relay.devices.revoke", "paramsRef": "{deviceID: string}", "resultRef": "void" },
-        { "method": "settings.get", "paramsRef": "free", "resultRef": "api.Settings" },
-        { "method": "relay.reset", "paramsRef": "free", "resultRef": "void" },
-        { "method": "public-access.status", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
-        { "method": "public-access.enable", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
-        { "method": "public-access.test", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
-        { "method": "public-access.disable", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
-        { "method": "public-access.reset", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
-        { "method": "public-access.restart", "paramsRef": "{publicHostname?: string, pathPrefix?: string}", "resultRef": "api.PublicAccessStatus" },
-        { "method": "settings.testOpenAI", "paramsRef": "free", "resultRef": "void" },
-        { "method": "settings.put", "paramsRef": "{...settings}", "resultRef": "api.Settings" },
-        { "method": "project.add", "paramsRef": "{...}", "resultRef": "api.Project" },
-        { "method": "task.create", "paramsRef": "{...}", "resultRef": "api.Task" },
-        { "method": "task.remove", "paramsRef": "{id: string}", "resultRef": "void" },
-        { "method": "task.rename", "paramsRef": "{id: string, name: string}", "resultRef": "void" },
-        { "method": "task.pin", "paramsRef": "{id: string, pinned: bool}", "resultRef": "void" },
-        { "method": "task.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
-        { "method": "task.attach", "paramsRef": "{id: string, workspace: string}", "resultRef": "void" },
-        { "method": "task.detach", "paramsRef": "{id: string, workspace: string}", "resultRef": "void" },
-        { "method": "schedule.create", "paramsRef": "api.ScheduleCreateRequest", "resultRef": "api.Schedule" },
-        { "method": "schedule.list", "paramsRef": "{}", "resultRef": "api.Schedule[]" },
-        { "method": "schedule.get", "paramsRef": "{id: string}", "resultRef": "api.Schedule" },
-        { "method": "schedule.remove", "paramsRef": "{id: string}", "resultRef": "void" },
-        { "method": "schedule.pause", "paramsRef": "{id: string}", "resultRef": "api.Schedule" },
-        { "method": "schedule.resume", "paramsRef": "{id: string}", "resultRef": "api.Schedule" },
-        { "method": "schedule.run", "paramsRef": "{id: string}", "resultRef": "api.ScheduleRun" },
-        { "method": "schedule.runs", "paramsRef": "{id: string, limit?: int}", "resultRef": "api.ScheduleRun[]" },
-        { "method": "project.worktrees", "paramsRef": "{project: string}", "resultRef": "[]api.WorktreeCandidate" },
-        { "method": "project.worktrees.import", "paramsRef": "{...}", "resultRef": "api.Workspace" },
-        { "method": "project.autoImportGitWorktrees", "paramsRef": "{project: string}", "resultRef": "api.Workspace[]" },
-        { "method": "project.setupScript", "paramsRef": "{...}", "resultRef": "void" },
-        { "method": "project.remove", "paramsRef": "{id: string, force?: bool}", "resultRef": "void" },
-        { "method": "project.rename", "paramsRef": "{id: string, name: string}", "resultRef": "void" },
-        { "method": "project.pin", "paramsRef": "{id: string, pinned: bool}", "resultRef": "void" },
-        { "method": "project.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
-        { "method": "workspace.create", "paramsRef": "{...}", "resultRef": "api.WorkspaceCreateResult" },
-        { "method": "workspace.remove", "paramsRef": "{id: string, force?: bool}", "resultRef": "void" },
-        { "method": "workspace.rename", "paramsRef": "{id: string, name: string}", "resultRef": "void" },
-        { "method": "workspace.pin", "paramsRef": "{id: string, pinned: bool}", "resultRef": "void" },
-        { "method": "workspace.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
-        { "method": "session.create", "paramsRef": "{...}", "resultRef": "api.Session" },
-        { "method": "browser.session.create", "paramsRef": "{workspace: string, url?: string, headless?: bool, viewport?: {width: int, height: int}}", "resultRef": "api.BrowserSession" },
-        { "method": "browser.session.list", "paramsRef": "{workspace?: string}", "resultRef": "api.BrowserSession[]" },
-        { "method": "browser.session.get", "paramsRef": "{id: string}", "resultRef": "api.BrowserSession" },
-        { "method": "browser.session.close", "paramsRef": "{id: string}", "resultRef": "void" },
-        { "method": "browser.action", "paramsRef": "{id: string, action: api.BrowserAction}", "resultRef": "api.BrowserActionResult" },
-        { "method": "browser.subscribe", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "{subscribed: bool, attachmentId: string}" },
-        { "method": "session.delete", "paramsRef": "{id: string}", "resultRef": "void" },
-        { "method": "session.delete.preflight", "paramsRef": "{id: string}", "resultRef": "api.SessionDeletePreflight" },
-        { "method": "session.current", "paramsRef": "free", "resultRef": "api.Session | null" },
-        { "method": "session.rename", "paramsRef": "{id: string, title: string}", "resultRef": "void" },
-        { "method": "session.title.regenerate", "paramsRef": "{id: string}", "resultRef": "{title: string}" },
-        { "method": "session.pin", "paramsRef": "{id: string, pinned: bool}", "resultRef": "void" },
-        { "method": "session.move", "paramsRef": "{id: string, before?: string}", "resultRef": "void" },
-        { "method": "session.move.preflight", "paramsRef": "{id: string}", "resultRef": "api.SessionMovePreflight" },
-        { "method": "session.undo", "paramsRef": "{id: string}", "resultRef": "void" },
-        { "method": "session.subscribe", "paramsRef": "{id: string, cols?: int, rows?: int, claim?: bool, epoch?: uint64, sequence?: uint64}", "resultRef": "{subscribed: bool, attachmentId: string}" },
-        { "method": "session.unsubscribe", "paramsRef": "{id: string}", "resultRef": "void" },
-        { "method": "session.ack", "paramsRef": "{id: string, epoch: uint64, sequence: uint64}", "resultRef": "none (no response; requires output-ack-v1)" },
-        { "method": "session.focus", "paramsRef": "{id: string, cols?: int, rows?: int}", "resultRef": "void" },
-        { "method": "session.resize", "paramsRef": "{id: string, cols: int, rows: int}", "resultRef": "void" },
-        { "method": "pane-group.create", "paramsRef": "{workspace: string, session: string, name?: string, before?: string}", "resultRef": "api.PaneGroup" },
-        { "method": "pane-group.rename", "paramsRef": "{id: string, name: string}", "resultRef": "api.PaneGroup" },
-        { "method": "pane-group.move", "paramsRef": "{id: string, before?: string}", "resultRef": "api.PaneGroup" },
-        { "method": "pane-group.remove", "paramsRef": "{id: string}", "resultRef": "void" },
-        { "method": "pane-group.update", "paramsRef": "{id: string, tree: api.PaneNode, expectedRevision: uint64}", "resultRef": "api.PaneGroup" },
-        { "method": "screen.report", "paramsRef": "{sessions: string[] | string}", "resultRef": "{reported: bool, screenSessions: string[]}" },
-        { "method": "screen.panes", "paramsRef": "{id: string}", "resultRef": "api.ScreenPanesResult" },
-        { "method": "git.panel", "paramsRef": "{workspace: string}", "resultRef": "api.GitPanel" },
-        { "method": "git.diff", "paramsRef": "{workspace: string, path: string}", "resultRef": "api.GitDiff" },
-        { "method": "git.checkout", "paramsRef": "{workspace: string, branch: string}", "resultRef": "void" },
-        { "method": "git.pull", "paramsRef": "{workspace: string}", "resultRef": "api.GitCommandResult" },
-        { "method": "git.push", "paramsRef": "{workspace: string}", "resultRef": "api.GitCommandResult" },
-        { "method": "git.commit", "paramsRef": "{workspace: string, ...}", "resultRef": "api.GitCommandResult" },
-        { "method": "git.pr.create", "paramsRef": "{workspace: string, ...}", "resultRef": "api.GitCommandResult" }
+        {
+          "method": "roster",
+          "paramsRef": "free",
+          "resultRef": "api.State (via makeRoster)"
+        },
+        {
+          "method": "agent.execution.get",
+          "paramsRef": "{executionId: string}",
+          "resultRef": "api.AgentExecution"
+        },
+        {
+          "method": "agent.events.history",
+          "paramsRef": "{streamId: string, afterSequence?: uint64, beforeSequence?: uint64, limit?: uint32}",
+          "resultRef": "api.AgentEventsHistoryResult"
+        },
+        {
+          "method": "agent.events.subscribe",
+          "paramsRef": "{streamId: string, afterSequence?: uint64, limit?: uint32}",
+          "resultRef": "api.AgentEventsSubscriptionResult"
+        },
+        {
+          "method": "agent.events.unsubscribe",
+          "paramsRef": "{streamId: string}",
+          "resultRef": "{streamId: string, unsubscribed: bool}"
+        },
+        {
+          "method": "usage.stats",
+          "paramsRef": "api.UsageStatsRequest",
+          "resultRef": "api.UsageStatsResult"
+        },
+        {
+          "method": "usage.rebuild",
+          "paramsRef": "free",
+          "resultRef": "api.UsageRebuildResult"
+        },
+        {
+          "method": "agent.execution.resume",
+          "paramsRef": "api.AgentCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "agent.turn.start",
+          "paramsRef": "api.AgentTurnStartCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "agent.turn.steer",
+          "paramsRef": "api.AgentTurnSteerCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "agent.turn.cancel",
+          "paramsRef": "api.AgentTurnCancelCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "agent.interaction.resolve",
+          "paramsRef": "api.AgentInteractionResolveCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "agent.goal.set",
+          "paramsRef": "api.AgentGoalSetCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "agent.goal.clear",
+          "paramsRef": "api.AgentGoalClearCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "agent.config.set",
+          "paramsRef": "api.AgentConfigSetCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "session.handoff",
+          "paramsRef": "{id: string, command?: string}",
+          "resultRef": "api.Session"
+        },
+        {
+          "method": "session.history",
+          "paramsRef": "api.SessionHistoryRequest",
+          "resultRef": "api.SessionHistoryResult"
+        },
+        {
+          "method": "session.resume",
+          "paramsRef": "api.SessionResumeRequest",
+          "resultRef": "api.Session"
+        },
+        {
+          "method": "agent.attachment.prepare",
+          "paramsRef": "api.AgentAttachmentPrepareCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "agent.attachment.chunk",
+          "paramsRef": "api.AgentAttachmentChunkCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "agent.attachment.complete",
+          "paramsRef": "api.AgentAttachmentCompleteCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "agent.attachment.abort",
+          "paramsRef": "api.AgentAttachmentAbortCommand",
+          "resultRef": "api.AgentCommandReceipt"
+        },
+        {
+          "method": "relay.pairing",
+          "paramsRef": "free",
+          "resultRef": "{pairingCode, expiresAt}"
+        },
+        {
+          "method": "relay.devices.list",
+          "paramsRef": "free",
+          "resultRef": "{devices: any[]}"
+        },
+        {
+          "method": "relay.devices.revoke",
+          "paramsRef": "{deviceID: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "settings.get",
+          "paramsRef": "free",
+          "resultRef": "api.Settings"
+        },
+        {
+          "method": "relay.reset",
+          "paramsRef": "free",
+          "resultRef": "void"
+        },
+        {
+          "method": "public-access.status",
+          "paramsRef": "{publicHostname?: string, pathPrefix?: string}",
+          "resultRef": "api.PublicAccessStatus"
+        },
+        {
+          "method": "public-access.enable",
+          "paramsRef": "{publicHostname?: string, pathPrefix?: string}",
+          "resultRef": "api.PublicAccessStatus"
+        },
+        {
+          "method": "public-access.test",
+          "paramsRef": "{publicHostname?: string, pathPrefix?: string}",
+          "resultRef": "api.PublicAccessStatus"
+        },
+        {
+          "method": "public-access.disable",
+          "paramsRef": "{publicHostname?: string, pathPrefix?: string}",
+          "resultRef": "api.PublicAccessStatus"
+        },
+        {
+          "method": "public-access.reset",
+          "paramsRef": "{publicHostname?: string, pathPrefix?: string}",
+          "resultRef": "api.PublicAccessStatus"
+        },
+        {
+          "method": "public-access.restart",
+          "paramsRef": "{publicHostname?: string, pathPrefix?: string}",
+          "resultRef": "api.PublicAccessStatus"
+        },
+        {
+          "method": "settings.testOpenAI",
+          "paramsRef": "free",
+          "resultRef": "void"
+        },
+        {
+          "method": "settings.put",
+          "paramsRef": "{...settings}",
+          "resultRef": "api.Settings"
+        },
+        {
+          "method": "project.add",
+          "paramsRef": "{...}",
+          "resultRef": "api.Project"
+        },
+        {
+          "method": "task.create",
+          "paramsRef": "{...}",
+          "resultRef": "api.Task"
+        },
+        {
+          "method": "task.remove",
+          "paramsRef": "{id: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "task.rename",
+          "paramsRef": "{id: string, name: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "task.pin",
+          "paramsRef": "{id: string, pinned: bool}",
+          "resultRef": "void"
+        },
+        {
+          "method": "task.move",
+          "paramsRef": "{id: string, before?: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "task.attach",
+          "paramsRef": "{id: string, workspace: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "task.detach",
+          "paramsRef": "{id: string, workspace: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "schedule.create",
+          "paramsRef": "api.ScheduleCreateRequest",
+          "resultRef": "api.Schedule"
+        },
+        {
+          "method": "schedule.list",
+          "paramsRef": "{}",
+          "resultRef": "api.Schedule[]"
+        },
+        {
+          "method": "schedule.get",
+          "paramsRef": "{id: string}",
+          "resultRef": "api.Schedule"
+        },
+        {
+          "method": "schedule.remove",
+          "paramsRef": "{id: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "schedule.pause",
+          "paramsRef": "{id: string}",
+          "resultRef": "api.Schedule"
+        },
+        {
+          "method": "schedule.resume",
+          "paramsRef": "{id: string}",
+          "resultRef": "api.Schedule"
+        },
+        {
+          "method": "schedule.run",
+          "paramsRef": "{id: string}",
+          "resultRef": "api.ScheduleRun"
+        },
+        {
+          "method": "schedule.runs",
+          "paramsRef": "{id: string, limit?: int}",
+          "resultRef": "api.ScheduleRun[]"
+        },
+        {
+          "method": "project.worktrees",
+          "paramsRef": "{project: string}",
+          "resultRef": "[]api.WorktreeCandidate"
+        },
+        {
+          "method": "project.worktrees.import",
+          "paramsRef": "{...}",
+          "resultRef": "api.Workspace"
+        },
+        {
+          "method": "project.autoImportGitWorktrees",
+          "paramsRef": "{project: string}",
+          "resultRef": "api.Workspace[]"
+        },
+        {
+          "method": "project.setupScript",
+          "paramsRef": "{...}",
+          "resultRef": "void"
+        },
+        {
+          "method": "project.remove",
+          "paramsRef": "{id: string, force?: bool}",
+          "resultRef": "void"
+        },
+        {
+          "method": "project.rename",
+          "paramsRef": "{id: string, name: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "project.pin",
+          "paramsRef": "{id: string, pinned: bool}",
+          "resultRef": "void"
+        },
+        {
+          "method": "project.move",
+          "paramsRef": "{id: string, before?: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "workspace.create",
+          "paramsRef": "{...}",
+          "resultRef": "api.WorkspaceCreateResult"
+        },
+        {
+          "method": "workspace.remove",
+          "paramsRef": "{id: string, force?: bool}",
+          "resultRef": "void"
+        },
+        {
+          "method": "workspace.rename",
+          "paramsRef": "{id: string, name: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "workspace.pin",
+          "paramsRef": "{id: string, pinned: bool}",
+          "resultRef": "void"
+        },
+        {
+          "method": "workspace.move",
+          "paramsRef": "{id: string, before?: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "session.create",
+          "paramsRef": "{...}",
+          "resultRef": "api.Session"
+        },
+        {
+          "method": "browser.session.create",
+          "paramsRef": "{workspace: string, url?: string, headless?: bool, viewport?: {width: int, height: int}}",
+          "resultRef": "api.BrowserSession"
+        },
+        {
+          "method": "browser.session.list",
+          "paramsRef": "{workspace?: string}",
+          "resultRef": "api.BrowserSession[]"
+        },
+        {
+          "method": "browser.session.get",
+          "paramsRef": "{id: string}",
+          "resultRef": "api.BrowserSession"
+        },
+        {
+          "method": "browser.session.close",
+          "paramsRef": "{id: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "browser.action",
+          "paramsRef": "{id: string, action: api.BrowserAction}",
+          "resultRef": "api.BrowserActionResult"
+        },
+        {
+          "method": "browser.subscribe",
+          "paramsRef": "{id: string, cols?: int, rows?: int}",
+          "resultRef": "{subscribed: bool, attachmentId: string}"
+        },
+        {
+          "method": "session.delete",
+          "paramsRef": "{id: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "session.delete.preflight",
+          "paramsRef": "{id: string}",
+          "resultRef": "api.SessionDeletePreflight"
+        },
+        {
+          "method": "session.current",
+          "paramsRef": "free",
+          "resultRef": "api.Session | null"
+        },
+        {
+          "method": "session.rename",
+          "paramsRef": "{id: string, title: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "session.title.regenerate",
+          "paramsRef": "{id: string}",
+          "resultRef": "{title: string}"
+        },
+        {
+          "method": "session.pin",
+          "paramsRef": "{id: string, pinned: bool}",
+          "resultRef": "void"
+        },
+        {
+          "method": "session.move",
+          "paramsRef": "{id: string, before?: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "session.move.preflight",
+          "paramsRef": "{id: string}",
+          "resultRef": "api.SessionMovePreflight"
+        },
+        {
+          "method": "session.undo",
+          "paramsRef": "{id: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "session.subscribe",
+          "paramsRef": "{id: string, cols?: int, rows?: int, claim?: bool, epoch?: uint64, sequence?: uint64}",
+          "resultRef": "{subscribed: bool, attachmentId: string}"
+        },
+        {
+          "method": "session.unsubscribe",
+          "paramsRef": "{id: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "session.ack",
+          "paramsRef": "{id: string, epoch: uint64, sequence: uint64}",
+          "resultRef": "none (no response; requires output-ack-v1)"
+        },
+        {
+          "method": "session.focus",
+          "paramsRef": "{id: string, cols?: int, rows?: int}",
+          "resultRef": "void"
+        },
+        {
+          "method": "session.resize",
+          "paramsRef": "{id: string, cols: int, rows: int}",
+          "resultRef": "void"
+        },
+        {
+          "method": "pane-group.create",
+          "paramsRef": "{workspace: string, session: string, name?: string, before?: string}",
+          "resultRef": "api.PaneGroup"
+        },
+        {
+          "method": "pane-group.rename",
+          "paramsRef": "{id: string, name: string}",
+          "resultRef": "api.PaneGroup"
+        },
+        {
+          "method": "pane-group.move",
+          "paramsRef": "{id: string, before?: string}",
+          "resultRef": "api.PaneGroup"
+        },
+        {
+          "method": "pane-group.remove",
+          "paramsRef": "{id: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "pane-group.update",
+          "paramsRef": "{id: string, tree: api.PaneNode, expectedRevision: uint64}",
+          "resultRef": "api.PaneGroup"
+        },
+        {
+          "method": "screen.report",
+          "paramsRef": "{sessions: string[] | string}",
+          "resultRef": "{reported: bool, screenSessions: string[]}"
+        },
+        {
+          "method": "screen.panes",
+          "paramsRef": "{id: string}",
+          "resultRef": "api.ScreenPanesResult"
+        },
+        {
+          "method": "git.panel",
+          "paramsRef": "{workspace: string}",
+          "resultRef": "api.GitPanel"
+        },
+        {
+          "method": "git.diff",
+          "paramsRef": "{workspace: string, path: string}",
+          "resultRef": "api.GitDiff"
+        },
+        {
+          "method": "git.checkout",
+          "paramsRef": "{workspace: string, branch: string}",
+          "resultRef": "void"
+        },
+        {
+          "method": "git.pull",
+          "paramsRef": "{workspace: string}",
+          "resultRef": "api.GitCommandResult"
+        },
+        {
+          "method": "git.push",
+          "paramsRef": "{workspace: string}",
+          "resultRef": "api.GitCommandResult"
+        },
+        {
+          "method": "git.commit",
+          "paramsRef": "{workspace: string, ...}",
+          "resultRef": "api.GitCommandResult"
+        },
+        {
+          "method": "git.pr.create",
+          "paramsRef": "{workspace: string, ...}",
+          "resultRef": "api.GitCommandResult"
+        }
       ]
     },
     "serverEvents": {
@@ -375,63 +1005,138 @@
       "uniqueItems": true,
       "eventDetails": {
         "welcome": {
-          "fields": { "t": "welcome", "version": "4.0", "host": "api.Host", "accessScopeId": "string", "capabilities": "string[]" },
+          "fields": {
+            "t": "welcome",
+            "version": "4.0",
+            "host": "api.Host",
+            "accessScopeId": "string",
+            "capabilities": "string[]"
+          },
           "notes": "First event after upgrade. Carries the stable Host identity, the authenticated visibility scope, and negotiated capabilities."
         },
         "maintenance": {
-          "fields": { "t": "maintenance", "message": "string", "kind": "string" },
+          "fields": {
+            "t": "maintenance",
+            "message": "string",
+            "kind": "string"
+          },
           "notes": "Sent when the host enters or leaves a maintenance window. Clients should pause long-running work."
         },
         "auth": {
-          "fields": { "t": "auth", "ok": "bool", "error": "string?" },
+          "fields": {
+            "t": "auth",
+            "ok": "bool",
+            "error": "string?"
+          },
           "notes": "Response to the auth envelope; usually sent as the response type, not as a push."
         },
         "error": {
-          "fields": { "t": "error", "id": "string?", "ok": false, "error": "string" },
+          "fields": {
+            "t": "error",
+            "id": "string?",
+            "ok": false,
+            "error": "string"
+          },
           "notes": "Generic error envelope. id is empty when the error is not tied to a request."
         },
         "roster": {
-          "fields": { "t": "roster", "state": "api.State" },
+          "fields": {
+            "t": "roster",
+            "state": "api.State"
+          },
           "notes": "Full roster snapshot. Sent on welcome and on full re-sync."
         },
         "roster.delta": {
-          "fields": { "t": "roster.delta", "baseRevision": "uint64", "revision": "uint64", "host": "api.Host?", "tasks": "EntityChanges<api.Task>?", "projects": "EntityChanges<api.Project>?", "workspaces": "EntityChanges<api.Workspace>?", "sessions": "EntityChanges<api.Session>?" },
+          "fields": {
+            "t": "roster.delta",
+            "baseRevision": "uint64",
+            "revision": "uint64",
+            "host": "api.Host?",
+            "tasks": "EntityChanges<api.Task>?",
+            "projects": "EntityChanges<api.Project>?",
+            "workspaces": "EntityChanges<api.Workspace>?",
+            "sessions": "EntityChanges<api.Session>?"
+          },
           "notes": "Requires capability 'roster-delta'. Each present collection contains upsert/remove/order arrays; absent collections mean no change. Clients must apply the delta only when baseRevision matches their latest full or delta roster revision. Migration metadata is intentionally absent after the v4 clean break."
         },
         "attached": {
-          "fields": { "t": "attached", "session": "string", "epoch": "uint64", "sequence": "uint64", "reanchor": "bool", "attachmentId": "string", "cols": "int?", "rows": "int?" },
+          "fields": {
+            "t": "attached",
+            "session": "string",
+            "epoch": "uint64",
+            "sequence": "uint64",
+            "reanchor": "bool",
+            "attachmentId": "string",
+            "cols": "int?",
+            "rows": "int?"
+          },
           "notes": "Host acknowledges session.subscribe and publishes the attachment identity used by DENB input frames. With capability 'terminal-size-v1', cols/rows give the PTY grid size at (epoch, sequence) when the Host knows it; absent means unknown and no resized events follow for this attachment."
         },
         "synced": {
-          "fields": { "t": "synced", "session": "string", "epoch": "uint64", "sequence": "uint64" },
+          "fields": {
+            "t": "synced",
+            "session": "string",
+            "epoch": "uint64",
+            "sequence": "uint64"
+          },
           "notes": "Replay catch-up is complete; the next binary frame will be the live stream at (epoch, sequence)."
         },
         "recoveryFailed": {
-          "fields": { "t": "recoveryFailed", "session": "string", "reason": "string" },
+          "fields": {
+            "t": "recoveryFailed",
+            "session": "string",
+            "reason": "string"
+          },
           "notes": "The session.subscribe acknowledgement was already sent, but the Host could not produce the recovery payload (atomic state and paired cursor) for it. The client must cancel any staged recovery for the session and subscribe again; no attached/synced markers follow this event. A failure before the acknowledgement is reported on the command response and never as this event."
         },
         "resized": {
-          "fields": { "t": "resized", "session": "string", "epoch": "uint64", "sequence": "uint64", "cols": "int", "rows": "int" },
+          "fields": {
+            "t": "resized",
+            "session": "string",
+            "epoch": "uint64",
+            "sequence": "uint64",
+            "cols": "int",
+            "rows": "int"
+          },
           "notes": "Requires capability 'terminal-size-v1' and a sized attached event. Output from (epoch, sequence) on is produced for cols x rows. The event travels ahead of queued output, so clients apply it when their output position reaches sequence, never on arrival."
         },
         "focusTaken": {
-          "fields": { "t": "focusTaken", "session": "string", "attachmentId": "string?" },
+          "fields": {
+            "t": "focusTaken",
+            "session": "string",
+            "attachmentId": "string?"
+          },
           "notes": "Another peer claimed this Session's input control lease. The recipient no longer owns it: input it sends is refused by the Host, and it must stop treating its lease as confirmed. attachmentId names the new owner's attachment."
         },
         "focusGranted": {
-          "fields": { "t": "focusGranted", "session": "string", "attachmentId": "string?" },
+          "fields": {
+            "t": "focusGranted",
+            "session": "string",
+            "attachmentId": "string?"
+          },
           "notes": "The Host handed this Session's input control lease back to the recipient because the peer that had taken it disconnected and the recipient still wanted it. attachmentId is the recipient's own attachment."
         },
         "exited": {
-          "fields": { "t": "exited", "session": "string" },
+          "fields": {
+            "t": "exited",
+            "session": "string"
+          },
           "notes": "Session has exited and the binary stream for it is closed."
         },
         "agent.events": {
-          "fields": { "t": "agent.events", "streamId": "string", "executionId": "string", "events": "api.CanonicalAgentEvent[]" },
+          "fields": {
+            "t": "agent.events",
+            "streamId": "string",
+            "executionId": "string",
+            "events": "api.CanonicalAgentEvent[]"
+          },
           "notes": "The only semantic Agent push. Every event carries eventId, streamId, executionId, sequence, type, timestamps, origin, and typed payload."
         },
         "pong": {
-          "fields": { "t": "pong", "id": "string" },
+          "fields": {
+            "t": "pong",
+            "id": "string"
+          },
           "notes": "Reply to a client ping when capability 'app-heartbeat-v1' is negotiated."
         }
       }
@@ -439,37 +1144,101 @@
     "agentEvents": {
       "type": "object",
       "description": "Canonical append-only Agent event contract. This metadata is consumed by bindings and contract tests; payload schemas are selected by type.",
-      "required": ["envelope", "types", "attentionStreamId"],
+      "required": [
+        "envelope",
+        "types",
+        "attentionStreamId"
+      ],
       "properties": {
         "envelope": {
           "type": "object",
-          "required": ["eventId", "streamId", "executionId", "sequence", "type", "occurredAt", "recordedAt", "origin", "payload"],
+          "required": [
+            "eventId",
+            "streamId",
+            "executionId",
+            "sequence",
+            "type",
+            "occurredAt",
+            "recordedAt",
+            "origin",
+            "payload"
+          ],
           "properties": {
-            "eventId": { "type": "string" },
-            "streamId": { "type": "string" },
-            "executionId": { "type": "string" },
-            "sequence": { "type": "integer", "minimum": 1 },
-            "turnId": { "type": "string" },
-            "type": { "type": "string" },
-            "occurredAt": { "type": "string", "format": "date-time" },
-            "recordedAt": { "type": "string", "format": "date-time" },
+            "eventId": {
+              "type": "string"
+            },
+            "streamId": {
+              "type": "string"
+            },
+            "executionId": {
+              "type": "string"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "occurredAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "recordedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
             "causedBy": {
               "type": "string",
               "description": "The commandId of the client command that caused this event. Host-derived provenance, not part of the event identity: a re-parsed transcript may omit it, and a client must treat it as late-bound rather than as a change to the row. Present on a user message.created when capability 'agent-causation-v1' is negotiated, and on a turn boundary cancelled by an explicit command."
             },
             "origin": {
               "type": "object",
-              "required": ["kind", "confidence"],
+              "required": [
+                "kind",
+                "confidence"
+              ],
               "properties": {
-                "kind": { "type": "string", "enum": ["host", "provider", "client"] },
-                "provider": { "type": "string" },
-                "driver": { "type": "string", "enum": ["tui", "acp", "cloud"] },
-                "channel": { "type": "string" },
-                "confidence": { "type": "string", "enum": ["native", "observed", "derived"] }
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "host",
+                    "provider",
+                    "client"
+                  ]
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "driver": {
+                  "type": "string",
+                  "enum": [
+                    "tui",
+                    "acp",
+                    "cloud"
+                  ]
+                },
+                "channel": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "string",
+                  "enum": [
+                    "native",
+                    "observed",
+                    "derived"
+                  ]
+                }
               },
               "additionalProperties": false
             },
-            "payload": { "type": "object", "additionalProperties": true }
+            "payload": {
+              "type": "object",
+              "additionalProperties": true
+            }
           },
           "additionalProperties": false
         },
@@ -478,49 +1247,783 @@
           "items": {
             "type": "string",
             "enum": [
-              "execution.started", "execution.resumed", "execution.replaced", "execution.failed",
-              "turn.started", "turn.completed", "turn.failed", "turn.interrupted", "turn.cancelled", "turn.aborted",
-              "message.created", "message.delta", "message.completed", "reasoning.delta",
-              "tool.started", "tool.updated", "tool.completed", "tool.failed",
-              "interaction.requested", "interaction.resolved", "interaction.expired",
-              "plan.updated", "tasks.updated", "todo.updated", "context.updated", "status.changed",
-              "attention.changed", "activity.updated", "plugin.updated", "subagent.updated",
-              "attachment.updated", "config.updated", "compaction.updated", "diff.updated",
-              "diagnostics.updated", "queue.updated", "commands.updated"
+              "execution.started",
+              "execution.resumed",
+              "execution.replaced",
+              "execution.failed",
+              "turn.started",
+              "turn.completed",
+              "turn.failed",
+              "turn.interrupted",
+              "turn.cancelled",
+              "turn.aborted",
+              "message.created",
+              "message.delta",
+              "message.completed",
+              "reasoning.delta",
+              "tool.started",
+              "tool.updated",
+              "tool.completed",
+              "tool.failed",
+              "interaction.requested",
+              "interaction.resolved",
+              "interaction.expired",
+              "plan.updated",
+              "tasks.updated",
+              "todo.updated",
+              "context.updated",
+              "status.changed",
+              "attention.changed",
+              "activity.updated",
+              "plugin.updated",
+              "subagent.updated",
+              "attachment.updated",
+              "config.updated",
+              "compaction.updated",
+              "diff.updated",
+              "diagnostics.updated",
+              "queue.updated",
+              "commands.updated"
             ]
           },
           "uniqueItems": true
         },
-        "attentionStreamId": { "type": "string", "const": "host:attention:v1" }
+        "attentionStreamId": {
+          "type": "string",
+          "const": "host:attention:v1"
+        },
+        "payloads": {
+          "description": "Payload fields per canonical Agent event type. Every field is optional: a payload is an open map, so a provider may add keys this contract does not name, and a client must ignore what it does not read. Declared fields exist so a field's meaning and JSON type have one home; the drift test pins the Host's emitted types against them for the event families listed here.",
+          "common": {
+            "description": "Fields the Host may put on any Agent event payload.",
+            "properties": {
+              "role": {
+                "type": "string",
+                "description": "Conversation role the event belongs to: user, assistant, or system."
+              },
+              "content": {
+                "type": "string",
+                "description": "Message or reasoning text. On a delta it is only the new part."
+              },
+              "contentDelta": {
+                "type": "boolean",
+                "description": "True when content is an increment rather than the whole text."
+              },
+              "messageId": {
+                "type": "string",
+                "description": "Provider message identity, used to join created, delta, and completed rows."
+              },
+              "model": {
+                "type": "string",
+                "description": "Model that produced the message or tool call."
+              },
+              "stopReason": {
+                "type": "string",
+                "description": "Provider reason the message or turn stopped."
+              },
+              "error": {
+                "type": "string",
+                "description": "Failure text when the row reports one."
+              },
+              "usage": {
+                "type": "object",
+                "description": "Token and cost accounting, shaped by the provider."
+              },
+              "durationMs": {
+                "type": "integer",
+                "description": "How long the step or turn took, in milliseconds."
+              },
+              "sidechain": {
+                "type": "boolean",
+                "description": "True when the row belongs to a subagent transcript."
+              }
+            }
+          },
+          "byType": {
+            "message.created": {
+              "properties": {
+                "attachments": {
+                  "type": "array",
+                  "description": "Files or images attached to the prompt.",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "localCommand": {
+                  "type": "string",
+                  "description": "Set when a slash command a person ran locally produced this row."
+                },
+                "summary": {
+                  "type": "string",
+                  "description": "Bold headline the provider gives a message it also summarizes."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "Title the provider gives a system or notice row."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Detail the provider gives a notice row."
+                },
+                "used": {
+                  "type": "string",
+                  "description": "What a tool or context row says it used."
+                },
+                "version": {
+                  "type": "string",
+                  "description": "Provider or plugin version the row reports."
+                }
+              }
+            },
+            "message.delta": {
+              "properties": {}
+            },
+            "message.completed": {
+              "properties": {
+                "localCommand": {
+                  "type": "string",
+                  "description": "Set when a slash command a person ran locally produced this row."
+                }
+              }
+            },
+            "tool.started": {
+              "properties": {
+                "callId": {
+                  "type": "string",
+                  "description": "Provider identity of the tool call, shared by every row about it."
+                },
+                "toolName": {
+                  "type": "string",
+                  "description": "Tool name the provider reports."
+                },
+                "toolKind": {
+                  "type": "string",
+                  "description": "Canonical kind: read, edit, ran, search, fetch, and so on."
+                },
+                "toolDetail": {
+                  "type": "string",
+                  "description": "One line naming what the call touches, such as a path or command."
+                },
+                "toolInput": {
+                  "type": "object",
+                  "description": "Arguments the provider sent, shaped by the provider."
+                },
+                "toolStatus": {
+                  "type": "string",
+                  "description": "Provider status label while the call runs."
+                },
+                "parentCallId": {
+                  "type": "string",
+                  "description": "The call this one belongs to when a subagent or nested tool ran it."
+                },
+                "terminalSessionId": {
+                  "type": "string",
+                  "description": "Agent terminal Session the call ran in, when it ran in one."
+                },
+                "toolCallId": {
+                  "type": "string",
+                  "description": "Legacy alias for callId, still emitted by older providers."
+                },
+                "subagentId": {
+                  "type": "string",
+                  "description": "The child whose sidechain this call ran on."
+                }
+              }
+            },
+            "tool.updated": {
+              "properties": {
+                "callId": {
+                  "type": "string",
+                  "description": "Provider identity of the tool call, shared by every row about it."
+                },
+                "toolName": {
+                  "type": "string",
+                  "description": "Tool name the provider reports."
+                },
+                "toolKind": {
+                  "type": "string",
+                  "description": "Canonical kind: read, edit, ran, search, fetch, and so on."
+                },
+                "toolDetail": {
+                  "type": "string",
+                  "description": "One line naming what the call touches, such as a path or command."
+                },
+                "toolInput": {
+                  "type": "object",
+                  "description": "Arguments the provider sent, shaped by the provider."
+                },
+                "toolStatus": {
+                  "type": "string",
+                  "description": "Provider status label while the call runs."
+                },
+                "parentCallId": {
+                  "type": "string",
+                  "description": "The call this one belongs to when a subagent or nested tool ran it."
+                },
+                "terminalSessionId": {
+                  "type": "string",
+                  "description": "Agent terminal Session the call ran in, when it ran in one."
+                },
+                "toolCallId": {
+                  "type": "string",
+                  "description": "Legacy alias for callId, still emitted by older providers."
+                },
+                "subagentId": {
+                  "type": "string",
+                  "description": "The child whose sidechain this call ran on."
+                }
+              }
+            },
+            "tool.completed": {
+              "properties": {
+                "callId": {
+                  "type": "string",
+                  "description": "Provider identity of the tool call, shared by every row about it."
+                },
+                "toolName": {
+                  "type": "string",
+                  "description": "Tool name the provider reports."
+                },
+                "toolKind": {
+                  "type": "string",
+                  "description": "Canonical kind: read, edit, ran, search, fetch, and so on."
+                },
+                "toolDetail": {
+                  "type": "string",
+                  "description": "One line naming what the call touches, such as a path or command."
+                },
+                "toolStatus": {
+                  "type": "string",
+                  "description": "Provider status label the call finished with."
+                },
+                "output": {
+                  "type": "string",
+                  "description": "Text the call produced."
+                },
+                "diff": {
+                  "type": "object",
+                  "description": "The change the call made, as file, additions, deletions, and diff text.",
+                  "properties": {
+                    "file": {
+                      "type": "string",
+                      "description": "Path the change touched."
+                    },
+                    "additions": {
+                      "type": "integer",
+                      "description": "Lines added."
+                    },
+                    "deletions": {
+                      "type": "integer",
+                      "description": "Lines removed."
+                    },
+                    "diff": {
+                      "type": "string",
+                      "description": "Unified diff text."
+                    }
+                  }
+                },
+                "files": {
+                  "type": "array",
+                  "description": "Paths the call touched.",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "terminalSessionId": {
+                  "type": "string",
+                  "description": "Agent terminal Session the call ran in, when it ran in one."
+                },
+                "toolCallId": {
+                  "type": "string",
+                  "description": "Legacy alias for callId, still emitted by older providers."
+                },
+                "subagentId": {
+                  "type": "string",
+                  "description": "The child whose sidechain this call ran on."
+                }
+              }
+            },
+            "tool.failed": {
+              "properties": {
+                "callId": {
+                  "type": "string",
+                  "description": "Provider identity of the tool call, shared by every row about it."
+                },
+                "toolName": {
+                  "type": "string",
+                  "description": "Tool name the provider reports."
+                },
+                "toolKind": {
+                  "type": "string",
+                  "description": "Canonical kind: read, edit, ran, search, fetch, and so on."
+                },
+                "toolDetail": {
+                  "type": "string",
+                  "description": "One line naming what the call touches, such as a path or command."
+                },
+                "toolStatus": {
+                  "type": "string",
+                  "description": "Provider status label the call finished with."
+                },
+                "output": {
+                  "type": "string",
+                  "description": "Text the call produced before it failed."
+                },
+                "toolCallId": {
+                  "type": "string",
+                  "description": "Legacy alias for callId, still emitted by older providers."
+                },
+                "subagentId": {
+                  "type": "string",
+                  "description": "The child whose sidechain this call ran on."
+                }
+              }
+            },
+            "interaction.requested": {
+              "properties": {
+                "interactionId": {
+                  "type": "string",
+                  "description": "Identity shared by requested, resolved, and expired rows."
+                },
+                "requestId": {
+                  "type": "string",
+                  "description": "Legacy alias for interactionId."
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "question, permission, or confirmation."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "The question or the action being asked about."
+                },
+                "version": {
+                  "type": "integer",
+                  "description": "Interaction schema version the options follow."
+                },
+                "state": {
+                  "type": "string",
+                  "description": "pending while the row waits, then resolved or expired."
+                },
+                "options": {
+                  "type": "array",
+                  "description": "The choices a person can take.",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "questions": {
+                  "type": "array",
+                  "description": "Question rows for a multi-question interaction.",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "subagentId": {
+                  "type": "string",
+                  "description": "The child asking, when a subagent raised the interaction."
+                }
+              }
+            },
+            "interaction.resolved": {
+              "properties": {
+                "interactionId": {
+                  "type": "string",
+                  "description": "Identity shared by requested, resolved, and expired rows."
+                },
+                "requestId": {
+                  "type": "string",
+                  "description": "Legacy alias for interactionId."
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "question, permission, or confirmation."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "The question or the action being asked about."
+                },
+                "version": {
+                  "type": "integer",
+                  "description": "Interaction schema version the options follow."
+                },
+                "state": {
+                  "type": "string",
+                  "description": "resolved or expired."
+                },
+                "options": {
+                  "type": "array",
+                  "description": "The choices the person could take.",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "response": {
+                  "type": "object",
+                  "description": "What the person answered, shaped by the interaction kind."
+                },
+                "subagentId": {
+                  "type": "string",
+                  "description": "The child asking, when a subagent raised the interaction."
+                }
+              }
+            },
+            "interaction.expired": {
+              "properties": {
+                "interactionId": {
+                  "type": "string",
+                  "description": "Identity shared by requested, resolved, and expired rows."
+                },
+                "requestId": {
+                  "type": "string",
+                  "description": "Legacy alias for interactionId."
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "question, permission, or confirmation."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "The question or the action being asked about."
+                },
+                "version": {
+                  "type": "integer",
+                  "description": "Interaction schema version the options follow."
+                },
+                "state": {
+                  "type": "string",
+                  "description": "resolved or expired."
+                },
+                "options": {
+                  "type": "array",
+                  "description": "The choices the person could take.",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "response": {
+                  "type": "object",
+                  "description": "What the person answered, shaped by the interaction kind."
+                },
+                "subagentId": {
+                  "type": "string",
+                  "description": "The child asking, when a subagent raised the interaction."
+                }
+              }
+            },
+            "plan.updated": {
+              "properties": {
+                "planId": {
+                  "type": "string",
+                  "description": "Identity of the plan being replaced."
+                },
+                "items": {
+                  "type": "array",
+                  "description": "Plan entries, each with a title and a state.",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "tasks.updated": {
+              "properties": {
+                "taskListId": {
+                  "type": "string",
+                  "description": "Identity of the task list being replaced."
+                },
+                "todoId": {
+                  "type": "string",
+                  "description": "Legacy alias for taskListId."
+                },
+                "items": {
+                  "type": "array",
+                  "description": "Entries, each with a title and a state.",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "todo.updated": {
+              "properties": {
+                "todoId": {
+                  "type": "string",
+                  "description": "Identity of the todo list being replaced."
+                },
+                "taskListId": {
+                  "type": "string",
+                  "description": "Alias for todoId."
+                },
+                "items": {
+                  "type": "array",
+                  "description": "Entries, each with a title and a state.",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "context.updated": {
+              "properties": {
+                "used": {
+                  "type": "integer",
+                  "description": "Context tokens the conversation occupies."
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "Context window the model provides."
+                }
+              }
+            },
+            "commands.updated": {
+              "properties": {
+                "commands": {
+                  "type": "array",
+                  "description": "The commands the agent offers, each with an id and description.",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "config.updated": {
+              "properties": {
+                "configId": {
+                  "type": "string",
+                  "description": "Identity of the selector set being replaced."
+                },
+                "configOptions": {
+                  "type": "array",
+                  "description": "Selectors with their current value and choices.",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "compaction.updated": {
+              "properties": {
+                "compactionId": {
+                  "type": "string",
+                  "description": "Identity of the compaction, so a re-report is not a second notice."
+                }
+              }
+            },
+            "subagent.updated": {
+              "properties": {
+                "subagentId": {
+                  "type": "string",
+                  "description": "Identity of the child transcript."
+                },
+                "parentCallId": {
+                  "type": "string",
+                  "description": "The tool call that started the child."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "What the child is called."
+                },
+                "label": {
+                  "type": "string",
+                  "description": "Fallback name when the provider sends no title."
+                },
+                "summary": {
+                  "type": "string",
+                  "description": "One line describing what the child did."
+                },
+                "state": {
+                  "type": "string",
+                  "description": "running or completed."
+                }
+              }
+            },
+            "diff.updated": {
+              "properties": {
+                "diffId": {
+                  "type": "string",
+                  "description": "Identity of the change being reported."
+                },
+                "file": {
+                  "type": "string",
+                  "description": "Path the change touched."
+                },
+                "diff": {
+                  "type": "object",
+                  "description": "The change: file, additions, deletions, and diff text."
+                }
+              }
+            },
+            "diagnostics.updated": {
+              "properties": {
+                "diagnosticsId": {
+                  "type": "string",
+                  "description": "Identity of the diagnostics row."
+                },
+                "file": {
+                  "type": "string",
+                  "description": "Path the diagnostics describe."
+                }
+              }
+            },
+            "queue.updated": {
+              "properties": {
+                "queueId": {
+                  "type": "string",
+                  "description": "Identity of the queue being replaced."
+                },
+                "itemId": {
+                  "type": "string",
+                  "description": "The queued item this row is about."
+                },
+                "requestId": {
+                  "type": "string",
+                  "description": "The request the queued item will make."
+                }
+              }
+            },
+            "activity.updated": {
+              "properties": {
+                "activityId": {
+                  "type": "string",
+                  "description": "Identity of the activity row."
+                }
+              }
+            },
+            "plugin.updated": {
+              "properties": {
+                "pluginId": {
+                  "type": "string",
+                  "description": "Identity of the plugin the row reports."
+                }
+              }
+            },
+            "attachment.updated": {
+              "properties": {
+                "attachmentId": {
+                  "type": "string",
+                  "description": "Identity of the attachment being reported."
+                }
+              }
+            },
+            "execution.started": {
+              "properties": {}
+            },
+            "execution.resumed": {
+              "properties": {}
+            },
+            "execution.replaced": {
+              "properties": {}
+            },
+            "execution.failed": {
+              "properties": {}
+            },
+            "turn.started": {
+              "properties": {}
+            },
+            "turn.completed": {
+              "properties": {}
+            },
+            "turn.failed": {
+              "properties": {}
+            },
+            "turn.interrupted": {
+              "properties": {}
+            },
+            "turn.cancelled": {
+              "properties": {}
+            },
+            "turn.aborted": {
+              "properties": {}
+            },
+            "reasoning.delta": {
+              "properties": {}
+            },
+            "status.changed": {
+              "properties": {}
+            },
+            "attention.changed": {
+              "properties": {}
+            }
+          }
+        }
       }
     },
     "relayStream": {
       "type": "object",
       "description": "BRLY/2 frame format used by the Relay control plane. Distinct wire from the main Host protocol; clients do not decode these directly.",
-      "required": ["magic", "wireVersion", "headerSize", "frames", "streamClasses", "limits"],
+      "required": [
+        "magic",
+        "wireVersion",
+        "headerSize",
+        "frames",
+        "streamClasses",
+        "limits"
+      ],
       "properties": {
-        "magic": { "type": "string", "const": "BRLY" },
-        "wireVersion": { "type": "integer", "const": 2 },
-        "headerSize": { "type": "integer", "const": 22 },
+        "magic": {
+          "type": "string",
+          "const": "BRLY"
+        },
+        "wireVersion": {
+          "type": "integer",
+          "const": 2
+        },
+        "headerSize": {
+          "type": "integer",
+          "const": 22
+        },
         "frames": {
           "type": "object",
           "properties": {
-            "open": { "type": "integer", "const": 1 },
-            "close": { "type": "integer", "const": 2 },
-            "text": { "type": "integer", "const": 3 },
-            "binary": { "type": "integer", "const": 4 },
-            "httpHeaders": { "type": "integer", "const": 5 },
-            "data": { "type": "integer", "const": 6 },
-            "end": { "type": "integer", "const": 7 },
-            "windowUpdate": { "type": "integer", "const": 8 },
-            "error": { "type": "integer", "const": 9 }
+            "open": {
+              "type": "integer",
+              "const": 1
+            },
+            "close": {
+              "type": "integer",
+              "const": 2
+            },
+            "text": {
+              "type": "integer",
+              "const": 3
+            },
+            "binary": {
+              "type": "integer",
+              "const": 4
+            },
+            "httpHeaders": {
+              "type": "integer",
+              "const": 5
+            },
+            "data": {
+              "type": "integer",
+              "const": 6
+            },
+            "end": {
+              "type": "integer",
+              "const": 7
+            },
+            "windowUpdate": {
+              "type": "integer",
+              "const": 8
+            },
+            "error": {
+              "type": "integer",
+              "const": 9
+            }
           }
         },
         "streamClasses": {
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["control", "http", "upgrade", "p2p-signal"]
+            "enum": [
+              "control",
+              "http",
+              "upgrade",
+              "p2p-signal"
+            ]
           },
           "uniqueItems": true,
           "description": "Stream class discriminator on the OPEN metadata. 'control' is the duplex host↔relay control channel; 'http' carries proxied HTTP/1.1; 'upgrade' carries the relayed WebSocket upgrade (which is where the inner Host WS lives); 'p2p-signal' is the canonical authenticated signaling class. Relay handshakes advertise and authorize this canonical capability; no unversioned signal alias is accepted."
@@ -528,10 +2031,22 @@
         "limits": {
           "type": "object",
           "properties": {
-            "maxMessageBytes": { "type": "integer", "const": 8388608 },
-            "initialStreamWindow": { "type": "integer", "const": 16777216 },
-            "maxHostStreams": { "type": "integer", "const": 128 },
-            "maxPublicStreams": { "type": "integer", "const": 64 }
+            "maxMessageBytes": {
+              "type": "integer",
+              "const": 8388608
+            },
+            "initialStreamWindow": {
+              "type": "integer",
+              "const": 16777216
+            },
+            "maxHostStreams": {
+              "type": "integer",
+              "const": 128
+            },
+            "maxPublicStreams": {
+              "type": "integer",
+              "const": 64
+            }
           }
         }
       }
@@ -541,31 +2056,108 @@
       "description": "HTTP routes exposed by the Host. WebSocket upgrades live under /v1/ws; the public Relay-facing endpoints cover health, settings, public access, and Relay join/pairing.",
       "items": {
         "type": "object",
-        "required": ["method", "path"],
+        "required": [
+          "method",
+          "path"
+        ],
         "properties": {
-          "method": { "type": "string" },
-          "path": { "type": "string" },
-          "purpose": { "type": "string" }
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          }
         }
       },
       "examples": [
-        { "method": "GET", "path": "/healthz", "purpose": "Typed subsystem health (see Headless/internal/api/health.go)." },
-        { "method": "GET", "path": "/v1/state", "purpose": "Lightweight state read; not the same as the roster WS push." },
-        { "method": "GET", "path": "/v1/ws", "purpose": "Main WebSocket upgrade; the full RPC surface lives here." },
-        { "method": "GET", "path": "/v1/browser/view", "purpose": "The Warren Browser viewer page for one browser Session (RFC 0022)." },
-        { "method": "GET", "path": "/v1/browser/stream", "purpose": "WebSocket carrying browserFrame screencast frames down and normalized pointer/key input up for one browser Session." },
-        { "method": "GET", "path": "/v1/settings", "purpose": "Read settings (token, model, etc)." },
-        { "method": "PUT", "path": "/v1/settings", "purpose": "Update settings." },
-        { "method": "POST", "path": "/v1/relay/join", "purpose": "Ask Headless to claim this Host with a Relay enrollment key and bind the returned Relay signing key." },
-        { "method": "POST", "path": "/v1/relay/pairing", "purpose": "Issue a short-lived pairing code for a Web client." },
-        { "method": "POST", "path": "/v1/maintenance", "purpose": "Toggle maintenance mode." },
-        { "method": "POST", "path": "/v1/runtime/refresh", "purpose": "Recompute runtime sizes for terminal sessions." },
-        { "method": "GET", "path": "/v1/public-access", "purpose": "Read public-access status." },
-        { "method": "POST", "path": "/v1/public-access/enable", "purpose": "Enable public access for one workspace." },
-        { "method": "POST", "path": "/v1/public-access/test", "purpose": "Test connectivity for the public-access tunnel." },
-        { "method": "POST", "path": "/v1/public-access/disable", "purpose": "Disable public access for one workspace." },
-        { "method": "POST", "path": "/v1/public-access/reset", "purpose": "Rotate the public-access token." },
-        { "method": "POST", "path": "/v1/public-access/restart", "purpose": "Restart the public-access tunnel." }
+        {
+          "method": "GET",
+          "path": "/healthz",
+          "purpose": "Typed subsystem health (see Headless/internal/api/health.go)."
+        },
+        {
+          "method": "GET",
+          "path": "/v1/state",
+          "purpose": "Lightweight state read; not the same as the roster WS push."
+        },
+        {
+          "method": "GET",
+          "path": "/v1/ws",
+          "purpose": "Main WebSocket upgrade; the full RPC surface lives here."
+        },
+        {
+          "method": "GET",
+          "path": "/v1/browser/view",
+          "purpose": "The Warren Browser viewer page for one browser Session (RFC 0022)."
+        },
+        {
+          "method": "GET",
+          "path": "/v1/browser/stream",
+          "purpose": "WebSocket carrying browserFrame screencast frames down and normalized pointer/key input up for one browser Session."
+        },
+        {
+          "method": "GET",
+          "path": "/v1/settings",
+          "purpose": "Read settings (token, model, etc)."
+        },
+        {
+          "method": "PUT",
+          "path": "/v1/settings",
+          "purpose": "Update settings."
+        },
+        {
+          "method": "POST",
+          "path": "/v1/relay/join",
+          "purpose": "Ask Headless to claim this Host with a Relay enrollment key and bind the returned Relay signing key."
+        },
+        {
+          "method": "POST",
+          "path": "/v1/relay/pairing",
+          "purpose": "Issue a short-lived pairing code for a Web client."
+        },
+        {
+          "method": "POST",
+          "path": "/v1/maintenance",
+          "purpose": "Toggle maintenance mode."
+        },
+        {
+          "method": "POST",
+          "path": "/v1/runtime/refresh",
+          "purpose": "Recompute runtime sizes for terminal sessions."
+        },
+        {
+          "method": "GET",
+          "path": "/v1/public-access",
+          "purpose": "Read public-access status."
+        },
+        {
+          "method": "POST",
+          "path": "/v1/public-access/enable",
+          "purpose": "Enable public access for one workspace."
+        },
+        {
+          "method": "POST",
+          "path": "/v1/public-access/test",
+          "purpose": "Test connectivity for the public-access tunnel."
+        },
+        {
+          "method": "POST",
+          "path": "/v1/public-access/disable",
+          "purpose": "Disable public access for one workspace."
+        },
+        {
+          "method": "POST",
+          "path": "/v1/public-access/reset",
+          "purpose": "Rotate the public-access token."
+        },
+        {
+          "method": "POST",
+          "path": "/v1/public-access/restart",
+          "purpose": "Restart the public-access tunnel."
+        }
       ]
     }
   }
