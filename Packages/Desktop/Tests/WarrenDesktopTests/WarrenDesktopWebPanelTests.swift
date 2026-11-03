@@ -147,7 +147,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             throw XCTSkip("Set WARREN_SETTINGS_IMAGES to write settings PNGs")
         }
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-        for section in [WarrenDesktopSettingsSection.appearance, .workspaces, .presets, .terminal, .aiTitles, .usage, .publicAccess, .relay] {
+        for section in [WarrenDesktopSettingsSection.appearance, .workspaces, .presets, .terminal, .aiTitles, .usage, .access] {
             let recorder = WarrenSemanticRecorder()
             let hosting = makeUsageHostingView(initialSection: section, recorder: recorder)
             hosting.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
@@ -199,7 +199,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             openAITitleEnabled: false,
             onSetOpenAISetting: { _, _ in },
             onTestOpenAI: { _, _, _ in },
-            initialSettingsSection: .relay
+            initialSettingsSection: .access
         )
         .environment(\.colorScheme, .dark)
         let hosting = NSHostingView(rootView: AnyView(settings))
@@ -383,7 +383,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             openAITitleEnabled: false,
             onSetOpenAISetting: { _, _ in },
             onTestOpenAI: { _, _, _ in },
-            initialSettingsSection: .relay
+            initialSettingsSection: .access
         )
         .environment(\.colorScheme, .dark)
         .warrenSemanticObservationRoot(recorder: recorder)
@@ -449,7 +449,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             openAITitleEnabled: false,
             onSetOpenAISetting: { _, _ in },
             onTestOpenAI: { _, _, _ in },
-            initialSettingsSection: .relay,
+            initialSettingsSection: .access,
             relayPrefill: prefill
         )
         .environment(\.colorScheme, .dark)
@@ -494,7 +494,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             openAITitleEnabled: false,
             onSetOpenAISetting: { _, _ in },
             onTestOpenAI: { _, _, _ in },
-            initialSettingsSection: .relay
+            initialSettingsSection: .access
         )
         .environment(\.colorScheme, .dark)
         .warrenSemanticObservationRoot(recorder: recorder)
@@ -521,7 +521,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             pathPrefix: "/private path?mode=secure&scope=owner"
         )
         let link = WarrenDesktopSettingsDeepLink(
-            section: .publicAccess,
+            section: .access,
             publicAccess: prefill
         )
         let url = try XCTUnwrap(link.url)
@@ -536,7 +536,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         let url = try XCTUnwrap(URL(string: "warren://settings/public-access?publicHostname=public.example.com&pathPrefix=%2Fhost"))
 
         let link = try XCTUnwrap(WarrenDesktopSettingsDeepLink(url: url))
-        XCTAssertEqual(link.section, .publicAccess)
+        XCTAssertEqual(link.section, .access)
         XCTAssertEqual(link.publicAccess?.publicHostname, "public.example.com")
         XCTAssertEqual(link.publicAccess?.pathPrefix, "/host")
     }
@@ -546,7 +546,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             relayURL: "http://192.0.2.10:8080/relay",
             enrollmentKey: "AAAA-BBBB-CCCC-DDDD"
         )
-        let link = WarrenDesktopSettingsDeepLink(section: .relay, relay: prefill)
+        let link = WarrenDesktopSettingsDeepLink(section: .access, relay: prefill)
         let url = try XCTUnwrap(link.url)
         XCTAssertNil(url.fragment)
         XCTAssertTrue(url.absoluteString.contains("enrollmentKey="))
@@ -558,7 +558,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
     func testRelaySettingsLinkReadsOnlyURLAndEnrollmentKey() throws {
         let url = try XCTUnwrap(URL(string: "warren://settings/relay?relayUrl=http%3A%2F%2F192.0.2.10%3A8080&enrollmentKey=AAAA-BBBB-CCCC-DDDD&hostId=ignored"))
         let link = try XCTUnwrap(WarrenDesktopSettingsDeepLink(url: url))
-        XCTAssertEqual(link.section, .relay)
+        XCTAssertEqual(link.section, .access)
         XCTAssertEqual(link.relay?.relayURL, "http://192.0.2.10:8080")
         XCTAssertEqual(link.relay?.enrollmentKey, "AAAA-BBBB-CCCC-DDDD")
         XCTAssertNil(link.publicAccess)
@@ -568,7 +568,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         let aliasParameters = try XCTUnwrap(URL(string: "warren://settings/relay?url=http%3A%2F%2F192.0.2.10%3A8080&host=ignored&ticket=short-lived"))
         let aliasSection = try XCTUnwrap(URL(string: "warren://settings/owned-relay?relayUrl=http%3A%2F%2F192.0.2.10%3A8080&enrollmentKey=AAAA-BBBB-CCCC-DDDD"))
 
-        XCTAssertEqual(WarrenDesktopSettingsDeepLink(url: aliasParameters)?.section, .relay)
+        XCTAssertEqual(WarrenDesktopSettingsDeepLink(url: aliasParameters)?.section, .access)
         XCTAssertNil(WarrenDesktopSettingsDeepLink(url: aliasParameters)?.relay)
         XCTAssertNil(WarrenDesktopSettingsDeepLink(url: aliasSection))
     }
@@ -675,7 +675,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             openAITitleEnabled: false,
             onSetOpenAISetting: { _, _ in },
             onTestOpenAI: { _, _, _ in },
-            initialSettingsSection: .remoteAccess
+            initialSettingsSection: .access
         )
         .environment(\.colorScheme, .dark)
         .warrenSemanticObservationRoot(recorder: recorder)
@@ -688,7 +688,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
 
         let snapshot = recorder.snapshot()
-        XCTAssertEqual(snapshot.node(id: "settings.section.Remote Access")?.isSelected, true)
+        XCTAssertEqual(snapshot.node(id: "settings.section.Access")?.isSelected, true)
         XCTAssertNotNil(snapshot.node(id: "settings.remote.switch"))
         // The page renders the source line; its wording is covered by
         // `WarrenDesktopRemoteAccess.relaySourceText` below, because the
@@ -703,7 +703,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
     /// Renders the Remote Access page with a self-hosted relay so the row, the
     /// source line and the share group can be looked at as drawn.
     @MainActor
-    func testWritesTheRemoteAccessPageWhenAnArtifactDirectoryIsGiven() throws {
+    func testWritesTheAccessPageWhenAnArtifactDirectoryIsGiven() throws {
         guard let directory = ProcessInfo.processInfo.environment["WARREN_SETTINGS_IMAGES"] else {
             throw XCTSkip("Set WARREN_SETTINGS_IMAGES to write settings PNGs")
         }
@@ -740,7 +740,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             openAITitleEnabled: false,
             onSetOpenAISetting: { _, _ in },
             onTestOpenAI: { _, _, _ in },
-            initialSettingsSection: .remoteAccess
+            initialSettingsSection: .access
         )
         .environment(\.colorScheme, .dark)
         let hosting = NSHostingView(rootView: AnyView(settings))
@@ -751,7 +751,7 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             return XCTFail("No bitmap for the Remote Access page")
         }
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
-        let url = URL(fileURLWithPath: directory).appendingPathComponent("settings-Remote-Access.png")
+        let url = URL(fileURLWithPath: directory).appendingPathComponent("settings-Access.png")
         try bitmap.representation(using: .png, properties: [:])?.write(to: url)
     }
 }

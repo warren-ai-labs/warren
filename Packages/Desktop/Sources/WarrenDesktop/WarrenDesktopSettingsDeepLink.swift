@@ -19,8 +19,19 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
     case lanPairing = "LAN Pairing"
     case publicAccess = "Public Access"
     case remoteAccess = "Remote Access"
+    /// One page for every way another device reaches this Host: the serverless
+    /// relay, the enrolled Relay, the LAN PIN window, and the public Web route.
+    case access = "Access"
 
     public var id: String { rawValue }
+
+    /// The pages the navigation lists. Relay, LAN pairing, Public Access and
+    /// Remote Access are blocks of the Access page: they keep their own case so
+    /// each block stays its own function, but none of them is a nav row.
+    public static var allCases: [WarrenDesktopSettingsSection] {
+        [.appearance, .terminal, .splits, .presets, .externalIDEs, .notifications,
+         .workspaces, .terminalRuntime, .aiTitles, .usage, .access]
+    }
 
     /// Whether the page edits a preference on this Mac or a value stored on the
     /// selected Host. The navigation reads the two scopes as separate groups,
@@ -30,7 +41,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case .appearance, .terminal, .splits, .presets, .externalIDEs, .notifications:
             .thisMac
         case .workspaces, .terminalRuntime, .aiTitles, .usage, .relay, .lanPairing, .publicAccess,
-             .remoteAccess:
+             .remoteAccess, .access:
             .host
         }
     }
@@ -51,6 +62,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case .lanPairing: "lan-pairing"
         case .publicAccess: "public-access"
         case .remoteAccess: "remote-access"
+        case .access: "access"
         }
     }
 
@@ -70,10 +82,11 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case "ai-titles", "ai-title", "openai", "openai-titles": self = .aiTitles
         case "usage", "usage-overview", "overview", "usage-summary", "stats", "usage-stats", "cost":
             self = .usage
-        case "relay": self = .relay
-        case "lan-pairing", "lan-pairing-window", "pairing": self = .lanPairing
-        case "public-access", "publicaccess", "public": self = .publicAccess
-        case "remote-access", "remote", "serverless", "bolthole": self = .remoteAccess
+        // The four older pages are blocks of Access now; their links still land
+        // on the page that holds them.
+        case "access", "reach", "remote-access", "remote", "serverless", "bolthole",
+             "relay", "lan-pairing", "lan-pairing-window", "pairing",
+             "public-access", "publicaccess", "public": self = .access
         default: return nil
         }
     }
@@ -149,8 +162,8 @@ public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
         relay: WarrenDesktopRelayPrefill? = nil
     ) {
         self.section = section
-        self.publicAccess = section == .publicAccess ? publicAccess : nil
-        self.relay = section == .relay ? relay : nil
+        self.publicAccess = section == .access ? publicAccess : nil
+        self.relay = section == .access ? relay : nil
     }
 
     public init?(url: URL) {
@@ -180,13 +193,13 @@ public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
         }
 
         self.section = section
-        guard section == .publicAccess || section == .relay else {
+        guard section == .access else {
             self.publicAccess = nil
             self.relay = nil
             return
         }
 
-        if section == .relay {
+        if query["relayurl"] != nil || query["enrollmentkey"] != nil || query["key"] != nil {
             let relayURL = Self.nonEmpty(query["relayurl"])
             let enrollmentKey = Self.nonEmpty(query["enrollmentkey"] ?? query["key"])
             let hasRelayValues = [relayURL, enrollmentKey].contains { $0 != nil }
@@ -219,14 +232,14 @@ public struct WarrenDesktopSettingsDeepLink: Equatable, Sendable {
         components.host = Self.host
         var items = [URLQueryItem(name: "section", value: section.deepLinkValue)]
 
-        if section == .relay, let relay {
+        if let relay {
             if let relayURL = relay.relayURL {
                 items.append(URLQueryItem(name: "relayUrl", value: relayURL))
             }
             if let enrollmentKey = relay.enrollmentKey {
                 items.append(URLQueryItem(name: "enrollmentKey", value: enrollmentKey))
             }
-        } else if section == .publicAccess, let publicAccess {
+        } else if let publicAccess {
             if let publicHostname = publicAccess.publicHostname {
                 items.append(URLQueryItem(name: "publicHostname", value: publicHostname))
             }

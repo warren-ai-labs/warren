@@ -12,7 +12,7 @@ import WarrenDesignSystem
 extension WarrenDesktopSettingsView {
     func remoteAccessSection(palette: WarrenSettingsPalette) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            WarrenSettingsGroup("Serverless relay") {
+            WarrenSettingsGroup("Connection") {
                 remoteAccessStatusRow(palette: palette)
 
                 WarrenSettingsRowDivider()

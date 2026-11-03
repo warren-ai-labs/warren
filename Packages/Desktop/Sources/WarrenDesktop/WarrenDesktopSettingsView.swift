@@ -63,6 +63,7 @@ private extension WarrenDesktopSettingsSection {
         case .lanPairing: "wifi"
         case .publicAccess: "globe"
         case .remoteAccess: "lock.shield"
+        case .access: "lock.shield"
         }
     }
 
@@ -83,6 +84,7 @@ private extension WarrenDesktopSettingsSection {
         case .lanPairing: "A temporary PIN window for a trusted iPhone."
         case .publicAccess: "Share this Host's Web UI at a public address."
         case .remoteAccess: "Reach this Host from anywhere without running a Relay."
+        case .access: "Every way another device reaches this Host, in one place."
         }
     }
 
@@ -138,6 +140,11 @@ private extension WarrenDesktopSettingsSection {
         case .remoteAccess:
             [rawValue, detail, "remote", "serverless", "bolthole", "relay", "iphone", "qr", "share",
              "pair", "encrypted", "self-hosted", "code", "rotate"]
+        case .access:
+            [rawValue, detail, "access", "reach", "remote", "serverless", "bolthole", "relay",
+             "enrollment", "ticket", "lan", "pin", "pairing", "bonjour", "iphone", "mobile", "qr",
+             "share", "encrypted", "self-hosted", "public", "hostname", "path", "tunnel", "web",
+             "internet", "device", "revoke"]
         }
     }
 }
@@ -950,7 +957,8 @@ struct WarrenDesktopSettingsView: View {
         case .relay: relaySection(palette: palette)
         case .lanPairing: lanPairingSection(palette: palette)
         case .publicAccess: publicAccessSection(palette: palette)
-        case .remoteAccess: remoteAccessSection(palette: palette)
+        case .remoteAccess: accessSection(palette: palette)
+        case .access: accessSection(palette: palette)
         }
     }
 
@@ -2034,7 +2042,7 @@ struct WarrenDesktopSettingsView: View {
 
     // MARK: - Relay
 
-    private func relaySection(palette: WarrenSettingsPalette) -> some View {
+    func relaySection(palette: WarrenSettingsPalette) -> some View {
         VStack(alignment: .leading, spacing: 24) {
             WarrenSettingsGroup("Connection") {
                 HStack(spacing: 12) {
@@ -2301,7 +2309,7 @@ struct WarrenDesktopSettingsView: View {
 
     // MARK: - LAN pairing
 
-    private func lanPairingSection(palette: WarrenSettingsPalette) -> some View {
+    func lanPairingSection(palette: WarrenSettingsPalette) -> some View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
             lanPairingContent(at: timeline.date, palette: palette)
         }
@@ -2457,7 +2465,7 @@ struct WarrenDesktopSettingsView: View {
         .frame(minHeight: 48)
     }
 
-    private func publicAccessSection(palette: WarrenSettingsPalette) -> some View {
+    func publicAccessSection(palette: WarrenSettingsPalette) -> some View {
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 12) {
                 WarrenSettingsGroup {
