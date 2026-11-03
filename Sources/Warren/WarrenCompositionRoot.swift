@@ -296,6 +296,15 @@ struct WarrenCompositionRoot: View {
             onRevokeRelayDevice: { deviceID, completion in
                 remoteModel.revokeRelayDevice(deviceID, completion: completion)
             },
+            remoteAccess: remoteModel.remoteAccess,
+            onLoadRemoteAccess: { remoteModel.loadRemoteAccess() },
+            onSetRemoteEnabled: { remoteModel.setRemoteAccessEnabled($0) },
+            onRemoteShare: { completion in
+                remoteModel.createRemoteShare(completion: completion)
+            },
+            onRotateRemote: { completion in
+                remoteModel.rotateRemoteCode(completion: completion)
+            },
             onWebOpenURL: { remoteModel.openWebURL($0) },
             onWebCopyURL: { remoteModel.copyWebURL($0) },
             defaultRuntime: remoteModel.defaultRuntime,

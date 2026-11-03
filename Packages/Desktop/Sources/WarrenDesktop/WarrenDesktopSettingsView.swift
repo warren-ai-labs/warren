@@ -62,6 +62,7 @@ private extension WarrenDesktopSettingsSection {
         case .relay: "antenna.radiowaves.left.and.right"
         case .lanPairing: "wifi"
         case .publicAccess: "globe"
+        case .remoteAccess: "lock.shield"
         }
     }
 
@@ -81,6 +82,7 @@ private extension WarrenDesktopSettingsSection {
         case .relay: "Enroll this Host and share it with iPhone."
         case .lanPairing: "A temporary PIN window for a trusted iPhone."
         case .publicAccess: "Share this Host's Web UI at a public address."
+        case .remoteAccess: "Reach this Host from anywhere without running a Relay."
         }
     }
 
@@ -133,6 +135,9 @@ private extension WarrenDesktopSettingsSection {
             [rawValue, detail, "pairing", "pin", "lan", "bonjour", "iphone", "mobile", "discovery", "security"]
         case .publicAccess:
             [rawValue, detail, "relay", "route", "hostname", "path", "endpoint", "tunnel", "internet", "web"]
+        case .remoteAccess:
+            [rawValue, detail, "remote", "serverless", "bolthole", "relay", "iphone", "qr", "share",
+             "pair", "encrypted", "self-hosted", "code", "rotate"]
         }
     }
 }
@@ -160,6 +165,12 @@ struct WarrenDesktopSettingsView: View {
     let relayDevices: [WarrenDesktopRelayDevice]
     let onLoadRelayDevices: (() -> Void)?
     let onRevokeRelayDevice: ((String, @escaping (Result<Void, Error>) -> Void) -> Void)?
+    /// Serverless remote access (Bolthole) as the Host reports it.
+    var remoteAccess: WarrenDesktopRemoteAccess = .init()
+    var onLoadRemoteAccess: (() -> Void)?
+    var onSetRemoteEnabled: ((Bool) -> Void)?
+    var onRemoteShare: ((@escaping (Result<WarrenDesktopRemoteShare, Error>) -> Void) -> Void)?
+    var onRotateRemote: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     let defaultRuntime: String?
     let onSetRuntime: (String) -> Void
     let autoOpenShell: Bool
@@ -258,6 +269,14 @@ struct WarrenDesktopSettingsView: View {
     @State private var relayInviteError: String?
     @State private var lanPairingBusy = false
     @State private var lanPairingError: String?
+    @State var remoteShare: WarrenDesktopRemoteShare?
+    /// The share link's QR code, made once when the link arrives.
+    @State var remoteShareQRCode: NSImage?
+    @State var remoteShareBusy = false
+    @State var remoteShareError: String?
+    @State var remoteRotateBusy = false
+    @State var remoteRotateError: String?
+    @State var remoteEnabledBusy = false
     /// The one blocking confirmation the page is showing, if any.
     @State private var confirmation: SettingsConfirmation?
     /// Why the last Revoke of a Relay device failed, by device.
@@ -268,7 +287,7 @@ struct WarrenDesktopSettingsView: View {
     @State private var usageRebuildSummary: WarrenUsageRebuildSummary?
     @State private var usageSelectedDay: String?
     @State private var usageShowsDetail = false
-    @ObservedObject private var copyFeedback = WarrenCopyFeedback.shared
+    @ObservedObject var copyFeedback = WarrenCopyFeedback.shared
     @Environment(\.colorScheme) private var colorScheme
 
     var initialSettingsSection: WarrenDesktopSettingsSection?
@@ -342,6 +361,11 @@ struct WarrenDesktopSettingsView: View {
         relayDevices: [WarrenDesktopRelayDevice] = [],
         onLoadRelayDevices: (() -> Void)? = nil,
         onRevokeRelayDevice: ((String, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
+        remoteAccess: WarrenDesktopRemoteAccess = .init(),
+        onLoadRemoteAccess: (() -> Void)? = nil,
+        onSetRemoteEnabled: ((Bool) -> Void)? = nil,
+        onRemoteShare: ((@escaping (Result<WarrenDesktopRemoteShare, Error>) -> Void) -> Void)? = nil,
+        onRotateRemote: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         defaultRuntime: String?,
         onSetRuntime: @escaping (String) -> Void,
         autoOpenShell: Bool,
@@ -383,6 +407,11 @@ struct WarrenDesktopSettingsView: View {
         self.relayDevices = relayDevices
         self.onLoadRelayDevices = onLoadRelayDevices
         self.onRevokeRelayDevice = onRevokeRelayDevice
+        self.remoteAccess = remoteAccess
+        self.onLoadRemoteAccess = onLoadRemoteAccess
+        self.onSetRemoteEnabled = onSetRemoteEnabled
+        self.onRemoteShare = onRemoteShare
+        self.onRotateRemote = onRotateRemote
         self.defaultRuntime = defaultRuntime
         self.onSetRuntime = onSetRuntime
         self.autoOpenShell = autoOpenShell
@@ -921,6 +950,7 @@ struct WarrenDesktopSettingsView: View {
         case .relay: relaySection(palette: palette)
         case .lanPairing: lanPairingSection(palette: palette)
         case .publicAccess: publicAccessSection(palette: palette)
+        case .remoteAccess: remoteAccessSection(palette: palette)
         }
     }
 
@@ -1899,6 +1929,12 @@ struct WarrenDesktopSettingsView: View {
         }
     }
 
+    /// Opens the rotate confirmation on behalf of the Remote Access page, which
+    /// lives in its own file and cannot name the private dialog enum.
+    func requestRotateRemoteCode() {
+        confirmation = .rotateRemoteCode
+    }
+
     /// The page's blocking confirmations. Each is a `WarrenDialog` like every
     /// other blocking flow, so its ground, padding and buttons match the rest
     /// of the app instead of arriving as a system alert.
@@ -1929,6 +1965,15 @@ struct WarrenDesktopSettingsView: View {
                     + "paired through the Relay lose access until this Mac is enrolled again.",
                 confirmLabel: "Reset",
                 onConfirm: resetRelay
+            )
+        case .rotateRemoteCode:
+            settingsConfirmation(
+                "Rotate the Remote Access Code?",
+                message: "This Mac replaces its connect code. Every device paired through a share "
+                    + "link loses access immediately and must scan a new link. LAN pairing and the "
+                    + "Relay enrollment are untouched.",
+                confirmLabel: "Rotate",
+                onConfirm: rotateRemoteCode
             )
         case .revokeDevice(let id, let name):
             settingsConfirmation(
@@ -2337,7 +2382,7 @@ struct WarrenDesktopSettingsView: View {
         return "Expires soon"
     }
 
-    private func formatPairingTTL(_ seconds: Int) -> String {
+    func formatPairingTTL(_ seconds: Int) -> String {
         if seconds >= 60 { return "\(max(1, seconds / 60)) min" }
         return "\(max(1, seconds)) sec"
     }
@@ -2730,7 +2775,7 @@ struct WarrenDesktopSettingsView: View {
     }
 
     @ViewBuilder
-    private func qrCodeImage(for value: String) -> NSImage? {
+    func qrCodeImage(for value: String) -> NSImage? {
         guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
         filter.setValue(Data(value.utf8), forKey: "inputMessage")
         filter.setValue("M", forKey: "inputCorrectionLevel")
@@ -2929,6 +2974,7 @@ private enum SettingsConfirmation: Equatable {
     case rebuildUsage
     case resetRelay
     case revokeDevice(id: String, name: String)
+    case rotateRemoteCode
 }
 
 // MARK: - App icon choice

@@ -235,6 +235,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// No pairing state is inferred from discovery; it is returned by the
     /// authenticated daemon settings projection.
     @Published private(set) var lanPairing = WarrenDesktopLANPairing()
+    /// Serverless remote access (Bolthole), owned by the selected Host daemon.
+    /// Asked for on demand, unlike the settings projection, because the relay
+    /// connection changes while the window stays open.
+    @Published private(set) var remoteAccess = WarrenDesktopRemoteAccess()
+    @Published private(set) var remoteShare: WarrenDesktopRemoteShare?
     /// Default engine for new sessions, owned by the headless daemon.
     @Published private(set) var defaultRuntime: String?
     /// Whether opening an empty workspace creates a default Shell session.
@@ -705,6 +710,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         openAITitleEnabled = false
         relaySettings = WarrenDesktopRelaySettings()
         lanPairing = WarrenDesktopLANPairing()
+        remoteAccess = WarrenDesktopRemoteAccess()
+        remoteShare = nil
         isMigratingRuntimeSessions = isLocal
             && WarrenRemoteEndpointConfiguration.localDaemonMigrationInProgress()
         if resolvedConfiguration.url.hasPrefix("http://127.0.0.1:8789"),
@@ -774,6 +781,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         webStatus = WarrenDesktopWebStatus()
         relaySettings = WarrenDesktopRelaySettings()
         lanPairing = WarrenDesktopLANPairing()
+        remoteAccess = WarrenDesktopRemoteAccess()
+        remoteShare = nil
         publishProjectionIfChanged(projection.withConnectionState(.disconnected))
         let ms = Int(Date().timeIntervalSince(disconnectStart) * 1000)
         TerminalDiagnostics.log("remote_disconnect_end", ["endpoint": prevEndpoint, "duration_ms": String(ms)])
@@ -1698,6 +1707,125 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 completion(.failure(error))
             }
         }
+    }
+
+    // MARK: - Remote access (serverless relay)
+
+    /// Reads the Host's serverless remote access state. Failures are recorded on
+    /// the projection rather than presented: this runs whenever the page opens
+    /// and after every action, and an old daemon without the API is a state to
+    /// show, not a dialog to dismiss.
+    func loadRemoteAccess() {
+        guard let wire else {
+            remoteAccess = WarrenDesktopRemoteAccess()
+            return
+        }
+        Task { @MainActor [weak self] in
+            do {
+                let data = try await wire.request("remote.status")
+                guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return
+                }
+                self?.remoteAccess = Self.remoteAccess(from: value)
+            } catch {
+                self?.remoteAccess.lastError = error.localizedDescription
+            }
+        }
+    }
+
+    func setRemoteAccessEnabled(_ enabled: Bool) {
+        guard let wire else { return }
+        Task { @MainActor [weak self] in
+            do {
+                let data = try await wire.request(enabled ? "remote.enable" : "remote.disable")
+                if let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    self?.remoteAccess = Self.remoteAccess(from: value)
+                }
+            } catch {
+                self?.present(error)
+            }
+            self?.loadRemoteAccess()
+        }
+    }
+
+    func createRemoteShare(
+        completion: @escaping (Result<WarrenDesktopRemoteShare, Error>) -> Void
+    ) {
+        guard let wire else {
+            completion(.failure(NSError(domain: "WarrenRemote", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The selected daemon is not connected.",
+            ])))
+            return
+        }
+        Task { @MainActor [weak self] in
+            do {
+                let data = try await wire.request("remote.share")
+                guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let link = value["link"] as? String,
+                      let url = URL(string: link) else {
+                    throw NSError(domain: "WarrenRemote", code: 14, userInfo: [
+                        NSLocalizedDescriptionKey: "The daemon returned no share link.",
+                    ])
+                }
+                let share = WarrenDesktopRemoteShare(
+                    url: url,
+                    expiresAt: Self.remoteShareExpiry(value),
+                    expiresIn: (value["expiresIn"] as? NSNumber)?.intValue ?? 0
+                )
+                self?.remoteShare = share
+                completion(.success(share))
+            } catch {
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func rotateRemoteCode(completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let wire else {
+            completion(.failure(NSError(domain: "WarrenRemote", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The selected daemon is not connected.",
+            ])))
+            return
+        }
+        Task { @MainActor [weak self] in
+            do {
+                _ = try await wire.request("remote.rotate")
+                self?.remoteShare = nil
+                completion(.success(()))
+            } catch {
+                completion(.failure(error))
+            }
+            self?.loadRemoteAccess()
+        }
+    }
+
+    static func remoteAccess(from value: [String: Any]) -> WarrenDesktopRemoteAccess {
+        var projection = WarrenDesktopRemoteAccess()
+        projection.enabled = value["enabled"] as? Bool ?? false
+        projection.connected = value["connected"] as? Bool ?? false
+        projection.state = (value["state"] as? String ?? "disabled")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        projection.relayURL = (value["relayURL"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        projection.relaySource = (value["relaySource"] as? String ?? "default")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        projection.configuredRelayURL = (value["configuredRelayURL"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        projection.defaultRelayURL = (value["defaultRelayURL"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        projection.devices = (value["devices"] as? NSNumber)?.intValue ?? 0
+        projection.lastError = (value["lastError"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return projection
+    }
+
+    static func remoteShareExpiry(_ value: [String: Any]) -> Date? {
+        guard let raw = value["expiresAt"] as? String else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: raw) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: raw)
     }
 
     func resetRelay(completion: @escaping (Result<Void, Error>) -> Void = { _ in }) {

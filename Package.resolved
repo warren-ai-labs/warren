@@ -2,12 +2,39 @@
   "originHash" : "4a4218b953a6a471ed090e084d1b3d5b512bf0a37a43c8c6824a54311fbc633e",
   "pins" : [
     {
+      "identity" : "bolthole",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/abcdlsj/bolthole",
+      "state" : {
+        "branch" : "main",
+        "revision" : "82c03ffc384dc2d3dac68f0611a04c04733a93e7"
+      }
+    },
+    {
       "identity" : "grdb.swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/groue/GRDB.swift.git",
       "state" : {
         "revision" : "36e30a6f1ef10e4194f6af0cff90888526f0c115",
         "version" : "7.10.0"
+      }
+    },
+    {
+      "identity" : "swift-asn1",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-asn1.git",
+      "state" : {
+        "revision" : "917b472dbe53ba699cbb0495f9a95a084bc6364d",
+        "version" : "1.7.4"
+      }
+    },
+    {
+      "identity" : "swift-crypto",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-crypto.git",
+      "state" : {
+        "revision" : "da9d28d69ebe3894b18376c8f2395c2f37b8448f",
+        "version" : "4.5.2"
       }
     }
   ],

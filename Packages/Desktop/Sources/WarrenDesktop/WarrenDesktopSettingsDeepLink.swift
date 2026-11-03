@@ -18,6 +18,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
     case relay = "Relay"
     case lanPairing = "LAN Pairing"
     case publicAccess = "Public Access"
+    case remoteAccess = "Remote Access"
 
     public var id: String { rawValue }
 
@@ -28,7 +29,8 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         switch self {
         case .appearance, .terminal, .splits, .presets, .externalIDEs, .notifications:
             .thisMac
-        case .workspaces, .terminalRuntime, .aiTitles, .usage, .relay, .lanPairing, .publicAccess:
+        case .workspaces, .terminalRuntime, .aiTitles, .usage, .relay, .lanPairing, .publicAccess,
+             .remoteAccess:
             .host
         }
     }
@@ -48,6 +50,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case .relay: "relay"
         case .lanPairing: "lan-pairing"
         case .publicAccess: "public-access"
+        case .remoteAccess: "remote-access"
         }
     }
 
@@ -70,6 +73,7 @@ public enum WarrenDesktopSettingsSection: String, CaseIterable, Identifiable, Se
         case "relay": self = .relay
         case "lan-pairing", "lan-pairing-window", "pairing": self = .lanPairing
         case "public-access", "publicaccess", "public": self = .publicAccess
+        case "remote-access", "remote", "serverless", "bolthole": self = .remoteAccess
         default: return nil
         }
     }

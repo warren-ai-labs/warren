@@ -244,6 +244,26 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             onWebStop: nil,
             onWebReset: nil,
             onRelayEnroll: nil,
+            remoteAccess: WarrenDesktopRemoteAccess(
+                enabled: true,
+                connected: true,
+                state: "connected",
+                relayURL: "https://relay.example.test",
+                relaySource: "self-hosted",
+                configuredRelayURL: "https://relay.example.test",
+                defaultRelayURL: "https://bolthole.warrenai.xyz",
+                devices: 1
+            ),
+            onLoadRemoteAccess: {},
+            onSetRemoteEnabled: { _ in },
+            onRemoteShare: { completion in
+                completion(.success(WarrenDesktopRemoteShare(
+                    url: URL(string: "https://relay.example.test/#k=code")!,
+                    expiresAt: Date().addingTimeInterval(600),
+                    expiresIn: 600
+                )))
+            },
+            onRotateRemote: { completion in completion(.success(())) },
             defaultRuntime: nil,
             onSetRuntime: { _ in },
             autoOpenShell: false,
@@ -628,5 +648,110 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
         XCTAssertNotNil(workspaceSection)
         XCTAssertEqual(workspaceSection?.label, "Workspaces")
         XCTAssertTrue(workspaceSection?.isSelected == true)
+    }
+
+    /// The Remote Access page is where "which relay am I on" is answered, so the
+    /// semantic contract has to carry the switch, the share/rotate controls and
+    /// the relay source, not only the address.
+    @MainActor
+    func testRemoteAccessPageNamesTheRelaySourceAndItsControls() {
+        let recorder = WarrenSemanticRecorder()
+        let settings = WarrenDesktopSettingsView(
+            onBack: {},
+            hostName: "Test Host",
+            webStatus: WarrenDesktopWebStatus(),
+            onWebTest: nil,
+            onWebStop: nil,
+            onWebReset: nil,
+            onRelayEnroll: nil,
+            defaultRuntime: nil,
+            onSetRuntime: { _ in },
+            autoOpenShell: false,
+            onSetAutoOpenShell: { _ in },
+            autoStartAI: false,
+            onSetAutoStartAI: { _ in },
+            openAIBaseURL: "",
+            openAIModel: "",
+            openAITitleEnabled: false,
+            onSetOpenAISetting: { _, _ in },
+            onTestOpenAI: { _, _, _ in },
+            initialSettingsSection: .remoteAccess
+        )
+        .environment(\.colorScheme, .dark)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .frame(width: 1_000, height: 800)
+
+        let hostingView = NSHostingView(rootView: AnyView(settings))
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+
+        let snapshot = recorder.snapshot()
+        XCTAssertEqual(snapshot.node(id: "settings.section.Remote Access")?.isSelected, true)
+        XCTAssertNotNil(snapshot.node(id: "settings.remote.switch"))
+        // The page renders the source line; its wording is covered by
+        // `WarrenDesktopRemoteAccess.relaySourceText` below, because the
+        // semantic recorder captures this row's label before the page settles.
+        XCTAssertNotNil(snapshot.node(id: "settings.remote.relay-source"))
+        XCTAssertEqual(
+            snapshot.nodes.contains { $0.id == "settings.remote.status" },
+            true
+        )
+    }
+
+    /// Renders the Remote Access page with a self-hosted relay so the row, the
+    /// source line and the share group can be looked at as drawn.
+    @MainActor
+    func testWritesTheRemoteAccessPageWhenAnArtifactDirectoryIsGiven() throws {
+        guard let directory = ProcessInfo.processInfo.environment["WARREN_SETTINGS_IMAGES"] else {
+            throw XCTSkip("Set WARREN_SETTINGS_IMAGES to write settings PNGs")
+        }
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        let settings = WarrenDesktopSettingsView(
+            onBack: {},
+            hostName: "Test Host",
+            webStatus: WarrenDesktopWebStatus(),
+            onWebTest: nil,
+            onWebStop: nil,
+            onWebReset: nil,
+            onRelayEnroll: nil,
+            remoteAccess: WarrenDesktopRemoteAccess(
+                enabled: true,
+                connected: true,
+                state: "connected",
+                relayURL: "https://bolthole.warrenai.xyz",
+                relaySource: "default",
+                defaultRelayURL: "https://bolthole.warrenai.xyz",
+                devices: 2
+            ),
+            onLoadRemoteAccess: {},
+            onSetRemoteEnabled: { _ in },
+            onRemoteShare: { _ in },
+            onRotateRemote: { completion in completion(.success(())) },
+            defaultRuntime: nil,
+            onSetRuntime: { _ in },
+            autoOpenShell: false,
+            onSetAutoOpenShell: { _ in },
+            autoStartAI: false,
+            onSetAutoStartAI: { _ in },
+            openAIBaseURL: "",
+            openAIModel: "",
+            openAITitleEnabled: false,
+            onSetOpenAISetting: { _, _ in },
+            onTestOpenAI: { _, _, _ in },
+            initialSettingsSection: .remoteAccess
+        )
+        .environment(\.colorScheme, .dark)
+        let hosting = NSHostingView(rootView: AnyView(settings))
+        hosting.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hosting.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
+            return XCTFail("No bitmap for the Remote Access page")
+        }
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let url = URL(fileURLWithPath: directory).appendingPathComponent("settings-Remote-Access.png")
+        try bitmap.representation(using: .png, properties: [:])?.write(to: url)
     }
 }

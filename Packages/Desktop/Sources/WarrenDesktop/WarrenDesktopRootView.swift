@@ -92,6 +92,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private let relayDevices: [WarrenDesktopRelayDevice]
     private let onLoadRelayDevices: (() -> Void)?
     private let onRevokeRelayDevice: ((String, @escaping (Result<Void, Error>) -> Void) -> Void)?
+    /// Serverless remote access (Bolthole) as the Host reports it.
+    private var remoteAccess: WarrenDesktopRemoteAccess = .init()
+    private var onLoadRemoteAccess: (() -> Void)?
+    private var onSetRemoteEnabled: ((Bool) -> Void)?
+    private var onRemoteShare: ((@escaping (Result<WarrenDesktopRemoteShare, Error>) -> Void) -> Void)?
+    private var onRotateRemote: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     private let onWebOpenURL: (URL) -> Void
     private let onWebCopyURL: (URL) -> Void
     private let defaultRuntime: String?
@@ -369,6 +375,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         relayDevices: [WarrenDesktopRelayDevice] = [],
         onLoadRelayDevices: (() -> Void)? = nil,
         onRevokeRelayDevice: ((String, @escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
+        remoteAccess: WarrenDesktopRemoteAccess = .init(),
+        onLoadRemoteAccess: (() -> Void)? = nil,
+        onSetRemoteEnabled: ((Bool) -> Void)? = nil,
+        onRemoteShare: ((@escaping (Result<WarrenDesktopRemoteShare, Error>) -> Void) -> Void)? = nil,
+        onRotateRemote: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onWebOpenURL: @escaping (URL) -> Void = { _ in },
         onWebCopyURL: @escaping (URL) -> Void = { _ in },
         defaultRuntime: String? = nil,
@@ -461,6 +472,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.relayDevices = relayDevices
         self.onLoadRelayDevices = onLoadRelayDevices
         self.onRevokeRelayDevice = onRevokeRelayDevice
+        self.remoteAccess = remoteAccess
+        self.onLoadRemoteAccess = onLoadRemoteAccess
+        self.onSetRemoteEnabled = onSetRemoteEnabled
+        self.onRemoteShare = onRemoteShare
+        self.onRotateRemote = onRotateRemote
         self.onWebOpenURL = onWebOpenURL
         self.onWebCopyURL = onWebCopyURL
         self.defaultRuntime = defaultRuntime
@@ -2101,6 +2117,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 relayDevices: relayDevices,
                 onLoadRelayDevices: onLoadRelayDevices,
                 onRevokeRelayDevice: onRevokeRelayDevice,
+                remoteAccess: remoteAccess,
+                onLoadRemoteAccess: onLoadRemoteAccess,
+                onSetRemoteEnabled: onSetRemoteEnabled,
+                onRemoteShare: onRemoteShare,
+                onRotateRemote: onRotateRemote,
                 defaultRuntime: defaultRuntime,
                 onSetRuntime: onSetRuntime,
                 autoOpenShell: autoOpenShell,
