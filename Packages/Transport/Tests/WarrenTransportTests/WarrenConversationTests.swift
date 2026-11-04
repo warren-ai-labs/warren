@@ -307,7 +307,7 @@ final class WarrenConversationTests: XCTestCase {
     func testSkillStepNamesTheSkillWithoutItsPluginPrefix() {
         let started = event("tool.started", [
             "callId": .string("s1"), "toolName": .string("skill"), "toolKind": .string("skill"),
-            "toolDetail": .string("bilibili-backend-platform:observability-query"),
+            "toolDetail": .string("platform-backend:observability-query"),
         ])
         let running = WarrenConversation.currentStep(after: nil, applying: [started])
         XCTAssertEqual(running?.line.verb, "Using skill")
