@@ -16,8 +16,8 @@ func TestRemoteHostParsing(t *testing.T) {
 		{"https://github.com/abcdlsj/warren.git", "github.com"},
 		{"ssh://git@github.com/abcdlsj/warren.git", "github.com"},
 		{"git@gitlab.com:group/repo.git", "gitlab.com"},
-		{"https://gitlab.bilibili.co/group/repo.git", "gitlab.bilibili.co"},
-		{"git@git.bilibili.co:group/repo.git", "git.bilibili.co"},
+		{"https://gitlab.example.com/group/repo.git", "gitlab.example.com"},
+		{"git@git.internal.example:group/repo.git", "git.internal.example"},
 		{"https://example.com/group/repo.git", "example.com"},
 	}
 	for _, test := range tests {
@@ -36,13 +36,16 @@ func TestPRHostSelectsCLIByRemote(t *testing.T) {
 	if host, err := prHost(context.Background(), dir); err != nil || host != "github" {
 		t.Fatalf("prHost = %q, %v, want github", host, err)
 	}
-	gitForTest(t, dir, "remote", "set-url", "origin", "https://gitlab.bilibili.co/group/repo.git")
+	gitForTest(t, dir, "remote", "set-url", "origin", "https://gitlab.example.com/group/repo.git")
 	if host, err := prHost(context.Background(), dir); err != nil || host != "gitlab" {
 		t.Fatalf("prHost = %q, %v, want gitlab", host, err)
 	}
-	gitForTest(t, dir, "remote", "set-url", "origin", "git@git.bilibili.co:group/repo.git")
+	// A GitLab host whose name does not contain "gitlab" is configured through
+	// the environment rather than compiled in.
+	t.Setenv("WARREN_GITLAB_HOSTS", "git.internal.example")
+	gitForTest(t, dir, "remote", "set-url", "origin", "git@git.internal.example:group/repo.git")
 	if host, err := prHost(context.Background(), dir); err != nil || host != "gitlab" {
-		t.Fatalf("prHost = %q, %v, want gitlab for git.bilibili.co", host, err)
+		t.Fatalf("prHost = %q, %v, want gitlab for a configured GitLab host", host, err)
 	}
 	gitForTest(t, dir, "remote", "set-url", "origin", "git@example.com:group/repo.git")
 	if _, err := prHost(context.Background(), dir); err == nil || !strings.Contains(err.Error(), "unsupported git host") {

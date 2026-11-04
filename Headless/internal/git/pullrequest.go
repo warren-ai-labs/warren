@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -104,10 +105,22 @@ func prHost(ctx context.Context, dir string) (string, error) {
 	switch {
 	case strings.Contains(host, "github.com"):
 		return "github", nil
-	case strings.Contains(host, "gitlab"), host == "git.bilibili.co":
+	case strings.Contains(host, "gitlab"), isExtraGitLabHost(host):
 		return "gitlab", nil
 	}
 	return "", fmt.Errorf("unsupported git host %q for pull requests (GitHub and GitLab are supported)", host)
+}
+
+// isExtraGitLabHost reports whether WARREN_GITLAB_HOSTS names this host. A
+// self-hosted GitLab on a short internal domain does not contain "gitlab", and
+// the host list stays in the environment rather than in the source.
+func isExtraGitLabHost(host string) bool {
+	for _, candidate := range strings.Split(os.Getenv("WARREN_GITLAB_HOSTS"), ",") {
+		if trimmed := strings.ToLower(strings.TrimSpace(candidate)); trimmed != "" && strings.EqualFold(host, trimmed) {
+			return true
+		}
+	}
+	return false
 }
 
 // remoteHost extracts the host name from any common git remote URL form:
