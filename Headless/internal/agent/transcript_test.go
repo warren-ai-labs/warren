@@ -2596,17 +2596,17 @@ func TestToolDetailNamesTheSkillAToolCallUses(t *testing.T) {
 		Type:      "tool_call",
 		Provider:  "claude",
 		ToolName:  "Skill",
-		ToolInput: map[string]any{"skill": "bilibili-backend-platform:observability-query", "args": "--prod"},
+		ToolInput: map[string]any{"skill": "platform-backend:observability-query", "args": "--prod"},
 	}
 	enrichToolSemantics(&event)
-	if event.ToolKind != "skill" || event.ToolDetail != "bilibili-backend-platform:observability-query" {
+	if event.ToolKind != "skill" || event.ToolDetail != "platform-backend:observability-query" {
 		t.Fatalf("kind=%q detail=%q", event.ToolKind, event.ToolDetail)
 	}
-	if got := api.CanonicalAgentEventFromObservation(event, "s", "s", 0, time.Now()).Payload["toolDetail"]; got != "bilibili-backend-platform:observability-query" {
+	if got := api.CanonicalAgentEventFromObservation(event, "s", "s", 0, time.Now()).Payload["toolDetail"]; got != "platform-backend:observability-query" {
 		t.Fatalf("canonical detail=%v", got)
 	}
 	event.ToolDetail = ""
-	if got := api.CanonicalAgentEventFromObservation(event, "s", "s", 0, time.Now()).Payload["toolDetail"]; got != "bilibili-backend-platform:observability-query" {
+	if got := api.CanonicalAgentEventFromObservation(event, "s", "s", 0, time.Now()).Payload["toolDetail"]; got != "platform-backend:observability-query" {
 		t.Fatalf("canonical fallback detail=%v", got)
 	}
 }

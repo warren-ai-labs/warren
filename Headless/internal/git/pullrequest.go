@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -93,6 +94,25 @@ func MainBranchShort(ctx context.Context, dir string) string {
 	return short
 }
 
+// gitlabExtraHosts are GitLab hosts whose name does not contain "gitlab",
+// such as a self-hosted GitLab on a short internal domain. Set
+// WARREN_GITLAB_HOSTS to a comma-separated list to route them to the GitLab
+// CLI. The list stays out of the source so a work host name is not shipped
+// with the binary.
+func gitlabExtraHosts() []string {
+	value := strings.TrimSpace(os.Getenv("WARREN_GITLAB_HOSTS"))
+	if value == "" {
+		return nil
+	}
+	hosts := make([]string, 0, 2)
+	for _, host := range strings.Split(value, ",") {
+		if trimmed := strings.ToLower(strings.TrimSpace(host)); trimmed != "" {
+			hosts = append(hosts, trimmed)
+		}
+	}
+	return hosts
+}
+
 // prHost maps the origin remote to the CLI that manages pull requests for
 // it: "github" for GitHub remotes and "gitlab" for GitLab remotes.
 func prHost(ctx context.Context, dir string) (string, error) {
@@ -104,10 +124,19 @@ func prHost(ctx context.Context, dir string) (string, error) {
 	switch {
 	case strings.Contains(host, "github.com"):
 		return "github", nil
-	case strings.Contains(host, "gitlab"), host == "git.bilibili.co":
+	case strings.Contains(host, "gitlab"), isExtraGitLabHost(host):
 		return "gitlab", nil
 	}
 	return "", fmt.Errorf("unsupported git host %q for pull requests (GitHub and GitLab are supported)", host)
+}
+
+func isExtraGitLabHost(host string) bool {
+	for _, candidate := range gitlabExtraHosts() {
+		if strings.EqualFold(host, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 // remoteHost extracts the host name from any common git remote URL form:
