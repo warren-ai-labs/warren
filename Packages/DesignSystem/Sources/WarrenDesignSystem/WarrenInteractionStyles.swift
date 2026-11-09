@@ -239,13 +239,23 @@ public struct WarrenPrimaryButtonStyle: ButtonStyle {
             )
             configuration.label
                 .font(font)
-                .foregroundStyle(tokens.background)
+                // A disabled action is a quiet control, not a ghost of a
+                // filled one: the old 0.42 opacity left a washed-out plate
+                // that still read as the button to press. It takes the field
+                // surface, a hairline and the supporting ink instead, so it
+                // stays legible and stops asking to be clicked.
+                .foregroundStyle(state == .disabled ? tokens.mutedForeground : tokens.background)
                 .padding(.horizontal, 14)
                 .frame(minHeight: height)
-                .background(fill(for: state, tokens: tokens))
+                .background(state == .disabled ? tokens.inputSurface : fill(for: state, tokens: tokens))
                 .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                .overlay {
+                    if state == .disabled {
+                        RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
+                            .strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline)
+                    }
+                }
                 .warrenFocusRing(state == .focused)
-                .opacity(state == .disabled ? 0.42 : 1)
                 .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: state)
                 .onHover { hovered = $0 }
         }

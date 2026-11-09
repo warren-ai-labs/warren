@@ -40,10 +40,17 @@ type remoteShareWindow struct {
 // code and a pairing invite in its fragment and is a bearer credential until
 // ExpiresAt.
 type RemoteShare struct {
-	Link      string    `json:"link"`
-	RelayURL  string    `json:"relayURL"`
-	ExpiresAt time.Time `json:"expiresAt"`
-	ExpiresIn int       `json:"expiresIn"`
+	Link string `json:"link"`
+	// WebLink opens the same pairing in a browser: the hosted Web client
+	// with the relay named in the fragment. Empty when no Web client is
+	// configured.
+	WebLink  string `json:"webLink,omitempty"`
+	RelayURL string `json:"relayURL"`
+	// RelaySource is "default" when the link goes through the build's relay,
+	// so a client can name it instead of printing its address.
+	RelaySource string    `json:"relaySource"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+	ExpiresIn   int       `json:"expiresIn"`
 }
 
 // pairedViaRemote marks clients paired through a remote share link.
@@ -211,13 +218,48 @@ func (s *HTTPServer) remoteShare(relayURL string) (RemoteShare, error) {
 	if err != nil {
 		return RemoteShare{}, err
 	}
+	webLink, err := remoteWebLink(s.RemoteWebURL, resolved, link)
+	if err != nil {
+		return RemoteShare{}, err
+	}
 	s.pairingMu.Lock()
 	s.remoteShareWindow = &remoteShareWindow{invite: invite, expiresAt: expiresAt}
 	s.pairingMu.Unlock()
 	return RemoteShare{
-		Link: link, RelayURL: resolved, ExpiresAt: expiresAt,
+		Link: link, WebLink: webLink, RelayURL: resolved,
+		RelaySource: shareRelaySource(resolved, s.RemoteDefaultRelayURL), ExpiresAt: expiresAt,
 		ExpiresIn: int(remoteShareTTL / time.Second),
 	}, nil
+}
+
+// remoteWebLink moves a share link's fragment onto the hosted Web client and
+// names the relay there with `r`, since the page is not served by the relay.
+// The fragment, and so the connect code, still never reaches a server.
+func remoteWebLink(webURL, relayURL, link string) (string, error) {
+	webURL = strings.TrimSpace(webURL)
+	if webURL == "" {
+		return "", nil
+	}
+	base, err := url.Parse(webURL)
+	if err != nil || (base.Scheme != "https" && base.Scheme != "http") || base.Host == "" {
+		return "", errors.New("invalid remote Web client URL")
+	}
+	_, fragment, ok := strings.Cut(link, "#")
+	if !ok {
+		return "", errors.New("share link has no fragment")
+	}
+	base.RawQuery, base.Fragment, base.RawFragment = "", "", ""
+	if base.Path == "" {
+		base.Path = "/"
+	}
+	return base.String() + "#r=" + url.QueryEscape(relayURL) + "&" + fragment, nil
+}
+
+func shareRelaySource(relayURL, defaultRelayURL string) string {
+	if relayURL == defaultRelayURL {
+		return "default"
+	}
+	return "self-hosted"
 }
 
 func (s *HTTPServer) closeRemoteShare() {

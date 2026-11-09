@@ -160,7 +160,7 @@ struct WarrenDesktopHostRefreshButton: View {
             // wash under the pointer, like every other header action.
             .foregroundStyle(isHovered ? palette.iconHover : palette.actionGlyph)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(isHovered ? palette.pressFill : .clear)
             )
             .contentShape(.rect)

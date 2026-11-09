@@ -91,4 +91,30 @@ final class WarrenDesktopSettingsWindowTests: XCTestCase {
         )
         XCTAssertEqual(builds, 2, "A closed page is not built")
     }
+
+    /// The remote access switch shows the Host's state, not the click, so the
+    /// page must be rebuilt when that state arrives.
+    func testARemoteAccessChangeRebuildsTheOpenPage() {
+        let coordinator = WarrenDesktopSettingsWindowPresenter.Coordinator()
+        var builds = 0
+        let content: () -> AnyView = {
+            builds += 1
+            return AnyView(Text("Settings"))
+        }
+        coordinator.update(
+            isPresented: true,
+            activation: 1,
+            contentKey: WarrenDesktopSettingsInputs(),
+            content: content
+        )
+        coordinator.update(
+            isPresented: true,
+            activation: 1,
+            contentKey: WarrenDesktopSettingsInputs(
+                remoteAccess: WarrenDesktopRemoteAccess(enabled: true, state: "connected")
+            ),
+            content: content
+        )
+        XCTAssertEqual(builds, 2, "The switch follows the Host once it reports")
+    }
 }

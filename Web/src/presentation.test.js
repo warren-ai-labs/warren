@@ -172,6 +172,26 @@ test("feedback states gate repeated actions and preserve actionable failures", (
   assert.match(read("style.css"), /\.terminal-new-output\s*\{[\s\S]*?min-height: 44px;/);
 });
 
+test("a switch asked for while the socket is down is replayed, not rejected", () => {
+  const app = read("App.jsx");
+  const deferral = app.slice(app.indexOf('state.status = "deferred";'));
+  // The click is not reported as a failure while the transport is still the
+  // only thing that is wrong.
+  assert.doesNotMatch(deferral.slice(0, 600), /announceFeedback/);
+  assert.match(deferral, /deferSwitch\(sessionID\)/);
+  assert.match(deferral, /connectionRef\.current\?\.reconnectNow\(\)/);
+  // The intent outlives the close (clearPendingSession runs on every reconnect)
+  // and is replayed by the roster that follows a welcome.
+  assert.match(app, /const deferredSwitchRef = useRef\(null\)/);
+  assert.match(app, /const resumeDeferredSwitch = useCallback\(\(\) => \{[\s\S]*?return beginSubscription\(sessionID, terminalRef\.current\)/);
+  // The queued click outranks the Session the roster would restore by default.
+  assert.match(app, /const sessionID = deferredSwitchSession\(\) \|\| preferred\?\.id \|\| nextSessionID;/);
+  assert.match(app, /resumeDeferredSwitch\(\);\n\s*for \(const sessionID of completedSessions\)/);
+  // The user hears about it only after the recovery budget, which is the point
+  // at which the switch has failed rather than slipped.
+  assert.match(app, /setPendingSessionID\(null\);\n\s*announceFeedback\("Session switch unavailable", "error"\);\n\s*\}, terminalRecoveryTimeoutMs\)/);
+});
+
 test("async UI requests expire and reject stale workspace/session callbacks", () => {
   const app = read("App.jsx");
   assert.match(app, /REQUEST_TIMEOUT_MS\s*=\s*30_000/);

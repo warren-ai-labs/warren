@@ -1421,7 +1421,7 @@ private struct WarrenDesktopSidebarHostHeader: View {
     /// A project wears a filled colour square with a bold capital, so the two
     /// never read as one another.
     private func hostTile(tokens: WarrenColorTokens) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
         return Text(String(displayName.prefix(1)).lowercased())
             .font(.system(size: 10, weight: .medium, design: .monospaced))
             .foregroundStyle(tint)

@@ -73,12 +73,18 @@ public struct WarrenDesktopRemoteAccess: Hashable, Sendable {
         }
     }
 
-    /// Which relay is in use, in words.
+    /// Which relay is in use, in words. The official relay is named, never
+    /// addressed: its URL is not printed anywhere a screenshot can carry it.
     public var relaySourceText: String {
-        if isSelfHostedRelay {
-            return "Self-hosted relay"
-        }
-        return defaultRelayURL.isEmpty ? "Official relay" : "Official relay (\(defaultRelayURL))"
+        isSelfHostedRelay ? "Self-hosted relay" : "Official relay"
+    }
+
+    /// The relay as the page prints it: a self-hosted relay by its URL, the
+    /// official one by name only.
+    public var displayedRelay: String {
+        guard isSelfHostedRelay else { return "Official relay" }
+        let url = effectiveRelayURL
+        return url.isEmpty ? "Self-hosted relay" : url
     }
 }
 
@@ -88,11 +94,15 @@ public struct WarrenDesktopRemoteAccess: Hashable, Sendable {
 /// fragment; it is a bearer credential until it expires, ten minutes later.
 public struct WarrenDesktopRemoteShare: Hashable, Sendable {
     public let url: URL
+    /// The same pairing opened in a browser through the hosted Web client;
+    /// nil when the Host has no Web client configured.
+    public let webURL: URL?
     public let expiresAt: Date?
     public let expiresIn: Int
 
-    public init(url: URL, expiresAt: Date? = nil, expiresIn: Int = 0) {
+    public init(url: URL, webURL: URL? = nil, expiresAt: Date? = nil, expiresIn: Int = 0) {
         self.url = url
+        self.webURL = webURL
         self.expiresAt = expiresAt
         self.expiresIn = expiresIn
     }

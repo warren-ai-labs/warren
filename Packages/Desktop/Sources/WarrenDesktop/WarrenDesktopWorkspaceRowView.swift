@@ -282,7 +282,7 @@ struct WarrenDesktopWorkspaceRow: View {
                 .opacity(leafDisclosure.isExpanded && !(isHovered || isFocused || forceHover) ? 0 : 1)
             }
         }
-        .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
+        .padding(.horizontal, WarrenDesktopRowAnatomy.horizontalPadding)
         .frame(maxWidth: .infinity, minHeight: rowHeight)
         .background(
             isSelected && !isSelectionDisabled
@@ -290,7 +290,7 @@ struct WarrenDesktopWorkspaceRow: View {
                 : ((isHovered || isFocused) && (leafDisclosure != nil || !showsSessionChildren)
                     ? tokens.treeRowHover
                     : .clear),
-            in: RoundedRectangle(cornerRadius: WarrenDesktopSidebarMetrics.rowRadius, style: .continuous)
+            in: RoundedRectangle(cornerRadius: WarrenDesktopRowAnatomy.radius, style: .continuous)
         )
         .contentShape(.rect)
         .warrenContextMenu(

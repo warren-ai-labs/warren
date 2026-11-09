@@ -743,15 +743,17 @@ final class WarrenDesktopWebPanelTests: XCTestCase {
             initialSettingsSection: .access
         )
         .environment(\.colorScheme, .dark)
+        // Tall enough to draw every block of the page in one image.
+        .frame(width: 1_000, height: 2_000)
         let hosting = NSHostingView(rootView: AnyView(settings))
-        hosting.frame = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        hosting.frame = NSRect(x: 0, y: 0, width: 1_000, height: 2_000)
         hosting.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
             return XCTFail("No bitmap for the Remote Access page")
         }
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
-        let url = URL(fileURLWithPath: directory).appendingPathComponent("settings-Access.png")
+        let url = URL(fileURLWithPath: directory).appendingPathComponent("settings-Access-full.png")
         try bitmap.representation(using: .png, properties: [:])?.write(to: url)
     }
 }

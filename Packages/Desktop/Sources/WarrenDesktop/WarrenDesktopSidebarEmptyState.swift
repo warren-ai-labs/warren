@@ -74,7 +74,7 @@ struct WarrenDesktopSidebarEmptyState: View {
 
                 if let action {
                     Button(action: action.perform) {
-                        HStack(spacing: 5) {
+                        HStack(spacing: 4) {
                             if let symbol = action.systemImage {
                                 Image(systemName: symbol)
                                     .font(.system(size: 9.5, weight: .semibold))
@@ -273,10 +273,10 @@ private struct WarrenDesktopSidebarEmptyActionStyle: ButtonStyle {
 
         var body: some View {
             let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-            let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+            let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
             configuration.label
                 .foregroundStyle(isHovered ? tokens.treeSessionSelectedText : tokens.treeSessionText)
-                .padding(.horizontal, 9)
+                .padding(.horizontal, 8)
                 .frame(height: 24)
                 .background(shape.fill(isHovered || configuration.isPressed ? tokens.treeRowSelected : tokens.treeRowHover))
                 .overlay(shape.strokeBorder(isFocused ? tokens.focusRing : tokens.cardBorder, lineWidth: 1))

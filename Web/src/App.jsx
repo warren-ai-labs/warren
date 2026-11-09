@@ -37,7 +37,7 @@ import {
   restoreNavigationPosition,
   resolveWorkspaceSession,
 } from "./navigation.js";
-import { parseAuthInput, runtime, serviceWorkerURL, tokenReady, webSocketURL, hasRelayHostID, hasRelayInviteID } from "./runtime.js";
+import { openRemoteLink, parseAuthInput, runtime, serviceWorkerURL, tokenReady, webSocketURL, hasRelayHostID, hasRelayInviteID } from "./runtime.js";
 import {
   automaticSessionKind,
   defaultHiddenSessionPresetKinds,
@@ -430,6 +430,11 @@ export default function App() {
   const maintenanceTimeoutRef = useRef(null);
   const feedbackTimerRef = useRef(null);
   const pendingSessionRef = useRef(null);
+  // A Session switch the user asked for while the socket was down. Relay closes
+  // every client route when a Host tunnel is replaced, so a click can land in a
+  // sub-second gap; the intent is replayed once the next socket is authorized
+  // instead of being rejected as unavailable.
+  const deferredSwitchRef = useRef(null);
   // Sessions known to have no terminal before the roster says so: a just
   // created ACP Session, or one whose subscribe answered without a terminal.
   const terminalFreeSessionsRef = useRef(new Set());
@@ -672,6 +677,33 @@ export default function App() {
     setPendingSessionID(null);
     setFeedback(previous => previous?.kind === "pending" ? null : previous);
   }, []);
+
+  const clearDeferredSwitch = useCallback(() => {
+    const deferred = deferredSwitchRef.current;
+    if (!deferred) return;
+    deferredSwitchRef.current = null;
+    clearTimeout(deferred.timer);
+  }, []);
+
+  // Holds a switch the transport could not carry. Losing the socket is not the
+  // user's mistake and not their business for a second: the next authorized
+  // socket replays the intent, and only a wait past the recovery budget is
+  // reported, because by then the switch has failed rather than slipped.
+  const deferSwitch = useCallback(sessionID => {
+    clearDeferredSwitch();
+    deferredSwitchRef.current = {
+      sessionID,
+      timer: setTimeout(() => {
+        const deferred = deferredSwitchRef.current;
+        if (!deferred || deferred.sessionID !== sessionID) return;
+        deferredSwitchRef.current = null;
+        if (appStateRef.current.activeSession !== sessionID) return;
+        pendingSessionRef.current = null;
+        setPendingSessionID(null);
+        announceFeedback("Session switch unavailable", "error");
+      }, terminalRecoveryTimeoutMs),
+    };
+  }, [announceFeedback, clearDeferredSwitch]);
 
   useEffect(() => () => {
     if (feedbackTimerRef.current !== null) clearTimeout(feedbackTimerRef.current);
@@ -1436,11 +1468,14 @@ export default function App() {
     // holding the terminal behind the neutral recovery surface.
     state.attachedSession = sessionID;
     setAttachedSession(sessionID);
+    // The switch the user asked for while the socket was down has landed, so
+    // stop counting down its budget.
+    if (deferredSwitchRef.current?.sessionID === sessionID) clearDeferredSwitch();
     if (flush) inputQueueRef.current.flush(sessionID);
     // Touch devices must not pop the software keyboard as a side effect of
     // attaching a session; the user focuses the terminal by tapping it.
     if (focus && autoFocusOnAttachRef.current && !isCoarsePointer()) terminalRef.current?.focus();
-  }, []);
+  }, [clearDeferredSwitch]);
 
   const markPresentationReady = useCallback(sessionID => {
     const subscription = subscriptionRef.current;
@@ -1510,6 +1545,9 @@ export default function App() {
 
   const beginSubscription = useCallback((sessionID, terminal) => {
     if (!sessionID) return false;
+    // A switch asked for while the socket was down belongs to one Session. A
+    // later, deliberate switch elsewhere retires the queued one.
+    if (deferredSwitchRef.current && deferredSwitchRef.current.sessionID !== sessionID) clearDeferredSwitch();
     const previous = subscriptionRef.current;
     const generation = previous.generation + 1;
     const previousSessionID = previous.sessionID;
@@ -1576,15 +1614,18 @@ export default function App() {
       });
       state.requestID = sent || null;
       if (!sent) {
-        state.status = "failed";
-        if (pendingSessionRef.current === sessionID) {
-          pendingSessionRef.current = null;
-          setPendingSessionID(null);
-          announceFeedback("Session switch unavailable", "error");
-        }
+        // The socket is not open. Over Relay that is the common case and not a
+        // fault: replacing a Host tunnel closes every client route, so a click
+        // can land inside a gap of well under a second. Keep the intent, ask
+        // for a reconnect, and let the roster that follows the next welcome
+        // replay it, rather than reporting a switch the user did make as
+        // unavailable.
+        state.status = "deferred";
+        deferSwitch(sessionID);
         connectionRef.current?.reconnectNow();
         return false;
       }
+      clearDeferredSwitch();
       clearRecoveryTimeout();
       recoveryTimeoutRef.current = setTimeout(() => {
         if (subscriptionRef.current !== state || state.status === "synced") return;
@@ -1615,7 +1656,38 @@ export default function App() {
       return true;
     }
     return sendSubscribe();
-  }, [announceFeedback, clearRecoveryState, clearRecoveryTimeout, markAttachReady, request]);
+  }, [announceFeedback, clearDeferredSwitch, clearRecoveryState, clearRecoveryTimeout, deferSwitch, markAttachReady, request]);
+
+  // The Session a queued switch still wants, or null once the intent is stale
+  // (the user moved on, or the Session is gone with the roster that replaced it).
+  const deferredSwitchSession = useCallback(() => {
+    const deferred = deferredSwitchRef.current;
+    if (!deferred) return null;
+    const state = appStateRef.current;
+    if (state.activeSession !== deferred.sessionID
+      || !state.catalog?.sessions?.get?.(deferred.sessionID)) return null;
+    return deferred.sessionID;
+  }, []);
+
+  // Replays a switch the previous socket could not carry. The roster that
+  // follows a welcome is the first moment the Host can answer again, so this
+  // hangs off that decision point rather than off a timer.
+  const resumeDeferredSwitch = useCallback(() => {
+    if (!deferredSwitchRef.current) return false;
+    const sessionID = deferredSwitchSession();
+    if (!sessionID) {
+      clearDeferredSwitch();
+      return false;
+    }
+    const subscription = subscriptionRef.current;
+    if (subscription.sessionID === sessionID && subscription.status !== "failed") {
+      // Already attached, on its way, or queued and waiting for the same socket
+      // this retry would wait for; markAttachReady retires the intent.
+      return false;
+    }
+    clearDeferredSwitch();
+    return beginSubscription(sessionID, terminalRef.current);
+  }, [beginSubscription, clearDeferredSwitch, deferredSwitchSession]);
 
   const sendInput = useCallback(data => {
     const state = appStateRef.current;
@@ -2770,17 +2842,24 @@ export default function App() {
           isSupportedAgentSession(tab),
         )
         : null;
-      const sessionID = preferred?.id || nextSessionID;
+      // A switch the user made while the socket was down outranks whatever the
+      // roster would otherwise restore, so the queued click is not quietly
+      // replaced by the Session the workspace gets back by default.
+      const sessionID = deferredSwitchSession() || preferred?.id || nextSessionID;
       recordNavigation(nextCatalog, nextWorkspaceID, sessionID);
       attachSession(sessionID, false, false, false);
     }
     else if (activeTabWasRemoved) {
       cancelSubscription();
     }
+    // A switch asked for while the socket was down is replayed here: the roster
+    // above already reattached the Session when it could, so this only fires
+    // for an intent the roster did not resolve on its own.
+    resumeDeferredSwitch();
     for (const sessionID of completedSessions) {
       agentCompletionEventsRef.current.emit({ sessionID });
     }
-  }, [applyRosterDelta, attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, presenter, recordNavigation, request, restoreGitUIForWorkspace]);
+  }, [applyRosterDelta, attachSession, cancelSubscription, clearMaintenanceTimeout, clearTerminalSearch, deferredSwitchSession, loadGitPanel, loadRemoteSettings, openFileView, persistCurrentGitUI, presenter, recordNavigation, request, resumeDeferredSwitch, restoreGitUIForWorkspace]);
 
   const acceptMessage = useCallback((event, parsed) => {
     if (event.data instanceof ArrayBuffer) {
@@ -3182,6 +3261,9 @@ export default function App() {
         presenter().lost(detail);
         setEmptyOverride({ loading: false, message: detail });
         clearPendingSession();
+        // A stated reason replaces a queued switch: the user is being told what
+        // is wrong, so retrying silently underneath it would only confuse.
+        clearDeferredSwitch();
         announceFeedback(detail || "Connection failed", "error");
         if (detail === "unauthorized") {
           // Relay access capabilities are intentionally short lived. Rotate
@@ -3231,6 +3313,7 @@ export default function App() {
     clearHostWaitCopy,
     clearMaintenanceTimeout,
     clearPendingSession,
+    clearDeferredSwitch,
     clearTerminalSearch,
     fitTerminal,
     markAttachReady,
@@ -3781,6 +3864,7 @@ export default function App() {
         token: runtime.token,
         clientID: runtime.clientID,
         getToken: () => runtime.token,
+        WebSocketClass: runtime.WebSocketClass,
         capabilities: [
           "roster-delta",
           appHeartbeatCapability,
@@ -3888,6 +3972,7 @@ export default function App() {
   }, []);
 
   const reconnectWithAuth = useCallback(async input => {
+    if (openRemoteLink(input)) return;
     const { token, url } = parseAuthInput(input);
     if (url && (url.origin !== location.origin || (url.pathname !== location.pathname && !url.hash.startsWith("#t=")))) {
       window.location.assign(url.href);
@@ -4664,6 +4749,8 @@ export default function App() {
       {needsPairing && (
         <WelcomeScreen
           onConnect={reconnectWithAuth}
+          remote={runtime.remoteApp}
+          initialError={runtime.remoteError}
           expired={credentialAtLaunch || hostReached}
           installHint={installHintVisible}
         />

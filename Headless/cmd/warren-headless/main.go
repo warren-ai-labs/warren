@@ -50,6 +50,9 @@ var (
 	// access is enabled without an explicit URL. Release builds may override it
 	// with -ldflags "-X main.defaultRemoteRelayURL=https://…".
 	defaultRemoteRelayURL = "https://bolthole.warrenai.xyz"
+	// defaultRemoteWebURL is the hosted Web client a remote share link opens
+	// in a browser. Override it with -ldflags "-X main.defaultRemoteWebURL=…".
+	defaultRemoteWebURL = "https://app.warrenai.xyz"
 )
 
 const tokenRepairInterval = time.Second
@@ -105,6 +108,7 @@ func main() {
 	worktreeRoot := flag.String("worktree-root", env("WARREN_WORKTREE_ROOT", "~/.warren/worktrees"), "worktree root")
 	outputDir := flag.String("output-dir", env("WARREN_OUTPUT_DIR", filepath.Join(configDir, "output")), "runtime output directory")
 	remoteRelayURL := flag.String("remote-relay-url", env("WARREN_REMOTE_RELAY_URL", defaultRemoteRelayURL), "default Bolthole relay for serverless remote access")
+	remoteWebURL := flag.String("remote-web-url", env("WARREN_REMOTE_WEB_URL", defaultRemoteWebURL), "hosted Web client that remote share links open in a browser (empty disables Web links)")
 	remoteCodePath := flag.String("remote-code-file", env("WARREN_REMOTE_CODE_FILE", filepath.Join(configDir, "remote.code")), "Bolthole connect code file (secret, 0600)")
 	remoteRelayKey := flag.String("remote-relay-key", env("WARREN_REMOTE_RELAY_KEY", ""), "registration key or JWT for relays that gate enrollment (secret, keep it in the environment)")
 	relayURL := flag.String("relay-url", env("WARREN_RELAY_URL", ""), "owned Relay URL (optional)")
@@ -356,6 +360,7 @@ func main() {
 		Logger: logger,
 	})
 	httpHandler.Remote = remoteSupervisor
+	httpHandler.RemoteWebURL = strings.TrimSpace(*remoteWebURL)
 	httpHandler.RemoteDirect = remoteSupervisor.DirectHandler()
 	if value, err := remote.NormalizeRelayURL(*remoteRelayURL); err == nil {
 		httpHandler.RemoteDefaultRelayURL = value

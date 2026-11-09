@@ -2086,11 +2086,11 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                         .monospacedDigit()
                 }
                 .foregroundStyle(allDone ? tokens.treeQuietText : tokens.sessionExtraRunningText)
-                .padding(.horizontal, 5)
+                .padding(.horizontal, 4)
                 .frame(height: 16)
                 .background(
                     isSubagentsExpanded || isSubagentChipHovered ? tokens.treeRowSelected : .clear,
-                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    in: RoundedRectangle(cornerRadius: 4, style: .continuous)
                 )
                 .contentShape(.rect)
             }
@@ -2140,7 +2140,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         _ agent: WarrenDesktopSubagent,
         tokens: WarrenColorTokens
     ) -> some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             subagentDot(agent, tokens: tokens)
             Text(agent.title)
                 .font(.system(size: 11, design: .monospaced))

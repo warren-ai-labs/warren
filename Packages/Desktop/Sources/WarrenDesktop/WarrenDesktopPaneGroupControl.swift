@@ -260,7 +260,7 @@ struct WarrenDesktopPaneGroupPill: View {
             fan(tokens: tokens, surface: surface)
                 .zIndex(3)
             titleArea(tokens: tokens)
-                .padding(.leading, 7)
+                .padding(.leading, 8)
             Text("\(group.members.count)")
                 .font(.system(size: 11))
                 .foregroundStyle(tokens.treeQuietText)
@@ -268,7 +268,7 @@ struct WarrenDesktopPaneGroupPill: View {
                 .opacity(lifted ? 0 : 1)
                 .accessibilityHidden(true)
         }
-        .padding(.leading, 5)
+        .padding(.leading, 4)
         .padding(.trailing, 10)
         .frame(width: Metrics.tabGroupPillWidth, height: Metrics.tabPillHeight, alignment: .leading)
         .background(
@@ -286,7 +286,7 @@ struct WarrenDesktopPaneGroupPill: View {
                     // a darker halo on the selected pill.
                     .background(Circle().fill(surface).padding(-1.5))
                     .padding(.top, 2)
-                    .padding(.trailing, 3)
+                    .padding(.trailing, 2)
                     .opacity(lifted ? 0 : 1)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
@@ -864,7 +864,7 @@ private struct WarrenDesktopPaneGroupShelfRow: View {
                 .frame(width: 22, height: 22)
                 .contentShape(.rect)
         }
-        .buttonStyle(WarrenDesktopPaneGroupShelfButtonStyle(cornerRadius: 6))
+        .buttonStyle(WarrenDesktopPaneGroupShelfButtonStyle(cornerRadius: 7))
         .warrenTooltip(help)
         .accessibilityLabel(help)
         .warrenSemanticElement(

@@ -420,7 +420,7 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                 Text("1 / \(paneCount)")
                     .font(.system(size: 11, weight: .medium).monospacedDigit())
                     .foregroundStyle(tokens.treeQuietText)
-                    .padding(.horizontal, 5)
+                    .padding(.horizontal, 4)
                     .frame(height: 16)
                     .background(
                         tokens.foreground.opacity(0.07),
@@ -1030,9 +1030,9 @@ struct WarrenDesktopSplitDivider: View {
                 .fixedSize()
                 .padding(.horizontal, WarrenSpacing.small)
                 .padding(.vertical, WarrenSpacing.xxs)
-                .background(tokens.popoverSurface, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .background(tokens.popoverSurface, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .strokeBorder(tokens.cardBorder, lineWidth: 1)
                 }
                 .offset(

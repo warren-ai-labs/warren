@@ -145,7 +145,7 @@ struct WarrenDesktopNoticeContent: View {
                             } label: {
                                 HStack(alignment: .top, spacing: WarrenDesktopMenuMetrics.iconSpacing) {
                                     WarrenNoticeToneIcon(kind: notice.kind)
-                                    VStack(alignment: .leading, spacing: 3) {
+                                    VStack(alignment: .leading, spacing: 2) {
                                         HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.xs) {
                                             Text(notice.title)
                                                 .font(.system(size: 13))

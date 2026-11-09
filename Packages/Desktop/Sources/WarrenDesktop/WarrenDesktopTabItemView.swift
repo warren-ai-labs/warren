@@ -116,7 +116,7 @@ struct WarrenDesktopTabItem: View {
         )
         ZStack(alignment: .trailing) {
             Button(action: onSelect) {
-                HStack(spacing: 7) {
+                HStack(spacing: 8) {
                     badge(tokens: tokens)
                         .opacity(isStopped ? 0.55 : 1)
                     if isPinned {
@@ -157,7 +157,7 @@ struct WarrenDesktopTabItem: View {
                         )
                     }
                 }
-                .padding(.leading, 5)
+                .padding(.leading, 4)
                 .padding(.trailing, WarrenLayoutMetrics.tabAccessoryColumnWidth - 4)
                 .frame(
                     width: width,
@@ -202,7 +202,7 @@ struct WarrenDesktopTabItem: View {
             .contentShape(.rect)
             .background(
                 isCloseHovered ? tokens.fillHover : .clear,
-                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
             )
             .foregroundStyle(tokens.mutedForeground)
             .opacity(exposesClose ? 1 : 0)

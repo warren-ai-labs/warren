@@ -35,8 +35,8 @@ extension WarrenDesktopSettingsView {
                         .padding(.vertical, 24)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.top, 18)
+                .padding(.horizontal, 12)
+                .padding(.top, 16)
                 .padding(.bottom, 16)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -57,7 +57,7 @@ extension WarrenDesktopSettingsView {
     /// screenshot of Settings says which build is being configured without
     /// opening About.
     func versionFooter(palette: WarrenSettingsPalette) -> some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             Text("Version")
                 .foregroundStyle(palette.inkFaint)
             Text(Self.appVersion)
@@ -68,8 +68,8 @@ extension WarrenDesktopSettingsView {
         .lineLimit(1)
         // Lines up with the section headings above, not with the card edge.
         .padding(.horizontal, 20)
-        .padding(.top, 10)
-        .padding(.bottom, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 16)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("settings.version")
         .warrenSemanticElement(
@@ -120,7 +120,7 @@ extension WarrenDesktopSettingsView {
                 .strokeBorder(searchFocused ? palette.focusRing : palette.cardBorder, lineWidth: 1)
         }
         .shadow(color: searchFocused ? palette.focusRing.opacity(0.55) : .clear, radius: 3)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 4)
     }

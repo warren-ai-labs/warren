@@ -16,6 +16,9 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 	if command.Type != "request" {
 		return fmt.Errorf("unsupported message type: %s", command.Type)
 	}
+	if err := p.authorizeMethod(command.Method); err != nil {
+		return err
+	}
 	params := command.Params
 	switch command.Method {
 	case "roster":

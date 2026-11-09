@@ -34,6 +34,16 @@ let package = Package(
             path: "Sources/WarrenDaemonMenuBar"
         ),
         .executableTarget(
+            name: "UIShot",
+            dependencies: [
+                .product(name: "WarrenDesktop", package: "Desktop"),
+                .product(name: "WarrenDesktopFixtures", package: "Desktop"),
+                .product(name: "WarrenDomain", package: "Domain"),
+                .product(name: "WarrenDesignSystem", package: "DesignSystem"),
+            ],
+            path: "Sources/UIShot"
+        ),
+        .executableTarget(
             name: "UIProbe",
             dependencies: [
                 .product(name: "WarrenDesktop", package: "Desktop"),

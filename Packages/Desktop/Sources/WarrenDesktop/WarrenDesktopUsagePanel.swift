@@ -356,7 +356,7 @@ public struct WarrenDesktopUsagePanel: View {
                         }
                         onLoad(range.days, nil, false)
                     } label: {
-                        HStack(spacing: 3) {
+                        HStack(spacing: 2) {
                             Text("Latest")
                             Image(systemName: "xmark")
                                 .font(.system(size: 9, weight: .medium))
@@ -368,7 +368,7 @@ public struct WarrenDesktopUsagePanel: View {
                     .padding(.horizontal, WarrenSpacing.compact)
                     .padding(.vertical, WarrenSpacing.xxs)
                     .background(tokens.link.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
 
                 // The day's two headline figures, not one. Reading the strip and
@@ -531,8 +531,8 @@ public struct WarrenDesktopUsagePanel: View {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .regular))
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
             // A filter that is on is a selection, and a selection in Warren is
             // the neutral wash — the accent belongs to agent activity and to a
             // destructive confirm, nowhere else.
@@ -556,8 +556,8 @@ public struct WarrenDesktopUsagePanel: View {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .regular))
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
             .background(selectedModelFilter != nil ? tokens.fillSelected : tokens.cardSurface)
             .foregroundStyle(tokens.foreground)
             .clipShape(RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
@@ -575,7 +575,7 @@ public struct WarrenDesktopUsagePanel: View {
                         selectedModelFilter = nil
                     }
                 } label: {
-                    HStack(spacing: 3) {
+                    HStack(spacing: 2) {
                         Image(systemName: "xmark.circle")
                             .font(.system(size: 11, weight: .regular))
                         Text("Reset")
@@ -1207,9 +1207,9 @@ public struct WarrenDesktopUsagePanel: View {
             GeometryReader { geometry in
                 let ratio = CGFloat(share ?? 0)
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(tokens.muted.opacity(0.20))
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(
                             LinearGradient(
                                 colors: [rowColor.opacity(0.30), rowColor.opacity(0.12)],

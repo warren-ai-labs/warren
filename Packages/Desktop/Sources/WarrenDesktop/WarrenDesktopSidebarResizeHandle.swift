@@ -158,9 +158,9 @@ struct WarrenDesktopSidebarResizeHandle: View {
             .fixedSize()
             .padding(.horizontal, WarrenSpacing.small)
             .padding(.vertical, WarrenSpacing.xxs)
-            .background(tokens.popoverSurface, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .background(tokens.popoverSurface, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .strokeBorder(tokens.cardBorder, lineWidth: 1)
             }
             .padding(.trailing, WarrenSpacing.compact)

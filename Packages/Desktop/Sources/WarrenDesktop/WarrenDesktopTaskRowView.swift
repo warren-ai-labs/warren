@@ -74,43 +74,46 @@ struct WarrenDesktopTaskRow: View {
                 action: { if !isInteractionDisabled { onToggleExpansion() } }
             )
 
-            // The hidden add menu gives back its gap as well as its width, so
-            // a resting row spends that room on the name.
-            HStack(spacing: showsAddMenu ? WarrenDesktopSidebarMetrics.groupIconSpacing : 0) {
-                taskAddMenu(tokens: tokens)
-                if !isExpanded {
-                    WarrenDesktopFoldSummary(marks: foldMarks, count: foldMarks.count)
-                }
+            if !isExpanded {
+                WarrenDesktopFoldSummary(marks: foldMarks, count: foldMarks.count)
             }
 
-            Button(action: onToggleExpansion) {
-                WarrenDesktopTreeChevron(isExpanded: isExpanded)
-                    .frame(
-                        width: WarrenDesktopSidebarMetrics.chevronSize,
-                        height: WarrenDesktopSidebarMetrics.groupRowHeight
-                    )
-                    .contentShape(.rect)
+            // One rail of fixed slots, as a project row draws it: the add menu
+            // keeps its slot when hidden so the name never re-truncates under
+            // the pointer.
+            WarrenDesktopRowRail {
+                taskAddMenu(tokens: tokens)
+
+                Button(action: onToggleExpansion) {
+                    WarrenDesktopTreeChevron(isExpanded: isExpanded)
+                        .frame(
+                            width: WarrenDesktopSidebarMetrics.chevronSize,
+                            height: WarrenDesktopRowAnatomy.groupRowHeight
+                        )
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(isInteractionDisabled)
+                .focused($isToggleFocused)
+                // Open, the chevron waits for the pointer; folded, it stays as
+                // the sign of the fold.
+                .opacity(isExpanded && !(isHovered || isFocused || isToggleFocused || forceHover) ? 0 : 1)
+                .warrenRowSlot(width: WarrenDesktopRowAnatomy.Slot.control)
+                .accessibilityLabel(isExpanded ? "Collapse task \(task.name)" : "Expand task \(task.name)")
+                .warrenSemanticElement(
+                    id: "task.\(task.id.description).toggle",
+                    role: .button,
+                    label: isExpanded ? "Collapse task \(task.name)" : "Expand task \(task.name)",
+                    isEnabled: !isInteractionDisabled,
+                    action: { if !isInteractionDisabled { onToggleExpansion() } }
+                )
             }
-            .buttonStyle(.plain)
-            .disabled(isInteractionDisabled)
-            .focused($isToggleFocused)
-            // Open, the chevron waits for the pointer; folded, it stays as the
-            // sign of the fold.
-            .opacity(isExpanded && !(isHovered || isFocused || isToggleFocused || forceHover) ? 0 : 1)
-            .accessibilityLabel(isExpanded ? "Collapse task \(task.name)" : "Expand task \(task.name)")
-            .warrenSemanticElement(
-                id: "task.\(task.id.description).toggle",
-                role: .button,
-                label: isExpanded ? "Collapse task \(task.name)" : "Expand task \(task.name)",
-                isEnabled: !isInteractionDisabled,
-                action: { if !isInteractionDisabled { onToggleExpansion() } }
-            )
         }
-        .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
-        .frame(maxWidth: .infinity, minHeight: WarrenDesktopSidebarMetrics.groupRowHeight)
+        .padding(.horizontal, WarrenDesktopRowAnatomy.horizontalPadding)
+        .frame(maxWidth: .infinity, minHeight: WarrenDesktopRowAnatomy.groupRowHeight)
         .background(
             isHovered || isFocused ? tokens.treeRowHover : .clear,
-            in: RoundedRectangle(cornerRadius: WarrenDesktopSidebarMetrics.rowRadius, style: .continuous)
+            in: RoundedRectangle(cornerRadius: WarrenDesktopRowAnatomy.radius, style: .continuous)
         )
         .contentShape(.rect)
         .onHover { isHovered = $0 }
@@ -145,16 +148,17 @@ struct WarrenDesktopTaskRow: View {
         Image(systemName: "plus")
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(tokens.treeQuietText)
-            .frame(width: 18, height: 18)
+            .frame(
+                width: WarrenDesktopRowAnatomy.Slot.control,
+                height: WarrenDesktopRowAnatomy.Slot.control
+            )
             .contentShape(.rect)
             .warrenMenuButton(taskAddActions)
             .modifier(WarrenDesktopTaskAddFocus(isFocused: isAddFocused, ring: tokens.focusRing))
             .disabled(isInteractionDisabled)
-            .opacity(showsAddMenu ? 1 : 0)
-            // Hidden, it gives its width back to the name, so a resting row
-            // shows as much of the name as it can.
-            .frame(width: showsAddMenu ? nil : 0)
-            .clipped()
+            // The slot stays whether or not the menu is drawn; see
+            // `WarrenDesktopRowRail`.
+            .warrenRowSlot(width: WarrenDesktopRowAnatomy.Slot.control, isVisible: showsAddMenu)
             .focused($isAddFocused)
             .accessibilityLabel("Add workspace to task \(task.name)")
             .accessibilityAddTraits(.isButton)

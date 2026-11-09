@@ -292,13 +292,16 @@ extension WarrenDesktopSettingsView {
                 .fixedSize()
                 .frame(width: 196, alignment: .leading)
             Text(description)
-                .font(.system(size: 11.5))
+                .font(WarrenTypography.settingsMeta)
                 .foregroundStyle(palette.meta)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        // A reference table, not a form: eleven variables at a form row's
+        // height made half a page of lookups. Tables take the tighter rhythm.
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(minHeight: 40)
     }
 
     func saveSetupScript(for project: Project) {

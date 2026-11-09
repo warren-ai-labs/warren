@@ -51,62 +51,53 @@ struct WarrenDesktopMenuPalette {
         colorScheme == .light ? .light : .dark
     }
 
-    static let dark = Self(
-        surface: WarrenColorTokens.hex(0x141414),
-        border: WarrenColorTokens.hex(0x262626),
-        topHighlight: Color.white.opacity(0.05),
-        divider: WarrenColorTokens.hex(0x222222),
-        headerText: WarrenColorTokens.hex(0x5C5C5C),
-        rowText: WarrenColorTokens.hex(0xEDEDED),
-        rowHoverText: WarrenColorTokens.hex(0xF5F5F5),
-        meta: WarrenColorTokens.hex(0x8A8A8A),
-        secondaryGlyph: WarrenColorTokens.hex(0x8A8A8A),
-        value: WarrenColorTokens.hex(0x5C5C5C),
-        chevron: WarrenColorTokens.hex(0x5C5C5C),
-        icon: WarrenColorTokens.hex(0x8A8A8A),
-        iconHover: WarrenColorTokens.hex(0xEDEDED),
-        check: WarrenColorTokens.hex(0xEDEDED),
-        hoverFill: WarrenColorTokens.dark.fillHover,
-        pressFill: WarrenColorTokens.dark.fillSelected,
-        hotRing: WarrenColorTokens.hex(0x232323),
-        actionGlyph: WarrenColorTokens.hex(0x8A8A8A),
-        dangerText: WarrenColorTokens.hex(0xE57B74),
-        dangerIcon: WarrenColorTokens.hex(0xE0524A),
-        tileFill: WarrenColorTokens.hex(0x1B1B1B),
-        tileBorder: WarrenColorTokens.hex(0x333333),
-        addText: WarrenColorTokens.hex(0x8A8A8A)
-    )
+    static let dark = make(for: .dark)
+    static let light = make(for: .light)
 
-    /// Paper's quiet tier: the sidebar's section weight of its warm text
-    /// base, rather than the cool neutral greys the dark spec uses.
-    private static let lightQuiet = WarrenColorTokens.light.sidebarTextBase
-        .opacity(WarrenSidebarTextWeight.section)
-
-    static let light = Self(
-        surface: WarrenColorTokens.hex(0xFFFFFF),
-        border: WarrenColorTokens.hex(0xE0DBD6),
-        topHighlight: .clear,
-        divider: WarrenColorTokens.hex(0xE8E4E0),
-        headerText: lightQuiet,
-        rowText: WarrenColorTokens.hex(0x1C1917),
-        rowHoverText: WarrenColorTokens.hex(0x000000),
-        meta: WarrenColorTokens.hex(0x6B6560),
-        secondaryGlyph: WarrenColorTokens.hex(0x6B6560),
-        value: lightQuiet,
-        chevron: lightQuiet,
-        icon: WarrenColorTokens.hex(0x6B6560),
-        iconHover: WarrenColorTokens.hex(0x1C1917),
-        check: WarrenColorTokens.hex(0x1C1917),
-        hoverFill: WarrenColorTokens.light.fillHover,
-        pressFill: WarrenColorTokens.light.fillSelected,
-        hotRing: WarrenColorTokens.hex(0xF4F3F3),
-        actionGlyph: lightQuiet,
-        dangerText: WarrenColorTokens.hex(0xB3261E),
-        dangerIcon: WarrenColorTokens.hex(0xB3261E),
-        tileFill: WarrenColorTokens.hex(0xF2EFEC),
-        tileBorder: WarrenColorTokens.hex(0xD2CCC6),
-        addText: WarrenColorTokens.hex(0x6B6560)
-    )
+    /// A menu is a raised surface, so it takes the same tone as every other
+    /// raised surface instead of a grey of its own.
+    ///
+    /// These twenty-six values used to be literals — a #141414 card, a #262626
+    /// hairline, its own quiet greys — which put a menu a step darker than the
+    /// popover it sat beside and let it drift every time the palette moved. The
+    /// menu now reads the resolved tokens, so it cannot.
+    private static func make(for colorScheme: ColorScheme) -> Self {
+        let tokens = WarrenColorTokens.resolved(for: colorScheme)
+        // A corner dot on a hot row has to cut itself out of what is under it,
+        // and the hover wash is translucent: the ring is the wash already
+        // composited over the card, which is the solid step the palette
+        // mechanism exists for.
+        let hoverAlpha = WarrenRGB(tokens.fillHover).alpha
+        let hotRing = WarrenRGB(tokens.popoverSurface)
+            .mixed(with: WarrenRGB(tokens.foreground), hoverAlpha)
+            .color
+        return Self(
+            surface: tokens.popoverSurface,
+            border: tokens.border,
+            // Paper has no light to catch along a card's top edge.
+            topHighlight: colorScheme == .light ? .clear : Color.white.opacity(0.05),
+            divider: tokens.border,
+            headerText: tokens.ink4,
+            rowText: tokens.foreground,
+            rowHoverText: tokens.foreground,
+            meta: tokens.ink3,
+            secondaryGlyph: tokens.ink3,
+            value: tokens.ink4,
+            chevron: tokens.ink4,
+            icon: tokens.ink3,
+            iconHover: tokens.foreground,
+            check: tokens.foreground,
+            hoverFill: tokens.fillHover,
+            pressFill: tokens.fillSelected,
+            hotRing: hotRing,
+            actionGlyph: tokens.ink3,
+            dangerText: tokens.destructive,
+            dangerIcon: tokens.destructive,
+            tileFill: tokens.muted,
+            tileBorder: tokens.ring,
+            addText: tokens.ink3
+        )
+    }
 }
 
 /// The one floating surface every menu and popover draws on: an opaque card

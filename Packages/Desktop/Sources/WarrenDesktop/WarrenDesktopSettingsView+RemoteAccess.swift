@@ -3,7 +3,8 @@ import CoreImage
 import SwiftUI
 import WarrenDesignSystem
 
-/// Settings → Remote Access: the Host's serverless (Bolthole) path to a phone.
+/// Settings → Access → Serverless relay: the Host's Bolthole path to a phone
+/// or a browser.
 ///
 /// This page answers one question the Relay page cannot: whether this Mac is
 /// reachable through a stateless relay it does not operate, and which relay that
@@ -21,9 +22,10 @@ extension WarrenDesktopSettingsView {
             }
 
             WarrenSettingsGroup(
-                "Share with iPhone",
-                footnote: "The link carries the connect code and one pairing invite, so treat it like a "
-                    + "password until it expires. Scanning it adds that device to Devices below."
+                "Share",
+                footnote: "Scan the QR code with Warren on iPhone, or open the Web link in any browser. "
+                    + "Both carry the connect code and one pairing invite, so treat them like a "
+                    + "password until they expire."
             ) {
                 HStack(spacing: 12) {
                     Button(remoteShareBusy ? "Preparing…" : (remoteShare == nil ? "Create Link" : "New Link")) {
@@ -38,7 +40,7 @@ extension WarrenDesktopSettingsView {
                     .accessibilityIdentifier("settings.remote.share")
 
                     if !remoteAccess.enabled {
-                        Text("Turn remote access on first.")
+                        Text("Turn on Serverless relay first.")
                             .font(.system(size: 11.5))
                             .foregroundStyle(palette.meta)
                     }
@@ -52,8 +54,8 @@ extension WarrenDesktopSettingsView {
                     .disabled(remoteRotateBusy || onRotateRemote == nil)
                     .accessibilityIdentifier("settings.remote.rotate")
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
 
                 if let remoteShare {
                     WarrenSettingsRowDivider()
@@ -63,14 +65,14 @@ extension WarrenDesktopSettingsView {
                 if let remoteShareError, !remoteShareError.isEmpty {
                     WarrenSettingsRowDivider()
                     WarrenSettingsStatusLine(tone: .failed, text: remoteShareError, isError: true)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
                 }
                 if let remoteRotateError, !remoteRotateError.isEmpty {
                     WarrenSettingsRowDivider()
                     WarrenSettingsStatusLine(tone: .failed, text: remoteRotateError, isError: true)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
                 }
             }
 
@@ -106,10 +108,8 @@ extension WarrenDesktopSettingsView {
                 ring: palette.box
             )
             VStack(alignment: .leading, spacing: 2) {
-                Text(remoteAccess.enabled
-                    ? (remoteAccess.effectiveRelayURL.isEmpty ? "Serverless relay" : remoteAccess.effectiveRelayURL)
-                    : "Not available remotely")
-                    .font(remoteAccess.enabled
+                Text(remoteAccess.enabled ? remoteAccess.displayedRelay : "Serverless relay is off")
+                    .font(remoteAccess.enabled && remoteAccess.isSelfHostedRelay
                         ? .system(size: 12.5, design: .monospaced)
                         : .system(size: 13))
                     .foregroundStyle(palette.inkBody)
@@ -146,8 +146,8 @@ extension WarrenDesktopSettingsView {
             )
         }
         .warrenSemanticElement(id: "settings.remote.status", role: .group, label: "Remote access")
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
         .frame(minHeight: 48)
     }
 
@@ -160,37 +160,121 @@ extension WarrenDesktopSettingsView {
         }
     }
 
-    /// The read-out that separates the two paths: which relay, whose relay, and
-    /// how the Host authenticates pairings.
+    /// Which relay carries the serverless path: the official one, or the
+    /// user's own. Choosing "My own" reveals a URL field; nothing changes on the
+    /// Host until that URL is applied.
     func remoteAccessDetails(palette: WarrenSettingsPalette) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            WarrenSettingsRow("Relay") {
-                WarrenSettingsReadout(value: remoteAccess.effectiveRelayURL.isEmpty
-                    ? "—"
-                    : remoteAccess.effectiveRelayURL)
+            WarrenSettingsRow(
+                "Relay",
+                description: remoteRelayUsesOwn
+                    ? "Your own Bolthole relay. The deploy guide above shows how to run one."
+                    : "The official relay needs no setup."
+            ) {
+                WarrenSettingsSegmented(
+                    options: [(false, "Official"), (true, "My own")],
+                    selection: Binding(
+                        get: { remoteRelayUsesOwn },
+                        set: { chooseOwnRemoteRelay($0) }
+                    ),
+                    accessibilityID: "settings.remote.relay-choice"
+                )
+                .disabled(remoteEnabledBusy || onSetRemoteRelay == nil)
             }
 
             WarrenSettingsRowDivider()
 
-            WarrenSettingsRow("Relay source", description: "Set when remote access is enabled.") {
-                Text(remoteAccess.relaySourceText)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(palette.inkBody)
-                    .accessibilityIdentifier("settings.remote.relay-source")
-                    .warrenSemanticElement(
-                        id: "settings.remote.relay-source",
-                        role: .text,
-                        label: remoteAccess.relaySourceText
-                    )
+            if remoteRelayUsesOwn {
+                WarrenSettingsRow("Relay URL") {
+                    HStack(spacing: 8) {
+                        WarrenSettingsTextField(
+                            placeholder: "https://relay.example.com",
+                            text: $remoteCustomRelayURL,
+                            monospaced: true,
+                            width: WarrenSettingsMetrics.fieldWidth,
+                            accessibilityID: "settings.remote.relay-url"
+                        )
+                        // Shown only when there is something to apply, so a
+                        // relay already in use reads as a value, not a form.
+                        if canApplyOwnRemoteRelay {
+                            Button("Use") { applyOwnRemoteRelay() }
+                                .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                                .fixedSize()
+                                .accessibilityIdentifier("settings.remote.relay-apply")
+                        }
+                    }
+                }
+            } else {
+                // The official relay's address is not shown: it gives an
+                // onlooker nothing to use, and the Host already knows it.
+                WarrenSettingsRow("Relay URL") {
+                    Text("Built in")
+                        .font(.system(size: 12))
+                        .foregroundStyle(palette.meta)
+                        .accessibilityIdentifier("settings.remote.relay-source")
+                        .warrenSemanticElement(
+                            id: "settings.remote.relay-source",
+                            role: .text,
+                            label: remoteAccess.relaySourceText
+                        )
+                }
             }
+        }
+        .onAppear(perform: seedRemoteRelayURL)
+        .onChange(of: remoteAccess) { _ in seedRemoteRelayURL() }
+    }
 
-            WarrenSettingsRowDivider()
+    /// "My own" is shown while the Host carries its own relay, or while the
+    /// user has picked it and not yet applied a URL.
+    var remoteRelayUsesOwn: Bool {
+        remoteAccess.isSelfHostedRelay || remoteRelayChoosingOwn
+    }
 
-            WarrenSettingsRow("Pairing") {
-                Text("End-to-end encrypted; the relay only forwards ciphertext.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(palette.meta)
-            }
+    var canApplyOwnRemoteRelay: Bool {
+        let value = remoteCustomRelayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, onSetRemoteRelay != nil, !remoteEnabledBusy,
+              let url = URL(string: value), let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http", url.host?.isEmpty == false else {
+            return false
+        }
+        return !(remoteAccess.isSelfHostedRelay && remoteAccess.enabled && value == remoteAccess.configuredRelayURL)
+    }
+
+    func chooseOwnRemoteRelay(_ own: Bool) {
+        if own {
+            remoteRelayChoosingOwn = true
+            return
+        }
+        remoteRelayChoosingOwn = false
+        // Going back to the official relay only touches the Host when it is on
+        // another one; picking "Official" on a Host already using it is a no-op.
+        if remoteAccess.isSelfHostedRelay {
+            applyRemoteRelay("default")
+        }
+    }
+
+    func applyOwnRemoteRelay() {
+        guard canApplyOwnRemoteRelay else { return }
+        applyRemoteRelay(remoteCustomRelayURL.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    func applyRemoteRelay(_ value: String) {
+        guard !remoteEnabledBusy, let onSetRemoteRelay else { return }
+        remoteEnabledBusy = true
+        // A link names the relay it was made for, so it stops working here.
+        clearRemoteShare()
+        onSetRemoteRelay(value)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            remoteEnabledBusy = false
+            remoteRelayChoosingOwn = false
+            onLoadRemoteAccess?()
+        }
+    }
+
+    func seedRemoteRelayURL() {
+        if remoteAccess.isSelfHostedRelay, remoteCustomRelayURL.isEmpty {
+            remoteCustomRelayURL = remoteAccess.configuredRelayURL
         }
     }
 
@@ -208,12 +292,12 @@ extension WarrenDesktopSettingsView {
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(share.url.absoluteString)
-                        .font(.system(size: 11.5, design: .monospaced))
+                    // The link is not printed: it names the relay and carries
+                    // the connect code, and the QR code and the copy buttons
+                    // hand it on without putting it on screen.
+                    Text("Scan with Warren on iPhone, or copy a link.")
+                        .font(.system(size: 11.5))
                         .foregroundStyle(palette.inkBody)
-                        .textSelection(.enabled)
-                        .lineLimit(3)
-                        .truncationMode(.middle)
                     Text(remoteShareExpiryText(share))
                         .font(.system(size: 11.5))
                         .foregroundStyle(palette.meta)
@@ -228,10 +312,24 @@ extension WarrenDesktopSettingsView {
                         let copied = copyFeedback.confirms(Self.remoteShareCopySource)
                         HStack(spacing: 6) {
                             Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 11))
-                            Text(copied ? "Copied" : "Copy Link")
+                            Text(copied ? "Copied" : "Copy App Link")
                         }
                     }
                     .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                    if let webURL = share.webURL {
+                        Button {
+                            copyFeedback.copy(webURL.absoluteString, confirmingIn: Self.remoteShareWebCopySource)
+                        } label: {
+                            let copied = copyFeedback.confirms(Self.remoteShareWebCopySource)
+                            HStack(spacing: 6) {
+                                Image(systemName: copied ? "checkmark" : "globe").font(.system(size: 11))
+                                Text(copied ? "Copied" : "Copy Web Link")
+                            }
+                        }
+                        .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                        .help("Opens this Host in a browser, end-to-end encrypted through the relay.")
+                        .accessibilityIdentifier("settings.remote.share.copy-web")
+                    }
                 }
             }
         }
@@ -249,6 +347,7 @@ extension WarrenDesktopSettingsView {
     }
 
     static let remoteShareCopySource = "settings.remote.share.copy"
+    static let remoteShareWebCopySource = "settings.remote.share.copy-web"
 
     func refreshRemoteShareQRCode() {
         guard let share = remoteShare else {

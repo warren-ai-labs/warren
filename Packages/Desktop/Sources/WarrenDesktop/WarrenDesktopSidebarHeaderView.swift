@@ -98,7 +98,11 @@ struct WarrenDesktopSidebarHeader: View {
                             // Session title: a Chinese name sets larger.
                             Text(host?.name ?? "This Mac")
                                 .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(tokens.foreground.opacity(0.92))
+                                // The column's own title, so it takes the
+                                // solid ink rather than a fade of it: a fade
+                                // here had to be re-tuned whenever the ground
+                                // moved.
+                                .foregroundStyle(tokens.foreground)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                             if isPublicAccessOn {
@@ -117,11 +121,12 @@ struct WarrenDesktopSidebarHeader: View {
                             }
                         }
                         if let subtitle = host?.subtitle, !subtitle.isEmpty {
-                            Text(subtitle)
-                                .font(.system(size: 11))
-                                .foregroundStyle(tokens.treeQuietText)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
+                            // "Local · <endpoint>", drawn as two runs: the place
+                            // keeps its width and only the endpoint truncates.
+                            // Truncating the pair in the middle ate the address
+                            // from its own middle and left "1…0.1:8789", which
+                            // reads as neither.
+                            HostSubtitleLine(subtitle: subtitle, color: tokens.treeQuietText)
                         }
                     }
                     Spacer(minLength: 0)
@@ -183,7 +188,7 @@ struct WarrenDesktopSidebarHeader: View {
                     .background(Circle().fill(tokens.workbenchCardFill))
                     .offset(x: 3, y: 3)
             }
-            .padding(.leading, 5)
+            .padding(.leading, 4)
             .warrenTooltip("Public Access is on")
             .accessibilityLabel("Public Access on")
             .accessibilityHidden(true)
@@ -263,3 +268,34 @@ struct WarrenDesktopSidebarHostIdentity: Equatable {
         return trimmed.isEmpty ? place : "\(place) · \(trimmed)"
     }
 }
+
+/// The Host row's second line, split so only its detail can truncate.
+private struct HostSubtitleLine: View {
+    let subtitle: String
+    let color: Color
+
+    private var parts: (place: String, detail: String?) {
+        let pieces = subtitle.components(separatedBy: " · ")
+        guard pieces.count > 1 else { return (subtitle, nil) }
+        return (pieces[0], pieces.dropFirst().joined(separator: " · "))
+    }
+
+    var body: some View {
+        let parts = parts
+        HStack(spacing: 4) {
+            Text(parts.place)
+                .fixedSize(horizontal: true, vertical: false)
+            if let detail = parts.detail {
+                Text("·")
+                    .opacity(0.7)
+                    .fixedSize(horizontal: true, vertical: false)
+                Text(detail)
+                    .truncationMode(.middle)
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(color)
+        .lineLimit(1)
+    }
+}
+

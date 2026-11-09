@@ -943,7 +943,6 @@ answer different questions.
 - [Minimum-contrast experiments](../../decisions/2026-08-28-minimum-contrast-experiments.md)
 - [Terminal runtime](../../runtime.md)
 - [Headless and remote connection architecture](../../headless-architecture.md)
-- [Terminal experience progress](../terminal-experience-progress.md)
 - `Packages/GhosttyAdapter/Sources/GhosttyAdapter/GhosttySurface.swift`
 - `Packages/GhosttyAdapter/Sources/GhosttyAdapter/WarrenGhosttyOutputWriter.swift`
 - `Packages/Vendor/GhosttyEmbedding/Sources/GhosttyTerminal/InMemory/InMemoryTerminalSession.swift`

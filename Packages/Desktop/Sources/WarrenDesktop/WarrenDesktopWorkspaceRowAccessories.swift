@@ -19,10 +19,11 @@ import WarrenDesignSystem
 /// explicit frames, so the width is known without a layout pass, and the
 /// constants below are the ones the row draws with.
 enum WarrenDesktopWorkspaceRowAccessories {
-    /// Hit target for the editor entry glyph.
-    static let editorEntryWidth: CGFloat = 20
-    /// Hit target for the Task link's flag glyph.
-    static let taskLinkWidth: CGFloat = 18
+    /// Hit target for the editor entry glyph, in the row's trailing rail.
+    static let editorEntryWidth: CGFloat = WarrenDesktopRowAnatomy.Slot.control
+    /// Hit target for the Task link's flag glyph, the same slot, so the two
+    /// entries and the group rows' chevron share one trailing column.
+    static let taskLinkWidth: CGFloat = WarrenDesktopRowAnatomy.Slot.control
 
     static func inset(
         isEditorMarked: Bool,
@@ -38,7 +39,7 @@ enum WarrenDesktopWorkspaceRowAccessories {
         // truncate names for space nothing occupies.
         guard !widths.isEmpty else { return 0 }
         let inset = widths.reduce(0, +)
-            + CGFloat(widths.count - 1) * WarrenSpacing.xs
+            + CGFloat(widths.count - 1) * WarrenDesktopRowAnatomy.slotGap
         // The overlay's own trailing padding, so the inset reaches where the
         // accessories actually start rather than where their frames do.
         return inset + WarrenSpacing.compact

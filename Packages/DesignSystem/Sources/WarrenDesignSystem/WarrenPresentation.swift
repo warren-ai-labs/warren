@@ -371,8 +371,14 @@ public struct WarrenSecondaryButtonStyle: ButtonStyle {
             configuration.label
                 .font(font)
                 .foregroundStyle(tokens.foreground)
+                // A dialog's buttons answer a sentence, so their labels are
+                // short: one line, hugged, and never re-wrapped by a long
+                // confirm beside them. "Delete Workspace" used to break in two
+                // and make one button taller than the other.
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, Self.horizontalPadding)
-                .frame(minHeight: height)
+                .frame(minWidth: Self.minimumWidth, minHeight: height)
                 .background(
                     state == .pressed
                         ? tokens.fillSelected
@@ -396,6 +402,9 @@ public struct WarrenSecondaryButtonStyle: ButtonStyle {
         /// One step wider than the old 12: the label gets room to breathe and
         /// every button in a dialog lands on the same width rhythm.
         static let horizontalPadding: CGFloat = 14
+        /// The narrowest a dialog button gets, so Cancel and its confirm land
+        /// on one width rhythm instead of each hugging its own word.
+        static let minimumWidth: CGFloat = 76
     }
 }
 
@@ -442,16 +451,35 @@ public struct WarrenDestructiveButtonStyle: ButtonStyle {
             )
             configuration.label
                 .font(font)
-                .foregroundStyle(.white)
+                .foregroundStyle(state == .disabled ? tokens.mutedForeground : .white)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 14)
-                .frame(minHeight: height)
-                .background(
-                    WarrenDialogPalette.destructive(for: colorScheme, tokens: tokens)
-                        .opacity(state == .pressed ? 0.82 : 1)
-                )
+                .frame(minWidth: 76, minHeight: height)
+                // Pressing darkens the fill and hovering lifts it, so the
+                // destructive button answers the pointer like every other
+                // control in the dialog instead of sitting inert until clicked.
+                //
+                // Disabled it is a quiet control like any other: a dead red
+                // plate still reads as the thing to press, and red is the one
+                // colour that should only appear on an action you can take.
+                .background {
+                    if state == .disabled {
+                        tokens.inputSurface
+                    } else {
+                        WarrenDialogPalette.destructive(for: colorScheme, tokens: tokens)
+                            .brightness(state == .hovered ? 0.04 : 0)
+                            .brightness(state == .pressed ? -0.06 : 0)
+                    }
+                }
                 .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                .overlay {
+                    if state == .disabled {
+                        RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
+                            .strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline)
+                    }
+                }
                 .warrenFocusRing(state == .focused)
-                .opacity(state == .disabled ? 0.42 : 1)
                 .animation(WarrenMotion.animation(.feedback, reduceMotion: reduceMotion), value: state)
                 .onHover { hovered = $0 }
         }

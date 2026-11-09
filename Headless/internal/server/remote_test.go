@@ -51,6 +51,7 @@ func newRemoteTestHost(t *testing.T) *remoteTestHost {
 	handler.Remote = supervisor
 	handler.RemoteDirect = supervisor.DirectHandler()
 	handler.RemoteDefaultRelayURL = relayServer.URL
+	handler.RemoteWebURL = "https://app.example.test"
 	return &remoteTestHost{
 		handler: handler, local: local, relay: relayServer, remote: supervisor,
 		hostID: state.Snapshot().Host.ID,
@@ -169,8 +170,26 @@ func TestRemoteShareRelayPairingAndOwnerSession(t *testing.T) {
 	if !strings.HasPrefix(link, host.relay.URL+"/#k=") {
 		t.Fatalf("share link = %q", link)
 	}
+	if share["relaySource"] != "default" {
+		t.Fatalf("share relaySource = %v, want default", share["relaySource"])
+	}
 	if fragment := shareFragment(t, link); fragment.Get("host") != host.hostID || fragment.Get("invite") == "" {
 		t.Fatalf("share fragment = %v", fragment)
+	}
+	// The Web link carries the same secrets, only in a fragment, and names
+	// the relay because the page is not served by it.
+	webLink, _ := share["webLink"].(string)
+	if !strings.HasPrefix(webLink, "https://app.example.test/#r=") {
+		t.Fatalf("web link = %q", webLink)
+	}
+	webFragment, linkFragment := shareFragment(t, webLink), shareFragment(t, link)
+	if webFragment.Get("r") != host.relay.URL {
+		t.Fatalf("web link relay = %q, want %q", webFragment.Get("r"), host.relay.URL)
+	}
+	for _, key := range []string{"k", "host", "invite"} {
+		if webFragment.Get(key) != linkFragment.Get(key) {
+			t.Fatalf("web link %s = %q, want %q", key, webFragment.Get(key), linkFragment.Get(key))
+		}
 	}
 
 	client, err := boltclient.New(link, &boltclient.Options{Mode: boltclient.RelayOnly, Name: "test phone"})
@@ -392,5 +411,22 @@ func TestRemoteRelaySourceAndReturnToDefault(t *testing.T) {
 	share := host.ownerPost(t, "/v1/remote/share", map[string]string{"relayUrl": "default"})
 	if link, _ := share["link"].(string); !strings.HasPrefix(link, host.relay.URL+"/#k=") {
 		t.Fatalf("share with relay=default = %q", link)
+	}
+}
+
+func TestRemoteWebLink(t *testing.T) {
+	link := "https://relay.example.com/#k=code&host=h1&invite=i1"
+	got, err := remoteWebLink("https://app.example.test/path?x=1#old", "https://relay.example.com", link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://app.example.test/path#r=https%3A%2F%2Frelay.example.com&k=code&host=h1&invite=i1"; got != want {
+		t.Fatalf("web link = %q, want %q", got, want)
+	}
+	if got, err := remoteWebLink("", "https://relay.example.com", link); err != nil || got != "" {
+		t.Fatalf("no Web client = %q, %v", got, err)
+	}
+	if _, err := remoteWebLink("ftp://app", "https://relay.example.com", link); err == nil {
+		t.Fatal("a non-http Web client URL was accepted")
 	}
 }

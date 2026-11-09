@@ -10,7 +10,8 @@ final class WarrenDesktopRemoteAccessTests: XCTestCase {
             relaySource: "default",
             defaultRelayURL: "https://bolthole.warrenai.xyz"
         )
-        XCTAssertEqual(projection.relaySourceText, "Official relay (https://bolthole.warrenai.xyz)")
+        XCTAssertEqual(projection.relaySourceText, "Official relay")
+        XCTAssertEqual(projection.displayedRelay, "Official relay", "the official relay is never addressed")
         XCTAssertFalse(projection.isSelfHostedRelay)
         XCTAssertEqual(projection.effectiveRelayURL, "https://bolthole.warrenai.xyz")
     }
@@ -24,6 +25,7 @@ final class WarrenDesktopRemoteAccessTests: XCTestCase {
             defaultRelayURL: "https://bolthole.warrenai.xyz"
         )
         XCTAssertEqual(projection.relaySourceText, "Self-hosted relay")
+        XCTAssertEqual(projection.displayedRelay, "https://relay.example.test")
         XCTAssertTrue(projection.isSelfHostedRelay)
     }
 

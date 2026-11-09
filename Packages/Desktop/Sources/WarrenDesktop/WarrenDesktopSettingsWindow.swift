@@ -82,14 +82,32 @@ struct WarrenDesktopSettingsWindowPresenter: NSViewRepresentable {
 
         private func makeWindow(content: AnyView) -> NSWindow {
             let hosting = NSHostingView(rootView: Self.root(content))
+            // A standard titled window put a system titlebar, a square frame
+            // and the system's own grey above Warren's backdrop: next to the
+            // main window it read as an app from another platform. The titlebar
+            // stays (it is what gives the window its traffic lights, its drag,
+            // its zoom and its shadow) but it is transparent and the page draws
+            // under it, so the window is one surface like every other.
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 1120, height: 740),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
             window.title = "Settings"
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
+            window.backgroundColor = .clear
+            window.isOpaque = false
             window.contentView = hosting
+            // The same subtle corner the main window wears: the contentView is
+            // clipped, so the page's backdrop ends in a curve instead of a
+            // square that the desktop shows through at the corners.
+            hosting.wantsLayer = true
+            hosting.layer?.cornerRadius = 8
+            hosting.layer?.masksToBounds = true
+            window.invalidateShadow()
             // Wide enough that a page column never drops below the width its
             // two-column rows and the Usage cards are laid out for.
             window.minSize = NSSize(width: 820, height: 540)

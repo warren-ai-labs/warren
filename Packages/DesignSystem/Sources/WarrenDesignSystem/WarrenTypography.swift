@@ -11,7 +11,9 @@ public enum WarrenTypography {
     public static let externalIDEPath = Font.system(size: 11, weight: .regular, design: .monospaced)
     public static let settingsGroupLabel = Font.system(size: 11, weight: .medium)
     public static let settingsBody = Font.system(size: 14, weight: .regular)
-    public static let settingsBodyEmphasis = Font.system(size: 14, weight: .regular)
+    /// A settings row's title: body size, one weight up, so the label outranks
+    /// the description under it without growing.
+    public static let settingsBodyEmphasis = Font.system(size: 14, weight: .medium)
     public static let settingsSupporting = Font.system(size: 13, weight: .regular)
     public static let settingsMeta = Font.system(size: 12, weight: .regular)
     /// Superset shortcuts are `text-xs tracking-widest`; Warren keeps the

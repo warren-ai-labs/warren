@@ -29,8 +29,9 @@ with the same code and switches between LAN and relay on its own.
 given; --relay default drops a self-hosted relay and returns to the build's).
 'remote share' prints a link and a terminal QR code that pairs any device
 scanning it within 10 minutes; each device gets its own token, listed and
-revocable on the Host. It needs remote access to be on, so run 'remote enable'
-first. Treat the link like a password. 'remote rotate' replaces the connect
+revocable on the Host. It also prints a Web link that pairs a browser through
+the hosted Web client. It needs remote access to be on, so run 'remote enable'
+first. Treat both links like passwords. 'remote rotate' replaces the connect
 code and forgets every remotely paired device.
 `
 }
@@ -89,13 +90,7 @@ func remoteCommand(args []string) error {
 	if outputJSON {
 		return printValue(object)
 	}
-	relay := stringValueAny(object, "relayURL")
-	if relay == "" {
-		relay = stringValueAny(object, "configuredRelayURL")
-	}
-	if relay == "" {
-		relay = stringValueAny(object, "defaultRelayURL")
-	}
+	relay := displayedRemoteRelay(object)
 	pairs := [][2]string{
 		{"ENABLED", fmt.Sprint(object["enabled"] == true)},
 		{"STATE", stringValueAny(object, "state")},
@@ -130,12 +125,32 @@ func printRemoteShare(object map[string]any, flags map[string]any) error {
 	}
 	pairs := [][2]string{
 		{"LINK", link},
-		{"RELAY", stringValueAny(object, "relayURL")},
-		{"PAIRS DEVICES FOR", formatRelayTTL(expiresIn)},
 	}
+	if webLink := strings.TrimSpace(stringValueAny(object, "webLink")); webLink != "" {
+		pairs = append(pairs, [2]string{"WEB LINK", webLink})
+	}
+	pairs = append(pairs, [][2]string{
+		{"RELAY", displayedRemoteRelay(object)},
+		{"PAIRS DEVICES FOR", formatRelayTTL(expiresIn)},
+	}...)
 	if path, ok := object["qrPath"].(string); ok {
 		pairs = append(pairs, [2]string{"QR", path})
 	}
 	printKVTable(pairs)
 	return nil
+}
+
+// displayedRemoteRelay names the relay for a table: a self-hosted relay by its
+// URL, the build's official relay by name only, so its address does not end up
+// in pasted terminal output. `--json` still carries every field.
+func displayedRemoteRelay(object map[string]any) string {
+	relay := stringValueAny(object, "relayURL")
+	if relay == "" {
+		relay = stringValueAny(object, "configuredRelayURL")
+	}
+	official := stringValueAny(object, "defaultRelayURL")
+	if relay == "" || stringValueAny(object, "relaySource") == "default" || (official != "" && relay == official) {
+		return "official"
+	}
+	return relay
 }

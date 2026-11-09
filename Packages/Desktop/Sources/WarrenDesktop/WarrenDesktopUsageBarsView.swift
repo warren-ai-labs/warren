@@ -52,7 +52,7 @@ struct WarrenDesktopUsageReadout: View {
             if !content.rows.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(content.rows, id: \.bucket) { row in
-                        HStack(spacing: 7) {
+                        HStack(spacing: 8) {
                             RoundedRectangle(cornerRadius: 2, style: .continuous)
                                 .fill(row.bucket.color(tokens))
                                 .frame(width: 8, height: 8)
@@ -497,13 +497,13 @@ struct WarrenDesktopUsageBarsView: View {
         .background(alignment: .bottom) {
             // The ring: one on the hovered bar, and a firmer one on the bar that
             // holds the selected day, so the selection survives a sweep.
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .strokeBorder(
                     tokens.foreground.opacity(isSelected ? 1 : 0.85),
                     lineWidth: 1.5
                 )
                 .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(tokens.foreground.opacity(0.05))
                 )
                 .frame(width: width + 8, height: max(shown, 2) + 8)

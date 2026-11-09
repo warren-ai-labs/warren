@@ -1,0 +1,14 @@
+# The hosted Warren Web client at app.warrenai.xyz, which serverless remote
+# access links open in a browser (docs/remote.md). Static assets only: the page
+# talks to Hosts through Bolthole relays, never through this Worker.
+# Deploy with `mise run web:deploy`.
+name = "warren-app"
+compatibility_date = "2026-08-18"
+
+routes = [
+  { pattern = "app.warrenai.xyz", custom_domain = true }
+]
+
+[assets]
+directory = "./.deploy"
+not_found_handling = "single-page-application"

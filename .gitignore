@@ -9,6 +9,8 @@ xcuserdata/
 .vscode/
 .idea/
 Web/node_modules/
+Web/.deploy/
+Web/.wrangler/
 Warren.app/
 Warren-*.zip
 Warren-*.zip.sha256

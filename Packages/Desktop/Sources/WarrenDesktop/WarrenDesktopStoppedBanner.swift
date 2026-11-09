@@ -123,11 +123,11 @@ public struct WarrenDesktopStoppedBanner: View {
         // Opaque, because this bar sits over live terminal output: a translucent
         // fill lets the text underneath read through the sentence.
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(tokens.background)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(tokens.border, lineWidth: 1)
         )
         .fixedSize(horizontal: true, vertical: false)

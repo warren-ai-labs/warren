@@ -1748,6 +1748,23 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         }
     }
 
+    /// Moves serverless remote access to another relay and turns it on:
+    /// "default" for the build's relay, or a relay URL the Host should carry.
+    func setRemoteRelay(_ relayURL: String) {
+        guard let wire else { return }
+        Task { @MainActor [weak self] in
+            do {
+                let data = try await wire.request("remote.enable", params: ["relayUrl": relayURL])
+                if let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    self?.remoteAccess = Self.remoteAccess(from: value)
+                }
+            } catch {
+                self?.present(error)
+            }
+            self?.loadRemoteAccess()
+        }
+    }
+
     func createRemoteShare(
         completion: @escaping (Result<WarrenDesktopRemoteShare, Error>) -> Void
     ) {
@@ -1769,6 +1786,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 }
                 let share = WarrenDesktopRemoteShare(
                     url: url,
+                    webURL: (value["webLink"] as? String).flatMap(URL.init(string:)),
                     expiresAt: Self.remoteShareExpiry(value),
                     expiresIn: (value["expiresIn"] as? NSNumber)?.intValue ?? 0
                 )

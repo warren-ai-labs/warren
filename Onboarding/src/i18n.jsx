@@ -116,6 +116,63 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.35.0",
+        dateISO: "2026-11-09",
+        date: "November 9, 2026",
+        title: "Warren reaches a Host from anywhere and draws one chrome.",
+        summary:
+          "A minor release that lets phones and browsers reach a Host through a stateless, end-to-end encrypted relay with no account, port or certificate, opens that Host from a share link in a browser, answers how a device reaches this Mac on one Access page, and gives the Desktop app one chrome: a palette derived from three authored colours, one spacing grid, one row anatomy, one overlay language and a Settings window drawn on Warren's own surface. The JSON control protocol remains at 4.0 with no new or changed method, and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Reach a Host from anywhere with `warren remote status|enable|disable|share|rotate`: a stateless relay that sees only ciphertext, the official one by default or your own, with device authorization kept on the Host. A share link carries a ten-minute invite, rotating the connect code revokes every remotely paired device, and `remote.status`, the `remote.*` methods and `status.remote` report the relay, its source and how many devices are paired.",
+              "Open the same Host in a browser: a share link also hands on a Web link whose page runs an end-to-end encrypted session through the relay, pairs the browser as its own client and remembers the Host, so the connect code and token never reach a server.",
+              "Pair a phone by scanning or pasting a share link; iOS keeps the connect code in the Keychain and shows that Host as one encrypted path with a relay picker.",
+              "See and control remote access in Settings: whether it is on, which relay, how many devices are paired, the switch, a ten-minute Create Link QR, and Rotate Code.",
+              "Merge Relay, LAN Pairing, Public Access and Remote Access into one Access page ordered from anywhere to this network, with the old section links still landing there.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Derive the palette: a theme authors ground, ink and recess plus its status and identity hues, and every surface and ink is mixed from them, with text tiers as solid steps instead of fades of one ink.",
+              "Hold chrome to one grid - even points except a 1pt hairline, radii one step apart - and fail a test when a Desktop value leaves it.",
+              "Name a row's parts once, so a hover-only \"+\" keeps its slot and cannot re-truncate a name, and a worktree's chevron shares its group's column.",
+              "Draw every floating surface as one family: menus, popovers, toasts, hover cards and the folded rail share one tone and one elevation, right-click menus are drawn in-window, keys are drawn as keys, and every dialog ends on one footer, so no confirm label wraps and a confirmation without a body pays no body inset.",
+              "Tune Settings: it opens on Appearance and shows the app version, rows sit on a 56-point floor at 16/14, forms grow to 1040 and Usage to 1240, a paragraph stops at a 560-point reading measure, and the Settings window paints one surface from its top edge instead of wearing the system's grey.",
+              "Give the app's own dialogs and menus the overlay language: shortcuts are one run of dim text, dividers stop at the row margin, the palette drops from seven greys to three, and the command palette ends where its results end.",
+              "Read a disabled primary or destructive action as a quiet outlined control instead of the same filled plate at 42% opacity.",
+              "Rest the split group's stacked icons 10 apart instead of 5, so a three-member group keeps every mark readable.",
+              "Serve the Web client as one entry with the Desktop Workbench chrome, a phone inbox that pushes a single Session, the Host's result sentence as a row's second line, folded inactive Projects, and a clearer chat face that names its target.",
+              "Say \"Official relay\" for the build's relay and print an address only for a self-hosted one; the share panel hands the link on through its QR code and copy buttons.",
+              "Refuse a share while remote access is off, and accept a relay registration key so a gated relay enrolls this Host.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Keep a Session switch made while the browser socket is down: the Web client holds the intent, asks for a reconnect and replays it on the roster that follows the next welcome, instead of answering that the switch is unavailable.",
+              "Keep a terminal recoverable after it is narrowed while a full-screen app runs with line wrapping off, by building on Ghostty v1.4.0 through ghostline v1.6.1 and GhosttyKit v1.1.0.",
+              "Give an anonymous public visitor its own `scope-public` instead of the owner's scope, with every request passing one authorization point; visitors keep the rights of a paired device and cannot touch Host settings.",
+              "Show the Host's remote access state after the switch is clicked, by taking every Settings value from the key that rebuilds the page.",
+              "Walk past an interpreter to the agent that started a Session, so a probe script an agent runs can no longer rebind that Session's provider, transcript and icon.",
+              "Keep one language in an AI title and bound it by the prompt: at most 30 latin characters or 16 CJK characters, with a verb in the request's own language.",
+              "Configure a self-hosted GitLab host with `WARREN_GITLAB_HOSTS`; the binary no longer carries a work host name.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0: no method was added or changed, no state schema moves, and this release migrates no state.",
+              "Remote access is end-to-end encrypted - the relay sees only ciphertext, and connect codes and paired-client tokens stay on the Host and in the client's Keychain. Bolthole 0.2.0 raises the per-stream window to 4 MiB with a 64 MiB per-session window, so both ends should run this release.",
+              "The Public Web link only works with the enrolled Server relay, not with serverless remote access.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.34.1",
         dateISO: "2026-10-27",
         date: "October 27, 2026",
@@ -1794,6 +1851,63 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.35.0",
+        dateISO: "2026-11-09",
+        date: "2026 年 11 月 9 日",
+        title: "Warren 可从任意位置访问 Host，并统一整套外观。",
+        summary:
+          "次版本：手机与浏览器可经无状态、端到端加密的 relay 访问 Host，无需账号、端口或证书；分享链接也可在浏览器里打开同一个 Host；一台设备如何访问这台 Mac，集中在一个 Access 页回答；Desktop 统一整套外观：由三种颜色派生的调色板、一套间距网格、一套行结构、一套浮层语言，以及绘制在 Warren 自身表面上的设置窗口。JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "用 `warren remote status|enable|disable|share|rotate` 从任意位置访问 Host：无状态 relay 只看到密文，默认用官方 relay，也可自建，设备授权仍留在 Host 上。分享链接携带十分钟邀请，轮换连接码会吊销所有已远程配对的设备；`remote.status`、`remote.*` 方法与 `status.remote` 报告 relay、其来源与已配对设备数。",
+              "在浏览器里打开同一个 Host：分享链接同时给出 Web 链接，页面经 relay 建立端到端加密会话，把该浏览器配对为独立客户端并记住 Host，连接码与令牌都不经过服务器。",
+              "扫描或粘贴分享链接即可配对手机；iOS 将连接码保存在 Keychain 中，该 Host 显示为一条加密路径加一个 relay 选择器。",
+              "在设置里查看与控制远程访问：是否开启、使用哪个 relay、已配对设备数、开关、十分钟有效的 Create Link 二维码，以及 Rotate Code。",
+              "把 Relay、局域网配对、公开访问与远程访问合并为一个 Access 页，按从任意位置到本网络的顺序排列，原分区链接仍会落到此处。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "派生调色板：主题只给出底色、墨色与凹面三种颜色及状态与身份色相，所有表面与墨色由混合得出，文字层级改为实色台阶，而非同一种墨色的透明度。",
+              "外观统一到一套网格：除 1pt 细线外都用偶数点，圆角相差一级；Desktop 里离开网格的数值会让测试失败。",
+              "行的各部位只定义一次，仅悬停出现的“+”保住自己的槽位，不会重新测量并截断名称；工作树的折叠箭头与分组行共用一列。",
+              "所有浮层读作同一族：菜单、弹出层、提示、悬停卡片与折叠栏共用一种色调与一层高度；右键菜单改为窗内绘制；按键画成按键；所有对话框共用同一页脚，确认标签不会换行，没有正文的确认框也不再为正文预留内边距。",
+              "调整设置密度：打开时停在外观页并显示应用版本；行高提高到 56 点、标签与提示为 16/14；表单加宽到 1040，Usage 到 1240；段落限制在 560 点阅读宽度；设置窗口从顶边绘制一整个表面，不再顶着系统的灰色。",
+              "对话框与菜单沿用浮层语言：快捷键是一段暗色文字，分隔线止于行边距，调色板从七种灰降到三种，命令面板在结果结束时结束，而不是停在滚动上限。",
+              "禁用的主要或危险操作显示为安静的描边控件，而不再是 42% 不透明的同色实心块。",
+              "拆分组的堆叠图标间距从 5 改为 10，三人组的每个标记都能看清。",
+              "Web 客户端统一为一个入口：Desktop Workbench 的侧栏与页头、推送单个会话的手机 Inbox、以 Host 结果句作为第二行、折叠非活动项目，以及更清晰的会话字面并标明目标会话。",
+              "设置与 CLI 表格中把构建自带的 relay 称为“官方 relay”，只有自建 relay 才打印地址；分享面板改由二维码与复制按钮传递链接。",
+              "远程访问关闭时拒绝分享，不再发出一条连不上的链接；接受 relay 注册密钥，使需要注册的 relay 也能登记本 Host。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "浏览器 socket 断开期间切换会话不再丢失：Web 客户端保留意图、请求重连，并在下一次 welcome 后的名册上重放，而不是直接回答会话切换不可用。",
+              "在全屏程序运行且关闭换行时收窄终端后仍可恢复：改用 Ghostty v1.4.0 构建，经 ghostline v1.6.1 与 GhosttyKit v1.1.0。",
+              "匿名公开访客使用自己的 `scope-public`，不再被授予所有者作用域；每个请求都经过统一的授权入口。访客保留与已配对设备相同的权限，但不能修改 Host 设置。",
+              "点击开关后设置页会显示 Host 的远程访问状态：页面所有取值都来自用于重建页面的键，值无法绕过重建进入页面。",
+              "绑定代理时会越过解释器找到启动会话的那个 agent，agent 运行的探测脚本不再把会话的 provider、transcript 与图标改绑。",
+              "AI 标题只使用一种语言并按提示词限制长度：最多 30 个拉丁字符或 16 个中日韩字符，动词使用请求本身的语言。",
+              "自建 GitLab 主机改用 `WARREN_GITLAB_HOSTS` 配置，二进制里不再带有某个工作域名。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0：未新增或改动方法，状态 schema 不变，本版本不迁移任何状态。",
+              "远程访问为端到端加密：relay 只看到密文，连接码与配对令牌留在 Host 与客户端的 Keychain 中。Bolthole 0.2.0 将每流窗口提高到 4 MiB、每会话窗口 64 MiB，两端都应升级到本版本。",
+              "Public Web 链接只在已注册的 Server relay 下可用，不适用于 serverless 远程访问。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.34.1",
         dateISO: "2026-10-27",

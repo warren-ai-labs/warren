@@ -76,10 +76,11 @@ public enum WarrenLayoutMetrics {
     public static let tabBarHeight: CGFloat = 32
     /// The window is a dark backdrop with cards on it: the sidebar, the tab
     /// capsule, and every pane. This is the backdrop's inset from the window
-    /// edge and the gutter between neighbouring cards.
-    public static let windowInset: CGFloat = 8
-    public static let cardGap: CGFloat = 8
-    public static let cardRadius: CGFloat = 12
+    /// edge and the gutter between neighbouring cards, resolved through the
+    /// window grid rather than restated here.
+    public static let windowInset: CGFloat = WarrenWindowGrid.inset
+    public static let cardGap: CGFloat = WarrenWindowGrid.gutter
+    public static let cardRadius: CGFloat = WarrenWindowGrid.cardRadius
     /// The capsule that holds the Tabs, and the one that holds the panels and
     /// "+" buttons, sit inside the 32pt row with a 3pt inner padding.
     public static let tabCapsulePadding: CGFloat = 3
@@ -113,7 +114,15 @@ public enum WarrenLayoutMetrics {
     /// The group's Session icons, stacked at rest with each one tucked behind
     /// the next and spread apart while the pointer lifts them.
     public static let tabGroupIconSize: CGFloat = 16
-    public static let tabGroupIconRestPitch: CGFloat = 5
+    /// How far apart the group's stacked icons sit at rest.
+    ///
+    /// It was 5 for a 16pt mark: each icon showed under a third of itself, and
+    /// with the separating ring the stack read as one smudged tile rather than
+    /// as the Sessions in it — a three-member group lost the third mark
+    /// entirely. 10 leaves most of every mark visible while the stack still
+    /// measures narrower than its members in a row; the lifted pitch of 22
+    /// still separates them completely.
+    public static let tabGroupIconRestPitch: CGFloat = 10
     public static let tabGroupIconLiftedPitch: CGFloat = 22
     /// How far every icon rises once lifted, and how far the one under the
     /// pointer rises and grows on top of that.

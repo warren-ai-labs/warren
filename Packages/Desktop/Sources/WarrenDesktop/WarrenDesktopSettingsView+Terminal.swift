@@ -62,8 +62,8 @@ extension WarrenDesktopSettingsView {
                     }
                     .accessibilityLabel("Preview \(renderedTitle)")
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
 
                 WarrenSettingsRowDivider()
 
@@ -72,8 +72,8 @@ extension WarrenDesktopSettingsView {
                     palette: palette,
                     onInsert: insertPlaceholder
                 )
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
             }
 
             Button("Restore Terminal Defaults") {
@@ -178,7 +178,7 @@ extension WarrenDesktopSettingsView {
                     .accessibilityLabel("Show \(preset.presetBarTitle)")
                     .accessibilityIdentifier("settings.preset-visibility.\(preset.id)")
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 16)
             .frame(minHeight: 48)
             .background(
                 draggedPresetID == preset.id ? palette.selected : Color.clear,
@@ -241,8 +241,8 @@ extension WarrenDesktopSettingsView {
                     onSubmit: { editingPresetID = nil },
                     accessibilityID: "settings.preset-command.\(preset.id)"
                 )
-                .padding(.horizontal, 14)
-                .padding(.bottom, 12)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 14)
             }
         }
         .animation(WarrenMotion.selection(reduceMotion: reduceMotion), value: isEditing)
@@ -494,7 +494,9 @@ extension WarrenDesktopSettingsView {
 
     func aiTitlesSection(palette: WarrenSettingsPalette) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            WarrenSettingsGroup {
+            // The page's first card had no heading, so it read as a stray box
+            // above the Endpoint group rather than as its own section.
+            WarrenSettingsGroup("Automatic titles") {
                 WarrenSettingsToggleRow(
                     title: "Generate Titles Automatically",
                     description: "Codex, Claude Code, OpenCode, and Qoder name their own conversations and Warren keeps those names. This switch adds a title from the LLM below whenever an agent has not named the conversation.",

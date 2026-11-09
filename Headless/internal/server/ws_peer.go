@@ -33,6 +33,10 @@ type wsPeer struct {
 	// ownerAuthenticated is true for the daemon's static Host token. Scoped
 	// pairing clients may operate the Host but cannot mutate Host settings.
 	ownerAuthenticated bool
+	// publicVisitor marks an anonymous peer from a public Relay route. It is
+	// never an owner and has its own access scope; authorizeMethod is where a
+	// narrower policy for it belongs.
+	publicVisitor bool
 	// outbound is the bounded terminal-output lane. Text/control traffic uses
 	// controlOutbound so a burst of binary output cannot delay a response,
 	// heartbeat, or recovery marker.

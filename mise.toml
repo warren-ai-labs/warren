@@ -46,6 +46,10 @@ run = "swift test --package-path Packages/Domain"
 description = "Observe the desktop semantic tree without screenshots or stealing focus"
 run = "bash scripts/observe-ui.sh"
 
+[tasks."ui:shot"]
+description = "Render the production desktop tree to PNGs offscreen, in both appearances"
+run = "bash scripts/ui-shot.sh"
+
 [tasks."accept:ui"]
 description = "Verify semantic UI and typed actions without screenshots or stealing focus"
 run = "bash scripts/observe-ui.sh"
@@ -65,6 +69,10 @@ run = "npm --prefix Web run dev"
 [tasks."web:build"]
 description = "Build the Vite web client into Web/dist"
 run = "bash scripts/prepare-web.sh && npm --prefix Web run build"
+
+[tasks."web:deploy"]
+description = "Deploy the hosted Web client to app.warrenai.xyz"
+run = "bash scripts/deploy-web-app.sh"
 
 [tasks."brand:assets"]
 description = "Generate responsive macOS and Web brand assets"

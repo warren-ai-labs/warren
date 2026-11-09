@@ -1317,10 +1317,10 @@ const shareIcon = (
 /// It is the first thing a new device sees, so it explains where a link comes
 /// from rather than only asking for one. `expired` is the returning case: this
 /// browser had a link and the Host no longer accepts it.
-export function WelcomeScreen({ onConnect, expired = false, installHint = false }) {
+export function WelcomeScreen({ onConnect, expired = false, installHint = false, remote = false, initialError = "" }) {
   const [inputValue, setInputValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialError);
 
   const handleSubmit = async event => {
     event.preventDefault();
@@ -1345,17 +1345,27 @@ export function WelcomeScreen({ onConnect, expired = false, installHint = false 
           {expired ? "This link no longer works" : "Connect to your Warren Host"}
         </h2>
         <p className="welcome-lead">
-          {expired
-            ? "The Host stopped accepting this browser's link. Copy a fresh one from Warren (Web › Copy Secure Web URL) and paste it below."
-            : "Warren runs on your own Mac or server. Open a Web link from it, and this browser connects straight to that Host."}
+          {remote
+            ? (expired
+              ? "The Host stopped accepting this browser. Share a new link from Warren and paste it below."
+              : "Warren runs on your own Mac. A share link connects this browser to it, end-to-end encrypted through the relay.")
+            : (expired
+              ? "The Host stopped accepting this browser's link. Copy a fresh one from Warren (Web › Copy Secure Web URL) and paste it below."
+              : "Warren runs on your own Mac or server. Open a Web link from it, and this browser connects straight to that Host.")}
         </p>
-        {!expired && (
+        {!expired && (remote ? (
+          <ol className="welcome-steps">
+            <li>Open Warren on your Mac.</li>
+            <li>In <strong>Settings › Access › Serverless relay</strong>, choose <strong>Share</strong>.</li>
+            <li>Open the Web link here, or paste it below.</li>
+          </ol>
+        ) : (
           <ol className="welcome-steps">
             <li>Open Warren on your Mac.</li>
             <li>In the menu bar, choose <strong>Web › Copy Secure Web URL</strong>.</li>
             <li>Open the link here, or paste it below.</li>
           </ol>
-        )}
+        ))}
         <form className="welcome-form" onSubmit={handleSubmit}>
           <input
             type="text"

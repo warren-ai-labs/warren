@@ -404,9 +404,29 @@ Five invariants follow:
 
 Colors in each client resolve through that client's semantic token tier. A component never hardcodes a literal color; a missing token should surface as a visible defect rather than silently resolve to a stale fallback.
 
+### 12.1 A theme authors three colors, the ladder is derived
+
+`WarrenPalette` holds what a theme author actually chooses: the card ground (`background`), the ink (`foreground`), the recess behind the cards (`recess`), and the status and identity hues. Every other neutral value is a mix of those three, resolved in one place (`WarrenPalette` and `WarrenColorTokens.make(from:)`). Surfaces step away from the ground by a stated fraction, and the ink ladder — `ink2`, `ink3`, `ink4`, the sidebar's five tiers — descends by construction rather than by five hand-measured literals.
+
+The two appearances take different fractions where they must, and say why in code: paper steps its panels toward the warm recess because a panel that lifts off black has to get lighter while a panel on paper has to get warmer, and paper starts its sidebar ladder closer to its ink because the same fraction that clears AA on a near-black ground lands under it on white.
+
+Text tiers are solid steps, not fades of one base. A fade names a fraction of the ink without naming the ground it lands on, so one fraction read differently on the sidebar, a pane, and a popover — which is how the quietest tier ended up below the legibility floor on one appearance and correct on the other. Alpha is reserved for the two cases where the ground is genuinely unknown: washes that land on rows and panes (`fillHover`, `fillSelected`, `tertiaryWash`) and glass's translucent surfaces.
+
+`WarrenPaletteTests` asserts the order the literals could not: the ink ladder descends, a popover sits above a panel, card edges stay visible but quiet, and paper is never quieter than Ember at the same tier.
+
+### 12.2 The window's spacing is a grid, and the grid is enforced
+
+`WarrenWindowGrid` states the rule the chrome measurements share: they are even points — `unit` is 2 — with a 1pt hairline as the only exception. `windowInset`, `gutter` and `cardRadius` resolve from it, and the inset and the gutter are deliberately the same value so the margin around a card and the space between two cards read as one grid.
+
+A rule in a comment is a rule the next view does not read, so `WarrenDesktopMetricGridTests` scans the Desktop sources for `.padding(_:)` and `spacing:` literals and fails on an off-grid value, and asserts the published chrome metrics satisfy the same rule. Corner radii are out of scope there: a curve follows the radius scale, not the spacing steps.
+
+Rows are built from `WarrenDesktopRowAnatomy`: one horizontal padding, one icon column, one label inset, one trailing rail of fixed-width slots. A trailing control keeps its slot when it is hidden, so a hover-only action cannot re-measure — and re-truncate — the label beside it.
+
 ## 13. Non-Intrusive Observability and Acceptance
 
 Acceptance tests must not take screenshots, move the mouse, or steal keyboard focus.
+
+Design iteration is a separate tool, not an acceptance layer. `UIShot` (`mise run ui:shot`) mounts the production tree in an offscreen hosting view and writes PNGs for both appearances; the window is never shown, key, or ordered in front, so it does not take focus either. It exists so a spacing or color change can be looked at without building, signing, and installing the app.
 
 ### 13.1 Three Observation Layers
 

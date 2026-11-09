@@ -443,7 +443,7 @@ struct WarrenDesktopTabBar: View {
                 onSelectTab(tab.id)
             }
         }
-        return HStack(spacing: 3) {
+        return HStack(spacing: 2) {
             Image(systemName: "chevron.down")
                 .font(.system(size: 9, weight: .semibold))
             Text("\(tabs.count)")
@@ -451,7 +451,7 @@ struct WarrenDesktopTabBar: View {
                 .monospacedDigit()
         }
         .foregroundStyle(tokens.mutedForeground)
-        .padding(.horizontal, 5)
+        .padding(.horizontal, 4)
         .frame(height: 20)
         .contentShape(.rect)
         .warrenMenuButton(actions, title: "All tabs")
@@ -1110,7 +1110,7 @@ struct WarrenDesktopSoloPaneIdentity: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             Group {
                 if let preset {
                     WarrenDesktopSessionKindBadge(kind: preset.request.kind, size: 16)
@@ -1184,7 +1184,7 @@ struct WarrenDesktopSoloPaneIdentity: View {
             .allowsHitTesting(showsControls)
             .accessibilityHidden(!showsControls)
         }
-        .padding(.leading, 5)
+        .padding(.leading, 4)
         .padding(.trailing, 4)
         .frame(height: WarrenLayoutMetrics.tabPillHeight)
         .background(
@@ -1224,7 +1224,7 @@ struct WarrenDesktopSoloPaneIdentity: View {
     private func titleArea(tokens: WarrenColorTokens) -> some View {
         WarrenDesktopClampedWidth(maxWidth: WarrenLayoutMetrics.soloPillTitleMaxWidth) {
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     titleText(tokens: tokens)
                     if identity.isLead {
                         WarrenDesktopLeadMark(tokens: tokens, height: 14)
@@ -1232,7 +1232,7 @@ struct WarrenDesktopSoloPaneIdentity: View {
                     }
                     runningCommandText(tokens: tokens)
                 }
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     titleText(tokens: tokens)
                     if identity.isLead {
                         WarrenDesktopLeadMark(tokens: tokens, height: 14)

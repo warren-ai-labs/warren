@@ -72,6 +72,9 @@ struct WarrenDesktopCommandPalette: View {
     /// Set when the pointer, not the keyboard, moved the selection, so the
     /// list does not scroll a row the pointer is already on.
     @State private var selectionFollowsPointer = false
+    /// The measured height of the result rows, so the panel can end where they
+    /// end instead of at the scroll cap.
+    @State private var resultsContentHeight: CGFloat = 0
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
@@ -142,6 +145,13 @@ struct WarrenDesktopCommandPalette: View {
         // The dialog family's surface and radius: the palette is the one
         // dialog without a title block, not a menu.
         .warrenPresentationSurface(role: .commandSurface, cornerRadius: WarrenRadius.large)
+        .onPreferenceChange(PaletteResultsHeightKey.self) { height in
+            // One write per measurement, and only when it moved: the panel's
+            // own height depends on this value, so a write on every layout
+            // pass would re-enter layout for as long as the palette was open.
+            guard abs(height - resultsContentHeight) > 0.5 else { return }
+            resultsContentHeight = height
+        }
         .onExitCommand(perform: onDismiss)
         .onChange(of: projection) { newProjection in
             rebuildIndex(for: newProjection)
@@ -187,6 +197,13 @@ struct WarrenDesktopCommandPalette: View {
 
     // MARK: - Layout
 
+    private struct PaletteResultsHeightKey: PreferenceKey {
+        static let defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            value = max(value, nextValue())
+        }
+    }
+
     private func divider(palette: WarrenDesktopMenuPalette) -> some View {
         Rectangle()
             .fill(palette.divider)
@@ -209,8 +226,25 @@ struct WarrenDesktopCommandPalette: View {
                     }
                 }
                 .padding(WarrenLayoutMetrics.commandPaletteResultsPadding)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: PaletteResultsHeightKey.self,
+                            value: proxy.size.height
+                        )
+                    }
+                }
             }
-            .frame(maxHeight: min(resultsMaxHeight, WarrenLayoutMetrics.commandPaletteResultsMaxHeight))
+            // The panel takes its results' height, up to the cap, rather than
+            // the cap. A ScrollView is greedy, so asking it for `maxHeight`
+            // gave a five-row result list the same 480pt floor as a hundred
+            // rows and left most of the panel empty.
+            .frame(
+                height: min(
+                    resultsContentHeight,
+                    min(resultsMaxHeight, WarrenLayoutMetrics.commandPaletteResultsMaxHeight)
+                )
+            )
             .onChange(of: selectedIndex) { newIndex in
                 guard !selectionFollowsPointer else {
                     selectionFollowsPointer = false
@@ -277,7 +311,11 @@ struct WarrenDesktopCommandPalette: View {
 
     private func keyHint(_ caps: [String], _ label: String) -> some View {
         HStack(spacing: WarrenSpacing.xs) {
-            WarrenDesktopMenuKeycaps(caps: caps)
+            // The same chip a dialog puts beside its title, so a key looks like
+            // a key wherever the app names one outside a menu.
+            ForEach(caps, id: \.self) { cap in
+                WarrenKeycap(cap, size: .regular)
+            }
             Text(label)
         }
         .accessibilityElement(children: .ignore)

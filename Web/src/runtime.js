@@ -1,3 +1,12 @@
+import {
+  boltholeWebSocketClass,
+  createRemoteClient,
+  pairRemote,
+  parseRemoteLink,
+  readRemoteProfile,
+  writeRemoteProfile,
+} from "./remote.js";
+
 const parameterMeta = document.querySelector('meta[name="warren-injected-params"]');
 const relayHostMeta = document.querySelector('meta[name="warren-relay-host-id"]');
 const relayInviteMeta = document.querySelector('meta[name="warren-relay-invite-id"]');
@@ -68,9 +77,39 @@ export function persistDaemonToken(token) {
   }
 }
 
+// Serverless remote access: a share link in the fragment, or the Host this
+// browser paired with earlier. A profile only exists on an origin that once
+// opened such a link, so a page served by a Host never enters this mode.
+const remoteLink = usesControlPlane ? null : parseRemoteLink(location.href);
+const remoteProfile = (() => {
+  if (usesControlPlane) return null;
+  const stored = readRemoteProfile();
+  if (!remoteLink) return stored;
+  const sameHost = stored && stored.hostID === remoteLink.hostID && stored.connectCode === remoteLink.connectCode;
+  return {
+    relayURL: remoteLink.relayURL,
+    connectCode: remoteLink.connectCode,
+    hostID: remoteLink.hostID,
+    hostName: remoteLink.hostName || stored?.hostName || "",
+    token: sameHost ? stored.token : "",
+  };
+})();
+const usesRemote = Boolean(remoteProfile);
+// The hosted page that remote access links open. It is never served by a
+// Host, so its Welcome screen explains remote links instead of the menu bar.
+export const remoteAppHostname = "app.warrenai.xyz";
+let remoteClient = null;
+const sharedRemoteClient = () => {
+  remoteClient ??= createRemoteClient(remoteProfile);
+  return remoteClient;
+};
+const remoteState = { error: "" };
+
 const suppliedToken = authFragment?.get("t") || "";
 const memoryToken = { value: "" };
-if (!usesControlPlane) {
+if (usesRemote) {
+  memoryToken.value = remoteProfile.token;
+} else if (!usesControlPlane) {
   if (suppliedToken) {
     memoryToken.value = suppliedToken;
     persistDaemonToken(suppliedToken);
@@ -133,7 +172,34 @@ async function exchangeInvite(inviteID) {
   return memoryToken.value;
 }
 
-export const tokenReady = usesControlPlane
+function remoteClientName() {
+  const agent = globalThis.navigator?.userAgent || "";
+  const platform = /iPhone|iPad/.test(agent) ? "iPhone" : /Android/.test(agent) ? "Android" : /Mac/.test(agent) ? "Mac" : "browser";
+  return `Warren Web (${platform})`;
+}
+
+// Exchanges the link's invite once. A browser that already holds a token for
+// this Host keeps it when the invite has expired, so reopening an old link
+// still connects.
+async function pairRemoteHost() {
+  if (!remoteLink?.invite) return memoryToken.value;
+  try {
+    const token = await pairRemote(sharedRemoteClient(), {
+      hostID: remoteProfile.hostID,
+      invite: remoteLink.invite,
+      clientID: relayClientID,
+      clientName: remoteClientName(),
+    });
+    memoryToken.value = token;
+    remoteProfile.token = token;
+  } catch (error) {
+    if (!memoryToken.value) remoteState.error = error?.message || "Warren could not pair with this Host.";
+  }
+  writeRemoteProfile(remoteProfile);
+  return memoryToken.value;
+}
+
+export const tokenReady = usesRemote ? pairRemoteHost() : usesControlPlane
   ? (hasRelayInviteID
     ? exchangeInvite(relayInviteID).catch(() => {
         memoryToken.value = "";
@@ -183,9 +249,27 @@ export function parseAuthInput(input) {
   return { token: trimmed, url: null };
 }
 
+// Reopens this page on a pasted remote access link in either shape, so the
+// link is handled exactly as if it had been opened directly.
+export function openRemoteLink(input) {
+  const link = parseRemoteLink(input);
+  if (!link) return false;
+  const fragment = new URLSearchParams({ r: link.relayURL, k: link.connectCode, host: link.hostID });
+  if (link.invite) fragment.set("invite", link.invite);
+  if (link.hostName) fragment.set("name", link.hostName);
+  history.replaceState(history.state, document.title, `${location.pathname}${location.search}#${fragment}`);
+  location.reload();
+  return true;
+}
+
 export async function authenticateToken(tokenOrTicket) {
   const token = typeof tokenOrTicket === "string" ? tokenOrTicket.trim() : "";
   if (!token) throw new Error("No token provided");
+  if (usesRemote) {
+    // A remote page can only be given a new share link; a bare token has no
+    // encrypted session to ride on.
+    throw new Error("Paste a remote access link from the Host.");
+  }
   if (usesControlPlane) {
     // A Host-scoped page holds no invite, so the only thing a paste can add is
     // an invite link or id for this Relay.
@@ -198,7 +282,7 @@ export async function authenticateToken(tokenOrTicket) {
   return token;
 }
 
-if (typeof history !== "undefined" && suppliedToken) {
+if (typeof history !== "undefined" && (suppliedToken || remoteLink)) {
   const clean = `${location.pathname}${location.search}`;
   history.replaceState(history.state, document.title, clean);
 }
@@ -207,11 +291,21 @@ export const runtime = {
   get relayHostID() { return resolvedRelayHostID; },
   relayInviteID: hasRelayInviteID ? relayInviteID : "",
   usesControlPlane,
+  usesRemote,
+  remoteApp: usesRemote || (!usesControlPlane && globalThis.location?.hostname === remoteAppHostname),
+  get remoteHostName() { return remoteProfile?.hostName || ""; },
+  get remoteError() { return remoteState.error; },
+  // WarrenConnection's socket class: Bolthole streams on a remote page, the
+  // browser's WebSocket otherwise.
+  WebSocketClass: usesRemote ? boltholeWebSocketClass(sharedRemoteClient) : undefined,
   get token() { return memoryToken.value; },
   set token(value) {
     const normalized = value || "";
     memoryToken.value = normalized;
-    if (!usesControlPlane) {
+    if (usesRemote) {
+      remoteProfile.token = normalized;
+      writeRemoteProfile(remoteProfile);
+    } else if (!usesControlPlane) {
       persistDaemonToken(normalized);
     }
   },
@@ -220,7 +314,10 @@ export const runtime = {
   refresh: refreshRelayToken,
   clearToken() {
     memoryToken.value = "";
-    if (!usesControlPlane) {
+    if (usesRemote) {
+      remoteProfile.token = "";
+      writeRemoteProfile(remoteProfile);
+    } else if (!usesControlPlane) {
       persistDaemonToken("");
     }
   },
@@ -228,6 +325,9 @@ export const runtime = {
 };
 
 export function webSocketURL() {
+  // A remote page has no socket URL of its own; this identifies the Host for
+  // per-endpoint storage keys.
+  if (usesRemote) return `bolthole://${encodeURIComponent(remoteProfile.hostID)}/v1/ws`;
   const hostParam = params.get("host");
   const protocol = usesControlPlane
     ? (location.protocol === "https:" ? "wss:" : "ws:")

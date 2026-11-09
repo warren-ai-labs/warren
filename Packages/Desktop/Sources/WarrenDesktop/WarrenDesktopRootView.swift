@@ -96,6 +96,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     private var remoteAccess: WarrenDesktopRemoteAccess = .init()
     private var onLoadRemoteAccess: (() -> Void)?
     private var onSetRemoteEnabled: ((Bool) -> Void)?
+    private var onSetRemoteRelay: ((String) -> Void)?
     private var onRemoteShare: ((@escaping (Result<WarrenDesktopRemoteShare, Error>) -> Void) -> Void)?
     private var onRotateRemote: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     let onWebOpenURL: (URL) -> Void
@@ -378,6 +379,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         remoteAccess: WarrenDesktopRemoteAccess = .init(),
         onLoadRemoteAccess: (() -> Void)? = nil,
         onSetRemoteEnabled: ((Bool) -> Void)? = nil,
+        onSetRemoteRelay: ((String) -> Void)? = nil,
         onRemoteShare: ((@escaping (Result<WarrenDesktopRemoteShare, Error>) -> Void) -> Void)? = nil,
         onRotateRemote: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         onWebOpenURL: @escaping (URL) -> Void = { _ in },
@@ -475,6 +477,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.remoteAccess = remoteAccess
         self.onLoadRemoteAccess = onLoadRemoteAccess
         self.onSetRemoteEnabled = onSetRemoteEnabled
+        self.onSetRemoteRelay = onSetRemoteRelay
         self.onRemoteShare = onRemoteShare
         self.onRotateRemote = onRotateRemote
         self.onWebOpenURL = onWebOpenURL
@@ -2074,6 +2077,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// Every value `settingsOverlay` hands the page. Its closures all reach
     /// the app model or this view's state through references, so the page
     /// keeps working when it is not rebuilt; only these values can go stale.
+    /// `settingsOverlay` reads its values from here and nowhere else, so a
+    /// value cannot reach the page without also rebuilding it when it changes.
     var settingsInputs: WarrenDesktopSettingsInputs {
         WarrenDesktopSettingsInputs(
             hostName: projection.host.name,
@@ -2081,12 +2086,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             lanPairing: lanPairing,
             relaySettings: relaySettings,
             relayDevices: relayDevices,
+            remoteAccess: remoteAccess,
             defaultRuntime: defaultRuntime,
             autoOpenShell: autoOpenShell,
             autoStartAI: autoStartAI,
             openAIBaseURL: openAIBaseURL,
             openAIModel: openAIModel,
             openAITitleEnabled: openAITitleEnabled,
+            // Projects only: the page never reads a group's Workspaces,
+            // and their branch and status churn is not a Settings change.
             projects: projection.groups.map(\.project),
             usageStats: usageStats,
             usageState: usageState,
@@ -2099,53 +2107,53 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     var settingsOverlay: AnyView {
-        AnyView(
+        let inputs = settingsInputs
+        return AnyView(
             WarrenDesktopSettingsView(
                 onBack: closeSettings,
-                hostName: projection.host.name,
-                webStatus: webStatus,
+                hostName: inputs.hostName,
+                webStatus: inputs.webStatus,
                 onWebTest: onWebTest,
                 onWebStop: onWebStop,
                 onWebReset: onWebReset,
                 onRelayEnroll: onRelayEnroll,
                 onRelayPairing: onRelayPairing,
-                lanPairing: lanPairing,
+                lanPairing: inputs.lanPairing,
                 onLANPairing: onLANPairing,
-                relaySettings: relaySettings,
+                relaySettings: inputs.relaySettings,
                 onSetRelayEnabled: onSetRelayEnabled,
                 onResetRelay: onResetRelay,
-                relayDevices: relayDevices,
+                relayDevices: inputs.relayDevices,
                 onLoadRelayDevices: onLoadRelayDevices,
                 onRevokeRelayDevice: onRevokeRelayDevice,
-                remoteAccess: remoteAccess,
+                remoteAccess: inputs.remoteAccess,
                 onLoadRemoteAccess: onLoadRemoteAccess,
                 onSetRemoteEnabled: onSetRemoteEnabled,
+                onSetRemoteRelay: onSetRemoteRelay,
                 onRemoteShare: onRemoteShare,
                 onRotateRemote: onRotateRemote,
-                defaultRuntime: defaultRuntime,
+                defaultRuntime: inputs.defaultRuntime,
                 onSetRuntime: onSetRuntime,
-                autoOpenShell: autoOpenShell,
+                autoOpenShell: inputs.autoOpenShell,
                 onSetAutoOpenShell: onSetAutoOpenShell,
-                autoStartAI: autoStartAI,
+                autoStartAI: inputs.autoStartAI,
                 onSetAutoStartAI: onSetAutoStartAI,
-                openAIBaseURL: openAIBaseURL,
-                openAIModel: openAIModel,
-                openAITitleEnabled: openAITitleEnabled,
+                openAIBaseURL: inputs.openAIBaseURL,
+                openAIModel: inputs.openAIModel,
+                openAITitleEnabled: inputs.openAITitleEnabled,
                 onSetOpenAISetting: onSetOpenAISetting,
                 onTestOpenAI: onTestOpenAI,
-                // Projects only: the page never reads a group's Workspaces,
-                // and their branch and status churn is not a Settings change.
-                projects: projection.groups.map(\.project),
+                projects: inputs.projects,
                 onSetProjectSetupScript: onSetProjectSetupScript,
-                usageStats: usageStats,
-                usageState: usageState,
+                usageStats: inputs.usageStats,
+                usageState: inputs.usageState,
                 onLoadUsage: onLoadUsage,
                 onRebuildUsage: onRebuildUsage,
-                initialSettingsSection: settingsDeepLinkSection,
-                publicAccessPrefill: settingsPublicAccessPrefill,
-                relayPrefill: settingsRelayPrefill,
-                hostOptions: endpointOptions,
-                selectedHostID: selectedEndpointID,
+                initialSettingsSection: inputs.initialSettingsSection,
+                publicAccessPrefill: inputs.publicAccessPrefill,
+                relayPrefill: inputs.relayPrefill,
+                hostOptions: inputs.hostOptions,
+                selectedHostID: inputs.selectedHostID,
                 onSelectHost: onSelectEndpoint
             )
             .transition(.opacity)
@@ -2790,6 +2798,7 @@ struct WarrenDesktopSettingsInputs: Equatable {
     var lanPairing = WarrenDesktopLANPairing()
     var relaySettings = WarrenDesktopRelaySettings()
     var relayDevices: [WarrenDesktopRelayDevice] = []
+    var remoteAccess = WarrenDesktopRemoteAccess()
     var defaultRuntime: String?
     var autoOpenShell = false
     var autoStartAI = false

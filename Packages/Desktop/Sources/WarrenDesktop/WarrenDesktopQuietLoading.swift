@@ -130,7 +130,7 @@ struct WarrenDesktopUpdateHUD: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let surface = WarrenColorTokens.resolved(for: colorScheme).popoverSurface
-        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
         WarrenDesktopDelayedReveal {
             ZStack {
                 // A third of the modal scrim: enough to say the window is

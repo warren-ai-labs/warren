@@ -84,16 +84,22 @@ extension WarrenDesktopSettingsSection {
         case .lanPairing: "A temporary PIN window for a trusted iPhone."
         case .publicAccess: "Share this Host's Web UI at a public address."
         case .remoteAccess: "Reach this Host from anywhere without running a Relay."
-        case .access: "Every way another device reaches this Host, in one place."
+        case .access: "How your phone or a browser reaches this Mac."
         }
     }
 
-    /// How wide the page's column may grow before it stops and centres.
+    /// How wide the page's column may grow before it stops.
+    ///
+    /// Superset's settings pages are `max-w-5xl` (1024) inside a centred
+    /// column, with 16 points around every row. At 640 the cards stopped well
+    /// short of the window and the right side of the page read as empty; at
+    /// 1040 the card's trailing edge sits where the controls are, which is what
+    /// makes a row read as one line rather than as a label with a stray field.
+    /// Usage is charts and keeps more room.
     var contentMaxWidth: CGFloat {
         switch self {
-        case .usage: 1160
-        // A row reads label to control in one glance at this width.
-        default: 640
+        case .usage: 1240
+        default: 1040
         }
     }
 
@@ -176,6 +182,8 @@ struct WarrenDesktopSettingsView: View {
     var remoteAccess: WarrenDesktopRemoteAccess = .init()
     var onLoadRemoteAccess: (() -> Void)?
     var onSetRemoteEnabled: ((Bool) -> Void)?
+    /// Switches the serverless relay: "default" for the official one, or a URL.
+    var onSetRemoteRelay: ((String) -> Void)?
     var onRemoteShare: ((@escaping (Result<WarrenDesktopRemoteShare, Error>) -> Void) -> Void)?
     var onRotateRemote: ((@escaping (Result<Void, Error>) -> Void) -> Void)?
     let defaultRuntime: String?
@@ -284,6 +292,10 @@ struct WarrenDesktopSettingsView: View {
     @State var remoteRotateBusy = false
     @State var remoteRotateError: String?
     @State var remoteEnabledBusy = false
+    /// The relay URL typed under "My own", before it is applied.
+    @State var remoteCustomRelayURL = ""
+    /// Whether "My own" is chosen while the Host still reports the official relay.
+    @State var remoteRelayChoosingOwn = false
     /// The one blocking confirmation the page is showing, if any.
     @State var confirmation: SettingsConfirmation?
     /// Why the last Revoke of a Relay device failed, by device.
@@ -371,6 +383,7 @@ struct WarrenDesktopSettingsView: View {
         remoteAccess: WarrenDesktopRemoteAccess = .init(),
         onLoadRemoteAccess: (() -> Void)? = nil,
         onSetRemoteEnabled: ((Bool) -> Void)? = nil,
+        onSetRemoteRelay: ((String) -> Void)? = nil,
         onRemoteShare: ((@escaping (Result<WarrenDesktopRemoteShare, Error>) -> Void) -> Void)? = nil,
         onRotateRemote: ((@escaping (Result<Void, Error>) -> Void) -> Void)? = nil,
         defaultRuntime: String?,
@@ -417,6 +430,7 @@ struct WarrenDesktopSettingsView: View {
         self.remoteAccess = remoteAccess
         self.onLoadRemoteAccess = onLoadRemoteAccess
         self.onSetRemoteEnabled = onSetRemoteEnabled
+        self.onSetRemoteRelay = onSetRemoteRelay
         self.onRemoteShare = onRemoteShare
         self.onRotateRemote = onRotateRemote
         self.defaultRuntime = defaultRuntime
@@ -475,7 +489,13 @@ struct WarrenDesktopSettingsView: View {
             detailPanel(palette: palette)
         }
         .padding(8)
-        .background(palette.windowBackdrop)
+        // The window's transparent titlebar already reserves the traffic
+        // lights' row as the hosting view's top safe area, so the page must not
+        // add a gutter of its own: doing both put the first card 53 points
+        // down, which read as a wide empty band above the navigation.
+        // The backdrop paints under the transparent titlebar; the content keeps
+        // its inset, so the surface is seamless and the lights have room.
+        .background { palette.windowBackdrop.ignoresSafeArea() }
         .overlay { setupScriptDialogLayer }
         // Dialogs hang from the page's root, not from the scrolled content
         // that asked for them: a confirmation opened from the foot of a long
@@ -497,20 +517,23 @@ struct WarrenDesktopSettingsView: View {
 
     func detailPanel(palette: WarrenSettingsPalette) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            // Superset's settings pages leave 32 between the page header and
+            // the first section, then 24 between sections; 24 everywhere made
+            // the title look like one more section heading.
+            VStack(alignment: .leading, spacing: 32) {
                 pageHeader(for: selectedSection, palette: palette)
                 pageContent(for: selectedSection, palette: palette)
             }
-            // The column stops at the page's own reading width and then stays
-            // where it started: next to the navigation. Centring it put 246 pt
-            // of empty card to the left of the title on a wide window, so the
-            // page began in the middle of the screen and the eye had to find the
-            // form every time the window moved. Usage is charts and figures and
-            // keeps growing; everything else reads label-to-control in one look.
+            // The column stops at the page's own width, then centres in what is
+            // left. It used to be left-aligned, because a 640-point column
+            // centred in a wide window pushed the title into the middle of the
+            // screen with a dead gutter before it. At 1040 the column nearly
+            // fills the panel, so centring only bites on a very wide window —
+            // and there it is what keeps one gutter, not two.
             .frame(maxWidth: selectedSection.contentMaxWidth, alignment: .leading)
             .padding(.horizontal, 28)
-            .padding(.vertical, 22)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(.vertical, 24)
+            .frame(maxWidth: .infinity, alignment: .center)
             .id(selectedSection)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -539,12 +562,12 @@ struct WarrenDesktopSettingsView: View {
 
             headerAccessory(for: section, palette: palette)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
     }
 
     @ViewBuilder
     func scopeRow(for section: SettingsSection, palette: WarrenSettingsPalette) -> some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             if section.scope == .thisMac {
                 Text("This Mac")
                     .font(.system(size: 12))
@@ -741,7 +764,7 @@ struct AppIconChoice: View {
                     }
                 }
                 .frame(width: 64, height: 64)
-                .padding(3)
+                .padding(2)
                 .overlay {
                     if isSelected {
                         // The same ring a chosen appearance card carries.

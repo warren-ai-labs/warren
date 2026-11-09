@@ -150,7 +150,7 @@ struct WarrenDesktopPresetBar: View {
     @ViewBuilder
     private func scopeAccessory(palette: WarrenDesktopMenuPalette) -> some View {
         if isBusy && pendingPresetID == nil {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 WarrenLoadingIndicator(size: 11, accessibilityLabel: "Starting session")
                 Text("Starting…")
             }

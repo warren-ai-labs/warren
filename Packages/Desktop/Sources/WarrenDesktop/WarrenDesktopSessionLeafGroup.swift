@@ -93,7 +93,13 @@ struct WarrenDesktopLeafDisclosure {
     /// More dots than this stop reading as individual Sessions.
     static let maximumDots = WarrenDesktopSidebarMetrics.maximumFoldDots
     static let dotSize: CGFloat = WarrenDesktopSidebarMetrics.foldDotSize
-    static let chevronWidth: CGFloat = WarrenDesktopSidebarMetrics.chevronSize
+    /// The fold chevron's slot.
+    ///
+    /// The same width a group row reserves, so a worktree's chevron and its
+    /// project's chevron centre on one column instead of two: the two used to
+    /// be 14 and 18 wide, which put the leaf's mark two points off the rail the
+    /// group's mark sits on.
+    static let chevronWidth: CGFloat = WarrenDesktopRowAnatomy.Slot.control
 
     /// The marks a folded row draws, capped at `maximumDots`. An idle or
     /// exited Session draws nothing.

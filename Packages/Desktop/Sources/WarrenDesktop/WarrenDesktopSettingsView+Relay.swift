@@ -11,7 +11,9 @@ extension WarrenDesktopSettingsView {
 
     func relaySection(palette: WarrenSettingsPalette) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            WarrenSettingsGroup("Connection") {
+            // The page already has a "Connection" group under the serverless
+            // relay; two identical headings on one page name nothing.
+            WarrenSettingsGroup("Relay connection") {
                 HStack(spacing: 12) {
                     WarrenSettingsStatusDot(
                         tone: relaySettings.isEnrolled
@@ -49,8 +51,8 @@ extension WarrenDesktopSettingsView {
                         .accessibilityIdentifier("settings.relay.switch")
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
                 .frame(minHeight: 48)
 
                 WarrenSettingsRowDivider()
@@ -92,8 +94,8 @@ extension WarrenDesktopSettingsView {
                     if let relayInviteError, !relayInviteError.isEmpty {
                         WarrenSettingsRowDivider()
                         WarrenSettingsStatusLine(tone: .failed, text: relayInviteError, isError: true)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 14)
                     }
                 }
 
@@ -189,8 +191,8 @@ extension WarrenDesktopSettingsView {
                     WarrenSettingsStatusLine(tone: .failed, text: relayResetError, isError: true)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
         }
     }
 
@@ -265,8 +267,8 @@ extension WarrenDesktopSettingsView {
                     )
                     if let error = relayRevokeErrors[device.id] {
                         WarrenSettingsStatusLine(tone: .failed, text: error, isError: true)
-                            .padding(.horizontal, 14)
-                            .padding(.bottom, 10)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 8)
                     }
                 }
             }
@@ -330,8 +332,8 @@ extension WarrenDesktopSettingsView {
                 if let lanPairingError, !lanPairingError.isEmpty {
                     WarrenSettingsRowDivider()
                     WarrenSettingsStatusLine(tone: .failed, text: lanPairingError, isError: true)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
                 }
             }
         }
@@ -427,8 +429,8 @@ extension WarrenDesktopSettingsView {
             .accessibilityLabel("Public Access")
             .accessibilityIdentifier("settings.public-access.switch")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
         .frame(minHeight: 48)
     }
 

@@ -52,7 +52,7 @@ extension WarrenDesktopSettingsView {
                         .accessibilityIdentifier("settings.appearance.app-icon.\(colorway.rawValue)")
                     }
                 }
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 14)
 
@@ -60,7 +60,7 @@ extension WarrenDesktopSettingsView {
                     .font(.system(size: 11.5))
                     .foregroundStyle(palette.meta)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 16)
                     .padding(.bottom, 14)
             }
 

@@ -202,9 +202,9 @@ struct WarrenDesktopApprovalTrayPill: View {
         let hue = (entries.map(\.mark).max() ?? .approvalNeeded).color(tokens)
         return WarrenDesktopChromeCapsule {
             Button(action: toggle) {
-                HStack(spacing: 7) {
+                HStack(spacing: 8) {
                     faces(entries, tokens: tokens)
-                    HStack(spacing: 3) {
+                    HStack(spacing: 2) {
                         Text("\(count)")
                             .monospacedDigit()
                             .warrenNumericTransition(value: count)
@@ -217,7 +217,7 @@ struct WarrenDesktopApprovalTrayPill: View {
                         .fill(hue)
                         .frame(width: 6, height: 6)
                 }
-                .padding(.leading, 7)
+                .padding(.leading, 8)
                 .padding(.trailing, 10)
                 .frame(height: WarrenLayoutMetrics.tabPillHeight)
                 .contentShape(.rect)
@@ -262,7 +262,7 @@ struct WarrenDesktopApprovalTrayPill: View {
                     .padding(1)
                     .background(
                         tokens.workbenchCardFill,
-                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        in: RoundedRectangle(cornerRadius: 4, style: .continuous)
                     )
             }
         }
@@ -399,7 +399,7 @@ struct WarrenDesktopApprovalTrayPanel: View {
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 8)
                     .background(palette.tileFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)

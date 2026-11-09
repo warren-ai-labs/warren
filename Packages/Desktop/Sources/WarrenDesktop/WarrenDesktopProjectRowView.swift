@@ -184,29 +184,34 @@ struct WarrenDesktopProjectRow: View {
                 action: { if !isInteractionDisabled { onToggleExpansion() } }
             )
 
-            // The hidden "+" gives back its gap as well as its width, the
-            // same as the task row, so a resting row spends that room on the
-            // name.
-            HStack(spacing: showsAddButton ? WarrenDesktopSidebarMetrics.groupIconSpacing : 0) {
+            if !isExpanded {
+                WarrenDesktopFoldSummary(marks: foldMarks, count: foldMarks.count)
+            }
+
+            // The row's controls end in one rail of fixed slots. The "+" keeps
+            // its slot when it is not drawn: giving the width back to the name
+            // made a long project name re-truncate the moment the pointer
+            // arrived, which is the row moving under the hand that selected it.
+            WarrenDesktopRowRail {
                 Button(action: onAddWorkspace) {
                     Image(systemName: "plus")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(tokens.treeQuietText)
-                        .frame(width: 18, height: 18)
+                        .frame(
+                            width: WarrenDesktopRowAnatomy.Slot.control,
+                            height: WarrenDesktopRowAnatomy.Slot.control
+                        )
                         .contentShape(.rect)
                         .accessibilityHidden(true)
                 }
                 .buttonStyle(WarrenChromeButtonStyle(isFocused: isAddFocused))
                 .disabled(isInteractionDisabled || isMutationDisabled)
-                .opacity(showsAddButton ? 1 : 0)
+                .warrenRowSlot(width: WarrenDesktopRowAnatomy.Slot.control, isVisible: showsAddButton)
+                // The slot is always reserved; only the control fades.
                 .animation(
                     WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
                     value: showsAddButton
                 )
-                // Hidden, it gives its width back to the name, as the task
-                // row's add menu does.
-                .frame(width: showsAddButton ? nil : 0)
-                .clipped()
                 .focused($isAddFocused)
                 .accessibilityLabel("New workspace in \(project.name)")
                 .warrenTooltip("New workspace")
@@ -221,41 +226,39 @@ struct WarrenDesktopProjectRow: View {
                         }
                     }
                 )
-                if !isExpanded {
-                    WarrenDesktopFoldSummary(marks: foldMarks, count: foldMarks.count)
-                }
-            }
 
-            Button(action: onToggleExpansion) {
-                WarrenDesktopTreeChevron(isExpanded: isExpanded)
-                    .frame(
-                        width: WarrenDesktopSidebarMetrics.chevronSize,
-                        height: WarrenDesktopSidebarMetrics.groupRowHeight
-                    )
-                    .contentShape(.rect)
+                Button(action: onToggleExpansion) {
+                    WarrenDesktopTreeChevron(isExpanded: isExpanded)
+                        .frame(
+                            width: WarrenDesktopSidebarMetrics.chevronSize,
+                            height: WarrenDesktopRowAnatomy.groupRowHeight
+                        )
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(isInteractionDisabled)
+                .focused($isToggleFocused)
+                // Open, the chevron waits for the pointer; folded, it stays as
+                // the sign of the fold.
+                .opacity(isExpanded && !(isHovered || isFocused || isToggleFocused || forceHover) ? 0 : 1)
+                .warrenRowSlot(width: WarrenDesktopRowAnatomy.Slot.control)
+                .accessibilityLabel(isExpanded ? "Collapse project \(project.name)" : "Expand project \(project.name)")
+                .warrenSemanticElement(
+                    id: "\(semanticID).toggle",
+                    role: .button,
+                    label: isExpanded ? "Collapse project \(project.name)" : "Expand project \(project.name)",
+                    isEnabled: !isInteractionDisabled,
+                    action: { if !isInteractionDisabled { onToggleExpansion() } }
+                )
             }
-            .buttonStyle(.plain)
-            .disabled(isInteractionDisabled)
-            .focused($isToggleFocused)
-            // Open, the chevron waits for the pointer; folded, it stays as the
-            // sign of the fold.
-            .opacity(isExpanded && !(isHovered || isFocused || isToggleFocused || forceHover) ? 0 : 1)
-            .accessibilityLabel(isExpanded ? "Collapse project \(project.name)" : "Expand project \(project.name)")
-            .warrenSemanticElement(
-                id: "\(semanticID).toggle",
-                role: .button,
-                label: isExpanded ? "Collapse project \(project.name)" : "Expand project \(project.name)",
-                isEnabled: !isInteractionDisabled,
-                action: { if !isInteractionDisabled { onToggleExpansion() } }
-            )
         }
-        .padding(.horizontal, WarrenDesktopSidebarMetrics.rowHorizontalPadding)
-        .frame(maxWidth: .infinity, minHeight: WarrenDesktopSidebarMetrics.groupRowHeight)
+        .padding(.horizontal, WarrenDesktopRowAnatomy.horizontalPadding)
+        .frame(maxWidth: .infinity, minHeight: WarrenDesktopRowAnatomy.groupRowHeight)
         .background(
             isSelected
                 ? tokens.treeRowSelected
                 : (isHovered || isFocused ? tokens.treeRowHover : .clear),
-            in: RoundedRectangle(cornerRadius: WarrenDesktopSidebarMetrics.rowRadius, style: .continuous)
+            in: RoundedRectangle(cornerRadius: WarrenDesktopRowAnatomy.radius, style: .continuous)
         )
         .contentShape(.rect)
         .onHover { isHovered = $0 }

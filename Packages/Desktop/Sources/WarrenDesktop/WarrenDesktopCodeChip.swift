@@ -35,10 +35,10 @@ struct WarrenDesktopCodeChip: View {
             .frame(height: 20)
             .background(
                 tokens.foreground.opacity(0.08),
-                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
             )
             .overlay {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .strokeBorder(
                         hovering ? tokens.foreground.opacity(0.20) : tokens.cardBorder,
                         lineWidth: 1

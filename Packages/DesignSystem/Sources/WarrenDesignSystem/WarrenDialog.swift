@@ -30,6 +30,10 @@ public struct WarrenDialog<Content: View, Footer: View>: View {
     private let message: String?
     private let content: Content
     private let footer: Footer
+    /// A confirmation carries no body, and the body's top padding on an empty
+    /// body is a void between the sentence and its buttons. The initializer
+    /// that takes no content closes it.
+    private var contentTopPadding: CGFloat
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
@@ -46,6 +50,7 @@ public struct WarrenDialog<Content: View, Footer: View>: View {
         self.width = width
         self.content = content()
         self.footer = footer()
+        self.contentTopPadding = 16
     }
 
     public var body: some View {
@@ -65,25 +70,32 @@ public struct WarrenDialog<Content: View, Footer: View>: View {
                                 .foregroundStyle(tokens.foreground)
                             Spacer(minLength: 0)
                             #if os(macOS)
-                            Text("Esc")
-                                .font(.system(size: 11))
-                                .foregroundStyle(tokens.ink4)
-                                .accessibilityHidden(true)
+                            // A key, drawn as a key: at body size and weight
+                            // the old "Esc" read as a word in the title line
+                            // rather than as the one way out of the dialog.
+                            WarrenKeycap("esc")
                             #endif
                         }
                         if let message, !message.isEmpty {
+                            // The dialog's one paragraph. Body size with a
+                            // little air between the lines: at 12pt on the
+                            // default leading a two-line sentence read as one
+                            // dense block under the title.
                             Text(message)
-                                .font(.system(size: 12))
+                                .font(WarrenTypography.body)
                                 .foregroundStyle(tokens.mutedForeground)
+                                .lineSpacing(3)
                                 .fixedSize(horizontal: false, vertical: true)
-                                .padding(.top, 4)
+                                .padding(.top, 6)
                         }
                         content
-                            .padding(.top, 16)
+                            .padding(.top, contentTopPadding)
                         footer
-                            .padding(.top, 18)
+                            .padding(.top, 16)
                     }
-                    .padding(18)
+                    // 20 on the window grid: the dialog's own margin is a
+                    // spacing step, not a number of its own.
+                    .padding(20)
                     // A window narrower than the dialog's width gets a narrower
                     // dialog, never one cut off at both sides.
                     .frame(maxWidth: width.points)
@@ -94,6 +106,24 @@ public struct WarrenDialog<Content: View, Footer: View>: View {
                 .frame(width: proxy.size.width, height: proxy.size.height)
             }
         }
+    }
+}
+
+extension WarrenDialog where Content == EmptyView {
+    /// A confirmation: a title, a sentence, and the buttons that answer it.
+    ///
+    /// It exists so the body can be absent rather than empty. Stated the other
+    /// way, every confirmation paid the body's top inset for a view that drew
+    /// nothing, which left a gap between the sentence and its buttons that read
+    /// as a missing paragraph.
+    public init(
+        _ title: String,
+        message: String? = nil,
+        width: WarrenDialogWidth = .s,
+        @ViewBuilder footer: () -> Footer
+    ) {
+        self.init(title, message: message, width: width, content: {}, footer: footer)
+        self.contentTopPadding = 0
     }
 }
 
@@ -116,6 +146,16 @@ public enum WarrenDialogConfirmKey: Sendable {
         switch self {
         case .return: .defaultAction
         case .commandReturn: KeyboardShortcut(.return, modifiers: .command)
+        }
+    }
+
+    /// The same key, spelled for a tooltip. The footer used to draw this string
+    /// beside the buttons; a tooltip says it once, on the control that answers
+    /// to it, and costs the row no width.
+    public var helpText: String {
+        switch self {
+        case .return: "Return"
+        case .commandReturn: "Command-Return"
         }
     }
 
@@ -172,12 +212,12 @@ public struct WarrenDialogFooter<Leading: View>: View {
     }
 
     public var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        HStack(spacing: 8) {
-            Text("\(confirmKey.hint) \(confirmLabel)")
-                .font(WarrenTypography.dialogMeta)
-                .foregroundStyle(tokens.ink4)
-                .accessibilityHidden(true)
+        HStack(spacing: WarrenSpacing.compact) {
+            // The confirm key used to be spelled out here, in a second label
+            // that repeated the button's own words at the quietest tier. It
+            // read as clutter and it squeezed long labels into two lines, so
+            // the hint moved to the button's tooltip and the row is the leading
+            // control again.
             leading
             Spacer(minLength: 12)
             Button(action: onCancel) {
@@ -189,6 +229,7 @@ public struct WarrenDialogFooter<Leading: View>: View {
             ))
             .keyboardShortcut(.cancelAction)
             .disabled(!isCancelEnabled)
+            .help("Esc")
             Button(action: onConfirm) {
                 Text(confirmLabel)
             }
@@ -197,6 +238,7 @@ public struct WarrenDialogFooter<Leading: View>: View {
                 isEnabled: isConfirmEnabled,
                 confirmKey: confirmKey
             ))
+            .help(confirmKey.helpText)
         }
     }
 }

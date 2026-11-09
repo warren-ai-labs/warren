@@ -63,6 +63,23 @@ like a Relay invite had; LAN PIN pairings stay non-owner.
 The link's fragment carries `k` (connect code), `host` (Host ID), `invite`
 and `name`. Treat it like a password until it expires.
 
+### In a browser
+
+`remote share` also returns `webLink`, the same pairing for a browser:
+
+```
+https://app.warrenai.xyz/#r=<relay URL>&k=<code>&host=<id>&invite=<invite>&name=<name>
+```
+
+The page is the Warren Web client hosted at `app.warrenai.xyz`, not served by
+the relay, so the relay cannot alter it. It reads the fragment, opens the same
+Noise session through the relay with the Bolthole JS SDK, exchanges the invite
+at `POST /v1/pairing/request`, and runs `/v1/ws` over a Bolthole `ws` stream.
+The browser keeps the relay, the code and its token in `localStorage` and
+reconnects without the link; pasting either link shape on the page works too.
+`--remote-web-url` / `WARREN_REMOTE_WEB_URL` points share links at another
+copy of the Web client, and an empty value turns Web links off.
+
 ## Host API
 
 All endpoints require the Host owner token. Desktop uses the WebSocket

@@ -4,14 +4,144 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-09
+
+A minor release: a Host can be reached from anywhere through a stateless,
+end-to-end encrypted relay that needs no account, port or certificate, a share
+link opens that same Host in a browser or on a phone, Settings answers "how does
+a device reach this Mac?" on one Access page, and the Desktop app draws one
+chrome everywhere — one palette derived from three authored colours, one spacing
+grid, one row anatomy, one overlay language, and a Settings window on Warren's
+own surface. The JSON control protocol remains at 4.0 with no new or changed
+method, and this release migrates no state.
+
+### Added
+
+- Reach a Host from anywhere without an account, a port or a certificate.
+  `warren remote status|enable|disable|share|rotate` dials a stateless relay —
+  the official `bolthole.warrenai.xyz` by default, or your own through
+  `--remote-relay-url` — that sees only ciphertext; device authorization stays
+  on the Host through the paired-client tokens it already keeps. A share link
+  carries a ten-minute invite, the connect code is written `0600`, rotating the
+  code revokes every remotely paired device and cuts its live Sessions, and
+  `remote.status`, the `remote.*` methods and `status.remote` in `/healthz`
+  report the relay, its source and the paired-device count.
+- Open the same Host in a browser. A remote share also returns a Web link: the
+  hosted Web client with the relay named in the fragment. The page opens an
+  end-to-end encrypted session through the relay, exchanges the invite for that
+  browser's own paired-client token, and remembers the Host so it reconnects
+  without the link. The connect code and the token never reach a server.
+- Pair a phone by scanning or pasting a share link. iOS saves a "remote"
+  endpoint with its connect code in the Keychain, and such a Host reads as
+  "Remote" with one encrypted path and a relay picker instead of LAN or Relay
+  routes.
+- See and control remote access from Settings: whether it is on, whether the
+  relay is the official one or your own, the paired-device count, the switch, a
+  ten-minute Create Link QR, and Rotate Code.
+- Reach one answer from one Access page. Relay, LAN Pairing, Public Access and
+  Remote Access each repeated the same skeleton — a way in, a short-lived
+  credential, and what gets in — so they are four blocks of one page ordered
+  from anywhere to this network, and the old section links still land there with
+  their setup values.
+
+### Changed
+
+- Draw one chrome. A theme now authors three colours — ground, ink and recess —
+  plus its status and identity hues, and `WarrenPalette` derives every surface
+  and ink by mixing them; text tiers are solid steps instead of fractions of one
+  ink, because a fraction names no ground to land on.
+- Hold chrome to one grid: padding lands on even points except a 1pt hairline,
+  radii sit one step apart, and a test scans the Desktop sources so an off-grid
+  value fails instead of slipping through review.
+- Name a row's parts once — padding, icon column, label inset and a trailing rail
+  of fixed-width slots — so a hover-only "+" keeps its slot and cannot
+  re-measure and re-truncate a name under the pointer, and a worktree's chevron
+  shares its column with its group's.
+- Draw every floating surface as one family. Menus, popovers, toasts, hover
+  cards and the folded rail take one tone and one elevation from the tokens;
+  right-click menus are drawn in-window like menu buttons; a key is drawn as a
+  key; and every dialog ends on one footer — a dim key hint on the left, Cancel
+  and the confirm action at the height of the field above them — so no confirm
+  label wraps and a confirmation without a body no longer pays a body inset.
+- Tune Settings to a working density. It opens on Appearance and shows the app
+  version; rows sit on a 56-point floor with a 16/14 label over a hint, forms
+  grow to 1040 and Usage to 1240 so a wide window gets one gutter rather than
+  two, and a paragraph stops at a 560-point reading measure. The Settings window
+  paints one surface from its top edge — transparent titlebar, hidden title,
+  full-size content — and is clipped at the main window's corner, so it no
+  longer wears the system's grey above Warren's backdrop.
+- Give the app's own dialogs and menus the overlay language: shortcuts are one
+  run of dim text instead of a box per key, dividers stop at the row margin, the
+  palette collapses from seven greys to three, and the command palette ends
+  where its results end instead of at the scroll cap.
+- Read a disabled primary or destructive action as a quiet outlined control
+  instead of the same filled plate at 42% opacity, so a dead action no longer
+  looks like the one to press.
+- Rest the split group's stacked icons 10 points apart instead of 5, so a
+  three-member group keeps every mark readable while still reading as a stack.
+- Serve the Web client as one entry: a Welcome screen with Progressive Web App
+  groundwork, the Desktop Workbench chrome for its sidebar and header, a phone
+  inbox that pushes a single Session, the Host's result sentence as a Session
+  row's second line, folded inactive Projects, and a clearer chat face that
+  names the Session it targets.
+- Say "Official relay" for the build's relay in Settings and in the CLI tables,
+  and print an address only for a self-hosted one; the share panel hands the
+  link on through its QR code and copy buttons instead of printing a string that
+  carried both the relay address and the connect code.
+- Refuse a share while remote access is off instead of handing out a link that
+  cannot connect, and accept a relay registration key so a relay that gates
+  enrollment still enrolls this Host.
+
 ### Fixed
 
+- Keep a Session switch made while the browser socket is down. The socket can
+  close for reasons that have nothing to do with the click, and Relay closes
+  every client route whenever a Host tunnel is replaced, so a click could land
+  in a sub-second gap and answer "Session switch unavailable" for a switch that
+  was entirely valid. The Web client now holds the intent, asks for a reconnect,
+  and replays it on the roster that follows the next welcome, reporting a
+  failure only when the switch has not landed within the recovery budget.
 - Keep a terminal recoverable after it is narrowed while a full-screen app
   runs with line wrapping off. The resize could leave a wide character without
   its second half in scrollback, and every later attach then failed to capture
   the screen and showed a blank pane. Warren now builds on Ghostty v1.4.0
   through ghostline v1.6.1 and GhosttyKit v1.1.0, which clear that character.
   A terminal already in this state stays blank until its scrollback is cleared.
+- Give an anonymous public visitor its own access scope. It used to be handed
+  the owner's scope and mixed its client-side state with the owner's; a visitor
+  now carries `scope-public`, and every request passes one authorization point
+  before dispatch. Visitors keep today's rights: they may operate the Host like
+  a paired device and cannot touch Host settings.
+- Show the Host's remote access state after the switch is clicked. Settings is
+  rebuilt only when its inputs change, and it now takes every value from that
+  key, so a value cannot reach the page without also rebuilding it.
+- Walk past a script to the agent that started a Session. The bind environment
+  reaches every descendant of a Session's shell, and an interpreter running a
+  file looked like the Session's own boundary, so a probe script an agent ran
+  could rebind the Session's provider, transcript and icon. Only a process that
+  is neither a shell, an interpreter launcher nor an agent now ends the walk.
+- Keep one language in an AI title and bound it by the prompt: at most 30 latin
+  characters or 16 CJK characters, a verb in the request's own language, and no
+  title that mixes two.
+- Configure a self-hosted GitLab host with `WARREN_GITLAB_HOSTS`; the binary no
+  longer carries a work host name.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0. No method was added or changed, no
+  state schema moves, and this release migrates no state.
+- Remote access is end-to-end encrypted: the relay sees only ciphertext, and the
+  connect code and paired-client tokens stay on the Host and in the client's
+  Keychain. Bolthole 0.2.0 raises the per-stream window to 4 MiB with a 64 MiB
+  per-session window, so flow control only differs against an older peer and
+  both ends should run this release; the deployed relay was redeployed from it.
+  `docs/remote.md` says how to run your own relay, when it is worth it, and how
+  to go back to the official one.
+- The Public Web link only works with the enrolled Server relay, not with
+  serverless remote access.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
 
 ## [0.34.1] - 2026-10-27
 

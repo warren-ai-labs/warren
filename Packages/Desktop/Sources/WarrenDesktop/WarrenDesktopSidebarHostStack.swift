@@ -380,7 +380,7 @@ struct WarrenDesktopSidebarHostStack: View {
             Capsule()
                 .fill(tokens.treeQuietText)
                 .frame(width: 16, height: 2)
-                .padding(.top, 3)
+                .padding(.top, 2)
                 .opacity(isLifted && !isPulled ? 0.8 : 0)
                 .accessibilityHidden(true)
         }
@@ -820,7 +820,7 @@ struct WarrenDesktopSidebarMembershipButton: View {
                 .foregroundStyle(isHovered || isDisplayed ? palette.rowHoverText : palette.secondaryGlyph)
                 .frame(width: Self.size, height: Self.size)
                 .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(isHovered ? palette.hoverFill : .clear)
                 )
                 .contentShape(.rect)

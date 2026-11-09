@@ -103,6 +103,9 @@ type HTTPServer struct {
 	Remote                RemoteAccess
 	RemoteDirect          http.Handler
 	RemoteDefaultRelayURL string
+	// RemoteWebURL is the hosted Web client that remote share links also
+	// open in a browser; empty leaves share links app-only.
+	RemoteWebURL string
 	// ordered runs per-session requests off the WebSocket reader without
 	// reordering them. Shared by the local and Relay control paths so a session
 	// keeps one ordering domain no matter which transport a client arrives on.
@@ -421,6 +424,7 @@ func (s *HTTPServer) servePeer(ctx context.Context, peer *wsPeer, transport peer
 	// An anonymous public-route transport is never an owner session, even
 	// though its client ID is empty just like the static Host token's.
 	peer.ownerAuthenticated = authenticated && owner
+	peer.publicVisitor = !authenticated
 	// Protocol 4 changes terminal recovery from a replayable byte stream to an
 	// atomically installable terminal state.  A missing version is therefore not
 	// an older-but-compatible client: it is an unauthenticated protocol shape
@@ -442,6 +446,9 @@ func (s *HTTPServer) servePeer(ctx context.Context, peer *wsPeer, transport peer
 	}
 	transport.authDeadline(time.Time{})
 	peer.accessScopeID = s.accessScopeID(clientID)
+	if peer.publicVisitor {
+		peer.accessScopeID = publicAccessScopeID
+	}
 	peer.setCapabilities(api.NegotiateCapabilities(s.Service.AgentViewCapabilities(), envelope.Capabilities))
 	state, revision := s.Service.RosterVersion(ctx)
 	state = projectRosterCapabilities(state, peer.capabilitiesList())
@@ -748,6 +755,18 @@ func (p *wsPeer) requireOwner() error {
 	if !p.ownerAuthenticated {
 		return errors.New("Host owner authentication is required")
 	}
+	return nil
+}
+
+// publicAccessScopeID is the access scope every anonymous public-route
+// visitor shares. It is distinct from the owner's, so a visitor's client-side
+// state never mixes with the owner's.
+const publicAccessScopeID = "scope-public"
+
+// authorizeMethod is the per-method gate for a peer, checked before dispatch.
+// Owner-only methods also check requireOwner themselves. Public visitors may
+// currently call every non-owner method; a finer policy for them goes here.
+func (p *wsPeer) authorizeMethod(method string) error {
 	return nil
 }
 

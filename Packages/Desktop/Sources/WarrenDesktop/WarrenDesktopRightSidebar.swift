@@ -174,7 +174,7 @@ struct WarrenDesktopRightSidebar: View {
         return Button {
             onSelectTab(page)
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Text(inspector.title)
                     .font(.system(size: 12, weight: isSelected ? .medium : .regular))
                 if inspector == .changes, changeCount > 0 {
@@ -182,7 +182,7 @@ struct WarrenDesktopRightSidebar: View {
                         .font(.system(size: 10.5, weight: .medium).monospacedDigit())
                         .warrenNumericTransition(value: changeCount)
                         .foregroundStyle(isSelected ? tokens.foreground.opacity(0.8) : tokens.mutedForeground)
-                        .padding(.horizontal, 5)
+                        .padding(.horizontal, 4)
                         .frame(minWidth: 16, minHeight: 16)
                         .background(tokens.tertiaryWash, in: Capsule())
                 }
@@ -232,7 +232,7 @@ struct WarrenDesktopRightSidebar: View {
             Button {
                 onSelectTab(page)
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     Image(systemName: "chevron.left.forwardslash.chevron.right")
                         .font(.system(size: 10.5, weight: .medium))
                     Text("Editor")

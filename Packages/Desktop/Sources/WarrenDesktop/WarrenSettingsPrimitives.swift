@@ -218,6 +218,9 @@ enum WarrenSettingsMetrics {
     static let fieldWidth: CGFloat = 320
     /// Every drop-down. One width, so the column has one right edge.
     static let controlWidth: CGFloat = 180
+    /// How wide a paragraph may run before it stops. A footnote that spanned
+    /// the page read as a banner rather than as an explanation.
+    static let readingWidth: CGFloat = 560
 }
 
 // MARK: - Group
@@ -265,8 +268,8 @@ struct WarrenSettingsGroup<Content: View>: View {
                             .multilineTextAlignment(.trailing)
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 10)
+                .padding(.horizontal, 16)
+                .padding(.bottom, WarrenSpacing.medium)
             }
 
             VStack(alignment: .leading, spacing: 0) {
@@ -277,12 +280,13 @@ struct WarrenSettingsGroup<Content: View>: View {
                 // read as a caption for whatever happened to follow it.
                 if let footnote {
                     Text(footnote)
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.settingsMeta)
                         .lineSpacing(3)
                         .foregroundStyle(palette.meta)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 12)
+                        .frame(maxWidth: WarrenSettingsMetrics.readingWidth, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 14)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -359,17 +363,21 @@ struct WarrenSettingsRow<Control: View>: View {
                 leading
             }
 
-            VStack(alignment: .leading, spacing: 2) {
+            // A settings row is read as a label and its answer: the title at
+            // body size, the description one step down and quiet. At 13 and
+            // 11.5 the two were close enough in weight to read as one run of
+            // text with a line break in it.
+            VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
                 Text(title)
-                    .font(.system(size: 13))
+                    .font(WarrenTypography.settingsBodyEmphasis)
                     .foregroundStyle(palette.inkBody)
                 if !description.isEmpty {
                     Text(description)
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.settingsMeta)
                         .lineSpacing(2)
                         .foregroundStyle(palette.meta)
                         .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: 420, alignment: .leading)
+                        .frame(maxWidth: 520, alignment: .leading)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -378,10 +386,16 @@ struct WarrenSettingsRow<Control: View>: View {
 
             control
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(minHeight: 44)
-        .opacity(isEnabled ? 1 : 0.42)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        // Superset's settings rows are 16 all round around a 14/12 pair; at
+        // half that vertical inset the page read as a dense list rather than a
+        // set of settings.
+        .frame(minHeight: 56)
+        // Disabled rows stay readable: at 0.42 the Launch Commands list's
+        // unavailable preset could not be read at all. The switch keeps its
+        // own state visible, and the row says why by being visibly quieter.
+        .opacity(isEnabled ? 1 : 0.55)
         .allowsHitTesting(isEnabled)
     }
 }
@@ -507,16 +521,16 @@ struct WarrenSettingsSegmented<Value: Hashable>: View {
                 .font(.system(size: 12))
                 .foregroundStyle(isSelected ? palette.ink : palette.inkQuiet)
                 .padding(.horizontal, 10)
-                .frame(height: 22)
+                .frame(height: 28)
                 .background {
                     if isSelected {
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .fill(palette.controlSelected)
                     }
                 }
                 .overlay {
                     if isSelected {
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .strokeBorder(palette.controlSelectedBorder, lineWidth: 1)
                     }
                 }
@@ -574,7 +588,7 @@ struct WarrenSettingsPicker<Value: Hashable>: View {
             }
             .padding(.leading, 10)
             .padding(.trailing, 8)
-            .frame(minWidth: minWidth, maxWidth: maxWidth, minHeight: 28)
+            .frame(minWidth: minWidth, maxWidth: maxWidth, minHeight: 32)
             .background(palette.controlFill)
             .clipShape(RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous))
             .overlay {
@@ -650,7 +664,7 @@ private struct WarrenSettingsPickerPanel<Value: Hashable>: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(palette.meta)
                     .padding(.horizontal, WarrenDesktopMenuMetrics.rowHorizontalPadding)
-                    .padding(.top, 5)
+                    .padding(.top, 4)
             }
         }
         .overlay { WarrenDesktopKeyCatcher(onKey: handle) }
@@ -707,7 +721,7 @@ struct WarrenSettingsStepper: View {
             stepButton(symbol: "minus", enabled: value > range.lowerBound, palette: palette) {
                 value = max(range.lowerBound, value - step)
             }
-            Rectangle().fill(palette.controlBorder).frame(width: 1, height: 28)
+            Rectangle().fill(palette.controlBorder).frame(width: 1, height: 32)
             HStack(spacing: 2) {
                 Text(display(value))
                     .font(.system(size: 12.5))
@@ -720,8 +734,8 @@ struct WarrenSettingsStepper: View {
                 }
             }
             .frame(minWidth: 44)
-            .frame(height: 28)
-            Rectangle().fill(palette.controlBorder).frame(width: 1, height: 28)
+            .frame(height: 32)
+            Rectangle().fill(palette.controlBorder).frame(width: 1, height: 32)
             stepButton(symbol: "plus", enabled: value < range.upperBound, palette: palette) {
                 value = min(range.upperBound, value + step)
             }
@@ -777,7 +791,7 @@ struct WarrenSettingsTextField: View {
         VStack(alignment: .leading, spacing: 4) {
             field(palette: palette)
                 .frame(width: width)
-                .frame(minHeight: 28)
+                .frame(minHeight: 32)
                 // The plain field only takes clicks on its line of text, so a
                 // click on the box's padding used to do nothing at all. The
                 // catcher sits behind the field, so clicks on the text still
@@ -801,7 +815,10 @@ struct WarrenSettingsTextField: View {
                     .foregroundStyle(palette.errorText)
             }
         }
-        .opacity(isEnabled ? 1 : 0.42)
+        // Disabled rows stay readable: at 0.42 the Launch Commands list's
+        // unavailable preset could not be read at all. The switch keeps its
+        // own state visible, and the row says why by being visibly quieter.
+        .opacity(isEnabled ? 1 : 0.55)
         .allowsHitTesting(isEnabled)
         .accessibilityIdentifier(accessibilityID ?? "")
     }
@@ -823,7 +840,7 @@ struct WarrenSettingsTextField: View {
         .foregroundStyle(palette.inkBody)
         .focused($isFocused)
         .onSubmit { onSubmit?() }
-        .padding(.horizontal, 9)
+        .padding(.horizontal, 8)
     }
 
     private func borderColor(_ palette: WarrenSettingsPalette) -> Color {
@@ -1028,7 +1045,7 @@ struct WarrenSettingsListRow<Leading: View, Trailing: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             trailing
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .frame(minHeight: subtitle == nil ? 42 : 48)
         .opacity(isDimmed ? 0.75 : 1)
@@ -1045,7 +1062,7 @@ struct WarrenSettingsEmptyRow: View {
         Text(text)
             .font(.system(size: 11.5))
             .foregroundStyle(WarrenSettingsPalette.resolved(for: colorScheme).meta)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 16)
             .frame(minHeight: 44, alignment: .leading)
     }
 }
@@ -1095,7 +1112,7 @@ struct WarrenSettingsReveal<Content: View>: View {
     var body: some View {
         content
             .padding(.vertical, 16)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

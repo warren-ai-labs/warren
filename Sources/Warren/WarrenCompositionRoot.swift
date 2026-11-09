@@ -299,6 +299,7 @@ struct WarrenCompositionRoot: View {
             remoteAccess: remoteModel.remoteAccess,
             onLoadRemoteAccess: { remoteModel.loadRemoteAccess() },
             onSetRemoteEnabled: { remoteModel.setRemoteAccessEnabled($0) },
+            onSetRemoteRelay: { remoteModel.setRemoteRelay($0) },
             onRemoteShare: { completion in
                 remoteModel.createRemoteShare(completion: completion)
             },
