@@ -518,9 +518,12 @@ struct WarrenDesktopMenuGroupHeader<Accessory: View>: View {
     var body: some View {
         let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
         HStack(spacing: 8) {
+            // A menu's group label is a quiet sentence-case caption, the way
+            // Superset's menus draw one. Tracked capitals were the loudest text
+            // in a surface whose whole job is to stay out of the way, and a menu
+            // with two or three groups read as a wall of labels.
             Text(title)
-                .font(.system(size: 11, weight: .medium))
-                .tracking(WarrenDesktopMenuMetrics.headerTracking)
+                .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(palette.headerText)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 0)

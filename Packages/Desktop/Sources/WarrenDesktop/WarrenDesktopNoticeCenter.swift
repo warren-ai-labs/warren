@@ -58,7 +58,7 @@ struct WarrenDesktopNoticePopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if selectedNotice == nil {
-                WarrenDesktopMenuGroupHeader(title: "NOTIFICATIONS") {
+                WarrenDesktopMenuGroupHeader(title: "Notifications") {
                     WarrenDesktopNoticeTitleActions(
                         unreadCount: notices.filter(\.isUnread).count,
                         isMuted: $isMuted,

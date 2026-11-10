@@ -99,7 +99,10 @@ private enum UIShot {
         )
         window.contentView = hostingView
         hostingView.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        // Long enough for the surfaces that reveal themselves after a delay:
+        // the update card waits before it appears, and a shot taken at 0.2s
+        // photographed an empty window.
+        RunLoop.main.run(until: Date().addingTimeInterval(1.0))
         hostingView.layoutSubtreeIfNeeded()
 
         guard let rep = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds) else {

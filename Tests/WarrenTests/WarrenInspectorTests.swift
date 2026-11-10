@@ -68,6 +68,10 @@ final class WarrenInspectorTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height), styleMask: [.titled], backing: .buffered, defer: false)
         let light = environment["WARREN_INSPECTOR_APPEARANCE"] == "light"
         window.appearance = NSAppearance(named: light ? .aqua : .darkAqua)
+        // The panel draws no ground of its own — in the app it sits on the
+        // sidebar's. An offscreen window without one composites the dark
+        // palette onto white, which reads as grey-on-grey and shows nothing.
+        window.backgroundColor = light ? .white : NSColor(calibratedWhite: 0.08, alpha: 1)
         let activity = WarrenDesktopInspectorActivity()
         func present(_ tab: WarrenDesktopInspectorTab) {
             let hosting = NSHostingView(
@@ -86,12 +90,12 @@ final class WarrenInspectorTests: XCTestCase {
         window.orderFrontRegardless()
 
         present(.changes)
-        try await render(currentView(), to: "\(prefix)-changes.png")
+        try await render(currentView(), to: "\(prefix)-changes.png", light: light)
 
         if let change = panel.changes.first(where: { $0.added + $0.deleted > 0 }) ?? panel.changes.first {
             inspector.toggleDiff(key: WarrenInspectorModel.changeKey(change), path: change.path, staged: change.staged, commit: nil, signature: "test")
             try await Task.sleep(for: .milliseconds(900))
-            try await render(currentView(), to: "\(prefix)-diff.png")
+            try await render(currentView(), to: "\(prefix)-diff.png", light: light)
         }
 
         if let commit = panel.unmergedCommits.first ?? panel.commits.first {
@@ -102,25 +106,35 @@ final class WarrenInspectorTests: XCTestCase {
         }
         present(.history)
         try await Task.sleep(for: .milliseconds(900))
-        try await render(currentView(), to: "\(prefix)-history.png")
+        try await render(currentView(), to: "\(prefix)-history.png", light: light)
 
         present(.files)
         try await Task.sleep(for: .milliseconds(900))
-        try await render(currentView(), to: "\(prefix)-files.png")
+        try await render(currentView(), to: "\(prefix)-files.png", light: light)
         if let file = environment["WARREN_INSPECTOR_FILE"] {
             inspector.openFile = file
             try await Task.sleep(for: .milliseconds(900))
-            try await render(currentView(), to: "\(prefix)-editor.png")
+            try await render(currentView(), to: "\(prefix)-editor.png", light: light)
         }
         window.orderOut(nil)
     }
 
     @MainActor
-    private func render(_ view: NSView, to path: String) async throws {
+    private func render(_ view: NSView, to path: String, light: Bool) async throws {
         view.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(250))
         view.layoutSubtreeIfNeeded()
         let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        // The panel draws no ground of its own — in the app the sidebar behind it
+        // does. A cached view leaves that transparent, and a transparent PNG
+        // reads as a white page, which is not the surface anyone sees.
+        if let context = NSGraphicsContext(bitmapImageRep: bitmap) {
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            (light ? NSColor.white : NSColor(calibratedWhite: 0.08, alpha: 1)).setFill()
+            NSRect(origin: .zero, size: view.bounds.size).fill()
+            NSGraphicsContext.restoreGraphicsState()
+        }
         view.cacheDisplay(in: view.bounds, to: bitmap)
         let data = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
         try data.write(to: URL(fileURLWithPath: path))

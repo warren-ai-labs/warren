@@ -449,7 +449,7 @@ struct WarrenDesktopSidebarHostStack: View {
     private func panel(tokens: WarrenColorTokens) -> some View {
         let menuPalette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
         return VStack(alignment: .leading, spacing: 0) {
-            WarrenDesktopMenuGroupHeader(title: "HOSTS") {
+            WarrenDesktopMenuGroupHeader(title: "Hosts") {
                 WarrenDesktopHostRefreshButton(isChecking: isCheckingHosts)
             }
 

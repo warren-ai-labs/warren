@@ -335,14 +335,14 @@ struct WarrenDesktopApprovalTrayPanel: View {
     /// reads as one of the window's menus; the count and its scope sit on
     /// the accessory side.
     private func header(count: Int, palette: WarrenDesktopMenuPalette) -> some View {
-        WarrenDesktopMenuGroupHeader(title: "WAITING ON YOU") {
+        WarrenDesktopMenuGroupHeader(title: "Waiting on you") {
             HStack(spacing: 4) {
                 Text("\(count)")
                     .monospacedDigit()
                     .warrenNumericTransition(value: count)
                 Text("\u{00B7} this Host")
             }
-            .font(.system(size: 11.5))
+            .font(WarrenTypography.footnote)
             .foregroundStyle(palette.meta)
             .padding(.trailing, Metrics.rowHorizontalPadding - 2)
             .accessibilityElement(children: .combine)
@@ -361,7 +361,7 @@ struct WarrenDesktopApprovalTrayPanel: View {
             HStack(spacing: 8) {
                 WarrenDesktopSessionKindBadge(kind: entry.kind, size: 16)
                 Text(entry.title)
-                    .font(.system(size: 13))
+                    .font(WarrenTypography.navigationItem)
                     .foregroundStyle(isHot ? palette.rowHoverText : palette.rowText)
                     .lineLimit(1)
                 Text(entry.location)
@@ -374,7 +374,7 @@ struct WarrenDesktopApprovalTrayPanel: View {
                 // blue, and beside an attention mark it read as a state.
                 Button("Open") { openSession(entry) }
                     .buttonStyle(.plain)
-                    .font(.system(size: 12))
+                    .font(WarrenTypography.caption)
                     .foregroundStyle(tokens.link)
                     .warrenTooltip("Open this Session", shortcut: "\u{23CE}")
                     .accessibilityLabel("Open \(entry.title)")

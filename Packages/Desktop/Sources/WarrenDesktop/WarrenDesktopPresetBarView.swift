@@ -123,7 +123,7 @@ struct WarrenDesktopPresetBar: View {
     ) -> some View {
         let groups = Self.groups(presets)
         VStack(alignment: .leading, spacing: 0) {
-            WarrenDesktopMenuGroupHeader(title: "NEW SESSION") {
+            WarrenDesktopMenuGroupHeader(title: "New session") {
                 scopeAccessory(palette: palette)
             }
 
@@ -188,7 +188,7 @@ struct WarrenDesktopPresetBar: View {
         let launchers = presets.filter { !$0.isAI && $0.request.kind != .browser }
         return [
             PresetGroup(title: nil, presets: launchers),
-            PresetGroup(title: "AGENTS", presets: agents),
+            PresetGroup(title: "Agents", presets: agents),
             PresetGroup(title: nil, presets: browsers),
         ]
         .filter { !$0.presets.isEmpty }

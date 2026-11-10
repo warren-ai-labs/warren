@@ -111,7 +111,7 @@ final class WarrenDesktopPresetBarInterfaceTests: XCTestCase {
             embeddedBrowser: true
         )
         let groups = WarrenDesktopPresetBar.groups(presets)
-        XCTAssertEqual(groups.map(\.title), [nil, "AGENTS", nil])
+        XCTAssertEqual(groups.map(\.title), [nil, "Agents", nil])
         XCTAssertTrue(groups[0].presets.allSatisfy { !$0.isAI && $0.request.kind != .browser })
         XCTAssertTrue(groups[1].presets.allSatisfy(\.isAI))
         XCTAssertEqual(groups[2].presets.map(\.request.kind), [.browser])
@@ -121,6 +121,6 @@ final class WarrenDesktopPresetBarInterfaceTests: XCTestCase {
         )
 
         let withoutBrowser = WarrenDesktopPresetBar.groups(presets.filter { $0.request.kind != .browser })
-        XCTAssertEqual(withoutBrowser.map(\.title), [nil, "AGENTS"], "An empty group is dropped")
+        XCTAssertEqual(withoutBrowser.map(\.title), [nil, "Agents"], "An empty group is dropped")
     }
 }

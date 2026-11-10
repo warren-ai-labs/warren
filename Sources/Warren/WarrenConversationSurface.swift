@@ -717,7 +717,7 @@ struct WarrenConversationView: View {
                 }
                 .padding(.horizontal, 8)
                 .frame(height: 24)
-                .background(palette.bubble, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(palette.bubble, in: RoundedRectangle(cornerRadius: WarrenRadius.row, style: .continuous))
                 .padding(.horizontal, 12)
                 .padding(.top, 10)
             }
@@ -917,7 +917,7 @@ struct WarrenConversationView: View {
                             Text(suggestion)
                                 .font(WarrenTypography.caption)
                                 .foregroundStyle(palette.ink2)
-                                .padding(.horizontal, 11)
+                                .padding(.horizontal, 12)
                                 .frame(height: 28)
                                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(palette.line2, lineWidth: 1))
                         }
@@ -1360,7 +1360,7 @@ private struct WarrenConversationTurnView: View, Equatable {
             }
             ForEach(Array(turn.errors.enumerated()), id: \.offset) { _, error in
                 HStack(alignment: .top, spacing: 8) {
-                    Circle().fill(palette.red).frame(width: 6, height: 6).padding(.top, 7)
+                    Circle().fill(palette.red).frame(width: 6, height: 6).padding(.top, 8)
                     Text(error)
                         .font(WarrenTypography.caption)
                         .foregroundStyle(palette.ink2)
@@ -2113,7 +2113,7 @@ struct WarrenConversationMarkdown: View {
                     .padding(.leading, CGFloat(item.depth) * 18)
                 }
             }
-            .padding(.leading, 22)
+            .padding(.leading, 20)
         case .quote(let value):
             inlineContent(
                 value,
@@ -3109,8 +3109,8 @@ private struct WarrenConversationDecisionDock: View {
                 .frame(maxHeight: folded ? CGFloat(Self.commandLineLimit) * Self.commandLineHeight : nil, alignment: .top)
                 .clipped()
                 .padding(.leading, 10)
-                .padding(.trailing, 34)
-                .padding(.vertical, 9)
+                .padding(.trailing, 32)
+                .padding(.vertical, 8)
                 .overlay(alignment: .bottom) {
                     if folded {
                         LinearGradient(colors: [palette.code.opacity(0), palette.code], startPoint: .top, endPoint: .bottom)
@@ -3130,7 +3130,7 @@ private struct WarrenConversationDecisionDock: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .padding(5)
+                    .padding(4)
                     .opacity(commandHovered || copied ? 1 : 0)
                     .warrenTooltip("Copy")
                     .accessibilityLabel("Copy command")

@@ -171,6 +171,25 @@ view's top safe area already reserves the lights' row, and adding one put the
 first card 53 points down. Verified by opening it in the running app
 (`warren://settings/appearance`) and photographing the window.
 
+## Surfaces not in the first pass (found at acceptance)
+
+The first pass covered the window, rows, overlays, dialogs, palette and Settings.
+These carry their own numbers and were not touched; each is checked against the
+Superset source where one exists.
+
+| Surface | Superset reference | What differs |
+| --- | --- | --- |
+| Update / restart card (`WarrenDesktopUpdateHUD`) | none (no update UI in the web app) | **Redesigned** after review: the card now leads with the app's own icon, names the version beside the title, sweeps a 3pt progress bar (the updater reports no bytes, so the bar never claims a percentage, and it settles still under Reduce Motion), and closes with an 11pt footnote — "Sessions keep running. Warren reopens in a moment." — which is the fact the person waiting actually needs. `WarrenTypography.footnote` was added for that line. |
+| Sidebar footer update glyph (`WarrenDesktopUpdateIcon`) | none | **Fixed**: the failed state wore a circular retry arrow, which reads as "refresh" rather than "something broke"; it now takes the header chip's exclamation, same 14pt weight, same destructive tone. |
+| Update marker states (`WarrenDesktopBuildBadge`) | none | **Fixed**: the failed state had its own type (12pt light) and no glyph, so the marker changed shape between states; all three states now share one chip, one 11pt medium label, and one glyph slot, and the label says "Update failed" rather than "Failed". |
+| Menu group headers (preset bar, tray, notices, hosts) | `WorkspaceView/RightSidebar/headerTabStyles.ts` (`text-xs`, sentence case) | tracked capitals at 11pt. **Fixed**: 12pt sentence case, no tracking; call sites renamed; test updated. |
+| Notice toasts (`WarrenDesktopNoticeToastStack`) | `components/DesktopNotices` | **Reviewed**: title/message now take `captionEmphasis`/`footnote`; the gallery primes the stack so it can be photographed at the width the app pins it to (288pt, bottom-left). |
+| Approval tray panel (`WarrenDesktopApprovalTrayPanel`) | `RightSidebar/ChangesView` row rhythm | **Reviewed, no redesign needed**: it already draws on the menu surface, palette, group header and row wash. Its three literal type sizes (13 title, 11.5 header meta, 12 action) now take `navigationItem`, `footnote` and `caption`. The gallery had been rendering it without the menu surface's height cap, which made it look like a half-empty 880pt card; it now uses the same wrapper the menu layer does. |
+| Conversation pane (`Sources/Warren/WarrenConversationSurface.swift`) | `components/MarkdownRenderer`, web chat | **Reviewed, mostly on-system**: its own `ConversationLayout` and palette are deliberate, and the pane reads as the app's most finished surface. Six paddings off the grid (5, 7, 9, 11, 22, 34) and one 6pt radius were pulled to 4/8/12/20/32 and `WarrenRadius.row`. It carries its own type scale — 8, 9 and 10pt marks are glyphs, not text — so the 11pt text floor does not apply to it. Rendered by `WarrenConversationPaneRenderTests` (`WARREN_CHAT_PANE_IMAGES`). |
+| Inspector (`Sources/Warren/WarrenInspector*.swift`) | `WorkspaceView/RightSidebar` (`ChangesView`, `FilesView`) | **Fixed**: eight text fades (0.7–0.85) became solid tiers (`ink2`, `sidebarTextBase`), the 9pt row padding went to 8, the 6pt radii to `WarrenRadius.row`, the 10.5pt status letter to 11pt in a 13pt column, and "Read-only" to `footnote`. Rendered live by `WarrenInspectorTests.testLiveInspectorRenders` — the harness now paints the pane's ground before caching, because a transparent capture read as a white page and made the dark palette look broken. |
+| Lead panels (`Sources/Warren/WarrenLeadPanels.swift`) | `components/AgentIcon`, agent session cards | **Fixed**: the disabled primary was a grey fill under grey text, which reads as a button already pressed; it now keeps its outline and drops its fill, as a disabled dialog's confirm does, and its label moved from `ink4` to `ink3`. One 5pt padding and one 5pt radius went to 4, the key hint to `monoSmall`. Rendered by `WarrenLeadPanelsRenderTests` (`WARREN_LEAD_PANEL_IMAGES`), which mounts the panels in the conversation dock they actually sit in. |
+| Onboarding (`Onboarding/`) | its own app | untouched. |
+
 ## Landmines found
 - Adding a conditional child (`if remoteAccess.enabled { Button … }`) inside the
   Share row's `HStack` segfaults SwiftUI's offscreen layout in `NSHostingView`.

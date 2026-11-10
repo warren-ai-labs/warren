@@ -198,7 +198,7 @@ struct WarrenInspectorFiles: View {
                 Spacer(minLength: 0)
                 if let status {
                     Text(status == "?" ? "U" : String(status.prefix(1)))
-                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(WarrenInspectorStatus.tint(for: status, tokens: tokens))
                 } else if containsChange {
                     Circle().fill(tokens.warning.opacity(0.8)).frame(width: 5, height: 5)
@@ -209,7 +209,7 @@ struct WarrenInspectorFiles: View {
             .frame(height: 26)
             .contentShape(Rectangle())
         }
-        .buttonStyle(WarrenInspectorRowStyle(cornerRadius: 6, inset: WarrenSpacing.xs))
+        .buttonStyle(WarrenInspectorRowStyle(cornerRadius: WarrenRadius.row, inset: WarrenSpacing.xs))
         .warrenContextMenu([
             .button(title: "Copy Path") {
                 WarrenCopyFeedback.shared.copy(node.id, announcing: "Copied path")
@@ -252,7 +252,7 @@ struct WarrenInspectorFiles: View {
                         .frame(height: 26)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(WarrenInspectorRowStyle(cornerRadius: 6, inset: WarrenSpacing.xs))
+                    .buttonStyle(WarrenInspectorRowStyle(cornerRadius: WarrenRadius.row, inset: WarrenSpacing.xs))
                 }
             }
         }
@@ -309,7 +309,7 @@ struct WarrenFileEditor: View {
                             Circle().fill(tokens.foreground.opacity(0.7)).frame(width: 6, height: 6).warrenTooltip("Unsaved changes")
                         }
                         if readOnly {
-                            Text("Read-only").font(.system(size: 10.5)).foregroundStyle(tokens.mutedForeground)
+                            Text("Read-only").font(WarrenTypography.footnote).foregroundStyle(tokens.mutedForeground)
                         }
                     }
                     let directory = (relativePath as NSString).deletingLastPathComponent

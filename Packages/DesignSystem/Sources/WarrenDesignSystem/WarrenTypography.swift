@@ -16,6 +16,12 @@ public enum WarrenTypography {
     public static let settingsBodyEmphasis = Font.system(size: 14, weight: .medium)
     public static let settingsSupporting = Font.system(size: 13, weight: .regular)
     public static let settingsMeta = Font.system(size: 12, weight: .regular)
+    /// A card's closing footnote: one step under body text, regular weight so
+    /// it reads as an aside rather than as another label.
+    public static let footnote = Font.system(size: 11, weight: .regular)
+    /// A status chip's label: small, but a control, so it takes the weight the
+    /// surrounding chrome labels do not.
+    public static let statusChip = Font.system(size: 11, weight: .medium)
     /// Superset shortcuts are `text-xs tracking-widest`; Warren keeps the
     /// monospaced design for keyboard hints.
     public static let shortcut = Font.system(size: 12, weight: .medium, design: .monospaced)

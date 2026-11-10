@@ -301,7 +301,7 @@ private struct WarrenInspectorChanges: View {
             WarrenBranchGlyph(size: 11)
             Text(panel.branch.isEmpty ? "detached" : panel.branch)
                 .font(.system(size: 11.5))
-                .foregroundStyle(tokens.foreground.opacity(0.85))
+                .foregroundStyle(tokens.ink2)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(panel.upstream.map { "Tracks \($0)" } ?? "No upstream")
@@ -773,7 +773,7 @@ private struct WarrenInspectorHistory: View {
                 }
             }
             .padding(.horizontal, WarrenSpacing.medium)
-            .padding(.vertical, 9)
+            .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(WarrenInspectorRowStyle())
@@ -876,9 +876,9 @@ struct WarrenInspectorStatus: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let letter = status == "?" || status == "??" ? "U" : String(status.prefix(1))
         Text(letter.isEmpty ? "M" : letter)
-            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
             .foregroundStyle(Self.tint(for: status, tokens: tokens))
-            .frame(width: 12)
+            .frame(width: 13)
     }
 
     /// One colour per status, shared with the Files tree so a file reads the
@@ -958,7 +958,7 @@ struct WarrenInspectorEmpty: View {
                 .foregroundStyle(tokens.mutedForeground.opacity(0.8))
             Text(title)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(tokens.foreground.opacity(0.85))
+                .foregroundStyle(tokens.ink2)
             Text(detail)
                 .font(.system(size: 12))
                 .foregroundStyle(tokens.mutedForeground)

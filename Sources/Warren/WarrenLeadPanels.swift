@@ -69,7 +69,7 @@ struct WarrenLeadDecisionPanel: View {
                     .opacity(highlight == index ? 1 : 0)
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.vertical, 4)
             .frame(minHeight: 32)
             .contentShape(Rectangle())
             .background(
@@ -233,7 +233,7 @@ struct WarrenLeadChecksPanel: View {
                 Text(title)
                 if let key {
                     Text(key)
-                        .font(.system(size: 10.5, design: .monospaced))
+                        .font(WarrenTypography.monoSmall)
                         // The filled default's own key sits back a step, as the
                         // design's `kbd` inside a primary button does.
                         .opacity(role == .primary ? 0.5 : 1)
@@ -537,14 +537,21 @@ struct WarrenLeadActionButtonStyle: ButtonStyle {
             .font(.system(size: 12.5, weight: primary ? .medium : .regular))
             .foregroundStyle(
                 primary
-                    ? (disabled ? palette.ink4 : palette.card)
+                    ? (disabled ? palette.ink3 : palette.card)
                     : (hovering ? palette.ink : palette.ink2)
             )
             .padding(.horizontal, 10)
             .frame(height: 28)
             .background {
                 if primary {
-                    shape.fill(disabled ? palette.bubble : (configuration.isPressed ? palette.ink2 : palette.ink))
+                    if disabled {
+                        // Blocked, not pressed: a grey fill under grey text reads
+                        // as a button already pushed. It keeps its outline and
+                        // gives up its fill, as a disabled dialog's confirm does.
+                        shape.strokeBorder(palette.line2, lineWidth: 1)
+                    } else {
+                        shape.fill(configuration.isPressed ? palette.ink2 : palette.ink)
+                    }
                 } else if hovering || configuration.isPressed {
                     shape.fill(configuration.isPressed ? palette.press : palette.bubble)
                 }
@@ -583,7 +590,7 @@ private struct WarrenLeadProblemButtonStyle: ButtonStyle {
             .padding(.vertical, 1)
             .background(
                 hovering ? palette.bubble : Color.clear,
-                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                in: RoundedRectangle(cornerRadius: WarrenRadius.xs, style: .continuous)
             )
             .opacity(visible || hovering ? 1 : 0)
             .onHover { hovering = $0 }

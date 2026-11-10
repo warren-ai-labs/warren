@@ -75,7 +75,7 @@ struct WarrenDesktopSSHHostListView: View {
     var body: some View {
         let palette = WarrenDesktopMenuPalette.resolved(for: colorScheme)
         VStack(alignment: .leading, spacing: 0) {
-            WarrenDesktopMenuGroupHeader(title: "SSH HOSTS") {
+            WarrenDesktopMenuGroupHeader(title: "SSH hosts") {
                 // The header's one action, on the shared inline button so it
                 // hovers and tooltips like every other menu action.
                 WarrenDesktopMenuInlineButton(

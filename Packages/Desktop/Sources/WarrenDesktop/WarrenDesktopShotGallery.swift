@@ -2,6 +2,7 @@ import SwiftUI
 import WarrenClientCore
 import WarrenDesignSystem
 import WarrenDomain
+import WarrenDomain
 
 /// The floating surfaces, drawn on their own for design review.
 ///
@@ -22,6 +23,16 @@ public struct WarrenDesktopShotGallery: View {
         case fan
         /// The Settings window, which otherwise needs live Host state to open.
         case settings
+        /// The update/restart card, which only appears for a few seconds.
+        case hud
+        /// The approval tray's "N waiting" pill and its panel.
+        case tray
+        /// The launch-command bar that hangs off the "+" menu.
+        case presets
+        /// A notice toast stack over the window it lands on.
+        case toasts
+        /// The sidebar header's update marker, in each of its states.
+        case badge
     }
 
     public let surface: Surface
@@ -45,7 +56,158 @@ public struct WarrenDesktopShotGallery: View {
         case .palette: palette
         case .fan: FanGallery()
         case .settings: settings
+        case .hud: hud
+        case .tray: tray
+        case .presets: presets
+        case .toasts: toasts
+        case .badge: badge
         }
+    }
+
+    /// The update marker as the sidebar header draws it, state by state.
+    private var badge: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            // The footer glyph the release builds use, beside the marker the
+            // preview builds use, so the two can be compared in one shot.
+            HStack(spacing: 24) {
+                ForEach(Array([
+                    ("ready", WarrenDesktopUpdateStatus.available(version: "0.35.0")),
+                    ("installing", .updating),
+                    ("failed", .failed),
+                ].enumerated()), id: \.offset) { _, item in
+                    VStack(spacing: 8) {
+                        Text(item.0)
+                            .font(WarrenTypography.caption)
+                            .foregroundStyle(WarrenColorTokens.dark.ink4)
+                        WarrenDesktopUpdateIcon(status: item.1, onAction: {})
+                    }
+                }
+            }
+            .padding(.bottom, 8)
+
+            ForEach(Array([
+                ("Local build, no update", WarrenDesktopUpdateStatus.none),
+                ("Update ready", .available(version: "0.35.0")),
+                ("Installing", .updating),
+                ("Update failed", .failed),
+            ].enumerated()), id: \.offset) { _, item in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(item.0)
+                        .font(WarrenTypography.caption)
+                        .foregroundStyle(WarrenColorTokens.dark.ink4)
+                    WarrenDesktopBuildBadge(updateStatus: item.1, isCompact: false)
+                }
+            }
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(WarrenColorTokens.dark.workbenchCardFill)
+    }
+
+    /// The update/restart card over a dimmed window.
+    private var hud: some View {
+        ZStack {
+            galleryBackdrop
+            WarrenDesktopUpdateHUD(detail: "Installing 0.35.0")
+        }
+    }
+
+    /// A stand-in for the window behind a floating surface: the ground, a few
+    /// blocks where the sidebar and a pane would be, and nothing else.
+    private var galleryBackdrop: some View {
+        ZStack(alignment: .topLeading) {
+            WarrenColorTokens.dark.windowBackdrop
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(WarrenColorTokens.dark.workbenchCardFill)
+                    .frame(width: 300)
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(WarrenColorTokens.dark.workbenchCardFill)
+            }
+            .padding(8)
+        }
+    }
+
+    /// The approval tray pill, with two Agents waiting.
+    private var tray: some View {
+        let store = WarrenDesktopApprovalTrayStore()
+        store.update([
+            WarrenDesktopApprovalTrayEntry(
+                id: TerminalSessionID(UUID(uuidString: "af02b8a4-6e7e-418a-a245-759c8170e3bf")!),
+                kind: .claude,
+                title: "检查 herdr app UI",
+                location: "warren · feat/workbench-cards",
+                mark: .approvalNeeded,
+                ask: "Claude wants to run a command",
+                detail: "git push origin main",
+                decision: nil
+            ),
+            WarrenDesktopApprovalTrayEntry(
+                id: TerminalSessionID(UUID(uuidString: "43517822-7987-4519-8d7c-efaa0b170a7d")!),
+                kind: .codex,
+                title: "sumi redundancy cleanup",
+                location: "sumi · refactor/sumi/redundancy",
+                mark: .inputNeeded,
+                ask: "Codex is asking a question",
+                detail: nil,
+                decision: nil
+            ),
+        ])
+        return VStack(alignment: .leading, spacing: 24) {
+            WarrenDesktopApprovalTrayPill(
+                store: store,
+                onOpen: { _ in },
+                onResolve: { _, _, _ in }
+            )
+            VStack(alignment: .leading, spacing: 8) {
+                Text("The panel it opens")
+                    .font(WarrenTypography.caption)
+                    .foregroundStyle(WarrenColorTokens.dark.ink4)
+                // The panel as the menu layer presents it: the shared menu
+                // surface at the tray's own width, not a bare stack.
+                WarrenDesktopApprovalTrayPanel(
+                    store: store,
+                    onOpen: { _ in },
+                    onResolve: { _, _, _ in },
+                    onDismiss: {}
+                )
+                .frame(width: WarrenDesktopApprovalTray.width)
+                // The menu layer's own surface, which is what caps the panel's
+                // height; a bare card stretched it to the shots's full canvas.
+                .modifier(WarrenDesktopMenuSurfaceModifier(width: WarrenDesktopApprovalTray.width))
+            }
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(WarrenColorTokens.dark.windowBackdrop)
+    }
+
+    /// The launch-command bar with the fixture's first workspace.
+    private var presets: some View {
+        let workspace = projection.groups.first?.workspaces.first
+        return VStack(alignment: .leading, spacing: 16) {
+            WarrenDesktopPresetBar(
+                workspace: workspace,
+                isBusy: false,
+                canUseEmbeddedBrowser: true,
+                onLaunch: { _ in }
+            )
+            Text("The bar as it drops from the pane's + control.")
+                .font(WarrenTypography.caption)
+                .foregroundStyle(WarrenColorTokens.dark.ink4)
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(WarrenColorTokens.dark.windowBackdrop)
+    }
+
+    /// Two notices stacked as they arrive.
+    ///
+    /// The stack only takes notices that arrive *after* it appears, so the
+    /// gallery primes it empty and fills it a beat later — otherwise the shot
+    /// photographs an empty corner.
+    private var toasts: some View {
+        ToastGallery()
     }
 
     /// The Settings window with a Host's shape but no live Host behind it.
@@ -251,5 +413,60 @@ private struct DialogGallery: View {
     private func band<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The notice toast stack, primed the way the app primes it: empty on appear,
+/// then filled by an arrival.
+private struct ToastGallery: View {
+    @State private var notices: [WarrenDesktopNotice] = []
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            WarrenGalleryBackdrop()
+            WarrenDesktopNoticeToastStack(
+                notices: notices,
+                isMuted: false,
+                onOpen: {}
+            )
+            // The app pins the stack to the sidebar's width in the window's
+            // bottom-left corner; a shot at full width is not the same surface.
+            .frame(width: 288)
+            .padding(16)
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            notices = [
+                WarrenDesktopNotice(
+                    id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+                    kind: .error,
+                    title: "Update failed",
+                    message: "Warren could not prepare the update. Click to retry."
+                ),
+                WarrenDesktopNotice(
+                    id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+                    kind: .success,
+                    title: "Workspace created",
+                    message: "feat/overlay-polish is ready."
+                ),
+            ]
+        }
+    }
+}
+
+/// The window behind a floating surface, for shots that need one.
+struct WarrenGalleryBackdrop: View {
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            WarrenColorTokens.dark.windowBackdrop
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(WarrenColorTokens.dark.workbenchCardFill)
+                    .frame(width: 300)
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(WarrenColorTokens.dark.workbenchCardFill)
+            }
+            .padding(8)
+        }
     }
 }

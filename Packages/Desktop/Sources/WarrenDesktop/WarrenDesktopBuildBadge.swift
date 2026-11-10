@@ -31,7 +31,7 @@ public enum WarrenDesktopUpdateStatus: Equatable, Sendable {
         case .updating:
             "Updating…"
         case .failed:
-            "Failed"
+            "Update failed"
         }
     }
 
@@ -139,15 +139,16 @@ struct WarrenDesktopBuildBadge: View {
                 .buttonStyle(.plain)
                 .padding(.horizontal, WarrenSpacing.xs)
                 .padding(.vertical, WarrenSpacing.xxs)
-                .background(
-                    color(for: updateStatus, tokens: tokens)
-                        .opacity(isStatusHovered ? 0.10 : 0.04)
-                )
+                // One chip shape for both actionable states: the app's quiet
+                // control surface with the state's colour on the hairline and
+                // the label. A 4% colour wash on a near-black rail was the
+                // faintest control in the window.
+                .background(tokens.fillHover)
                 .overlay {
                     RoundedRectangle(cornerRadius: WarrenRadius.xs)
                         .stroke(
                             color(for: updateStatus, tokens: tokens)
-                                .opacity(isStatusHovered ? 0.45 : 0.20),
+                                .opacity(isStatusHovered ? 0.5 : 0.3),
                             lineWidth: WarrenSpacing.hairline
                         )
                 }
@@ -178,14 +179,19 @@ struct WarrenDesktopBuildBadge: View {
             case .updating:
                 WarrenLoadingIndicator(size: 10, accessibilityLabel: "Updating Warren")
             case .failed:
-                EmptyView()
+                // A dot cannot say "failed", so the retry state keeps a glyph:
+                // the same slot the other two states fill, at the same weight.
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .accessibilityHidden(true)
             case .none:
                 EmptyView()
             }
             Text(label)
-                .font(updateStatus == .failed
-                    ? .system(size: 12, weight: .light)
-                    : WarrenTypography.sectionLabel)
+                // One type treatment for every state: a status chip is a
+                // control, and 12pt light made the failed state look like a
+                // different widget from the update it belongs to.
+                .font(WarrenTypography.statusChip)
                 .foregroundStyle(color(for: updateStatus, tokens: tokens))
                 .lineLimit(1)
         }
@@ -306,7 +312,10 @@ struct WarrenDesktopUpdateIcon: View {
             }
             .frame(width: 14, height: 14)
         case .failed:
-            Image(systemName: "arrow.clockwise.circle.fill")
+            // The same mark the header's chip wears: a red exclamation says
+            // "something went wrong" at a glance, where a circular arrow said
+            // "refresh" and left the failure to the tooltip.
+            Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(tint)
         }
