@@ -116,6 +116,40 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.36.0",
+        dateISO: "2026-11-10",
+        date: "November 10, 2026",
+        title: "Warren finishes the surface pass and one vocabulary for updates.",
+        summary:
+          "A Desktop-only release that finishes the surface pass: the update card is drawn around the wait it explains, the header chip and the sidebar footer say a failed update the same way, and the Inspector, the Conversation pane and the Lead panels are pulled onto the type scale and the grid the window already used. The JSON control protocol remains at 4.0, nothing outside the Desktop app's appearance changed, and this release migrates no state.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Draw the update card around what the wait means: the app's own icon, the version under the title, a 3pt segment sweeping a track instead of a percentage the updater never reports - still under Reduce Motion - and a footnote saying Sessions keep running. The card takes the popover rung of the elevation ladder at a 340-point width instead of a shadow radius of its own.",
+              "Give the update markers one vocabulary: a failed update is an exclamation in the header chip and in the sidebar footer, which no longer draws a circular retry arrow, and the chip keeps one 11pt medium label and one glyph slot in every state instead of dropping to 12pt light with no glyph for a failure. The label says \"Update failed\".",
+              "Set a menu's group header as a 12pt sentence-case caption instead of 11pt tracked capitals, and say it the same way in the preset bar, the approval tray, the notices popover, the Hosts panel and the SSH host list.",
+              "Take the shared type tokens where the window still carried literals of its own: the notice toast's 12.5/11.5 title and message, and the approval tray's 13/11.5/12 title, header meta and action. `WarrenTypography` gains `footnote` for a card's closing line and `statusChip` for a state that is still a control.",
+              "Audit the three surfaces the shot gallery cannot reach: eight Inspector text fades became solid tiers, its status letter grew to 11pt in a 13-point column, \"Read-only\" took the footnote token, and off-grid paddings (5, 7, 9, 11, 22, 34) and two 5 and 6-point radii went to the scale across the Inspector, the Conversation pane and the Lead panels.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Read a blocked primary in the Lead panels as an outlined control instead of a grey fill under grey text: it keeps its outline, drops its fill and lifts its label a tier, as a dialog's disabled confirm does.",
+              "Give the gallery the surfaces it could not photograph: the Lead panels mount in the Conversation dock they sit in, the approval tray panel mounts on the menu surface that caps its height, and the Inspector harness paints the pane's ground before caching, because a transparent capture read as a white page. The UI shot now waits a full second, so the update card's delayed reveal is in frame.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. No Host, CLI, Web or iOS behaviour changed; the work is confined to the Desktop app's appearance and the render harnesses that judge it.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.35.0",
         dateISO: "2026-11-09",
         date: "November 9, 2026",
@@ -1851,6 +1885,40 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.36.0",
+        dateISO: "2026-11-10",
+        date: "2026 年 11 月 10 日",
+        title: "Warren 收尾表面整理，更新状态只说一种话。",
+        summary:
+          "仅涉及 Desktop 的版本：更新卡片围绕等待本身重画，页头胶囊与侧栏底部用同一种方式表达更新失败，Inspector、对话面板与 Lead 面板回到窗口已有的字号阶梯与网格。JSON 控制协议仍为 4.0，Desktop 外观之外没有任何行为改动，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "更新卡片围绕等待本身重画：应用自己的图标、标题下方的版本、在轨道上扫过的一段 3pt 进度（更新器不报告字节，所以从不显示具体百分比，开启“减弱动态效果”时停在原地）以及一行说明 Session 仍在运行的脚注。卡片改用弹出层的抬升档、宽度固定 340 点，不再自带阴影半径。",
+              "更新标记只说一种话：失败在页头胶囊与侧栏底部都是感叹号，底部不再画循环刷新箭头；胶囊在所有状态下共用 11pt medium 标签与同一个图标槽位，不再在失败时降到 12pt light 且没有图标，文案改为“Update failed”。",
+              "菜单分组标题改为 12pt 句式大小写，去掉 11pt 的字距大写：启动命令栏、审批托盘、通知弹层、Hosts 面板与 SSH 主机列表都用同一种写法。",
+              "窗口里仍自带字号的地方改用共享 token：通知提示的 12.5/11.5 标题与正文，审批托盘的 13/11.5/12 标题、页头元信息与操作。`WarrenTypography` 新增 `footnote`（卡片收尾的一行）与 `statusChip`（仍是控件的状态标签）。",
+              "审查截图库覆盖不到的三处表面：Inspector 的八处文字透明度改为实色层级，状态字母增大到 11pt 并占 13 点列宽，“Read-only”改用脚注 token；Inspector、对话面板与 Lead 面板上离开网格的内边距（5、7、9、11、22、34）与两个 5/6 点圆角回到尺度，Lead 面板的按键提示改用 `monoSmall`。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "Lead 面板禁用的主要按钮改为描边控件，而不再是一块灰底灰字：保留描边、去掉填充，标签提升一级，与对话框禁用的确认按钮一致。",
+              "让截图库能拍到原本拍不到的表面：Lead 面板挂进它们实际所在的对话坞，审批托盘挂到菜单层用来限制高度的菜单表面上，Inspector 的渲染在缓存前先画窗格底色，因为透明截图会读成白页；UI 截图等待满 1 秒，让延迟出现的更新卡片进入画面。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。Host、CLI、Web 与 iOS 行为均未改动，改动仅限 Desktop 外观与用于判断外观的渲染测试。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.35.0",
         dateISO: "2026-11-09",

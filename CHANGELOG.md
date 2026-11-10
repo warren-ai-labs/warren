@@ -4,6 +4,66 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-11-10
+
+A Desktop-only release that finishes the surface pass: the update card is drawn
+around the wait it explains, the three update markers share one vocabulary, and
+the Inspector, the Conversation pane and the Lead panels are pulled onto the type
+scale and the grid the window already used. The JSON control protocol remains at
+4.0, nothing outside the Desktop app's appearance changed, and this release
+migrates no state.
+
+### Changed
+
+- Draw the update card around what the wait means: the app's own icon, the
+  version under the title, a 3pt segment sweeping a track instead of a percentage
+  the updater never reports — the segment settles still under Reduce Motion — and
+  a footnote saying Sessions keep running. The card takes the popover rung of the
+  elevation ladder at a 340-point width instead of carrying a shadow radius of
+  its own.
+- Give the update markers one vocabulary. A failed update reads as an exclamation
+  in the header chip and in the sidebar footer, where the footer used to draw a
+  circular retry arrow that said "refresh" and the chip dropped to 12pt light
+  with no glyph at all; the chip now keeps one 11pt medium label and one glyph
+  slot in every state, and the label says "Update failed".
+- Set a menu's group header as a 12pt sentence-case caption instead of 11pt
+  tracked capitals, which was the loudest text in a surface whose job is to stay
+  out of the way. The preset bar, the approval tray, the notices popover, the
+  Hosts panel and the SSH host list all say it the same way.
+- Take the shared type tokens where the window still carried literals of its own:
+  the notice toast's 12.5/11.5 title and message, and the approval tray's
+  13/11.5/12 title, header meta and action. `WarrenTypography` gains `footnote`
+  for a card's closing line and `statusChip` for a state that is still a control.
+- Audit the three surfaces the shot gallery cannot reach. In the Inspector, eight
+  text fades became solid tiers, the status letter grew to 11pt in a 13-point
+  column, and "Read-only" took the footnote token. Across the Inspector, the
+  Conversation pane and the Lead panels, off-grid paddings (5, 7, 9, 11, 22, 34)
+  and two 5 and 6-point radii went to the scale, and the Lead panels' key hint
+  took `monoSmall`.
+
+### Fixed
+
+- Read a blocked primary in the Lead panels as an outlined control instead of a
+  grey fill under grey text, which sat beside a bright secondary and looked like
+  a button already pressed. It keeps its outline, drops its fill and lifts its
+  label a tier, as a dialog's disabled confirm does.
+- Give the gallery the surfaces it could not photograph. The Lead panels mount in
+  the Conversation dock they actually sit in, the approval tray panel mounts on
+  the menu surface that caps its height, and the Inspector harness paints the
+  pane's ground before caching, because a transparent capture read as a white
+  page and made the dark palette look broken when it was only unpainted. The UI
+  shot now waits a full second, so the update card's delayed reveal is in frame.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0, no method was added or changed, and
+  this release migrates no state. No Host, CLI, Web or iOS behaviour changed; the
+  work is confined to the Desktop app's appearance and the render harnesses that
+  judge it.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.35.0] - 2026-11-09
 
 A minor release: a Host can be reached from anywhere through a stateless,
