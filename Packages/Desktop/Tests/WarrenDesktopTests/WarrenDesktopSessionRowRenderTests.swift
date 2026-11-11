@@ -133,7 +133,8 @@ final class WarrenDesktopSessionRowRenderTests: XCTestCase {
         for height in heights {
             XCTAssertEqual(height, WarrenDesktopSidebarMetrics.sessionRowHeight, accuracy: 0.5)
         }
-        XCTAssertEqual(WarrenDesktopSidebarMetrics.sessionRowHeight, 44, accuracy: 0.001)
+        // The row is two text lines and the padding around them: 7 + 16 + 1 + 15 + 7.
+        XCTAssertEqual(WarrenDesktopSidebarMetrics.sessionRowHeight, 46, accuracy: 0.001)
     }
 
     /// Writes the mounted sidebar to PNGs when asked, so the row can be looked

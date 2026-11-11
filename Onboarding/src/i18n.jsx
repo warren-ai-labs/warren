@@ -116,6 +116,40 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.36.1",
+        dateISO: "2026-11-11",
+        date: "November 11, 2026",
+        title: "A quieter sidebar, and a packaged app that can find its own resources.",
+        summary:
+          "A Desktop-only patch that retunes the sidebar's type, its ink and its rhythm, and stops a packaged app from trapping when it looks for its own resource bundle. The tree's four levels, its row kinds and its 300-point width are unchanged; the JSON control protocol remains at 4.0, nothing outside the Desktop app changed, and this release migrates no state.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Set the sidebar's type on four sizes instead of six: a Session title at 13.5, its second line at 12, the meta tier at 11.5 and numerals at 11. Six sizes used to span three points, so 12 and 11.5 - or 11 and 10.5 - were indistinguishable in one row.",
+              "Give the ink ladder four steps instead of five. Times, counts, glyphs and the second line sat at 32% of the ink, 2.4:1 on the card, under the floor for text that small; they moved up one step, the remaining steps spread to 82 / 64 / 52, and the fractions now resolve per appearance so paper clears the same floor.",
+              "Rework the rhythm: a Session row 46 high, a project 32, a worktree 22, folded and idle rows carrying the height of the rows they fold; gaps of 0, 2, 8, 16 and 28, with 10 between projects when the one above ends in a one-line row.",
+              "End both Session lines on one column: the age is right-aligned in a fixed 30-point column that the second line also reserves, and the icon column shrank from 18 to 16, so the title gained six points of width.",
+              "Set a worktree's branch name in medium weight, so the name that heads a block outranks the activity line above it without borrowing a brighter ink.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Stop a packaged app from trapping when it reads its own resources: `Bundle.module` only looks beside the app bundle and at the build machine's absolute path, so any other Mac hit `fatalError` when Settings showed the app-icon picker. The resolver now searches the app, `swift run` and test layouts and returns nil instead of trapping.",
+              "Draw a folded row at the height of the rows it folds, so a project that ends in \"N idle worktrees\" stops at a row rather than trailing off in a strip two points shorter than every row above it.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. No Host, CLI, Web or iOS behaviour changed.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.36.0",
         dateISO: "2026-11-10",
         date: "November 10, 2026",
@@ -1885,6 +1919,40 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.36.1",
+        dateISO: "2026-11-11",
+        date: "2026 年 11 月 11 日",
+        title: "侧边栏更安静，打包后的应用也能找到自己的资源。",
+        summary:
+          "仅涉及 Desktop 的补丁：重调侧边栏的字号、墨色与节奏，并修掉打包后的应用在读取自身资源时崩溃的问题。四层结构、行种类与 300 点宽度未变；JSON 控制协议仍为 4.0，Desktop 之外没有任何改动，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "侧边栏字号从六档收为四档：Session 标题 13.5、副行 12、元信息 11.5、数字 11。此前六档只跨三个点，12 与 11.5、11 与 10.5 在同一行里分辨不出来。",
+              "墨色阶梯从五级收为四级。时间、计数、图标与副行原先落在 32% 墨色上，对比度 2.4:1，低于这类小字的可读门槛；它们上移一级，其余三级展开为 82 / 64 / 52，并按外观分别取值，使浅色纸面同样达标。",
+              "重调节奏：Session 行 46、项目行 32、工作树行 22，折叠行与空闲行取其被折叠行的高度；间距为 0、2、8、16、28，当上一个项目以一行摘要结尾时，项目间距降为 10。",
+              "Session 两行都收在同一列：时间固定在 30 点列内右对齐，副行同样预留该列；图标列由 18 收窄到 16，标题因此多出六个点的宽度。",
+              "工作树的分支名改用 medium 字重：它作为一块内容的标题，用字重压过上一行的活动说明，而不必借用更亮的墨色。",
+            ],
+          },
+          {
+            title: "修复",
+            items: [
+              "修掉打包后的应用读取自身资源时的崩溃：`Bundle.module` 只在应用包旁与构建机的绝对路径下查找，换一台 Mac 之后，一打开设置里的图标选择器就会 `fatalError`。现在改为在应用、`swift run` 与测试三种布局中查找，找不到时返回 nil 而不是崩溃。",
+              "折叠行改用它所折叠的行的高度：以“N idle worktrees”结尾的项目不再以一条比上面每行都矮两点的条子收尾。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。Host、CLI、Web 与 iOS 行为均未改动。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.36.0",
         dateISO: "2026-11-10",

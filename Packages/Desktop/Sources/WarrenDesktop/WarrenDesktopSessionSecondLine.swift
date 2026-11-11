@@ -86,16 +86,16 @@ struct WarrenDesktopSessionSecondLine: Equatable {
         let warning: Color
         let failure: Color
 
-        /// One ink per state: a working line in `t4` with a `t2` peak moving
-        /// across it, a finished-unseen one in `t4`, a resting one in `t5`, a
-        /// request in ember and a failure in red. Counts and separators sit
-        /// in the line's own ink; only the context reminder keeps its amber.
+        /// Two inks per state: a working line in `t4` with a `t2` peak moving
+        /// across it, a resting or finished one in `t4`, a request in ember and
+        /// a failure in red. Counts, separators and the idle line share the
+        /// line's own ink; only the context reminder keeps its amber.
         static func resolve(tone: Tone, tokens: WarrenColorTokens) -> Tint {
             let ink = tokens.sidebarInk
             let base: Color
             switch tone {
             case .running, .done: base = ink.t4
-            case .idle: base = ink.t5
+            case .idle: base = ink.t4
             case .attention: base = tokens.highlight
             case .failure: base = tokens.sessionFailureText
             }
@@ -103,8 +103,8 @@ struct WarrenDesktopSessionSecondLine: Equatable {
                 primary: base,
                 primaryPeak: tone == .running ? ink.t2 : base,
                 extra: base,
-                meta: tone == .running || tone == .done ? ink.t5 : base,
-                separator: tone == .running || tone == .done ? ink.t5 : base,
+                meta: base,
+                separator: base,
                 warning: tokens.sessionContextWarningText,
                 failure: tokens.sessionFailureText
             )
@@ -149,14 +149,20 @@ extension WarrenColorTokens {
 /// is added only when the primary plus that whole append fit. Nothing appended
 /// is ever truncated, and the first append that does not fit stops the rest.
 enum WarrenDesktopSessionSecondLineLayout {
-    static let primaryFontSize: CGFloat = 11.5
+    /// The second line's size.
+    ///
+    /// 12 against a 13.5 title: the size step is small on purpose, because the
+    /// line is not told apart by size any more — the ink does that, one tier
+    /// down. Shrinking it instead made the row's lower half read as fine print
+    /// at 46pt tall, which is what a two-line row must not do.
+    static let primaryFontSize: CGFloat = 12
     /// The wide scripts' size on the same line. Layout measures at the Latin
     /// size, which only errs toward leaving room.
-    static let primaryWideFontSize: CGFloat = 11
+    static let primaryWideFontSize: CGFloat = 11.5
     /// A shell command's own size. The monospaced face is a little smaller so
     /// its wider glyphs occupy the same run as the row's regular text.
-    static let commandFontSize: CGFloat = 11
-    /// The meta tier, a half step under the activity it trails.
+    static let commandFontSize: CGFloat = 11.5
+    /// The meta tier, one step under the activity it trails.
     static let metaFontSize: CGFloat = 11
     /// The trailing column's ceiling, the width of `icon + 4/6` at the meta size.
     static let maximumMetaWidth: CGFloat = 35

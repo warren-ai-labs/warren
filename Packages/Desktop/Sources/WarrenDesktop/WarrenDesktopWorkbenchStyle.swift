@@ -12,10 +12,11 @@ enum WarrenDesktopSidebarMetrics {
     /// Inset of the tree from the sidebar card's edges. The top inset is the
     /// gap under the tab bar's hairline.
     static let contentHorizontalInset: CGFloat = 8
-    static let contentVerticalInset: CGFloat = 10
+    static let contentVerticalInset: CGFloat = 8
     /// The tree's gaps, each wider than the one inside it: 0 between
-    /// Sessions, 6 between worktrees (0 between two with no Session), 14
-    /// between groups. No hairline divides groups; the gap does.
+    /// Sessions, 2 between one-line summaries, 8 between worktrees (0 between
+    /// two with no Session), 16 between groups. No hairline divides groups; the
+    /// gap does.
     ///
     /// Between Tasks and the Host sections, where both are listed.
     static let sectionSpacing: CGFloat = 28
@@ -23,7 +24,21 @@ enum WarrenDesktopSidebarMetrics {
     static let sectionHeaderSpacing: CGFloat = 6
     /// Between two groups of one list, and from the last project to the
     /// inactive-projects row.
-    static let groupSpacing: CGFloat = 20
+    ///
+    /// The tree spaces by four steps: 0 inside a block, 2 between one-line
+    /// summaries, 8 between blocks, 16 between groups. A rhythm pass widened
+    /// them to 24 and 14 and it read loose: the rows already carry two lines and
+    /// an icon, so a gap only has to outrank the one below it, not give every
+    /// group its own page.
+    static let groupSpacing: CGFloat = 16
+    /// Between two groups when the one above ends in a one-line row.
+    ///
+    /// The gap is read against the row it follows. Sixteen after a 46pt block of
+    /// Sessions is a break; the same sixteen after a 22pt "N idle worktrees"
+    /// line is a hole, because the eye measures it against that line. Ten keeps
+    /// the boundary above the worktree gap without leaving the last row of a
+    /// project floating.
+    static let groupSpacingAfterOneLineRow: CGFloat = 10
     /// Above and below a folded group, so two folded neighbours sit 2pt apart.
     static let foldedGroupInset: CGFloat = 1
     /// Between a group row and its first worktree: the rows' heights carry it.
@@ -31,22 +46,34 @@ enum WarrenDesktopSidebarMetrics {
     /// Between two worktrees of one group when either lists Sessions. Two
     /// worktrees with none pack with no gap, so a group of idle branches
     /// reads as one short list rather than a column of islands.
-    static let worktreeSpacing: CGFloat = 10
+    static let worktreeSpacing: CGFloat = 8
     /// Between one-line summary rows (a folded worktree, an empty one, the
     /// idle row), which read together as one list.
     static let summarySpacing: CGFloat = 2
-    /// A one-line summary row's height.
+    /// A one-line summary row's height: a folded worktree, the row a project's
+    /// Task worktrees fold into.
+    ///
+    /// The worktree row's own height. A folded row is a row among rows, and when
+    /// it drew two points shorter than the row it folds, a project with one read
+    /// as a list that trails off rather than one that ends.
     static let summaryRowHeight: CGFloat = 22
-    /// Between a worktree row and its Sessions, and between two Sessions:
-    /// the rows' own padding is the gap.
+    /// Between a worktree row and its Sessions, and between two Sessions: the
+    /// rows' own padding is the gap. A 2pt seam between Sessions was tried and
+    /// taken back out: with the rows at 44 the seam was the thing making the
+    /// column read as a list of cards rather than one tree.
     static let sessionSpacing: CGFloat = 0
 
     static let sectionHeaderHeight: CGFloat = 20
     /// The Projects / Tasks tab bar, and the gap under its hairline.
     static let tabBarHeight: CGFloat = 30
-    static let groupRowHeight: CGFloat = 30
-    static let worktreeRowHeight: CGFloat = 24
-    /// A worktree with no Session, listed under its project's idle row.
+    static let groupRowHeight: CGFloat = 32
+    static let worktreeRowHeight: CGFloat = 22
+    /// A worktree with no Session, listed under its project's idle row, and
+    /// the folded row that stands for them all.
+    ///
+    /// The worktree row's own height: a folded list is a row among the rows it
+    /// folds, not a caption under them. At 20 the idle row sat a step lower than
+    /// every neighbour, which read as a leftover strip once a project had one.
     static let idleWorktreeRowHeight: CGFloat = 22
     /// The row that folds a section's inactive projects away, and each row
     /// of its list.
@@ -65,11 +92,14 @@ enum WarrenDesktopSidebarMetrics {
     static let rowHorizontalPadding: CGFloat = 8
     static let rowRadius: CGFloat = 7
     /// Every row's leading icon sits centred in this column, and its text
-    /// starts the same gap after it: at 34pt into the row, at every level.
-    static let iconColumnWidth: CGFloat = 18
+    /// starts the same gap after it, at every level.
+    ///
+    /// The column is the widest mark it holds — a 16pt Session badge — so the
+    /// 18pt it carried left two points of air that came out of the title.
+    static let iconColumnWidth: CGFloat = 16
     static let iconTextSpacing: CGFloat = 8
 
-    static let groupIconSize: CGFloat = 18
+    static let groupIconSize: CGFloat = 16
     static let groupIconSpacing: CGFloat = iconTextSpacing
     static let worktreeIconSize: CGFloat = 12
     /// A Task worktree's project tile, in the icon column.
@@ -79,7 +109,14 @@ enum WarrenDesktopSidebarMetrics {
 
     static let sessionIconSize: CGFloat = 16
     static let sessionIconSpacing: CGFloat = iconTextSpacing
-    static let sessionVerticalPadding: CGFloat = 6
+    /// The breathing room above and below a Session row's two lines.
+    ///
+    /// Seven. Five was tried and taken back out — at 42 consecutive Session rows
+    /// touch and one row's second line reads as the third column of the block
+    /// above — and six still left the row flat next to its own icon: the 16pt
+    /// mark is what the eye measures the row against, and a two-line row only
+    /// reads taller than its icon once the padding is over half of it.
+    static let sessionVerticalPadding: CGFloat = 7
     /// A Session row's second line, the same height whether it is drawing the
     /// activity now or the last one.
     static let sessionActivityLineHeight: CGFloat = 15
@@ -135,16 +172,17 @@ extension WarrenColorTokens {
     var treeActivityHighlightText: Color { sidebarInk.t2 }
     /// Labels that name rather than say: the idle and inactive rows' words.
     var treeQuietText: Color { sidebarInk.t4 }
-    var treeChevron: Color { sidebarInk.t5 }
-    /// The quietest tier: times, counts, a branch's prefix, glyphs, a
-    /// resting Session's second line.
-    var treeFaintText: Color { sidebarInk.t5 }
+    var treeChevron: Color { sidebarInk.t4 }
+    /// Times, counts, a branch's prefix, glyphs, a resting Session's second
+    /// line. The same step as `treeQuietText`: the fifth ink was four points
+    /// from this one, so it read as the same tier while failing contrast.
+    var treeFaintText: Color { sidebarInk.t4 }
     /// A branch name sits a step under the Session lines it heads: the rows
     /// carry the content, the branch only says which checkout they are in.
     var treeBranchText: Color { sidebarInk.branch }
     /// The branch's `release/…/` prefix, one more step down.
     var treeBranchPrefixText: Color { sidebarInk.branch.opacity(0.7) }
-    var treeGroupIcon: Color { sidebarInk.t5 }
+    var treeGroupIcon: Color { sidebarInk.t4 }
     var treeRowHover: Color { sidebarInk.hover }
     var treeRowSelected: Color { sidebarInk.selected }
     /// The selected Tab's pill. Opaque, so a badge's ring can match it.
@@ -166,28 +204,39 @@ enum WarrenDesktopTreeTypography {
     static let groupName = Font.system(size: groupNameSize, weight: .semibold)
     static let groupNameWide = Font.system(size: groupNameWideSize, weight: .semibold)
     /// A Session's title, the group name's size in regular weight.
-    static let sessionTitle = Font.system(size: 13, weight: .regular)
-    static let sessionTitleWide = Font.system(size: 12.5, weight: .regular)
+    ///
+    /// It used to be 13 against an 11.5 second line: a 1.13× step, which the eye
+    /// cannot separate, so the tree leaned on ink alone to say which line is the
+    /// name. 13.5 against 11 is 1.23×, and weight still separates a group name
+    /// from a title at the same size.
+    static let sessionTitle = Font.system(size: 13.5, weight: .regular)
+    static let sessionTitleWide = Font.system(size: 13, weight: .regular)
     /// A branch name: a git ref, so monospaced. Its Chinese runs keep the
     /// proportional face, a step down, since a monospaced CJK run is uneven.
-    static let branchName = Font.system(size: 11, weight: .regular, design: .monospaced)
-    static let branchNameWide = Font.system(size: 10.5, weight: .regular)
+    ///
+    /// Medium weight, because a branch name heads the Sessions under it and the
+    /// line directly above it is the previous block's activity line at the same
+    /// ink. Rank by weight instead of by brightness: one more step of ink would
+    /// put the label level with the titles it labels.
+    static let branchName = Font.system(size: 11.5, weight: .medium, design: .monospaced)
+    static let branchNameWide = Font.system(size: 11, weight: .medium)
     /// The project a Task's worktree belongs to, ahead of its branch.
-    static let worktreeProjectName = Font.system(size: 12, weight: .medium)
+    static let worktreeProjectName = Font.system(size: 11.5, weight: .medium)
     /// "N idle worktrees" and "N inactive projects": the words in SF Pro,
     /// the count in SF Mono.
     static let foldedCount = Font.system(size: 11.5, weight: .regular)
     static let foldedCountNumber = Font.system(size: 11, weight: .medium, design: .monospaced)
-    static let inactiveProjectName = Font.system(size: 12.5, weight: .regular)
-    /// Times and counts: SF Mono, so a column of them lines up.
-    static let age = Font.system(size: 10.5, weight: .regular, design: .monospaced)
-    static let count = Font.system(size: 10.5, weight: .medium, design: .monospaced)
+    static let inactiveProjectName = Font.system(size: 11.5, weight: .regular)
+    /// Times and counts: SF Mono, so a column of them lines up. One step under
+    /// the second line, and large enough to stay legible on `t4`.
+    static let age = Font.system(size: 11, weight: .regular, design: .monospaced)
+    static let count = Font.system(size: 11, weight: .medium, design: .monospaced)
     /// The Projects / Tasks tabs, and the count after each.
     static let tabTitle = Font.system(size: 13, weight: .medium)
     static let tabTitleSelected = Font.system(size: 13, weight: .semibold)
-    static let tabCount = Font.system(size: 10, weight: .medium, design: .monospaced)
+    static let tabCount = Font.system(size: 11, weight: .medium, design: .monospaced)
     /// The `⌘T` hint on the Task worktree a new Session opens in.
-    static let keyHint = Font.system(size: 10, weight: .medium, design: .monospaced)
+    static let keyHint = Font.system(size: 11, weight: .medium, design: .monospaced)
     /// A section heading where one remains: the multi-Host "Projects · Hosts".
     static let sectionTitle = Font.system(size: 11.5, weight: .semibold)
     static let sectionCount = Font.system(size: 11, weight: .medium).monospacedDigit()
@@ -259,17 +308,27 @@ struct WarrenDesktopTreeGroupSeparator: ViewModifier {
     let isFirst: Bool
     var isFolded = false
     var followsFolded = false
+    /// The group above ends in a one-line row rather than a block.
+    var followsOneLineRow = false
     var isLast = false
+
+    private var separatorHeight: CGFloat {
+        if isFolded && followsFolded {
+            return WarrenDesktopSidebarMetrics.summarySpacing
+        }
+        return followsOneLineRow
+            ? WarrenDesktopSidebarMetrics.groupSpacingAfterOneLineRow
+            : WarrenDesktopSidebarMetrics.groupSpacing
+    }
 
     func body(content: Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Groups are 20 apart; folded groups in a run pack 2 apart and
-            // read as one list.
+            // Groups are 16 apart; folded groups in a run pack 2 apart and
+            // read as one list, and a group that ends in a one-line row gets a
+            // smaller gap than one that ends in a block.
             if !isFirst {
                 Color.clear
-                    .frame(height: isFolded && followsFolded
-                        ? WarrenDesktopSidebarMetrics.summarySpacing
-                        : WarrenDesktopSidebarMetrics.groupSpacing)
+                    .frame(height: separatorHeight)
                     .accessibilityHidden(true)
             }
             content
@@ -282,12 +341,14 @@ extension View {
         isFirst: Bool,
         isFolded: Bool = false,
         followsFolded: Bool = false,
+        followsOneLineRow: Bool = false,
         isLast: Bool = false
     ) -> some View {
         modifier(WarrenDesktopTreeGroupSeparator(
             isFirst: isFirst,
             isFolded: isFolded,
             followsFolded: followsFolded,
+            followsOneLineRow: followsOneLineRow,
             isLast: isLast
         ))
     }
@@ -300,31 +361,38 @@ extension View {
         of item: Item,
         in items: [Item],
         isFollowed: Bool = false,
-        isFolded: (Item) -> Bool
+        isFolded: (Item) -> Bool,
+        endsWithOneLineRow: (Item) -> Bool = { _ in false }
     ) -> some View {
         let neighbours = WarrenDesktopTreeGroupNeighbours(of: item, in: items, isFolded: isFolded)
         return warrenTreeGroupSeparator(
             isFirst: neighbours.isFirst,
             isFolded: isFolded(item),
             followsFolded: neighbours.followsFolded,
+            followsOneLineRow: neighbours.previous.map(endsWithOneLineRow) ?? false,
             isLast: neighbours.isLast && !isFollowed
         )
     }
 }
 
 /// Where one group sits among its section's groups, for its separator.
-struct WarrenDesktopTreeGroupNeighbours {
+struct WarrenDesktopTreeGroupNeighbours<Item> {
     let isFirst: Bool
     let followsFolded: Bool
     let isLast: Bool
+    /// The group directly above, so a separator can ask what it ends with.
+    let previous: Item?
 
-    init<Item: Identifiable>(of item: Item, in items: [Item], isFolded: (Item) -> Bool) {
+    init(of item: Item, in items: [Item], isFolded: (Item) -> Bool) where Item: Identifiable {
         let index = items.firstIndex { $0.id == item.id }
         isFirst = index == nil || index == items.startIndex
         if let index, index > items.startIndex {
-            followsFolded = isFolded(items[items.index(before: index)])
+            let above = items[items.index(before: index)]
+            followsFolded = isFolded(above)
+            previous = above
         } else {
             followsFolded = false
+            previous = nil
         }
         isLast = index == nil || index == items.index(before: items.endIndex)
     }

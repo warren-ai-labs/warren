@@ -381,7 +381,13 @@ struct WarrenDesktopSidebarHostRows: View {
                     of: scopedGroup,
                     in: listed,
                     isFollowed: showsInactiveRow,
-                    isFolded: { !isProjectExpanded($0.group.project.id, in: host) }
+                    isFolded: { !isProjectExpanded($0.group.project.id, in: host) },
+                    endsWithOneLineRow: { other in
+                        guard isProjectExpanded(other.group.project.id, in: host) else { return false }
+                        return WarrenDesktopWorkspaceSplit(other.group.workspaces) {
+                            isWorkspaceLive($0, in: host)
+                        }.showsIdleRow
+                    }
                 )
             }
             if showsInactiveRow {
@@ -442,7 +448,7 @@ struct WarrenDesktopSidebarHostRows: View {
                 count: workspaces.count,
                 singular: "idle worktree",
                 plural: "idle worktrees",
-                height: WarrenDesktopSidebarMetrics.summaryRowHeight,
+                height: WarrenDesktopSidebarMetrics.idleWorktreeRowHeight,
                 isExpanded: isExpanded,
                 semanticID: "\(key).idle-worktrees",
                 isEnabled: enabled,

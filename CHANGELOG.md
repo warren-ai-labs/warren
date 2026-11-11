@@ -4,6 +4,68 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.36.1] - 2026-11-11
+
+A Desktop-only patch that retunes the sidebar's type, its ink and its rhythm, and
+stops a packaged app from trapping when it looks for its own resource bundle. The
+tree's four levels, its row kinds and its 300-point width are unchanged; the JSON
+control protocol remains at 4.0, nothing outside the Desktop app changed, and this
+release migrates no state.
+
+### Changed
+
+- Set the sidebar's type on four sizes instead of six. A Session title is 13.5,
+  its second line 12, the meta tier 11.5 and numerals 11; before, six sizes
+  spanned three points, so 12 and 11.5 - or 11 and 10.5 - were indistinguishable
+  in one row and the tree leaned on ink alone to say which line was the name.
+- Give the ink ladder four steps instead of five. Times, counts, glyphs and the
+  second line sat at 32% of the ink, 2.4:1 on the card: under the floor for text
+  that small, and four points from the step above, so it neither cleared the floor
+  nor read as its own tier. Those lines moved up one step, the three remaining
+  steps spread to 82 / 64 / 52, and the fractions now resolve per appearance
+  because the mid-grey that clears 4.5:1 on a near-black card lands under it on
+  paper. A test walks both ladders and fails if a step drops below the floor or
+  stops descending.
+- Rework the rhythm. A Session row is 46 (7pt of padding above and below two
+  lines), a project 32, a worktree 22, and the folded and idle rows carry the
+  height of the rows they fold. Gaps run 0 between a worktree's Sessions, 2 from
+  a worktree's name to its first Session, 8 between worktrees, 16 between
+  projects and 28 between sections, with 10 between projects when the one above
+  ends in a one-line row: 16 after a 46-point block is a break, and the same 16
+  after a 22-point line is a hole.
+- End both Session lines on one column. The age is right-aligned in a fixed
+  30-point column that the second line also reserves, so a title and its activity
+  line stop at the same x instead of the second line falling four to eight points
+  short. The icon column shrank from 18 to 16 - the width of the widest mark it
+  holds - and that point plus the four from the age column went to the title.
+- Set a worktree's branch name in medium weight. It heads the Sessions under it,
+  but the line directly above is the previous block's activity line at the same
+  ink, so the name had no rank of its own; weight gives it one without raising it
+  level with the titles it labels.
+
+### Fixed
+
+- Stop a packaged app from trapping when it reads its own resources.
+  `Bundle.module`'s generated accessor only looks beside `Bundle.main.bundleURL`
+  and at the build directory of the machine that produced the binary, while the
+  app ships its resources in `Contents/Resources`; any other Mac therefore hit
+  `fatalError` as soon as Settings showed the app-icon picker. The resolver now
+  searches the app, `swift run` and test layouts and returns nil instead of
+  trapping.
+- Draw a folded row at the height of the rows it folds. "N idle worktrees" and a
+  folded worktree drew at 20 while the worktree rows they fold drew at 22, and the
+  idle row is the last thing a project draws: a list that ends in a strip shorter
+  than every row above it does not end, it trails off.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0, no method was added or changed, and
+  this release migrates no state. No Host, CLI, Web or iOS behaviour changed; the
+  work is confined to the Desktop app's sidebar and its resource loading.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.36.0] - 2026-11-10
 
 A Desktop-only release that finishes the surface pass: the update card is drawn

@@ -231,6 +231,10 @@ struct WarrenDesktopSidebarRows: View {
                                     isFollowed: showsInactiveRow
                                 ) {
                                     isProjectFolded($0)
+                                } endsWithOneLineRow: { other in
+                                    // A project that shows an idle-worktrees row
+                                    // ends in a 22pt line, not a block.
+                                    !isProjectFolded(other) && workspaceSplit(of: other).showsIdleRow
                                 }
                             }
                             if showsInactiveRow {
@@ -648,7 +652,7 @@ struct WarrenDesktopSidebarRows: View {
                 count: workspaces.count,
                 singular: "idle worktree",
                 plural: "idle worktrees",
-                height: WarrenDesktopSidebarMetrics.summaryRowHeight,
+                height: WarrenDesktopSidebarMetrics.idleWorktreeRowHeight,
                 isExpanded: isExpanded,
                 semanticID: "project-idle-worktrees.\(projectID.description)",
                 isEnabled: !isInteractionDisabled,
@@ -1869,7 +1873,12 @@ struct WarrenDesktopWorkspaceSessionRow: View {
 
     /// The title line's trailing age column, which the second line leaves
     /// empty: the widest age, `59m`, and the gap before it.
-    static let ageColumnWidth: CGFloat = 34
+    ///
+    /// Both lines end on this column, so a title and its activity line stop at
+    /// the same x. It used to be 34 while the title's age took only its own
+    /// width, which left the second line four to eight points short of the
+    /// title and put the seam in a different place on every row.
+    static let ageColumnWidth: CGFloat = 30
 
     static func reservesAgeColumn(_ line: WarrenDesktopSessionSecondLine) -> Bool {
         if case .plan = line.meta { return false }
@@ -1968,8 +1977,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                 Text(age)
                     .font(WarrenDesktopTreeTypography.age)
                     .foregroundStyle(tokens.treeFaintText)
-                    .padding(.leading, 2)
-                    .fixedSize()
+                    .frame(width: Self.ageColumnWidth - 6, alignment: .trailing)
             }
         }
     }

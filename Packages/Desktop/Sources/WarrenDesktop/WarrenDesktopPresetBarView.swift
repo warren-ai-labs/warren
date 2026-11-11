@@ -475,12 +475,7 @@ final class WarrenPresetIconCache {
     typealias Loader = @MainActor (String) -> NSImage?
 
     static let shared = WarrenPresetIconCache { name in
-        let packaged = Bundle.main.resourceURL?
-            .appendingPathComponent("WarrenDesktop_WarrenDesktop.bundle", isDirectory: true)
-            .appendingPathComponent("\(name).svg")
-        let url = packaged.flatMap {
-            FileManager.default.fileExists(atPath: $0.path) ? $0 : nil
-        } ?? Bundle.module.url(forResource: name, withExtension: "svg")
+        let url = WarrenDesktopResources.bundle?.url(forResource: name, withExtension: "svg")
         return url.flatMap(NSImage.init(contentsOf:))
     }
 

@@ -24,7 +24,7 @@ public enum WarrenDesktopDockIcon {
 
     /// The colorway's icon on the macOS icon grid, as the Dock would draw it.
     public static func image(for colorway: WarrenAppIconColorway) -> NSImage? {
-        Bundle.module.image(forResource: resourceName(for: colorway))
+        WarrenDesktopResources.bundle?.image(forResource: resourceName(for: colorway))
     }
 
     static func resourceName(for colorway: WarrenAppIconColorway) -> String {

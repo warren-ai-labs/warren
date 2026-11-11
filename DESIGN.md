@@ -406,7 +406,9 @@ Colors in each client resolve through that client's semantic token tier. A compo
 
 ### 12.1 A theme authors three colors, the ladder is derived
 
-`WarrenPalette` holds what a theme author actually chooses: the card ground (`background`), the ink (`foreground`), the recess behind the cards (`recess`), and the status and identity hues. Every other neutral value is a mix of those three, resolved in one place (`WarrenPalette` and `WarrenColorTokens.make(from:)`). Surfaces step away from the ground by a stated fraction, and the ink ladder — `ink2`, `ink3`, `ink4`, the sidebar's five tiers — descends by construction rather than by five hand-measured literals.
+`WarrenPalette` holds what a theme author actually chooses: the card ground (`background`), the ink (`foreground`), the recess behind the cards (`recess`), and the status and identity hues. Every other neutral value is a mix of those three, resolved in one place (`WarrenPalette` and `WarrenColorTokens.make(from:)`). Surfaces step away from the ground by a stated fraction, and the ink ladder — `ink2`, `ink3`, `ink4`, the sidebar's four tiers — descends by construction rather than by hand-measured literals.
+
+The sidebar carried five tiers until the last one proved unusable: at 32% of the ink it measured 2.4:1 on the card, under the 4.5:1 floor for text this small, and only four points from the tier above, so it neither cleared the floor nor read as its own step. Times, counts, glyphs and the second line moved up to the fourth tier; the ladder lost a step and gained a legible floor.
 
 The two appearances take different fractions where they must, and say why in code: paper steps its panels toward the warm recess because a panel that lifts off black has to get lighter while a panel on paper has to get warmer, and paper starts its sidebar ladder closer to its ink because the same fraction that clears AA on a near-black ground lands under it on white.
 

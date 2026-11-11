@@ -141,6 +141,35 @@ final class WarrenPaletteTests: XCTestCase {
         )
     }
 
+    /// Every step of the tree's ink ladder clears the small-text floor on its
+    /// own ground, and each reads quieter than the one above it.
+    ///
+    /// The ladder's last step sat at 32% of the ink once: 2.4:1 on the card, and
+    /// four points from the step above, so it neither cleared the floor nor read
+    /// as a tier of its own. Times, counts and the second line live there, which
+    /// is why the floor is asserted rather than eyeballed.
+    func testSidebarInkLadderClearsTheSmallTextFloor() {
+        for (name, palette) in themes {
+            let ground = palette.background
+            var previous: WarrenRGB?
+            for (tier, weight) in WarrenSidebarInkLadder.weights(for: palette.appearance).enumerated() {
+                let ink = palette.ink(weight)
+                XCTAssertGreaterThanOrEqual(
+                    ink.contrastRatio(with: ground), 4.5,
+                    "\(name): sidebar tier t\(tier + 1) is below the small-text floor"
+                )
+                if let previous {
+                    XCTAssertGreaterThan(
+                        distance(previous, from: ground),
+                        distance(ink, from: ground),
+                        "\(name): sidebar tier t\(tier + 1) must read quieter than t\(tier)"
+                    )
+                }
+                previous = ink
+            }
+        }
+    }
+
     /// Mixing is the whole mechanism, so it must be exact at both ends.
     func testMixIsExactAtItsEndpoints() {
         let a = WarrenRGB.hex(0x1020_30)

@@ -25,11 +25,38 @@ public enum WarrenSidebarTextWeight {
     public static let descendingTiers: [Double] = [workspace, leaf, section]
 }
 
-/// The sidebar's five inks, brightest first, and its two washes.
+/// The sidebar's ink ladder, as fractions of the palette's ink over its ground.
+///
+/// Kept as numbers rather than literals so the order and the floor are things a
+/// test can walk: every step must read quieter than the one above it, and none
+/// may fall under the 4.5:1 floor that small text needs.
+///
+/// The two appearances take different fractions, and the reason is arithmetic:
+/// a mid-grey loses contrast faster against white than against near-black, so
+/// the fractions that clear the floor on the card land under it on paper. Paper
+/// therefore steps closer to its ink at every tier.
+public enum WarrenSidebarInkLadder {
+    /// Brightest tier first: a group name, a live title, a resting title, and the
+    /// tier that carries the second line, branch names, times and counts.
+    public static func weights(for appearance: WarrenPalette.Appearance) -> [Double] {
+        switch appearance {
+        case .dark: return [1, 0.82, 0.64, 0.52]
+        case .light: return [1, 0.86, 0.72, 0.60]
+        }
+    }
+}
+
+/// The sidebar's four inks, brightest first, and its two washes.
 ///
 /// Solid values rather than fades of one base: the sidebar design names each
 /// step by its colour, so a row's tier is the same on every ground and the
 /// steps stay as far apart as drawn.
+///
+/// The ladder used to carry a fifth step at 32% of the ink base. Times, counts
+/// and the second line sat on it, at 2.4:1 against the card — below the 4.5:1
+/// floor for text this small, and four points from the step above, which read
+/// as one tier in a list. Those lines now share `t4`; the fifth step is gone
+/// rather than restated.
 public struct WarrenSidebarInk: Sendable {
     /// Project and Task names, a selected title, the selected tab.
     public let t1: Color
@@ -37,12 +64,10 @@ public struct WarrenSidebarInk: Sendable {
     public let t2: Color
     /// A resting Session's title, a Task worktree's project name.
     public let t3: Color
-    /// Branch names, a live second line, an unselected tab.
+    /// Branch names, the second line, times, counts, glyphs.
     public let t4: Color
-    /// Times, counts, branch prefixes, glyphs, a resting second line.
-    public let t5: Color
-    /// A worktree's branch name. On Ember it sits above `t5`, because the
-    /// quietest tier is too faint for the name that heads a block.
+    /// A worktree's branch name, the same step as `t4`: the name that heads a
+    /// block is not metadata and does not read quieter than what it heads.
     public let branch: Color
     public let hover: Color
     public let selected: Color
@@ -354,6 +379,7 @@ public struct WarrenColorTokens: Sendable {
     private static func make(from palette: WarrenPalette) -> Self {
         let background = palette.background
         let foreground = palette.foreground
+        let sidebarInkLadder = WarrenSidebarInkLadder.weights(for: palette.appearance)
         // The washes stay alpha: they land on rows, panes and popovers whose
         // ground differs, and a solid value would have to know which one.
         let isLight = palette.appearance == .light
@@ -403,11 +429,10 @@ public struct WarrenColorTokens: Sendable {
             sidebarTextBase: palette.sidebarTextBase.color,
             sidebarInk: WarrenSidebarInk(
                 t1: foreground.color,
-                t2: palette.ink2.color,
-                t3: palette.ink(0.62).color,
-                t4: palette.ink(0.46).color,
-                t5: palette.ink(0.32).color,
-                branch: palette.ink(0.40).color,
+                t2: palette.ink(sidebarInkLadder[1]).color,
+                t3: palette.ink(sidebarInkLadder[2]).color,
+                t4: palette.ink(sidebarInkLadder[3]).color,
+                branch: palette.ink(sidebarInkLadder[3]).color,
                 hover: foreground.color.opacity(hoverOpacity),
                 selected: foreground.color.opacity(selectedOpacity)
             ),

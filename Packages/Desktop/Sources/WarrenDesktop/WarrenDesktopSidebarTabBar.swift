@@ -97,7 +97,7 @@ struct WarrenDesktopSidebarTabBar: View {
                     .foregroundStyle(isSelected ? ink.t1 : ink.t4)
                 Text("\(count)")
                     .font(WarrenDesktopTreeTypography.tabCount)
-                    .foregroundStyle(isSelected ? ink.t4 : ink.t5)
+                    .foregroundStyle(ink.t4)
                 if needsYou && !isSelected {
                     Circle()
                         .fill(tokens.highlight)

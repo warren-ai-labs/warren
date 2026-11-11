@@ -12,13 +12,19 @@ import WarrenObservation
 struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
     let leafCount: Int
     /// The gap between the row and its first leaf.
-    var rowSpacing: CGFloat = WarrenDesktopSidebarMetrics.sessionSpacing
+    ///
+    /// Two, not none: the worktree's branch name and the Session's title sit in
+    /// the same column, so with nothing between them they read as one
+    /// paragraph — a label and the thing it labels with no seam. Two points are
+    /// enough once the name carries its own weight; the gap only lifts the
+    /// label off its own leaves, and two leaves stay as close as they were.
+    var rowSpacing: CGFloat = 2
     let row: Row
     let leaves: Leaves
 
     init(
         leafCount: Int,
-        rowSpacing: CGFloat = WarrenDesktopSidebarMetrics.sessionSpacing,
+        rowSpacing: CGFloat = 2,
         @ViewBuilder row: () -> Row,
         @ViewBuilder leaves: () -> Leaves
     ) {

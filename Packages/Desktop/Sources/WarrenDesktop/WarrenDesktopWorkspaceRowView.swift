@@ -167,7 +167,7 @@ struct WarrenDesktopWorkspaceRow: View {
                             .font(WarrenDesktopTreeTypography.worktreeProjectName)
                             .foregroundStyle(isNewSessionTarget
                                 ? tokens.sidebarInk.t2
-                                : (isQuiet ? tokens.sidebarInk.t5 : tokens.sidebarInk.t3))
+                                : (isQuiet ? tokens.sidebarInk.t4 : tokens.sidebarInk.t3))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                         if showsBranch {
