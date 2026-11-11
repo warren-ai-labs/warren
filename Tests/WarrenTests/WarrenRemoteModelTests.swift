@@ -1769,6 +1769,64 @@ final class WarrenRemoteModelTests: XCTestCase {
             "A tool event leaves the child's waiting state alone"
         )
     }
+
+    /// `remote.enable` answers before the relay dial finishes, so the page keeps
+    /// reading status while the Host says "connecting" and stops once it settles.
+    @MainActor
+    func testRemoteAccessSettlingFollowsTheDial() {
+        let dialing = WarrenRemoteApplicationModel.remoteAccess(from: ["enabled": true, "state": "connecting"])
+        XCTAssertTrue(WarrenRemoteApplicationModel.remoteAccessIsSettling(dialing))
+
+        let connected = WarrenRemoteApplicationModel.remoteAccess(from: [
+            "enabled": true, "connected": true, "state": "connected",
+        ])
+        XCTAssertFalse(WarrenRemoteApplicationModel.remoteAccessIsSettling(connected))
+
+        let turningOff = WarrenRemoteApplicationModel.remoteAccess(from: ["enabled": false, "state": "connecting"])
+        XCTAssertFalse(
+            WarrenRemoteApplicationModel.remoteAccessIsSettling(turningOff),
+            "A Host on its way off has nothing left to dial"
+        )
+
+        // The schedule has to be long enough to cover a dial and short enough
+        // to stop asking: this is not a poll.
+        let total = WarrenRemoteApplicationModel.remoteAccessSettleDelays.reduce(Duration.zero, +)
+        XCTAssertGreaterThan(total, .seconds(1))
+        XCTAssertLessThanOrEqual(total, .seconds(6))
+    }
+
+    /// `remote.status` is a different path from the settings projection, so the
+    /// Desktop reads it as an event while the window is open. What the page
+    /// shows has to survive a daemon that omits optional fields.
+    @MainActor
+    func testRemoteAccessProjectionReadsTheHostStatus() {
+        let projection = WarrenRemoteApplicationModel.remoteAccess(from: [
+            "enabled": true,
+            "connected": true,
+            "state": "connected",
+            "relayURL": "https://bolthole.warrenai.xyz",
+            "relaySource": "self-hosted",
+            "configuredRelayURL": "https://relay.example.test",
+            "devices": 2,
+        ])
+
+        XCTAssertTrue(projection.enabled)
+        XCTAssertTrue(projection.connected)
+        XCTAssertEqual(projection.state, "connected")
+        XCTAssertEqual(projection.effectiveRelayURL, "https://bolthole.warrenai.xyz")
+        XCTAssertTrue(projection.isSelfHostedRelay)
+        XCTAssertEqual(projection.relaySourceText, "Self-hosted relay")
+        XCTAssertEqual(projection.devices, 2)
+        XCTAssertFalse(projection.stateText.isEmpty)
+
+        // An old daemon answers with nothing useful; the page must read as off
+        // rather than as a broken Relay.
+        let empty = WarrenRemoteApplicationModel.remoteAccess(from: [:])
+        XCTAssertFalse(empty.enabled)
+        XCTAssertEqual(empty.state, "disabled")
+        XCTAssertEqual(empty.effectiveRelayURL, "")
+        XCTAssertEqual(empty.relaySourceText, "Official relay")
+    }
 }
 
 
@@ -1838,35 +1896,4 @@ private final class PausingWorkspaceCreationFake {
     }
 }
 
-    /// `remote.status` is a different path from the settings projection, so the
-    /// Desktop reads it as an event while the window is open. What the page
-    /// shows has to survive a daemon that omits optional fields.
-    @MainActor
-    func testRemoteAccessProjectionReadsTheHostStatus() {
-        let projection = WarrenRemoteApplicationModel.remoteAccess(from: [
-            "enabled": true,
-            "connected": true,
-            "state": "connected",
-            "relayURL": "https://bolthole.warrenai.xyz",
-            "relaySource": "self-hosted",
-            "configuredRelayURL": "https://relay.example.test",
-            "devices": 2,
-        ])
 
-        XCTAssertTrue(projection.enabled)
-        XCTAssertTrue(projection.connected)
-        XCTAssertEqual(projection.state, "connected")
-        XCTAssertEqual(projection.effectiveRelayURL, "https://bolthole.warrenai.xyz")
-        XCTAssertTrue(projection.isSelfHostedRelay)
-        XCTAssertEqual(projection.relaySourceText, "Self-hosted relay")
-        XCTAssertEqual(projection.devices, 2)
-        XCTAssertFalse(projection.stateText.isEmpty)
-
-        // An old daemon answers with nothing useful; the page must read as off
-        // rather than as a broken Relay.
-        let empty = WarrenRemoteApplicationModel.remoteAccess(from: [:])
-        XCTAssertFalse(empty.enabled)
-        XCTAssertEqual(empty.state, "disabled")
-        XCTAssertEqual(empty.effectiveRelayURL, "")
-        XCTAssertEqual(empty.relaySourceText, "Official relay")
-    }

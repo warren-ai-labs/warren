@@ -268,6 +268,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     @Published var attachingSessionID: TerminalSessionID?
 
     var wire: WarrenRemoteClient?
+    /// Bumped by every settle so an older read loop stops reading.
+    var remoteAccessSettleGeneration = 0
     var embeddedSSHTunnel: WarrenEmbeddedSSHTunnel?
     /// The endpoint currently backed by the live transport. SSH endpoints
     /// keep a durable alias in `endpointConfiguration`, while the helper
@@ -1729,6 +1731,47 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 self?.remoteAccess = Self.remoteAccess(from: value)
             } catch {
                 self?.remoteAccess.lastError = error.localizedDescription
+            }
+        }
+        settleRemoteAccess()
+    }
+
+    /// Delays between `remote.status` reads while the relay may still be dialing.
+    /// `remote.enable` answers with a snapshot taken before the dial finishes, so
+    /// the single read that follows an action can report "connecting" and leave
+    /// the page there until it is opened again.
+    static let remoteAccessSettleDelays: [Duration] = [
+        .milliseconds(300), .milliseconds(700), .milliseconds(1500), .milliseconds(2500),
+    ]
+
+    /// Whether another `remote.status` read could still change what the page shows.
+    static func remoteAccessIsSettling(_ projection: WarrenDesktopRemoteAccess) -> Bool {
+        projection.enabled && projection.state.lowercased() == "connecting"
+    }
+
+    /// Re-reads `remote.status` until the Host stops reporting a dial in flight,
+    /// for at most `remoteAccessSettleDelays`. Bounded on purpose: a Host whose
+    /// relay stays unreachable keeps its own state, and the page stops asking.
+    func settleRemoteAccess() {
+        guard let wire else { return }
+        remoteAccessSettleGeneration &+= 1
+        let generation = remoteAccessSettleGeneration
+        Task { @MainActor [weak self] in
+            for delay in Self.remoteAccessSettleDelays {
+                guard let self, generation == self.remoteAccessSettleGeneration else { return }
+                guard Self.remoteAccessIsSettling(self.remoteAccess) else { return }
+                try? await Task.sleep(for: delay)
+                guard generation == self.remoteAccessSettleGeneration else { return }
+                do {
+                    let data = try await wire.request("remote.status")
+                    guard generation == self.remoteAccessSettleGeneration else { return }
+                    guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        return
+                    }
+                    self.remoteAccess = Self.remoteAccess(from: value)
+                } catch {
+                    return
+                }
             }
         }
     }
