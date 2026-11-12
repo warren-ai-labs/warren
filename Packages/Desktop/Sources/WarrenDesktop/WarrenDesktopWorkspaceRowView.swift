@@ -282,16 +282,27 @@ struct WarrenDesktopWorkspaceRow: View {
                 .opacity(leafDisclosure.isExpanded && !(isHovered || isFocused || forceHover) ? 0 : 1)
             }
         }
+        // The label sits two points low in its row, so it heads the Sessions
+        // under it instead of floating between them and the block above.
+        .offset(y: WarrenDesktopSidebarMetrics.worktreeTextSink)
         .padding(.horizontal, WarrenDesktopRowAnatomy.horizontalPadding)
         .frame(maxWidth: .infinity, minHeight: rowHeight)
-        .background(
-            isSelected && !isSelectionDisabled
-                ? tokens.treeRowSelected
-                : ((isHovered || isFocused) && (leafDisclosure != nil || !showsSessionChildren)
-                    ? tokens.treeRowHover
-                    : .clear),
-            in: RoundedRectangle(cornerRadius: WarrenDesktopRowAnatomy.radius, style: .continuous)
-        )
+        .background {
+            // The pill follows the sunk text, not the row: its last 17 points,
+            // centred on the label.
+            RoundedRectangle(
+                cornerRadius: WarrenDesktopSidebarMetrics.worktreePillRadius,
+                style: .continuous
+            )
+            .fill(
+                isSelected && !isSelectionDisabled
+                    ? tokens.treeRowSelected
+                    : ((isHovered || isFocused) && (leafDisclosure != nil || !showsSessionChildren)
+                        ? tokens.treeRowHover
+                        : .clear)
+            )
+            .padding(.top, WarrenDesktopSidebarMetrics.worktreePillInset)
+        }
         .contentShape(.rect)
         .warrenContextMenu(
             !isInteractionDisabled && !isMutationDisabled ? contextMenuActions : []

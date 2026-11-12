@@ -4,6 +4,60 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.36.2] - 2026-11-12
+
+A Desktop-only patch that finishes the sidebar: its names are set the way the
+reference interface sets its own, a branch name keeps the part that identifies it,
+and the gaps between rows are derived from measured ink rather than chosen by eye.
+The tree's four levels, its row kinds and its 300-point width are unchanged; the
+JSON control protocol remains at 4.0, nothing outside the Desktop app changed, and
+this release migrates no state.
+
+### Changed
+
+- Keep the tree's names in the window's own face. A rounded SF, Optima and a slab
+  were each tried and each read as an import in a column of system text, worst of
+  all beside a Chinese name that falls back to PingFang anyway. The project name
+  is SF Pro medium at 14 and the Session title medium at 13.5, which is how the
+  reference interface separates its levels: by weight at a shared size, not by
+  family.
+- Set a branch name in proportional text. A ref is not code anyone reads glyph by
+  glyph, and a cell of fixed-width glyphs among proportional labels both read as
+  an import and cost about a seventh of the row's width. It is 11.5 medium, and
+  it moves up one ink step: a name heads a block rather than annotating one.
+- Give up a branch name's width a segment at a time. A ref that does not fit
+  first writes its leading path segments as initials -
+  `release/web/interaction-report-fields-long` becomes
+  `r/web/interaction-report-fields-long`, then `r/w/…` - and only a ref too wide
+  even at that falls back to eliding its head, which keeps the leaf. The leaf,
+  the part that tells two worktrees apart, is never touched, and nothing is
+  invented: an earlier attempt drew `…/` in place of the prefix, which read as a
+  branch Warren had processed.
+- Derive the gaps from ink. What the eye measures is the white between one row's
+  last pixel and the next row's first, not the points between their frames, so
+  every gap is now stated against a target: 14 from a worktree's label to the
+  first Session's title, 17.5 to 19.5 between two Sessions, 27 to 29.5 from a
+  block up to the next label, about 36 from a project to the next one and 30 from
+  a summary row. Session rows are 46, projects 32, worktrees and folded rows 22.
+- Sink a group's name four points in its row, with its hover pill following it,
+  and a worktree's label three, with no gap to its first Session. The air a row
+  leaves above itself is what attaches it to what follows: a label that sits low
+  reads as the head of the rows under it instead of as a peer of the block above.
+- Space the inactive-projects row as the boundary it is. It sat 24 below the last
+  project's Sessions - closer than one project sits to the next - and read as
+  that project's child. Its avatar stack starts higher in its row than a project
+  tile does, so it takes the group gap plus nine.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0, no method was added or changed, and
+  this release migrates no state. No Host, CLI, Web or iOS behaviour changed; the
+  work is confined to the Desktop app's sidebar and the render fixtures that
+  judge it.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.36.1] - 2026-11-11
 
 A Desktop-only patch that retunes the sidebar's type, its ink and its rhythm, and

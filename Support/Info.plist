@@ -19,9 +19,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.36.1</string>
+	<string>0.36.2</string>
 	<key>CFBundleVersion</key>
-	<string>51</string>
+	<string>52</string>
     <key>WarrenBuildVersion</key>
     <string>development</string>
     <key>WarrenBuildRevision</key>

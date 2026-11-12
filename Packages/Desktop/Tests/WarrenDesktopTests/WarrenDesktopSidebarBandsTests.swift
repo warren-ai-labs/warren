@@ -286,6 +286,21 @@ final class WarrenDesktopSidebarBandsTests: XCTestCase {
         // The prefix runs to the last slash.
         XCTAssertEqual(WarrenDesktopBranchName.parts("release/ios/1.2").prefix, "release/ios/")
 
+        // A ref that does not fit gives up its path segment letters from the
+        // left, and never its leaf.
+        let ladder = WarrenDesktopBranchName.abbreviatedCandidates("feat/web/interaction-report-fields")
+            .map { $0.prefix + $0.leaf }
+        XCTAssertEqual(ladder, [
+            "feat/web/interaction-report-fields",
+            "f/web/interaction-report-fields",
+            "f/w/interaction-report-fields",
+        ])
+        // A name with no slash has one candidate and no invented prefix.
+        XCTAssertEqual(
+            WarrenDesktopBranchName.abbreviatedCandidates("main").map { $0.prefix + $0.leaf },
+            ["main"]
+        )
+
         // A Task's `project · branch` label is not a branch.
         let task = WarrenDesktopBranchName.parts("warren · ios/widget")
         XCTAssertEqual(task.prefix, "")

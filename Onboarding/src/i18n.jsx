@@ -116,6 +116,33 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.36.2",
+        dateISO: "2026-11-12",
+        date: "November 12, 2026",
+        title: "The sidebar's names, its branch refs, and its gaps, all measured.",
+        summary:
+          "A Desktop-only patch that finishes the sidebar: its names are set the way the reference interface sets its own, a branch name keeps the part that identifies it, and the gaps between rows are derived from measured ink rather than chosen by eye. The tree's four levels, its row kinds and its 300-point width are unchanged; the JSON control protocol remains at 4.0 and this release migrates no state.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Keep the tree's names in the window's own face: the project name is SF Pro medium at 14 and the Session title medium at 13.5. A rounded SF, Optima and a slab were each tried and each read as an import in a column of system text, worst of all beside a Chinese name that falls back to PingFang anyway.",
+              "Set a branch name in proportional text at 11.5 medium, one ink step louder: a ref is not code anyone reads glyph by glyph, and a cell of fixed-width glyphs among proportional labels cost about a seventh of the row's width.",
+              "Give up a branch name's width a segment at a time - `release/web/interaction-report-fields-long` becomes `r/web/…`, then `r/w/…` - and only a ref too wide even at that elides its head, which keeps the leaf. The leaf is never touched and nothing is invented.",
+              "Derive the gaps from ink: 14 from a worktree's label to the first Session's title, 17.5 to 19.5 between two Sessions, 27 to 29.5 from a block up to the next label, about 36 from a project to the next one and 30 from a summary row. Session rows are 46, projects 32, worktrees and folded rows 22.",
+              "Sink a group's name four points in its row and a worktree's label three, with no gap to its first Session, and space the inactive-projects row as the boundary it is: it takes the group gap plus nine, because its avatar stack starts higher in its row than a project tile does.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. No Host, CLI, Web or iOS behaviour changed.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.36.1",
         dateISO: "2026-11-11",
         date: "November 11, 2026",
@@ -1919,6 +1946,33 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.36.2",
+        dateISO: "2026-11-12",
+        date: "2026 年 11 月 12 日",
+        title: "侧边栏的名字、分支名与间距，都按实测来。",
+        summary:
+          "仅涉及 Desktop 的补丁：侧边栏收尾——名字改用参考实现的做法，分支名保留能认出它的那一段，行与行之间的间距按实测墨迹推导而不是靠眼睛挑。四层结构、行种类与 300 点宽度未变；JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "树里的名字回到窗口自己的字体：项目名 SF Pro medium 14，Session 标题 medium 13.5。圆体 SF、Optima 与板衬线都试过，在一列系统文字里都像外来字体，旁边还是回落到 PingFang 的中文名时尤其明显。",
+              "分支名改为比例字 11.5 medium，并提亮一级：ref 不是逐字阅读的代码，而固定字宽的方块混在比例标签里，既像外来物，又吃掉约七分之一的行宽。",
+              "宽度不够时按路径层级逐级缩写：`release/web/interaction-report-fields-long` 先变成 `r/web/…`，再变成 `r/w/…`；只有连最简形式都放不下时才从头部省略，叶子始终保留，也不自造字符。",
+              "间距按墨迹推导：分支名到首个 Session 标题 14，Session 之间 17.5–19.5，块到下一个分支名 27–29.5，项目之间约 36，摘要行之后约 30。Session 行 46、项目行 32、工作树与折叠行 22。",
+              "项目名在行内下移 4 点、分支名下移 3 点且与首个 Session 之间不留缝；inactive projects 行按组边界处理——因为它行内的头像堆比项目方块更靠上，所以取组间距再加 9 点。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。Host、CLI、Web 与 iOS 行为均未改动。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.36.1",
         dateISO: "2026-11-11",

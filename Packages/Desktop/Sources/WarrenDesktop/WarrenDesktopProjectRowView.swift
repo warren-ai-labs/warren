@@ -252,14 +252,23 @@ struct WarrenDesktopProjectRow: View {
                 )
             }
         }
+        // The name sits four points low in its row: the air it leaves above
+        // belongs to the boundary with the group before it, and the name reads
+        // as the head of the rows under it rather than as their peer.
+        .offset(y: WarrenDesktopSidebarMetrics.groupTextSink)
         .padding(.horizontal, WarrenDesktopRowAnatomy.horizontalPadding)
         .frame(maxWidth: .infinity, minHeight: WarrenDesktopRowAnatomy.groupRowHeight)
-        .background(
-            isSelected
-                ? tokens.treeRowSelected
-                : (isHovered || isFocused ? tokens.treeRowHover : .clear),
-            in: RoundedRectangle(cornerRadius: WarrenDesktopRowAnatomy.radius, style: .continuous)
-        )
+        .background {
+            // The pill follows the sunk name, not the row.
+            RoundedRectangle(cornerRadius: WarrenDesktopRowAnatomy.radius, style: .continuous)
+                .fill(
+                    isSelected
+                        ? tokens.treeRowSelected
+                        : (isHovered || isFocused ? tokens.treeRowHover : .clear)
+                )
+                .frame(height: WarrenDesktopSidebarMetrics.groupPillHeight)
+                .padding(.top, WarrenDesktopSidebarMetrics.groupPillInset)
+        }
         .contentShape(.rect)
         .onHover { isHovered = $0 }
         // A long name truncates to one line; the whole name is on hover.

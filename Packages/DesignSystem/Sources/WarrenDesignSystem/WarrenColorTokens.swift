@@ -66,8 +66,9 @@ public struct WarrenSidebarInk: Sendable {
     public let t3: Color
     /// Branch names, the second line, times, counts, glyphs.
     public let t4: Color
-    /// A worktree's branch name, the same step as `t4`: the name that heads a
-    /// block is not metadata and does not read quieter than what it heads.
+    /// A worktree's branch name, one step above `t4`: it heads a block rather
+    /// than annotating one, and at the second line's own ink it read as another
+    /// line of that block.
     public let branch: Color
     public let hover: Color
     public let selected: Color
@@ -432,7 +433,7 @@ public struct WarrenColorTokens: Sendable {
                 t2: palette.ink(sidebarInkLadder[1]).color,
                 t3: palette.ink(sidebarInkLadder[2]).color,
                 t4: palette.ink(sidebarInkLadder[3]).color,
-                branch: palette.ink(sidebarInkLadder[3]).color,
+                branch: palette.ink(sidebarInkLadder[2]).color,
                 hover: foreground.color.opacity(hoverOpacity),
                 selected: foreground.color.opacity(selectedOpacity)
             ),

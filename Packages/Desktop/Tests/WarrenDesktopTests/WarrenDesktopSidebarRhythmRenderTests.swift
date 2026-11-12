@@ -54,6 +54,19 @@ final class WarrenDesktopSidebarRhythmRenderTests: XCTestCase {
         let wKeep = ws(warren, "feat/keep-ended-sessions", branch: "feat/keep-ended-sessions")
         let wLead = ws(warren, "feat/lead-agent", branch: "feat/lead-agent")
         let wIdle = ws(warren, "feat/old-idea", branch: "feat/old-idea")
+        // Two refs that the rail cannot hold at 300: one long enough that a
+        // shortened prefix brings it back, one too long even for that, so the
+        // render shows both the abbreviation and the head elision.
+        let wLong = ws(
+            warren,
+            "release/web/interaction-report-fields-long",
+            branch: "release/web/interaction-report-fields-long"
+        )
+        let wLonger = ws(
+            warren,
+            "release/web/interaction-report-fields-for-the-picker",
+            branch: "release/web/interaction-report-fields-for-the-picker"
+        )
         let wStory = ws(gateway, "Story OGV 相关推荐", branch: "Story OGV 相关推荐")
         let wGatewayMain = ws(gateway, "main")
         let wDolly = ws(dolly, "main")
@@ -94,6 +107,8 @@ final class WarrenDesktopSidebarRhythmRenderTests: XCTestCase {
             agent(wOsc, .claude, "inspect 当前分支 merge main 之后的状态", "Merged and rewrote program status follow-up", ago: 4 * 86400),
             agent(wKeep, .pi, "keep ended sessions", "Fixed session endReason loss in Desktop", ago: 4 * 86400),
             agent(wLead, .codex, "lead agent (codex)", "Stopped using window activation and more", ago: 4 * 60),
+            agent(wLong, .claude, "implement 取件人字段的校验与回填", "Added picker validation and backfill", ago: 47 * 60),
+            agent(wLonger, .claude, "inspect 取件人字段的清空与默认值", "Checked clearing and defaults", ago: 51 * 60),
             agent(wStory, .claude, "inspect rebase changelog 删除临时代码", "Updated docs and MR 13098 with host aliases", ago: 4 * 86400),
             shell(wStory, ago: 95 * 3600),
             agent(wDolly, .pi, "implement 添加项目到 warren inspect 本地构建", "Renamed and recompiled app with user-scoped id", ago: 3 * 86400),
@@ -104,7 +119,7 @@ final class WarrenDesktopSidebarRhythmRenderTests: XCTestCase {
             host: host,
             tasks: [degrade, report],
             projects: [warren, gateway, dolly, h2, bili, bapis, dynamic, click],
-            workspaces: [wBili, wBapis, wDynamic, wGatewayTask, wClick, wMain, wOsc, wKeep, wLead, wIdle, wStory, wGatewayMain, wDolly, wH2],
+            workspaces: [wBili, wBapis, wDynamic, wGatewayTask, wClick, wMain, wOsc, wKeep, wLead, wLong, wLonger, wIdle, wStory, wGatewayMain, wDolly, wH2],
             sessions: sessions
         )
         for scheme in [ColorScheme.dark, .light] {

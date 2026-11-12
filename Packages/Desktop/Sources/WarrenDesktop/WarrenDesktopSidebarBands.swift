@@ -225,6 +225,28 @@ enum WarrenDesktopBranchName {
         return (String(name[...slash]), String(name[name.index(after: slash)...]))
     }
 
+    /// The refs to try, widest first: the whole name, then the same name with
+    /// the first path segment cut to its initial, then the first two, and so on.
+    ///
+    /// The leaf is never touched - it is what tells two worktrees apart - and
+    /// nothing is invented: `feat/web/interaction-report-fields` becomes
+    /// `f/web/interaction-report-fields`, then `f/w/interaction-report-fields`,
+    /// which is still the branch, written short.
+    static func abbreviatedCandidates(_ name: String) -> [(prefix: String, leaf: String)] {
+        let whole = wholeParts(name)
+        guard !whole.prefix.isEmpty else { return [whole] }
+        let body = whole.prefix.hasSuffix("/") ? String(whole.prefix.dropLast()) : whole.prefix
+        let segments = body.split(separator: "/").map(String.init)
+        var candidates: [(prefix: String, leaf: String)] = [whole]
+        for abbreviated in 1...segments.count {
+            let prefix = segments.enumerated()
+                .map { $0.offset < abbreviated ? String($0.element.prefix(1)) : $0.element }
+                .joined(separator: "/") + "/"
+            candidates.append((prefix, whole.leaf))
+        }
+        return candidates
+    }
+
     static func text(_ name: String, leaf leafColor: Color, prefix prefixColor: Color) -> Text {
         let parts = parts(name)
         let leaf = Text(parts.leaf).foregroundColor(leafColor)
@@ -233,12 +255,14 @@ enum WarrenDesktopBranchName {
     }
 }
 
-/// A branch name that is cut at most once.
+/// A branch name that keeps its end.
 ///
-/// When the whole name does not fit, the prefix goes first, since the leaf is
-/// the part someone recognizes, and a quiet `…/` stands for it; only when the
-/// leaf alone still does not fit does its end fade, as every name in the tree
-/// does.
+/// When the whole ref does not fit, its path segments give up their letters from
+/// the left - `feat/web/interaction-report-fields`, then
+/// `f/web/interaction-report-fields`, then `f/w/interaction-report-fields` - so
+/// what is dropped is spacing, not the name. Only when the shortest form still
+/// does not fit is the head elided, which keeps the leaf: the part that tells two
+/// worktrees apart.
 struct WarrenDesktopBranchNameLabel: View {
     let name: String
     let leafColor: Color
@@ -247,16 +271,21 @@ struct WarrenDesktopBranchNameLabel: View {
     var wideFont: Font = WarrenDesktopTreeTypography.branchNameWide
 
     var body: some View {
-        let whole = WarrenDesktopBranchName.wholeParts(name)
-        // A name that does not fit fades at its end, before whatever the
-        // row keeps at its trailing edge, rather than losing its prefix.
+        let candidates = WarrenDesktopBranchName.abbreviatedCandidates(name)
         ViewThatFits(in: .horizontal) {
-            line(prefix: whole.prefix, leaf: whole.leaf)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-            WarrenDesktopFadingLine {
-                line(prefix: whole.prefix, leaf: whole.leaf)
+            ForEach(Array(candidates.enumerated()), id: \.offset) { _, candidate in
+                line(prefix: candidate.prefix, leaf: candidate.leaf)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
+            // The shortest form, cut at its head by the system's own ellipsis:
+            // the end of the ref is what names the branch.
+            line(
+                prefix: candidates.last?.prefix ?? "",
+                leaf: candidates.last?.leaf ?? name
+            )
+            .lineLimit(1)
+            .truncationMode(.head)
         }
     }
 

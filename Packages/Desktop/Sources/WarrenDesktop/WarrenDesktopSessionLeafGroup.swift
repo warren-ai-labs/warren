@@ -13,18 +13,19 @@ struct WarrenDesktopSessionLeafGroup<Row: View, Leaves: View>: View {
     let leafCount: Int
     /// The gap between the row and its first leaf.
     ///
-    /// Two, not none: the worktree's branch name and the Session's title sit in
-    /// the same column, so with nothing between them they read as one
-    /// paragraph — a label and the thing it labels with no seam. Two points are
-    /// enough once the name carries its own weight; the gap only lifts the
-    /// label off its own leaves, and two leaves stay as close as they were.
-    var rowSpacing: CGFloat = 2
+    /// None. Measured on real rows, whose titles are mostly Chinese: with the
+    /// label sunk three points in a 22pt row, the Session's own top padding
+    /// leaves 14 of white from the label's baseline to the first title, against
+    /// 18 from the project name down to the label and 19.5 between two
+    /// Sessions. Five points here left 20, so the label read as a subtitle of
+    /// the project rather than the head of its Sessions.
+    var rowSpacing: CGFloat = 0
     let row: Row
     let leaves: Leaves
 
     init(
         leafCount: Int,
-        rowSpacing: CGFloat = 2,
+        rowSpacing: CGFloat = 0,
         @ViewBuilder row: () -> Row,
         @ViewBuilder leaves: () -> Leaves
     ) {
@@ -68,19 +69,22 @@ enum WarrenDesktopWorktreeGap {
     /// The gap above the worktree at `index` of an ordered list.
     static func above(_ index: Int, leafCounts: [Int]) -> CGFloat {
         guard index > 0, index < leafCounts.count else { return 0 }
-        return leafCounts[index - 1] == 0 && leafCounts[index] == 0
-            ? WarrenDesktopSidebarMetrics.summarySpacing
-            : WarrenDesktopSidebarMetrics.worktreeSpacing
+        // A summary follows a block as its footer, not as a peer: no gap.
+        if leafCounts[index] == 0 {
+            return leafCounts[index - 1] == 0 ? WarrenDesktopSidebarMetrics.summarySpacing : 0
+        }
+        return WarrenDesktopSidebarMetrics.worktreeSpacing
     }
 
-    /// Above the idle-worktrees row, the last summary: the block gap after a
-    /// worktree that lists Sessions, the summary gap after one that lists
-    /// none, and none at all directly under the group's own row.
+    /// Above the idle-worktrees row, the group's last line.
+    ///
+    /// None after a block: the row is the footer of the project, not another
+    /// worktree in it, so it sits on the block's last line and the group gap
+    /// that follows is the only air around it. After a summary it keeps the
+    /// summary gap, so a run of them reads as one list.
     static func aboveIdleRow(lastLeafCount: Int?) -> CGFloat {
         guard let lastLeafCount else { return 0 }
-        return lastLeafCount > 0
-            ? WarrenDesktopSidebarMetrics.worktreeSpacing
-            : WarrenDesktopSidebarMetrics.summarySpacing
+        return lastLeafCount > 0 ? 0 : WarrenDesktopSidebarMetrics.summarySpacing
     }
 }
 

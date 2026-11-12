@@ -243,7 +243,11 @@ struct WarrenDesktopSidebarRows: View {
                                         isFirst: listed.isEmpty,
                                         isFolded: !tree.inactiveProjectsExpanded,
                                         followsFolded: listed.last.map(isProjectFolded) ?? false,
-                                        isLast: true
+                                        followsOneLineRow: listed.last.map {
+                                            !isProjectFolded($0) && workspaceSplit(of: $0).showsIdleRow
+                                        } ?? false,
+                                        isLast: true,
+                                        inkOffset: WarrenDesktopSidebarMetrics.inactiveProjectsRowInkOffset
                                     )
                             }
                         }

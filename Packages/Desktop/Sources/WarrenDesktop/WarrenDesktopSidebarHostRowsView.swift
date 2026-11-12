@@ -396,7 +396,14 @@ struct WarrenDesktopSidebarHostRows: View {
                         isFirst: listed.isEmpty,
                         isFolded: !inactiveProjectsExpandedHostIDs.contains(host.endpointID),
                         followsFolded: listed.last.map { !isProjectExpanded($0.group.project.id, in: host) } ?? false,
-                        isLast: true
+                        followsOneLineRow: listed.last.map { last in
+                            isProjectExpanded(last.group.project.id, in: host)
+                                && WarrenDesktopWorkspaceSplit(last.group.workspaces) {
+                                    isWorkspaceLive($0, in: host)
+                                }.showsIdleRow
+                        } ?? false,
+                        isLast: true,
+                        inkOffset: WarrenDesktopSidebarMetrics.inactiveProjectsRowInkOffset
                     )
             }
         }
