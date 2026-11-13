@@ -1382,22 +1382,28 @@ private struct WarrenDesktopSidebarHostHeader: View {
         .onHover { isHovered = $0 }
     }
 
-    /// The one shape no other row uses: a hollow tile, the hostname, the rule
-    /// that runs to the trailing edge, then the Session dots and the disclosure
-    /// chevron. A Host reads as a labelled rule before a word of it is read.
+    /// The one shape no other row uses: the hostname, the rule that runs to
+    /// the trailing edge, then the Session dots and the disclosure chevron. A
+    /// Host reads as a labelled rule before a word of it is read.
     private func rowContent(
         tokens: WarrenColorTokens,
         isEngaged: Bool,
         includesChevron: Bool = true
     ) -> some View {
         HStack(spacing: WarrenSpacing.small) {
-            hostTile(tokens: tokens)
-            Text(displayName)
-                .font(WarrenTypography.codeSmall.weight(.medium))
-                .foregroundStyle(tint)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .layoutPriority(1)
+            // The Host's name sits with the project names under it, in their
+            // family's narrower cut: a machine's name is a name here, not a
+            // code value, and the condensed face leaves the row's rule and
+            // marks their room.
+            WarrenDesktopTreeTypography.scriptText(
+                displayName,
+                latin: WarrenTypography.sidebarHostTitle,
+                wide: WarrenTypography.sidebarHostTitleWide
+            )
+            .foregroundStyle(tint)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .layoutPriority(1)
             if isEmpty {
                 Text("no projects")
                     .font(WarrenTypography.navigationMeta)
@@ -1427,31 +1433,6 @@ private struct WarrenDesktopSidebarHostHeader: View {
             isExpanded: isExpanded,
             color: isEngaged ? tokens.sidebarMetaTextActive : tokens.sidebarMetaText
         )
-    }
-
-    /// The Host's tile: a hollow square ringed in the Host's own hue with its
-    /// lowercase initial in the monospaced face, and a link dot on the corner.
-    /// A project wears a filled colour square with a bold capital, so the two
-    /// never read as one another.
-    private func hostTile(tokens: WarrenColorTokens) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
-        return Text(String(displayName.prefix(1)).lowercased())
-            .font(WarrenTypography.monoSmall.weight(.medium))
-            .foregroundStyle(tint)
-            .frame(width: 16, height: 16)
-            .background {
-                shape.strokeBorder(tint.opacity(0.55), lineWidth: WarrenSpacing.hairline)
-            }
-            .overlay(alignment: .bottomTrailing) {
-                Circle()
-                    .fill(WarrenDesktopHostReachability(host.connectionState).color(tokens))
-                    .frame(width: 6, height: 6)
-                    .overlay {
-                        Circle().strokeBorder(tokens.workbenchCardFill, lineWidth: 1.5)
-                    }
-                    .offset(x: 2, y: 2)
-            }
-            .accessibilityHidden(true)
     }
 
     /// The title rule. It reaches the trailing cluster instead of stopping at

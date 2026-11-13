@@ -1152,17 +1152,22 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     /// The window's own Host, for the selected first row of the foot's panel.
+    ///
+    /// The row names the Host the window is on, not what the sidebar's tree
+    /// lists: with several Hosts in the tree the header says so, but the
+    /// panel's rows are the Hosts themselves, each with its own add/remove
+    /// control beside it.
     var sidebarCurrentHost: WarrenDesktopSidebarOtherHost? {
         guard let option = endpointOptions.first(where: { $0.id == selectedEndpointID }) else {
             return nil
         }
-        return WarrenDesktopSidebarOtherHost(
-            id: option.id,
-            name: sidebarHostSummary.name,
-            isLocal: option.isLocal,
-            address: WarrenDesktopSidebarOtherHost.address(fromDetail: option.detail),
+        return WarrenDesktopSidebarOtherHost.current(
+            option: option,
             isOnline: projection.connectionState.isConnected,
-            isDisplayedInSidebar: true
+            // Without a display section the sidebar lists the current Host by
+            // definition, and there is no membership to manage.
+            isDisplayedInSidebar: usesSidebarHostSections ? option.isDisplayedInSidebar : true,
+            canToggleSidebarMembership: usesSidebarHostSections
         )
     }
 

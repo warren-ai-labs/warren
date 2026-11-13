@@ -17,6 +17,10 @@ struct WarrenDesktopSidebarOtherHost: Identifiable, Equatable {
     let marks: [WarrenActivityMark]
     /// Whether its tree is listed in the sidebar beside the window's Host.
     let isDisplayedInSidebar: Bool
+    /// Whether the panel may add or remove this Host's tree. The window's own
+    /// Host has nothing to manage while the sidebar lists only the current
+    /// Host, which is what a catalog without a display section means.
+    let canToggleSidebarMembership: Bool
 
     init(
         id: String,
@@ -25,7 +29,8 @@ struct WarrenDesktopSidebarOtherHost: Identifiable, Equatable {
         address: String? = nil,
         isOnline: Bool = true,
         marks: [WarrenActivityMark] = [],
-        isDisplayedInSidebar: Bool = false
+        isDisplayedInSidebar: Bool = false,
+        canToggleSidebarMembership: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -34,6 +39,30 @@ struct WarrenDesktopSidebarOtherHost: Identifiable, Equatable {
         self.isOnline = isOnline
         self.marks = marks
         self.isDisplayedInSidebar = isDisplayedInSidebar
+        self.canToggleSidebarMembership = canToggleSidebarMembership
+    }
+
+    /// The panel's first row: the window's own Host, named and routed like
+    /// every other row there.
+    ///
+    /// The sidebar's header may say "Multiple hosts" while its tree carries
+    /// several, but a row that can be switched to, added and removed has to
+    /// name the Host it acts on.
+    static func current(
+        option: WarrenDesktopEndpointOption,
+        isOnline: Bool,
+        isDisplayedInSidebar: Bool,
+        canToggleSidebarMembership: Bool
+    ) -> WarrenDesktopSidebarOtherHost {
+        WarrenDesktopSidebarOtherHost(
+            id: option.id,
+            name: option.label,
+            isLocal: option.isLocal,
+            address: address(fromDetail: option.detail),
+            isOnline: isOnline,
+            isDisplayedInSidebar: isDisplayedInSidebar,
+            canToggleSidebarMembership: canToggleSidebarMembership
+        )
     }
 
     /// This Mac is not an entry in the Host catalog, so it cannot be deleted.
@@ -590,6 +619,10 @@ struct WarrenDesktopSidebarHostStack: View {
             .lineLimit(1)
             .truncationMode(.tail)
             .frame(maxWidth: .infinity, alignment: .leading)
+            if host.canToggleSidebarMembership, onSetSidebarVisibility != nil {
+                // Room for the membership button the row overlays.
+                Color.clear.frame(width: WarrenDesktopSidebarMembershipButton.size)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -608,6 +641,12 @@ struct WarrenDesktopSidebarHostStack: View {
         }
         .contentShape(.rect)
         .warrenContextMenu(contextActions(for: host))
+        .overlay(alignment: .trailing) {
+            if let onSetSidebarVisibility, host.canToggleSidebarMembership {
+                membershipButton(host, isRowHot: true, onSet: onSetSidebarVisibility)
+                    .padding(.trailing, 8)
+            }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(host.name)
         .accessibilityValue("Selected. \(host.panelSubtitle)")

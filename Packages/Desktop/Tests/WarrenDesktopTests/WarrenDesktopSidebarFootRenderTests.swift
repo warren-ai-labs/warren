@@ -199,14 +199,55 @@ final class WarrenDesktopSidebarFootRenderTests: XCTestCase {
 
         let snapshot = recorder.snapshot()
         XCTAssertEqual(snapshot.node(id: "sidebar.other-host.local")?.isSelected, true)
-        // The window's Host is always in the sidebar, so it has no toggle.
-        XCTAssertNil(snapshot.node(id: "sidebar.other-host.local.sidebar"))
+        // Each row manages its own tree, the window's Host included: that is
+        // what lets a Host be removed again once several are listed.
+        XCTAssertEqual(snapshot.node(id: "sidebar.other-host.local.sidebar")?.isSelected, true)
 
         try recorder.perform(.press, on: "sidebar.other-host.beelink.sidebar")
         XCTAssertNil(selected)
         XCTAssertEqual(membership?.0, "beelink")
         XCTAssertEqual(membership?.1, true)
         XCTAssertNil(deleted)
+
+        try recorder.perform(.press, on: "sidebar.other-host.local.sidebar")
+        XCTAssertNil(selected)
+        XCTAssertEqual(membership?.0, "local")
+        XCTAssertEqual(membership?.1, false)
+        XCTAssertNil(deleted)
+    }
+
+    @MainActor
+    func testPanelLeavesTheWindowHostWithNothingToToggleAlone() async throws {
+        let recorder = WarrenSemanticRecorder()
+        var membership: (String, Bool)?
+        let view = WarrenDesktopSidebarHostStack(
+            hosts: others,
+            currentHost: WarrenDesktopSidebarOtherHost(
+                id: "local",
+                name: "studio",
+                isLocal: true,
+                isDisplayedInSidebar: true,
+                canToggleSidebarMembership: false
+            ),
+            onSelectHost: { _ in },
+            onAddHost: {},
+            onSetSidebarVisibility: { membership = ($0, $1) },
+            initiallyPulled: true
+        )
+        .frame(width: Self.width, height: 330, alignment: .bottom)
+        .environment(\.colorScheme, .dark)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(x: 0, y: 0, width: Self.width, height: 330)
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        hosting.layoutSubtreeIfNeeded()
+
+        // A catalog with no display section lists the current Host by
+        // definition, so there is nothing to add and nothing to remove.
+        XCTAssertNil(recorder.snapshot().node(id: "sidebar.other-host.local.sidebar"))
+        XCTAssertNil(membership)
     }
 
     @MainActor
@@ -237,5 +278,26 @@ final class WarrenDesktopSidebarFootRenderTests: XCTestCase {
     func testOnlyThisMacCannotBeDeleted() {
         XCTAssertFalse(current.canDelete)
         XCTAssertTrue(others[0].canDelete)
+    }
+
+    /// The foot's first row names the Host the window is on, even while the
+    /// sidebar's tree lists several Hosts under one "Multiple hosts" header.
+    func testWindowHostRowIsNamedAfterItsOwnEndpoint() {
+        let option = WarrenDesktopEndpointOption(
+            id: "local",
+            label: "Studio",
+            isLocal: true,
+            detail: "127.0.0.1:8789",
+            isDisplayedInSidebar: true
+        )
+        let host = WarrenDesktopSidebarOtherHost.current(
+            option: option,
+            isOnline: true,
+            isDisplayedInSidebar: true,
+            canToggleSidebarMembership: true
+        )
+        XCTAssertEqual(host.name, "Studio")
+        XCTAssertEqual(host.panelSubtitle, "Local · 127.0.0.1:8789")
+        XCTAssertEqual(host.address, "127.0.0.1:8789")
     }
 }

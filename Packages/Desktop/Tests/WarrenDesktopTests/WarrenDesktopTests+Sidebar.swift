@@ -743,6 +743,58 @@ extension WarrenDesktopTests {
         hostingView.layoutSubtreeIfNeeded()
         XCTAssertNil(recorder.snapshot().node(id: workspaceID))
     }
+
+    /// The foot's first row is the window's Host, not a summary of the
+    /// sidebar: with several Hosts listed it still names the one the window is
+    /// on, and still lets that Host's tree be removed from the sidebar.
+    @MainActor
+    func testFootRowNamesTheWindowHostWhileTheSidebarListsSeveral() {
+        let localHost = Host(name: "studio")
+        let remoteHost = Host(name: "fsn1")
+        let root = WarrenDesktopRoot(
+            projection: WarrenDesktopProjection(
+                host: localHost,
+                groups: [],
+                connectionState: .attached
+            ),
+            endpointOptions: [
+                .init(
+                    id: "local",
+                    label: "Local",
+                    isLocal: true,
+                    detail: "127.0.0.1:8789",
+                    isDisplayedInSidebar: true
+                ),
+                .init(id: "fsn1", label: "fsn1", isDisplayedInSidebar: true),
+            ],
+            selectedEndpointID: "local",
+            sidebarHostProjections: [
+                WarrenDesktopSidebarHostProjection(
+                    endpointID: "local",
+                    endpointLabel: "Local",
+                    host: localHost,
+                    connectionState: .attached
+                ),
+                WarrenDesktopSidebarHostProjection(
+                    endpointID: "fsn1",
+                    endpointLabel: "fsn1",
+                    host: remoteHost,
+                    connectionState: .attached
+                ),
+            ],
+            usesSidebarHostSections: true,
+            persistenceEnabled: false
+        ) { context in
+            TestTerminalSurface(context: context)
+        }
+
+        XCTAssertEqual(root.sidebarHostSummary.name, "Multiple hosts")
+        XCTAssertEqual(root.sidebarCurrentHost?.name, "Local")
+        XCTAssertEqual(root.sidebarCurrentHost?.address, "127.0.0.1:8789")
+        XCTAssertEqual(root.sidebarCurrentHost?.isDisplayedInSidebar, true)
+        XCTAssertEqual(root.sidebarCurrentHost?.canToggleSidebarMembership, true)
+    }
+
     func testHostTintAssignmentIsStableAcrossOrderAndResolvesCollisions() {
         let aliases = (0..<64).map { "host-\($0)" }
         let paletteCount = WarrenColorTokens.dark.hostSectionTints.count

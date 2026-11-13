@@ -66,6 +66,13 @@ public enum WarrenTypography {
     /// whole stage is read once and points somewhere else.
     public static let emptyStageTitle = Font.custom("AvenirNext-DemiBold", size: 16.5)
     public static let emptyStageMessage = Font.custom("AvenirNext-Regular", size: 13.5)
+    /// A sidebar section's empty state: why the tree is empty and the one way
+    /// out of it. Avenir Next at the tree's own size, so the section reads as
+    /// guidance in the voice of the names it stands in for instead of as one
+    /// more system-face chrome row.
+    public static let sidebarEmptyState = Font.custom("AvenirNext-Regular", size: 13.5)
+    /// The second line under a sidebar empty state, a step under its title.
+    public static let sidebarEmptyStateDetail = Font.custom("AvenirNext-Regular", size: 12)
     /// A settings page's title.
     public static let settingsPageTitle = Font.custom("AvenirNext-DemiBold", size: 20.5)
     /// A settings group's heading, a step above its rows.
@@ -119,6 +126,13 @@ public enum WarrenTypography {
     /// hover card. Avenir Next Condensed, so it sits with the project names
     /// in Avenir Next and a long ref keeps more of its letters.
     public static let branchName = Font.custom("AvenirNextCondensed-Medium", size: 12.5)
+    /// A Host's heading inside the sidebar's tree, above the Projects it holds.
+    ///
+    /// Condensed like the branch names: the header shares its row with the
+    /// rule, the Session marks and the disclosure, and a machine name in the
+    /// wide cut pushed those out. DemiBold keeps it above its project names.
+    public static let sidebarHostTitle = Font.custom("AvenirNextCondensed-DemiBold", size: 14.5)
+    public static let sidebarHostTitleWide = Font.system(size: 14, weight: .semibold)
     /// A panel's tabs (the right sidebar's Changes / History / Files /
     /// Editor): Avenir Next, medium at rest and demibold when selected, so
     /// they read as the panel's headings rather than as buttons.

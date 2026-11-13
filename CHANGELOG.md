@@ -4,6 +4,56 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-11-13
+
+A Desktop release that closes the multi-Host sidebar's last two gaps. The
+sidebar's foot no longer stands the window's own Host in as "Multiple hosts":
+every row in its panel names its own machine and carries its own add/remove
+control, so a Host that was put into the tree can be taken out again. Inside
+the tree, a Host's heading loses the tile that led it and takes Avenir Next's
+condensed cut, and the empty states under it move off the system face onto
+Avenir Next. The JSON control protocol remains at 4.0, nothing outside the
+Desktop app changed, and this release migrates no state.
+
+### Fixed
+
+- Name the Host in the sidebar's foot panel, not the tree. Once the sidebar
+  listed a second Host, the panel's selected first row took the sidebar
+  header's "Multiple hosts" summary as its name, so the one row a person
+  switches from named no machine. It now reads like every other row there:
+  the endpoint's label, then where the Host is and how it is reached.
+- Let the window's own Host leave the sidebar. That row hard-coded itself as
+  displayed and carried no membership control, so the Host the window was on
+  could be added to the tree but never removed. Each row in the panel now
+  owns its own switch. A catalog with no display section keeps no switch on
+  the current Host, because the sidebar lists it by definition and there is
+  nothing to toggle.
+
+### Changed
+
+- Set a Host's heading inside the sidebar's tree in Avenir Next Condensed. The
+  heading shares its row with the rule, the Session marks and the disclosure,
+  so the wide cut pushed those aside on a long machine name; the condensed
+  face keeps the name with the project names below it and leaves the row its
+  room. A Chinese name keeps the system face at a half point less.
+- Drop the tile in front of a Host's heading. It repeated the first letter and
+  a connection dot the name and the trailing state already say, and without it
+  the name starts on the same edge as the section labels, as a Host header
+  should. The heading is now one labelled rule.
+- Set the sidebar's empty states in Avenir Next: the line that says why a
+  section is empty, the one that says how many Workspaces a filter hid, and
+  the way out of each. The copy is read once, like the headings beside it,
+  rather than scanned like the rows.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0, no method was added or changed,
+  and this release migrates no state. No Host, CLI, Web, iOS or Relay
+  behaviour changed; the work is confined to the Desktop app's sidebar.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing,
+  not general public distribution.
+
 ## [0.38.1] - 2026-11-13
 
 A Desktop patch that draws the last two surfaces Warren still handed to the

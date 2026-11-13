@@ -59,14 +59,14 @@ struct WarrenDesktopSidebarEmptyState: View {
                             .accessibilityHidden(true)
                     }
                     Text(title)
-                        .font(WarrenTypography.navigationItem)
+                        .font(WarrenTypography.sidebarEmptyState)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .foregroundStyle(titleColor(tokens))
 
                 if let detail {
                     Text(detail)
-                        .font(WarrenTypography.navigationMeta)
+                        .font(WarrenTypography.sidebarEmptyStateDetail)
                         .foregroundStyle(detailColor(tokens))
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
@@ -136,13 +136,13 @@ struct WarrenDesktopSidebarEmptyState: View {
     private func starterRow(tokens: WarrenColorTokens) -> some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xxs) {
             Text(title)
-                .font(WarrenTypography.navigationItem)
+                .font(WarrenTypography.sidebarEmptyState)
                 .foregroundStyle(tokens.mutedForeground)
 
             if canStartProject, let onAddProject {
                 Button(action: onAddProject) {
                     Text("Add Project…")
-                        .font(WarrenTypography.navigationItem)
+                        .font(WarrenTypography.sidebarEmptyState)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(tokens.primary)
@@ -158,7 +158,7 @@ struct WarrenDesktopSidebarEmptyState: View {
                 // A Host this window cannot write to has no button, so the CLI
                 // stays the way forward.
                 Text(detail)
-                    .font(WarrenTypography.navigationMeta)
+                    .font(WarrenTypography.sidebarEmptyStateDetail)
                     .foregroundStyle(tokens.mutedForeground.opacity(0.72))
                     .fixedSize(horizontal: false, vertical: true)
             }

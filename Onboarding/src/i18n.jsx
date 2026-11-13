@@ -116,6 +116,38 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.39.0",
+        dateISO: "2026-11-13",
+        date: "November 13, 2026",
+        title: "Every Host keeps its own row in the sidebar's foot.",
+        summary:
+          "A Desktop release that closes the multi-Host sidebar's last two gaps. The sidebar's foot no longer stands the window's own Host in as Multiple hosts: every row in its panel names its own machine and carries its own add/remove control, so a Host that was put into the tree can be taken out again. Inside the tree, a Host's heading loses the tile that led it and takes Avenir Next's condensed cut, and the empty states under it move off the system face onto Avenir Next. The JSON control protocol remains at 4.0, nothing outside the Desktop app changed, and this release migrates no state.",
+        sections: [
+          {
+            title: "Fixed",
+            items: [
+              "Name the Host in the sidebar's foot panel, not the tree. Once the sidebar listed a second Host, the panel's selected first row took the sidebar header's Multiple hosts summary as its name, so the one row a person switches from named no machine. It now reads like every other row there: the endpoint's label, then where the Host is and how it is reached.",
+              "Let the window's own Host leave the sidebar. That row hard-coded itself as displayed and carried no membership control, so the Host the window was on could be added to the tree but never removed. Each row in the panel now owns its own switch. A catalog with no display section keeps no switch on the current Host, because the sidebar lists it by definition and there is nothing to toggle.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Set a Host's heading inside the sidebar's tree in Avenir Next Condensed. The heading shares its row with the rule, the Session marks and the disclosure, so the wide cut pushed those aside on a long machine name; the condensed face keeps the name with the project names below it and leaves the row its room. A Chinese name keeps the system face at a half point less.",
+              "Drop the tile in front of a Host's heading. It repeated the first letter and a connection dot the name and the trailing state already say, and without it the name starts on the same edge as the section labels, as a Host header should. The heading is now one labelled rule.",
+              "Set the sidebar's empty states in Avenir Next: the line that says why a section is empty, the one that says how many Workspaces a filter hid, and the way out of each. The copy is read once, like the headings beside it, rather than scanned like the rows.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. No Host, CLI, Web, iOS or Relay behaviour changed; the work is confined to the Desktop app's sidebar.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.38.1",
         dateISO: "2026-11-13",
         date: "November 13, 2026",
@@ -2058,6 +2090,33 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.39.0",
+        dateISO: "2026-11-13",
+        date: "2026 年 11 月 13 日",
+        title: "侧边栏底部的每个 Host 都有自己的那一行。",
+        summary:
+          "这是 Desktop 的版本，补上多 Host 侧边栏最后两处缺口。底部面板不再用 Multiple hosts 顶替窗口所在的 Host：面板里每一行都写自己的机器名，也都带自己的加入/移出开关，于是加进侧边栏的 Host 也能再移出去。树里的 Host 标题去掉了前面的图标，改用 Avenir Next 的窄体；它下面的空状态也从系统字体改为 Avenir Next。JSON 控制协议仍为 4.0，Desktop 之外没有任何变化，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "修正",
+            items: [
+              "侧边栏底部面板的那一行写 Host 自己，而不是整棵树的摘要。侧边栏列出第二个 Host 之后，面板上方被选中的那一行把头部摘要 Multiple hosts 当成了自己的名字，于是唯一用来切换的那一行反而没写出是哪台机器。现在它和其他行读法一致：先是 endpoint 的标签，再是 Host 在哪里、怎么连。",
+              "窗口所在的 Host 也能移出侧边栏。这一行原先把自身写死为“已显示”，也没有加入/移出开关，于是窗口正在用的 Host 能加进树里，却永远移不出去。现在面板里每一行都有自己的开关。配置里没有 display 段的目录中，当前 Host 仍然没有开关，因为那种情况下侧边栏本来就只列它，没什么可切换。",
+              "树里的 Host 标题改用 Avenir Next Condensed。标题与引导线、Session 状态点和展开箭头共用一行，机器名一长，宽体字就会把它们挤到一边；窄体让名字与下面的项目名同族，也给这一行留出位置。中文名仍用系统字体，字号小半点。",
+              "去掉 Host 标题前面的图标。它重复了名字的首字母和一个连接点，而这两件事名字与行尾状态都已经说了；去掉之后名字与分节标签对齐，符合 Host 标题应有的位置。标题现在就是一条带名字的线。",
+              "侧边栏的空状态改用 Avenir Next：说明某一段为什么是空的、筛选隐藏了多少个 Workspace、以及各自的出路。这些文案与旁边的标题一样是读一次的字，而不是像下面的行那样扫过去。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。Host、CLI、Web、iOS 与 Relay 的行为均未改动；改动限于 Desktop app 的侧边栏。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.38.1",
         dateISO: "2026-11-13",
