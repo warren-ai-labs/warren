@@ -90,11 +90,18 @@ struct WarrenDesktopSidebarTabBar: View {
             onSelect(tab)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
+                // The bold cut is wider, so each tab reserves its selected
+                // width; otherwise switching tabs nudges the one after it.
                 Text(title)
-                    .font(isSelected
-                        ? WarrenDesktopTreeTypography.tabTitleSelected
-                        : WarrenDesktopTreeTypography.tabTitle)
-                    .foregroundStyle(isSelected ? ink.t1 : ink.t4)
+                    .font(WarrenDesktopTreeTypography.tabTitleSelected)
+                    .hidden()
+                    .overlay(alignment: .leading) {
+                        Text(title)
+                            .font(isSelected
+                                ? WarrenDesktopTreeTypography.tabTitleSelected
+                                : WarrenDesktopTreeTypography.tabTitle)
+                            .foregroundStyle(isSelected ? ink.t1 : ink.t4)
+                    }
                 Text("\(count)")
                     .font(WarrenDesktopTreeTypography.tabCount)
                     .foregroundStyle(ink.t4)

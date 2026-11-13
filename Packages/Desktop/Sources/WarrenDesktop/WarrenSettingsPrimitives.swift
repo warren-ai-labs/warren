@@ -258,7 +258,7 @@ struct WarrenSettingsGroup<Content: View>: View {
                     // A step above row text, so a group reads as a section
                     // heading rather than as one more caption among the rows.
                     Text(title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(WarrenTypography.settingsGroupTitle)
                         .foregroundStyle(palette.inkBody)
                     Spacer(minLength: 8)
                     if let accessory {

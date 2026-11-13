@@ -43,10 +43,30 @@ public enum WarrenTypography {
     public static let badge = Font.system(size: 10, weight: .medium)
     /// Empty states stay regular: the kit never uses the light weight, which
     /// thins out on paper. Size and a quiet color carry the calm instead.
-    public static let emptyState = Font.system(size: 18, weight: .regular)
+    ///
+    /// Empty states, page titles and settings headings are read once rather
+    /// than scanned, so they take Avenir Next; controls, body text and dense
+    /// rows keep the system face. Avenir sizes run half a point over SF,
+    /// because its lowercase sits lower.
+    public static let emptyState = Font.custom("AvenirNext-Regular", size: 18.5)
     /// Empty-state titles use a larger size than the body so an empty page
     /// reads as calm guidance instead of shouting chrome.
-    public static let emptyStateTitle = Font.system(size: 20, weight: .regular)
+    public static let emptyStateTitle = Font.custom("AvenirNext-Regular", size: 20.5)
+    /// A settings page's title.
+    public static let settingsPageTitle = Font.custom("AvenirNext-DemiBold", size: 20.5)
+    /// A settings group's heading, a step above its rows.
+    public static let settingsGroupTitle = Font.custom("AvenirNext-DemiBold", size: 13.5)
+    /// A menu's group caption and the title of a submenu page. The rows under
+    /// them are controls and stay in the system face, like a native menu; the
+    /// captions take Avenir Next so they read as labels, not as more rows.
+    public static let menuGroupHeader = Font.custom("AvenirNext-Medium", size: 12)
+    public static let menuPageTitle = Font.custom("AvenirNext-DemiBold", size: 13.5)
+    /// A tooltip's text and a hover card's labels. Avenir Next, in medium:
+    /// at 12pt its regular cut is thin on the floating surface.
+    public static let tooltip = Font.custom("AvenirNext-Medium", size: 12.5)
+    public static let hoverCardLabel = Font.custom("AvenirNext-Medium", size: 11.5)
+    /// The uppercase, tracked group labels in the settings navigation.
+    public static let settingsNavigationLabel = Font.custom("AvenirNext-DemiBold", size: 10.5)
     public static let screenTitle = Font.system(size: 18, weight: .medium)
     /// Superset settings page headings are `text-xl` in medium weight.
     public static let pageTitle = Font.system(size: 20, weight: .medium)

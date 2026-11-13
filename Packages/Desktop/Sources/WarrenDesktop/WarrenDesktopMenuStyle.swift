@@ -523,7 +523,7 @@ struct WarrenDesktopMenuGroupHeader<Accessory: View>: View {
             // in a surface whose whole job is to stay out of the way, and a menu
             // with two or three groups read as a wall of labels.
             Text(title)
-                .font(.system(size: 12, weight: .regular))
+                .font(WarrenTypography.menuGroupHeader)
                 .foregroundStyle(palette.headerText)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 0)

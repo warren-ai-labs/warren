@@ -233,13 +233,20 @@ final class WarrenDesktopSidebarBandsTests: XCTestCase {
         XCTAssertEqual(split.idle.map(\.name), ["fresh", "old"])
         XCTAssertTrue(split.showsIdleRow)
 
-        // A project with no Session and one worktree is only its own row.
+        // A project with no Session and one worktree still shows it.
         let lone = WarrenDesktopWorkspaceSplit([main]) { _ in false }
+        XCTAssertEqual(lone.live.map(\.name), ["main"])
         XCTAssertFalse(lone.showsIdleRow)
-        XCTAssertFalse(lone.hasRows)
+        XCTAssertTrue(lone.hasRows)
         // Several idle worktrees still fold into the row, so each stays
         // reachable.
         XCTAssertTrue(WarrenDesktopWorkspaceSplit([main, old]) { _ in false }.showsIdleRow)
+
+        // One idle worktree beside a live one is drawn with it, not folded.
+        let single = WarrenDesktopWorkspaceSplit([main, feature]) { $0.name == "feature" }
+        XCTAssertEqual(single.live.map(\.name), ["main", "feature"])
+        XCTAssertTrue(single.idle.isEmpty)
+        XCTAssertFalse(single.showsIdleRow)
     }
 
     func testSplitPutsTheDefaultBranchFirstInEachList() {
@@ -450,9 +457,9 @@ final class WarrenDesktopSidebarBandsTests: XCTestCase {
         XCTAssertNil(folded["workspace.project-list.\(idleA.id.description)"])
         XCTAssertEqual(folded["projects-inactive"]?.label, "1 inactive project")
         XCTAssertNil(folded["project.\(sumi.id.description)"])
-        // A pinned project with no Session is its row alone.
+        // A pinned project with no Session still lists its one worktree.
         XCTAssertNotNil(folded["project.\(quiet.id.description)"])
-        XCTAssertNil(folded["workspace.project-list.\(quietMain.id.description)"])
+        XCTAssertNotNil(folded["workspace.project-list.\(quietMain.id.description)"])
         XCTAssertNil(folded["project-idle-worktrees.\(quiet.id.description)"])
 
         let open = render(WarrenDesktopSidebarTreeState(

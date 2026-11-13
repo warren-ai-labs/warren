@@ -132,7 +132,7 @@ extension WarrenDesktopSettingsView {
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(WarrenTypography.settingsNavigationLabel)
                 .tracking(1.1)
                 .foregroundStyle(palette.inkFaint)
                 .padding(.horizontal, 8)
@@ -225,7 +225,7 @@ extension WarrenDesktopSettingsView {
         // one list; the dot says how the Host's connection is doing.
         let row = HStack(spacing: 6) {
             Text(currentHostLabel.uppercased())
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(WarrenTypography.settingsNavigationLabel)
                 .tracking(1.1)
                 .foregroundStyle(palette.inkFaint)
                 .lineLimit(1)

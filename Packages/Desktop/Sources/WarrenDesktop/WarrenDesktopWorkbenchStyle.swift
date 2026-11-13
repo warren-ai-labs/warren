@@ -170,8 +170,10 @@ enum WarrenDesktopSidebarMetrics {
     static let sessionLineSpacing: CGFloat = 1
     static let sessionDotSize: CGFloat = 8
     static let sessionDotOffset: CGFloat = 3
-    /// How much of an overflowing line fades out at its trailing end.
-    static let sessionLineFadeWidth: CGFloat = 24
+    /// How much of an overflowing line fades out at its trailing end. 24 ate
+    /// most of a word at the sidebar's edge; 14 is about two glyphs, enough
+    /// to say the line goes on.
+    static let sessionLineFadeWidth: CGFloat = 14
 
     static let foldDotSize: CGFloat = 6
     static let foldDotSpacing: CGFloat = 3
@@ -250,16 +252,22 @@ enum WarrenDesktopTreeTypography {
     /// falls back to PingFang anyway. What the reference interface does instead
     /// is set its names at 14 in medium and let weight, not family, carry the
     /// tier. That is what this is.
-    static let groupName = Font.system(size: groupNameSize, weight: .medium)
+    ///
+    /// Later the tree was one face top to bottom, so only size and weight told
+    /// its tiers apart. Projects and Tasks are the rows a person reads first,
+    /// so their names take Avenir Next. Only Latin runs change; a Chinese run
+    /// keeps the system face, as Avenir Next has no CJK glyphs.
+    static let groupName = Font.custom("AvenirNext-Medium", size: groupNameSize)
     static let groupNameWide = Font.system(size: groupNameWideSize, weight: .medium)
     /// A Session's title, the group name's size in regular weight.
     ///
     /// It used to be 13 against an 11.5 second line: a 1.13× step, which the eye
     /// cannot separate, so the tree leaned on ink alone to say which line is the
     /// name. 13.5 against 11 is 1.23×, and weight still separates a group name
-    /// from a title at the same size.
-    static let sessionTitle = Font.system(size: 13.5, weight: .medium)
-    static let sessionTitleWide = Font.system(size: 13, weight: .medium)
+    /// from a title at the same size. Regular, not medium: a column of medium
+    /// titles read heavier than the project names above them.
+    static let sessionTitle = Font.system(size: 13.5, weight: .regular)
+    static let sessionTitleWide = Font.system(size: 13, weight: .regular)
     /// A branch name: proportional, like every other label in the tree.
     ///
     /// Monospaced was a mistake here. The ref is not code anyone reads
@@ -268,23 +276,39 @@ enum WarrenDesktopTreeTypography {
     /// the row's width, which is what pushed long names into losing their tail.
     /// Medium weight, because the name heads the Sessions under it and the line
     /// above is the previous block's activity line at the same ink.
-    static let branchName = Font.system(size: 11.5, weight: .medium)
+    ///
+    /// Set in Avenir Next Condensed: it belongs to the project name's family,
+    /// so the two read as one block, and its narrower glyphs leave long refs
+    /// more of their letters.
+    static let branchName = Font.custom("AvenirNextCondensed-Medium", size: 12.5)
     static let branchNameWide = Font.system(size: 11, weight: .medium)
     /// The project a Task's worktree belongs to, ahead of its branch.
     static let worktreeProjectName = Font.system(size: 11.5, weight: .medium)
-    /// "N idle worktrees" and "N inactive projects": the words in SF Pro,
-    /// the count in SF Mono.
-    static let foldedCount = Font.system(size: 11.5, weight: .regular)
-    static let foldedCountNumber = Font.system(size: 11, weight: .medium, design: .monospaced)
+    /// "N idle worktrees" and "N inactive projects".
+    ///
+    /// Both in Avenir Next, the branch names' family, in italic: the row is a
+    /// note about the rows it folds, not one more name, and the slant says so
+    /// without another shade of grey. The count is upright and tabular.
+    static let foldedCount = Font.custom("AvenirNext-Italic", size: 12)
+    static let foldedCountNumber = Font.custom("AvenirNext-Medium", size: 12).monospacedDigit()
     static let inactiveProjectName = Font.system(size: 11.5, weight: .regular)
     /// Times and counts: SF Mono, so a column of them lines up. One step under
     /// the second line, and large enough to stay legible on `t4`.
     static let age = Font.system(size: 11, weight: .regular, design: .monospaced)
     static let count = Font.system(size: 11, weight: .medium, design: .monospaced)
     /// The Projects / Tasks tabs, and the count after each.
-    static let tabTitle = Font.system(size: 13, weight: .medium)
-    static let tabTitleSelected = Font.system(size: 13, weight: .semibold)
-    static let tabCount = Font.system(size: 11, weight: .medium, design: .monospaced)
+    ///
+    /// Seravek, a humanist sans: Avenir's geometric capitals stood apart from
+    /// the lowercase in a mixed-case word like "Projects", and Seravek's do
+    /// not. The count keeps the family with tabular digits, so a changing
+    /// number does not shift the tab beside it.
+    ///
+    /// Regular and medium, not medium and bold: the tabs sit above every row,
+    /// and a bold heading there took the eye before the list did. Ink and the
+    /// underline already mark the selected tab.
+    static let tabTitle = Font.custom("Seravek", size: 14)
+    static let tabTitleSelected = Font.custom("Seravek-Medium", size: 14)
+    static let tabCount = Font.custom("Seravek", size: 12).monospacedDigit()
     /// The `⌘T` hint on the Task worktree a new Session opens in.
     static let keyHint = Font.system(size: 11, weight: .medium, design: .monospaced)
     /// A section heading where one remains: the multi-Host "Projects · Hosts".

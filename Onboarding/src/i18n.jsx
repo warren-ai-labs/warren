@@ -116,6 +116,42 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.37.0",
+        dateISO: "2026-11-13",
+        date: "November 13, 2026",
+        title: "One window, more than one face, and a rule for each.",
+        summary:
+          "A Desktop-only release that gives the window a type system instead of one face: what a person reads once - a project name, a settings page, an empty state, a menu caption, a tooltip - takes Avenir Next, a branch ref takes its condensed cut, the Projects / Tasks tabs take Seravek, and everything scanned in a dense row keeps the system face. The tree's four levels, its row kinds and its 300-point width are unchanged; the JSON control protocol remains at 4.0 and this release migrates no state.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Give the tree a second family where it earns one: Projects and Tasks are the rows a person reads first, so their names are Avenir Next Medium at 14. Only Latin runs change - Avenir Next has no CJK glyphs, so a Chinese name keeps the system face and its fallback rather than losing its shape.",
+              "Set a branch name in Avenir Next Condensed Medium at 12.5: it belongs to the project name's family, so the two read as one block, and the narrower cut leaves a long ref more of its letters than the proportional system face did at 11.5 - half a point larger and still narrower.",
+              "Set a Session title in regular weight: it was 13.5 medium, and a column of medium titles read heavier than the project names above them, so the titles now defer to the names a person reads first. The 13.5 / 11 step still separates a title from its second line.",
+              "Set the Projects / Tasks tabs in Seravek at 14, selected medium. Avenir's geometric capitals stood apart from the lowercase in a mixed-case word like \"Projects\" and Seravek's do not. Regular and medium, not medium and bold: the tabs sit above every row, and a bold heading there took the eye before the list did, while ink and the underline already mark the selection. The count keeps the family with tabular digits, and each tab reserves its selected width so switching one does not nudge the tab after it.",
+              "Set a folded-count row in Avenir Next italic: \"N idle worktrees\" and \"N inactive projects\" are notes about the rows they fold, not one more name, and the slant says so without another shade of grey. The count stays upright, medium and tabular so a changing number does not shift the words beside it.",
+              "Move the headings that are read once onto Avenir Next, half a point over the SF sizes they replace because its lowercase sits lower: an empty state's title and body, a settings page title, a settings group heading, and the uppercase tracked labels in the settings navigation. Menu group captions and submenu titles follow, at 12 medium and 13.5 demi-bold, while the rows under them stay in the system face - a native menu sets its controls in the system face and its labels apart from them.",
+              "Set a tooltip's text and a hover card's labels in Avenir Next medium, at 12.5 and 11.5: they are read once and pass, at a size where the floating surface makes the regular cut look thin, so they take the family's medium weight rather than a heavier system face.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Draw a single idle worktree as a row instead of folding it: \"1 idle worktree\" saved a line by hiding a name, so one idle worktree is drawn with the live ones, and a project whose only worktree has no Session lists that worktree instead of leaving its name out of the tree. The folded row now only ever folds two or more.",
+              "Narrow the trailing overflow fade from 24 points to 14: at the sidebar's edge, 24 ate most of a word, and 14 is about two glyphs, enough to say the line goes on.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. No Host, CLI, Web or iOS behaviour changed; the work is confined to the design system's type tokens and the Desktop views that read them.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.36.2",
         dateISO: "2026-11-12",
         date: "November 12, 2026",
@@ -1946,6 +1982,42 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.37.0",
+        dateISO: "2026-11-13",
+        date: "2026 年 11 月 13 日",
+        title: "窗口不止一种字体，每种字体各管一类字。",
+        summary:
+          "仅涉及 Desktop 的版本：窗口不再只有一种字体。只读一次的字——项目名、设置页、空状态、菜单分组标题、浮层提示——改用 Avenir Next；分支名改用其窄体；Projects / Tasks 标签改用 Seravek；密集行里需要扫读的文字仍用系统字体。四层结构、行种类与 300 点宽度未变；JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "树在有理由的地方引入第二种字体：Projects 与 Tasks 是人最先读的行，所以名字改用 Avenir Next Medium 14。只有拉丁文字变化——Avenir Next 没有中日韩字形，中文名仍用系统字体与其回退，不会走形。",
+              "分支名改用 Avenir Next Condensed Medium 12.5：它属于项目名的同一家族，两者读起来是一块而不是一个标签加一条注脚；窄体比原先 11.5 的比例系统字体更大半点却更窄，长 ref 因此能多留几个字母。",
+              "Session 标题改用 regular：原为 13.5 medium，一列 medium 标题比上方的项目名还重，而项目名才是人先读的一层，标题现在让位给它。13.5 与 11 的字号差依旧把标题与副行分开。",
+              "Projects / Tasks 标签改用 Seravek 14，选中态 medium。Avenir 的几何大写在与小写混排的 \"Projects\" 里显得分开，Seravek 不会。用 regular 与 medium 而非 medium 与 bold：标签位于所有行之上，加粗会先于列表抢眼睛，而墨色与下划线已经标出选中项。计数沿用同一家族并用等宽数字，每个标签预留选中时的宽度，切换时不会顶动后一个。",
+              "折叠计数行改用 Avenir Next 斜体：\"N idle worktrees\" 与 \"N inactive projects\" 是对被折叠行的说明，不是又一个名字，斜体就说明了这点，不必再换一档灰色。计数本身保持直立 medium 等宽数字，数字变化时旁边的字不会跟着晃。",
+              "只读一次的标题改用 Avenir Next，字号比原来的 SF 大半点，因为它的下半部分更低：空状态的标题与正文、设置页标题、设置分组标题，以及设置导航里那些大写加字距的标签。菜单分组标题与二级页标题同样处理（12 medium 与 13.5 demi-bold），其下的行仍用系统字体——原生菜单的控制项用系统字体，标签则要与它们区分开。",
+              "浮层提示的文字与悬停卡片的标签改用 Avenir Next medium（12.5 与 11.5）：它们只读一次就过，在这个字号下浮在窗口上的表面会让 regular 显得纤细，所以取同族的 medium，而不是更重的系统字体。",
+            ],
+          },
+          {
+            title: "修正",
+            items: [
+              "唯一一个空闲工作树改为画成行，不再折叠：\"1 idle worktree\" 为了省一行藏掉了一个名字，现在单个空闲工作树与活跃工作树一起画出；如果项目只有这一个没有 Session 的工作树，也会把它列出来，而不是让它的名字在树里消失。有两个以上才折叠。",
+              "行尾溢出渐变由 24 点收窄到 14 点：在侧边栏边缘，24 点会吃掉大半个词，14 点约两个字，足够说明这一行还没结束。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。Host、CLI、Web 与 iOS 行为均未改动；改动限于设计系统的字体 token 与读取它们的 Desktop 视图。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.36.2",
         dateISO: "2026-11-12",

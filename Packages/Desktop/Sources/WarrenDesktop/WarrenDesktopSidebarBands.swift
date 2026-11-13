@@ -160,14 +160,16 @@ struct WarrenDesktopProjectHoldClock: Equatable {
 /// In each list a `main` or `master` worktree comes first, so the default
 /// branch is always found in the same place.
 struct WarrenDesktopWorkspaceSplit: Equatable {
+    /// The worktrees drawn as rows: every live one, plus a lone idle one,
+    /// including the only worktree of a project with no Session.
     /// The default branch, then the Host's order.
     var live: [Workspace]
     /// The default branch, then most recently active first.
     var idle: [Workspace]
 
     init(_ workspaces: [Workspace], isLive: (Workspace) -> Bool) {
-        live = Self.defaultBranchFirst(workspaces.filter(isLive))
-        idle = Self.defaultBranchFirst(workspaces
+        var live = workspaces.filter(isLive)
+        var idle = Self.defaultBranchFirst(workspaces
             .enumerated()
             .filter { !isLive($0.element) }
             .sorted { lhs, rhs in
@@ -176,6 +178,15 @@ struct WarrenDesktopWorkspaceSplit: Equatable {
                 return left == right ? lhs.offset < rhs.offset : left > right
             }
             .map(\.element))
+        // One idle worktree is not a list: folding it behind "1 idle
+        // worktree", or hiding it under a project with nothing else, hides
+        // its name for nothing, so it is drawn as a row like a live one.
+        if idle.count == 1 {
+            live = workspaces.filter { isLive($0) || $0.id == idle[0].id }
+            idle = []
+        }
+        self.live = Self.defaultBranchFirst(live)
+        self.idle = idle
     }
 
     static func isDefaultBranch(_ workspace: Workspace) -> Bool {
@@ -189,11 +200,10 @@ struct WarrenDesktopWorkspaceSplit: Equatable {
         workspaces.filter(isDefaultBranch) + workspaces.filter { !isDefaultBranch($0) }
     }
 
-    /// Whether the idle row is drawn. A project with no Session and one
-    /// worktree is just its own row: a lone idle `main` under it says nothing
-    /// the project row does not.
+    /// Whether the idle row is drawn. A single idle worktree is already in
+    /// `live`, so the row only ever folds two or more.
     var showsIdleRow: Bool {
-        !idle.isEmpty && !(live.isEmpty && idle.count == 1)
+        !idle.isEmpty
     }
 
     /// Whether the project has anything to draw beneath its own row.

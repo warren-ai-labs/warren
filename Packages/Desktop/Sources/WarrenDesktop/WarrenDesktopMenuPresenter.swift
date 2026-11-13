@@ -611,7 +611,7 @@ struct WarrenDesktopActionMenu: View {
                 .foregroundStyle(WarrenDesktopMenuPalette.resolved(for: colorScheme).secondaryGlyph)
                 .frame(width: WarrenDesktopMenuMetrics.actionSize, height: WarrenDesktopMenuMetrics.actionSize)
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(WarrenTypography.menuPageTitle)
                 .foregroundStyle(WarrenDesktopMenuPalette.resolved(for: colorScheme).rowText)
                 .lineLimit(1)
             Spacer(minLength: 0)

@@ -553,7 +553,7 @@ struct WarrenDesktopSettingsView: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(section.rawValue)
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(WarrenTypography.settingsPageTitle)
                     .foregroundStyle(palette.ink)
                 scopeRow(for: section, palette: palette)
             }

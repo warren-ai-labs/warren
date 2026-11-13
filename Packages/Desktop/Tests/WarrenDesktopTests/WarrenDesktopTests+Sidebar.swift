@@ -1958,12 +1958,12 @@ extension WarrenDesktopTests {
         XCTAssertNil(solo[mainRowID], "One worktree draws no worktree row")
         XCTAssertNotNil(solo[leafID], "Its Sessions hang under the project")
 
-        // A second worktree with no Session folds into the idle row, so the
-        // project still lists its one live worktree by name.
+        // A second worktree with no Session is one idle worktree, not a
+        // list, so it is drawn as a row beside the live one.
         let pair = nodes(workspaces: [main, feature])
         XCTAssertNotNil(pair[mainRowID])
-        XCTAssertNil(pair["workspace.project-list.\(feature.id.description)"])
-        XCTAssertNotNil(pair["project-idle-worktrees.\(project.id.description)"])
+        XCTAssertNotNil(pair["workspace.project-list.\(feature.id.description)"])
+        XCTAssertNil(pair["project-idle-worktrees.\(project.id.description)"])
         XCTAssertNotNil(pair[leafID])
     }
     /// The multi-Host sections hold a one-worktree project's Sessions directly

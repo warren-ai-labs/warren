@@ -4,6 +4,76 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-11-13
+
+A Desktop-only release that gives the window a type system instead of one face.
+What a person reads once - a project name, a settings page, an empty state, a
+menu caption, a tooltip - takes Avenir Next; a branch ref takes its condensed cut; the
+Projects / Tasks tabs take Seravek; and everything scanned in a dense row keeps
+the system face. The tree's four levels, its row kinds and its 300-point width
+are unchanged; the JSON control protocol remains at 4.0, nothing outside the
+Desktop app changed, and this release migrates no state.
+
+### Changed
+
+- Give the tree a second family where it earns one. The tree was one face top to
+  bottom, so only size and weight told its tiers apart; Projects and Tasks are
+  the rows a person reads first, so their names are Avenir Next Medium at 14.
+  Only Latin runs change: Avenir Next has no CJK glyphs, so a Chinese name keeps
+  the system face and its fallback rather than losing its shape.
+- Set a branch name in Avenir Next Condensed Medium at 12.5. A ref belongs to the
+  project name's family, so the two read as one block instead of a label and a
+  note, and the narrower cut leaves a long ref more of its letters than the
+  proportional system face did at 11.5 - half a point larger and still narrower.
+- Set a Session title in regular weight. It was 13.5 medium, and a column of
+  medium titles read heavier than the project names above them: the names are
+  the tier a person reads first, and the titles under them now defer to it
+  rather than competing with it. The 13.5 / 11 step still separates a title from
+  its second line.
+- Set the Projects / Tasks tabs in Seravek at 14, selected medium. Avenir's
+  geometric capitals stood apart from the lowercase in a mixed-case word like
+  "Projects" and Seravek's do not. Regular and medium, not medium and bold: the
+  tabs sit above every row, and a bold heading there took the eye before the
+  list did, while ink and the underline already mark the selection. The count
+  keeps the family with tabular digits, and each tab reserves its selected width
+  so switching one does not nudge the tab after it.
+- Set a folded-count row in Avenir Next italic. "N idle worktrees" and "N
+  inactive projects" are notes about the rows they fold, not one more name, and
+  the slant says so without another shade of grey; the count itself stays
+  upright, medium and tabular so a changing number does not shift the words
+  beside it.
+- Move the headings that are read once onto Avenir Next, half a point over the
+  SF sizes they replace because its lowercase sits lower: an empty state's title
+  and body, a settings page title, a settings group heading, and the uppercase
+  tracked labels in the settings navigation. Menu group captions and submenu
+  titles follow, at 12 medium and 13.5 demi-bold, while the rows under them stay
+  in the system face - a native menu sets its controls in the system face and
+  its labels apart from them.
+- Set a tooltip's text and a hover card's labels in Avenir Next medium, at 12.5
+  and 11.5. They are read once and pass, at a size where the floating surface
+  makes the regular cut look thin, so they take the family's medium weight
+  rather than a heavier system face.
+
+### Fixed
+
+- Draw a single idle worktree as a row instead of folding it. "1 idle worktree"
+  saved a line by hiding a name, so one idle worktree is drawn with the live ones
+  - and a project whose only worktree has no Session lists that worktree instead
+  of leaving its name out of the tree altogether. The folded row now only ever
+  folds two or more, which is when it is a list rather than a name.
+- Narrow the trailing overflow fade from 24 points to 14. At the sidebar's edge,
+  24 ate most of a word; 14 is about two glyphs, enough to say the line goes on.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0, no method was added or changed, and
+  this release migrates no state. No Host, CLI, Web or iOS behaviour changed; the
+  work is confined to the design system's type tokens and the Desktop views that
+  read them.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.36.2] - 2026-11-12
 
 A Desktop-only patch that finishes the sidebar: its names are set the way the

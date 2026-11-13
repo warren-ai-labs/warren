@@ -28,7 +28,7 @@ struct WarrenDesktopDetailCard: View {
             ForEach(rows) { row in
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(row.label)
-                        .font(.system(size: 11))
+                        .font(WarrenTypography.hoverCardLabel)
                         .foregroundStyle(tokens.mutedForeground)
                         .frame(width: 62, alignment: .leading)
                     Text(row.value)

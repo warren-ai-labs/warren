@@ -271,7 +271,7 @@ private struct WarrenTooltipBubble: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         HStack(spacing: 8) {
             Text(text)
-                .font(.system(size: 12))
+                .font(WarrenTypography.tooltip)
                 .foregroundStyle(tokens.foreground)
             if let shortcut {
                 Text(shortcut)
