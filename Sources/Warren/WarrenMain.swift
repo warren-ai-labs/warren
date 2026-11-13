@@ -334,13 +334,16 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         offeredDiskImages.insert(promptKey)
         presentMainWindowIfNeeded()
         NSApp.activate(ignoringOtherApps: true)
-        guard WarrenDiskImagePrompt.confirm(update) else {
-            // Asking again on a later mount keeps the image usable after the
-            // user dismissed this one.
-            offeredDiskImages.remove(promptKey)
-            return
+        WarrenDiskImagePrompt.shared.ask(update) { [weak self] install in
+            guard let self else { return }
+            guard install else {
+                // Asking again on a later mount keeps the image usable after
+                // the user dismissed this one.
+                self.offeredDiskImages.remove(promptKey)
+                return
+            }
+            self.installDiskImageUpdate(update)
         }
-        installDiskImageUpdate(update)
     }
 
     private func installDiskImageUpdate(_ update: WarrenDiskImageUpdate) {
@@ -959,19 +962,49 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
 
 /// The one question a mounted Warren disk image asks. Both versions are named
 /// so the relation is read from numbers, not from which button appeared.
+///
+/// It is drawn in the window as Warren's own dialog, like every other
+/// confirmation, rather than as a system alert in the system's type. The
+/// question waits in `pending` until the window shows it, so a prompt raised
+/// while the window is still mounting is not lost.
 @MainActor
-private enum WarrenDiskImagePrompt {
-    static func confirm(_ update: WarrenDiskImageUpdate) -> Bool {
-        let alert = NSAlert()
-        alert.alertStyle = update.relation == .older ? .warning : .informational
-        alert.messageText = "Install Warren \(update.displayVersion)?"
-        alert.informativeText = message(for: update)
-        alert.addButton(withTitle: update.relation == .older ? "Install Older Version" : "Install")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+final class WarrenDiskImagePrompt: ObservableObject {
+    static let shared = WarrenDiskImagePrompt()
+
+    struct Question: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+        let confirmLabel: String
+        /// Installing an older build downgrades the app, so it reads as
+        /// destructive and takes ⌘↩.
+        let isDowngrade: Bool
+        let answer: (Bool) -> Void
     }
 
-    private static func message(for update: WarrenDiskImageUpdate) -> String {
+    @Published private(set) var pending: Question?
+
+    func ask(_ update: WarrenDiskImageUpdate, answer: @escaping (Bool) -> Void) {
+        // A newer mount replaces an unanswered question; the older one is
+        // declined so its caller can offer it again on a later mount.
+        pending?.answer(false)
+        let isDowngrade = update.relation == .older
+        pending = Question(
+            title: "Install Warren \(update.displayVersion)?",
+            message: Self.message(for: update),
+            confirmLabel: isDowngrade ? "Install Older Version" : "Install",
+            isDowngrade: isDowngrade,
+            answer: answer
+        )
+    }
+
+    func respond(_ install: Bool) {
+        guard let question = pending else { return }
+        pending = nil
+        question.answer(install)
+    }
+
+    static func message(for update: WarrenDiskImageUpdate) -> String {
         let installed = update.displayInstalledVersion
         let relation: String
         switch update.relation {

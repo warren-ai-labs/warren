@@ -116,6 +116,37 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.38.1",
+        dateISO: "2026-11-13",
+        date: "November 13, 2026",
+        title: "The last two system surfaces, drawn by Warren.",
+        summary:
+          "A Desktop patch that draws the last two surfaces Warren still handed to the system and makes the release gate see the Desktop app's own tests. The question a mounted disk image asks, and a Conversation answer's More menu, now come from Warren in Warren's own type instead of from a system alert and a system menu; the embedded editor's file tree narrowing script installs last, where it can act; and scripts/verify.sh now runs swift test at the repository root and the onboarding tests, so the app test that went stale in 0.38.0 is fixed. The JSON control protocol remains at 4.0, nothing outside the Desktop app changed, and this release migrates no state.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Ask the disk image install question in Warren's own dialog. A mounted Warren disk image used to raise a system alert in the system's type; it now draws the one dialog every other confirmation uses, with the same footer, so the release that installs Warren asks its one question in Warren's own voice. Installing an older build still reads as destructive - the confirm button says Install Older Version - and the question waits in the app until the window can show it, so a prompt raised while the window is still mounting is not lost. A newer mount replaces an unanswered question and declines the older one, which keeps the image usable after it was dismissed.",
+              "Open a Conversation answer's More menu as Warren's own menu. The ellipsis beside an answer was the one list in the window drawn as a system menu; it now uses the same context menu as every other menu, with the same Copy Markdown and Retry Turn actions, and keeps its More tip and its button role for assistive technology.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Install the embedded editor's file tree narrowing script last, at document end. It only acts once the workbench has laid out, so it now runs after the scripts that paint the ground and rearrange the workbench rather than between them, and its test covers the order, the injection time and the source it injects instead of only counting the scripts.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "scripts/verify.sh now also runs the app target's own tests - swift test at the repository root - and the onboarding Worker's tests, beside the package tests, the Relay and Headless race tests and the non-visual UI probes. 0.38.0 shipped with one stale app test because verify never ran them; that test is fixed here.",
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. No Host, CLI, Web or iOS behaviour changed; the work is confined to the Desktop app and the release script.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.38.0",
         dateISO: "2026-11-13",
         date: "November 13, 2026",
@@ -2027,6 +2058,37 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.38.1",
+        dateISO: "2026-11-13",
+        date: "2026 年 11 月 13 日",
+        title: "最后两处系统界面也由 Warren 自己绘制。",
+        summary:
+          "这是 Desktop 的修补版本：把最后两处仍交给系统的界面收回来，并让发布前的检查真正跑到 Desktop app 自己的测试。挂载磁盘映像时的安装询问、对话回答上的“更多”菜单，现在都由 Warren 用自己的字体绘制，不再是系统弹窗和系统菜单；内嵌编辑器的文件树收窄脚本改为最后安装，装在工作台完成布局之后；scripts/verify.sh 现在还会在仓库根目录运行 swift test 与 onboarding 的测试，0.38.0 里那个过期未发现的 app 测试因此修好。JSON 控制协议仍为 4.0，Desktop 之外没有任何变化，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "磁盘映像的安装询问改用 Warren 自己的对话框。挂载 Warren 磁盘映像时原先弹系统警告，用的是系统字体；现在改用其他确认操作共用的那一个对话框和同一个页脚，于是安装 Warren 的那个版本用自己的语气问出自己的问题。安装旧版本仍被当作破坏性操作，确认按钮写 Install Older Version；询问会留在 app 里等窗口能显示时再显示，窗口还在挂载时提出的询问不会丢失。更新的挂载会替换尚未回答的询问，并把旧的那个按取消处理，被关掉之后映像仍然可用。",
+              "对话回答上的“更多”菜单改用 Warren 自己的菜单。回答旁的省略号原是窗口里唯一用系统菜单绘制的列表；现在改用与其他菜单相同的上下文菜单，仍是 Copy Markdown 与 Retry Turn 两项，并保留 More 提示与给辅助技术的按钮角色。",
+            ],
+          },
+          {
+            title: "修正",
+            items: [
+              "内嵌编辑器的文件树收窄脚本改为最后安装，注入时机为文档末尾。它只有在工作台完成布局之后才会起作用，所以现在排在于画底色、重排工作台的脚本之后，而不是夹在它们中间；它的测试也改为检查顺序、注入时机与注入的源码，不再只数脚本个数。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "scripts/verify.sh 现在还会运行 app target 自己的测试（仓库根目录的 swift test）与 onboarding 的测试，与各 package 测试、Relay 与 Headless 的竞态测试、非可视的界面探针一起构成发布门禁。0.38.0 因为检查没跑到这些测试，带着一个过期测试发了出去；该测试在本次修复。",
+              "JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。Host、CLI、Web 与 iOS 的行为均未改动；改动限于 Desktop app 与发布脚本。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.38.0",
         dateISO: "2026-11-13",

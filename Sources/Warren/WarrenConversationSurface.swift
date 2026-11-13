@@ -1988,24 +1988,18 @@ private struct WarrenConversationAnswerFooter: View {
             if let onRetry {
                 iconButton("arrow.clockwise", label: "Retry", action: onRetry)
             }
-            Menu {
-                Button("Copy Markdown") {
-                    copyFeedback.copy(answer, announcing: "Copied Markdown")
-                }
-                if let onRetry {
-                    Button("Retry Turn", action: onRetry)
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 12))
-                    .foregroundStyle(palette.ink4)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 24, height: 24)
-            .warrenTooltip("More")
+            // Warren's own menu, as every other menu in the window: a system
+            // menu here was the one list drawn in the system's type.
+            Image(systemName: "ellipsis")
+                .font(.system(size: 12))
+                .foregroundStyle(palette.ink4)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+                .warrenMenuButton(moreActions)
+                .warrenTooltip("More")
+                .accessibilityElement()
+                .accessibilityLabel("More")
+                .accessibilityAddTraits(.isButton)
             if let endedAt {
                 Text(Self.format(endedAt))
                     .font(WarrenTypography.monoSmall)
@@ -2019,6 +2013,18 @@ private struct WarrenConversationAnswerFooter: View {
         .opacity(visible ? 1 : 0)
         .allowsHitTesting(visible)
         .accessibilityHidden(!visible)
+    }
+
+    private var moreActions: [WarrenDesktopContextMenuAction] {
+        var actions: [WarrenDesktopContextMenuAction] = [
+            .button(title: "Copy Markdown", action: {
+                copyFeedback.copy(answer, announcing: "Copied Markdown")
+            }),
+        ]
+        if let onRetry {
+            actions.append(.button(title: "Retry Turn", action: onRetry))
+        }
+        return actions
     }
 
     private func iconButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {

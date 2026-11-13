@@ -4,6 +4,57 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.38.1] - 2026-11-13
+
+A Desktop patch that draws the last two surfaces Warren still handed to the
+system, and makes the release gate see the Desktop app's own tests. The question
+a mounted disk image asks, and a Conversation answer's More menu, now come from
+Warren in Warren's own type instead of from a system alert and a system menu;
+the embedded editor's file tree narrowing script installs last, where it can
+act; and `scripts/verify.sh` now runs `swift test` at the repository root and
+the onboarding tests, so the app test that went stale in 0.38.0 is fixed. The
+JSON control protocol remains at 4.0, nothing outside the Desktop app changed,
+and this release migrates no state.
+
+### Changed
+
+- Ask the disk image install question in Warren's own dialog. A mounted
+  `Warren-<version>.dmg` used to raise a system alert in the system's type; it
+  now draws the one dialog every other confirmation uses, with the same footer,
+  so the release that installs Warren asks its one question in Warren's own
+  voice. Installing an older build still reads as destructive - the confirm
+  button says Install Older Version - and the question waits in the app until
+  the window can show it, so a prompt raised while the window is still mounting
+  is not lost. A newer mount replaces an unanswered question and declines the
+  older one, which keeps the image usable after it was dismissed.
+- Open a Conversation answer's More menu as Warren's own menu. The ellipsis
+  beside an answer was the one list in the window drawn as a system menu; it now
+  uses the same context menu as every other menu, with the same Copy Markdown
+  and Retry Turn actions, and keeps its More tip and its button role for
+  assistive technology.
+
+### Fixed
+
+- Install the embedded editor's file tree narrowing script last, at document
+  end. It only acts once the workbench has laid out, so it now runs after the
+  scripts that paint the ground and rearrange the workbench rather than between
+  them, and its test covers the order, the injection time and the source it
+  injects instead of only counting the scripts.
+
+### Release notes
+
+- `scripts/verify.sh` now also runs the app target's own tests - `swift test` at
+  the repository root - and the onboarding Worker's tests, beside the package
+  tests, the Relay and Headless race tests and the non-visual UI probes. 0.38.0
+  shipped with one stale app test because verify never ran them; that test is
+  fixed here.
+- The JSON control protocol remains at 4.0, no method was added or changed, and
+  this release migrates no state. No Host, CLI, Web or iOS behaviour changed;
+  the work is confined to the Desktop app and the release script.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.38.0] - 2026-11-13
 
 A release that carries one type system across the three apps and gives every

@@ -871,7 +871,15 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         let scripts = configuration.userContentController.userScripts
         // The appearance script paints the ground and leads, so it is in place
         // before the chrome script starts rearranging the workbench.
-        XCTAssertEqual(scripts.count, 3)
+        XCTAssertEqual(scripts.count, 4)
+        // The file tree is narrowed last, once the workbench has laid out.
+        let narrowing = scripts.last
+        XCTAssertEqual(narrowing?.injectionTime, .atDocumentEnd)
+        XCTAssertEqual(narrowing?.isForMainFrameOnly, true)
+        XCTAssertTrue(narrowing?.source.contains(".part.sidebar") ?? false)
+        XCTAssertTrue(
+            narrowing?.source.contains("const minimum = \(WarrenEmbeddedEditorChrome.sidebarMinimumWidth);") ?? false
+        )
         let ground = scripts.first?.source ?? ""
         XCTAssertTrue(ground.contains(WarrenEmbeddedEditorChrome.backgroundStyleElementID))
         XCTAssertTrue(ground.contains("#workbench-container"))

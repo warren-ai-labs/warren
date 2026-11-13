@@ -43,6 +43,14 @@ for package in \
     run_package_tests "$package"
 done
 
+# The app target's own tests: the composition root, the embedded editor and
+# the other code in Sources/Warren that no package test reaches.
+echo "==> swift test Warren"
+swift test --package-path "$repository_root"
+
+echo "==> onboarding worker"
+npm --prefix "$repository_root/Onboarding" test
+
 echo "==> non-visual semantic UI acceptance"
 WARREN_ARTIFACT_DIR="${WARREN_ARTIFACT_DIR:-/tmp/warren-observation/ui-probe}" \
     swift run --package-path "$repository_root" UIProbe

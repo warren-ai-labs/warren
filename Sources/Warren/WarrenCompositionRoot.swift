@@ -57,6 +57,7 @@ struct WarrenCompositionRoot: View {
     @State private var terminalSearchSessionID: TerminalSessionID?
     @State private var updateStatus: WarrenDesktopUpdateStatus = .none
     @StateObject private var presentation = WarrenPresentationCoordinator()
+    @ObservedObject private var diskImagePrompt = WarrenDiskImagePrompt.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -657,7 +658,23 @@ struct WarrenCompositionRoot: View {
 
     @ViewBuilder
     private var appPresentationLayer: some View {
-        if let preview = supersetImportPreview {
+        if let question = diskImagePrompt.pending {
+            // Asked by the app, not by a Host, so it outranks the Host's
+            // dialogs and survives a change of Host.
+            WarrenDialog(question.title, message: question.message) {
+                WarrenDialogFooter(
+                    confirmLabel: question.confirmLabel,
+                    isDestructive: question.isDowngrade,
+                    onCancel: { diskImagePrompt.respond(false) },
+                    onConfirm: { diskImagePrompt.respond(true) }
+                )
+            }
+            .onExitCommand { diskImagePrompt.respond(false) }
+            .id(question.id)
+            .zIndex(WarrenPresentationLayer.modal)
+            .onAppear { presentation.present(.modal) }
+            .onDisappear { presentation.dismissTop() }
+        } else if let preview = supersetImportPreview {
             // The importer draws its own `WarrenDialog`, so it is not wrapped.
             Group {
                 WarrenSupersetImportView(

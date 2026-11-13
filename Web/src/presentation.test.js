@@ -252,26 +252,22 @@ test("macOS app surfaces avoid native business sheets and alerts", () => {
     "Sources/Warren/WarrenMain.swift",
     "Packages/Desktop/Sources/WarrenDesktop/WarrenDesktopRootView.swift",
   ];
-  // The one native alert is the mounted disk image's install question. It
-  // needs a blocking Install/Cancel choice before the image replaces the app,
-  // and a posted notice cannot answer that.
+  // Every question is drawn by the app now. The mounted disk image's install
+  // question used to be the one native alert here; it is a Warren dialog too,
+  // so no surface may reach for NSAlert.
   const warrenMain = readFileSync(resolve(repoRoot, "Sources/Warren/WarrenMain.swift"), "utf8");
-  const diskImagePrompt = warrenMain.match(/private enum WarrenDiskImagePrompt \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(diskImagePrompt, "Sources/Warren/WarrenMain.swift: WarrenDiskImagePrompt");
-  assert.match(diskImagePrompt, /NSAlert\(\)/, "WarrenDiskImagePrompt.confirm");
+  assert.match(warrenMain, /WarrenDiskImagePrompt\.shared\.ask\(/);
   for (const relative of files) {
     const content = readFileSync(resolve(repoRoot, relative), "utf8");
     assert.doesNotMatch(content, /\.sheet\s*\(/, relative);
-    const withoutDiskImagePrompt = relative === "Sources/Warren/WarrenMain.swift"
-      ? content.replace(diskImagePrompt, "")
-      : content;
-    assert.doesNotMatch(withoutDiskImagePrompt, /NSAlert\(\)/, relative);
+    assert.doesNotMatch(content, /NSAlert\(\)/, relative);
   }
   // The SSH host picker is a Workbench menu page, not a native sheet: the
   // Host panel drills into it and the Desktop draws it on the shared menu
   // surface. The app only supplies the catalog through a page model.
   const compositionRoot = readFileSync(resolve(repoRoot, "Sources/Warren/WarrenCompositionRoot.swift"), "utf8");
   assert.doesNotMatch(compositionRoot, /NSAlert\(\)/, "Sources/Warren/WarrenCompositionRoot.swift");
+  assert.match(compositionRoot, /diskImagePrompt\.pending/, "Sources/Warren/WarrenCompositionRoot.swift");
   assert.match(compositionRoot, /sshHostPage/);
   assert.doesNotMatch(compositionRoot, /WarrenSSHHostPicker\(/);
   const hostPage = readFileSync(

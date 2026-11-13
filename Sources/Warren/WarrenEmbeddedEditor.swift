@@ -1507,11 +1507,6 @@ enum WarrenEmbeddedEditorChrome {
             forMainFrameOnly: true
         ))
         configuration.userContentController.addUserScript(WKUserScript(
-            source: sidebarNarrowingSource,
-            injectionTime: .atDocumentEnd,
-            forMainFrameOnly: true
-        ))
-        configuration.userContentController.addUserScript(WKUserScript(
             source: statusBarSource,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
@@ -1520,6 +1515,13 @@ enum WarrenEmbeddedEditorChrome {
             source: WarrenEmbeddedEditorPreviewTheme.source(appearance: appearance),
             injectionTime: .atDocumentStart,
             forMainFrameOnly: false
+        ))
+        // Last, and at document end: it only acts once the workbench has laid
+        // out, so it has nothing to do before the scripts above.
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: sidebarNarrowingSource,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
         ))
     }
 }
