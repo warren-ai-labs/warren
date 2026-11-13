@@ -264,7 +264,7 @@ struct WarrenDesktopWorkspaceRow: View {
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .strokeBorder(tokens.cardBorder, lineWidth: 1)
                     )
-                    .help("New Sessions open here")
+                    .warrenTooltip("New Sessions open here")
                     .accessibilityLabel("New Sessions open here")
             }
             if let leafDisclosure {
@@ -308,7 +308,7 @@ struct WarrenDesktopWorkspaceRow: View {
             !isInteractionDisabled && !isMutationDisabled ? contextMenuActions : []
         )
         // A long name truncates to one line; the whole name is on hover.
-        .help(taskName.map { "\(presentedName) · Task: \($0)" } ?? presentedName)
+        .warrenRowTooltip(taskName.map { "\(presentedName) · Task: \($0)" } ?? presentedName)
         .accessibilityElement(children: .contain)
         .onHover { isHovered = $0 }
     }

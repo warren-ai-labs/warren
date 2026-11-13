@@ -69,7 +69,7 @@ struct WarrenWorkspaceCreatorView: View {
                             .accessibilityIdentifier("workspace-creation.run-setup-script")
 
                         Text("Configured script: \(setupScript)")
-                            .font(.system(size: 11.5, design: .monospaced))
+                            .font(WarrenTypography.codeSmall)
                             .foregroundStyle(tokens.mutedForeground)
                             .lineLimit(2)
 
@@ -85,19 +85,19 @@ struct WarrenWorkspaceCreatorView: View {
                         .accessibilityIdentifier("workspace-creation.setup-arguments")
 
                         Text("The script runs in the new worktree. The first two arguments are the main repository and worktree paths.")
-                            .font(.system(size: 11.5))
+                            .font(WarrenTypography.dialogMeta)
                             .foregroundStyle(tokens.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
                 Text("Worktree files are stored under ~/.warren/worktrees.")
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.dialogMeta)
                     .foregroundStyle(tokens.mutedForeground)
 
                 if let errorMessage = coordinator.errorMessage {
                     Text(errorMessage)
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.dialogMeta)
                         .foregroundStyle(tokens.destructive)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityLabel("Workspace creation error: \(errorMessage)")

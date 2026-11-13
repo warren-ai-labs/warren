@@ -51,11 +51,11 @@ extension WarrenDesktopSettingsView {
                     )
                     HStack(spacing: 6) {
                         Text("↳")
-                            .font(.system(size: 11.5, design: .monospaced))
+                            .font(WarrenTypography.codeSmall)
                             .foregroundStyle(palette.inkFaint)
                             .accessibilityHidden(true)
                         Text(renderedTitle)
-                            .font(.system(size: 11.5, design: .monospaced))
+                            .font(WarrenTypography.codeSmall)
                             .foregroundStyle(palette.meta)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -153,10 +153,10 @@ extension WarrenDesktopSettingsView {
                             .opacity(isVisible ? 1 : 0.45)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(preset.presetBarTitle)
-                                .font(.system(size: 13))
+                                .font(WarrenTypography.settingsBodyEmphasis)
                                 .foregroundStyle(isVisible ? palette.inkBody : palette.inkFaint)
                             Text(presetCommandSummary(preset))
-                                .font(.system(size: 11.5, design: .monospaced))
+                                .font(WarrenTypography.codeSmall)
                                 .foregroundStyle(palette.meta)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -191,7 +191,7 @@ extension WarrenDesktopSettingsView {
             )
             .draggable(preset.id) {
                 Text(preset.presetBarTitle)
-                    .font(.system(size: 12))
+                    .font(WarrenTypography.body)
                     .padding(6)
                     .background(palette.card)
                     .onAppear { draggedPresetID = preset.id }
@@ -444,13 +444,13 @@ extension WarrenDesktopSettingsView {
         } label: {
             HStack(spacing: 6) {
                 Text(text)
-                    .font(.system(size: 12))
+                    .font(WarrenTypography.caption)
                     .foregroundStyle(palette.inkQuiet)
                 Image(systemName: "arrow.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(palette.inkFaint)
                 Text(section.rawValue)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(WarrenTypography.captionEmphasis)
                     .foregroundStyle(palette.inkBody)
                 Spacer(minLength: 0)
             }
@@ -483,7 +483,7 @@ extension WarrenDesktopSettingsView {
                 description: "libghostty-vt snapshots match the client exactly; the detached server keeps sessions alive across daemon upgrades."
             ) {
                 Text(defaultRuntime ?? "ghostline")
-                    .font(.system(size: 12.5, design: .monospaced))
+                    .font(WarrenTypography.mono)
                     .foregroundStyle(palette.inkQuiet)
                     .accessibilityIdentifier("settings.terminal-runtime.picker")
             }

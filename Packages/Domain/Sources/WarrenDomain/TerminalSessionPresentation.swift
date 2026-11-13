@@ -163,6 +163,19 @@ public enum TerminalSessionPresentation {
         return normalized
     }
 
+    /// A path cut to its last `maxComponents` directories, after the `~`
+    /// abbreviation: `~/Workspace/gh/abcdlsj/emby` reads as `…/abcdlsj/emby`.
+    /// A path that already has no more than that many is returned whole, so
+    /// `~/src/ak` and `/work/warren` keep their start.
+    public static func shortenedPath(_ path: String, maxComponents: Int = 2) -> String {
+        let abbreviated = abbreviatedPath(path)
+        let keep = max(1, maxComponents)
+        let components = abbreviated.split(separator: "/", omittingEmptySubsequences: true)
+        let named = components.first == "~" ? components.dropFirst() : components[...]
+        guard named.count > keep else { return abbreviated }
+        return "…/" + named.suffix(keep).joined(separator: "/")
+    }
+
     /// A path with redundant separators and `.`/`..` segments removed, without
     /// resolving symlinks: the displayed path should be the one the shell
     /// reported, not the one the filesystem points at.

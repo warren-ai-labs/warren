@@ -298,12 +298,12 @@ struct WarrenDesktopCommandPalette: View {
             Spacer(minLength: WarrenSpacing.compact)
 
             Text("w: p: s: t: g: @blocked")
-                .font(.system(size: 11, design: .monospaced))
+                .font(WarrenTypography.monoSmall)
                 .foregroundStyle(palette.meta)
                 .lineLimit(1)
                 .accessibilityLabel("Narrow with w:, p:, s:, t:, g:, or @blocked")
         }
-        .font(.system(size: 11.5))
+        .font(WarrenTypography.popoverMeta)
         .foregroundStyle(palette.meta)
         .padding(.horizontal, WarrenSpacing.medium)
         .frame(height: WarrenLayoutMetrics.commandPaletteFooterHeight)

@@ -1976,11 +1976,11 @@ private struct WarrenTerminalStatusPill: View {
                 .frame(width: 16, height: 16)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(WarrenTypography.popoverTitle)
                     .foregroundStyle(tokens.foreground.opacity(0.92))
                 if let shownDetail {
                     Text(shownDetail)
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.popoverMeta)
                         .foregroundStyle(tokens.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                         .transition(.opacity)
@@ -2017,9 +2017,9 @@ private struct WarrenTerminalStatusPill: View {
 private struct WarrenEmptyWorkspacePanel: View {
     var body: some View {
         WarrenDesktopEmptyStage(
-            mark: .symbol("terminal"),
-            title: "Start a session",
-            message: "Open a Shell or an Agent from + in the top bar.",
+            mark: .symbol("apple.terminal"),
+            title: "No sessions here yet",
+            message: "Start a shell or an Agent from + in the tab bar.",
             // Only what starts a Session: tab and pane shortcuts have
             // nothing to act on until one is open.
             hints: [.init(keys: "⌘T", label: "New shell")]

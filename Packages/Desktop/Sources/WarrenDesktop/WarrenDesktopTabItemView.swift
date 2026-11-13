@@ -8,6 +8,11 @@ struct WarrenDesktopTabItem: View {
     let tab: ClientTab
     let displayTitle: String
     let mark: WarrenActivityMark?
+    /// A plain shell's running or failed state, drawn on the icon like the
+    /// sidebar row's dot.
+    var shellMark: WarrenActivityMark? = nil
+    /// A shell's running command, appended to the title in the quieter ink.
+    var shellCommand: String = ""
     /// Whether this Tab's Conversation Session is a Lead. The title carries the
     /// outlined word; a pending Lead request also raises the icon's dot.
     var isLead: Bool = false
@@ -127,7 +132,7 @@ struct WarrenDesktopTabItem: View {
                     }
                     HStack(spacing: 6) {
                         WarrenDesktopFadingLine(edge: .trailing) {
-                            Text(displayTitle)
+                            titleText(tokens: tokens)
                                 .font(.system(size: 13, weight: .medium))
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -259,6 +264,15 @@ struct WarrenDesktopTabItem: View {
         .accessibilityValue(isSelected ? "Selected" : "Not selected")
     }
 
+    /// The Tab's name, with a shell's running command after it in the quieter
+    /// ink: two shells in one Workspace share a location, so the command is
+    /// what tells their Tabs apart.
+    private func titleText(tokens: WarrenColorTokens) -> Text {
+        guard !shellCommand.isEmpty else { return Text(displayTitle) }
+        return Text(displayTitle)
+            + Text(" · \(shellCommand)").foregroundColor(tokens.mutedForeground)
+    }
+
     /// The Session's kind badge. A Tab with no Session yet shows a placeholder
     /// tile.
     @ViewBuilder
@@ -269,13 +283,14 @@ struct WarrenDesktopTabItem: View {
                 .frame(width: 16, height: 16)
                 .accessibilityHidden(true)
         } else {
-            // Status lives in the sidebar's dots; the Tab names the Session.
-            // A Lead's unanswered request is the one exception: its Tab carries
-            // the same orange dot, because the request may be waiting in a pane
-            // the person has not looked at.
+            // An Agent's status lives in the sidebar's dots; the Tab names the
+            // Session. Two exceptions carry a dot here too: a Lead's unanswered
+            // request, which may be waiting in a pane the person has not looked
+            // at, and a plain shell's running or failed command, the same dot
+            // its row draws.
             WarrenDesktopSessionKindBadge(kind: tab.kind, size: 16)
                 .overlay(alignment: .bottomTrailing) {
-                    if isLead, let mark, mark.tier == .actionable {
+                    if let mark = isLead && mark?.tier == .actionable ? mark : shellMark {
                         WarrenDesktopStatusDot(
                             mark: mark,
                             size: 6,

@@ -41,7 +41,7 @@ extension WarrenDesktopSettingsView {
 
                     if !remoteAccess.enabled {
                         Text("Turn on Serverless relay first.")
-                            .font(.system(size: 11.5))
+                            .font(WarrenTypography.settingsMeta)
                             .foregroundStyle(palette.meta)
                     }
 
@@ -111,17 +111,17 @@ extension WarrenDesktopSettingsView {
                 Text(remoteAccess.enabled ? remoteAccess.displayedRelay : "Serverless relay is off")
                     .font(remoteAccess.enabled && remoteAccess.isSelfHostedRelay
                         ? .system(size: 12.5, design: .monospaced)
-                        : .system(size: 13))
+                        : WarrenTypography.body)
                     .foregroundStyle(palette.inkBody)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(remoteAccess.stateText)
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.settingsMeta)
                     .foregroundStyle(palette.meta)
                     .fixedSize(horizontal: false, vertical: true)
                 if remoteAccess.enabled, !remoteAccess.lastError.isEmpty {
                     Text(remoteAccess.lastError)
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.settingsMeta)
                         .foregroundStyle(palette.meta)
                         .lineLimit(2)
                 }
@@ -209,7 +209,7 @@ extension WarrenDesktopSettingsView {
                 // onlooker nothing to use, and the Host already knows it.
                 WarrenSettingsRow("Relay URL") {
                     Text("Built in")
-                        .font(.system(size: 12))
+                        .font(WarrenTypography.caption)
                         .foregroundStyle(palette.meta)
                         .accessibilityIdentifier("settings.remote.relay-source")
                         .warrenSemanticElement(
@@ -296,10 +296,10 @@ extension WarrenDesktopSettingsView {
                     // the connect code, and the QR code and the copy buttons
                     // hand it on without putting it on screen.
                     Text("Scan with Warren on iPhone, or copy a link.")
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.settingsMeta)
                         .foregroundStyle(palette.inkBody)
                     Text(remoteShareExpiryText(share))
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.settingsMeta)
                         .foregroundStyle(palette.meta)
                     WarrenSettingsCountdownBar(
                         expiresAt: share.expiresAt,
@@ -327,7 +327,7 @@ extension WarrenDesktopSettingsView {
                             }
                         }
                         .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
-                        .help("Opens this Host in a browser, end-to-end encrypted through the relay.")
+                        .warrenTooltip("Opens this Host in a browser, end-to-end encrypted through the relay.")
                         .accessibilityIdentifier("settings.remote.share.copy-web")
                     }
                 }

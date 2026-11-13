@@ -47,23 +47,26 @@ extension WarrenDesktopSettingsSection {
     /// A monochrome SF Symbol for the navigation item. The design drops the
     /// coloured tile: colour means status in Warren, so settings navigation
     /// stays grey and only a status dot carries a colour.
+    /// One family of single-colour outlines at one weight: each names the
+    /// thing the page governs (a palette, a Terminal window, a chip) rather
+    /// than a generic shape, so the rail reads at a glance without colour.
     var symbol: String {
         switch self {
-        case .appearance: "circle.lefthalf.filled"
-        case .terminal: "terminal"
-        case .splits: "rectangle.split.2x1"
-        case .presets: "play.rectangle"
-        case .externalIDEs: "chevron.left.forwardslash.chevron.right"
+        case .appearance: "paintpalette"
+        case .terminal: "apple.terminal"
+        case .splits: "square.split.2x1"
+        case .presets: "bolt"
+        case .externalIDEs: "curlybraces"
         case .notifications: "bell"
-        case .workspaces: "arrow.triangle.branch"
-        case .terminalRuntime: "server.rack"
-        case .aiTitles: "sparkles"
-        case .usage: "chart.bar"
-        case .relay: "antenna.radiowaves.left.and.right"
-        case .lanPairing: "wifi"
-        case .publicAccess: "globe"
-        case .remoteAccess: "lock.shield"
-        case .access: "lock.shield"
+        case .workspaces: "square.stack.3d.up"
+        case .terminalRuntime: "cpu"
+        case .aiTitles: "wand.and.sparkles"
+        case .usage: "chart.line.uptrend.xyaxis"
+        case .relay: "dot.radiowaves.left.and.right"
+        case .lanPairing: "laptopcomputer.and.iphone"
+        case .publicAccess: "network"
+        case .remoteAccess: "checkmark.shield"
+        case .access: "checkmark.shield"
         }
     }
 
@@ -570,16 +573,16 @@ struct WarrenDesktopSettingsView: View {
         HStack(spacing: 8) {
             if section.scope == .thisMac {
                 Text("This Mac")
-                    .font(.system(size: 12))
+                    .font(WarrenTypography.caption)
                     .foregroundStyle(palette.inkQuiet)
             } else {
                 hostScopeChip(palette: palette)
             }
             Text("·")
-                .font(.system(size: 12))
+                .font(WarrenTypography.caption)
                 .foregroundStyle(palette.inkFaint)
             Text(section.detail)
-                .font(.system(size: 12))
+                .font(WarrenTypography.caption)
                 .foregroundStyle(palette.inkQuiet)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -590,7 +593,7 @@ struct WarrenDesktopSettingsView: View {
     func hostScopeChip(palette: WarrenSettingsPalette) -> some View {
         HStack(spacing: 6) {
             Text(currentHostLabel)
-                .font(.system(size: 12))
+                .font(WarrenTypography.caption)
                 .foregroundStyle(palette.inkBody)
                 .lineLimit(1)
             connectionDot(hostOptions.first { $0.id == selectedHostID }?.probeState, palette: palette)
@@ -628,7 +631,7 @@ struct WarrenDesktopSettingsView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(section == .publicAccess ? "Copy setup link" : "Copy link")
+        .warrenTooltip(section == .publicAccess ? "Copy setup link" : "Copy link")
         .accessibilityLabel(section == .publicAccess ? "Copy Public Access setup link" : "Copy \(section.rawValue) settings link")
         .accessibilityIdentifier("settings.section.\(section.deepLinkValue).deeplink")
     }
@@ -679,7 +682,7 @@ struct WarrenSettingsNavItem: View {
                 // and the section label's: a rail of four grey values reads as
                 // texture, and the icons are not what a person scans for.
                 Image(systemName: section.symbol)
-                    .font(.system(size: 15))
+                    .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(isSelected ? palette.ink : palette.inkFaint)
                     .frame(width: 20)
                     .overlay(alignment: .topTrailing) {
@@ -689,13 +692,13 @@ struct WarrenSettingsNavItem: View {
                         }
                     }
                 Text(section.rawValue)
-                    .font(.system(size: 13))
+                    .font(WarrenTypography.settingsNavigationItem)
                     .foregroundStyle(isSelected ? palette.ink : palette.inkBody)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if let scopeLabel {
                     Text(scopeLabel)
-                        .font(.system(size: 10.5))
+                        .font(WarrenTypography.settingsNavigationScope)
                         .foregroundStyle(palette.inkFaint)
                         .lineLimit(1)
                 }
@@ -774,7 +777,7 @@ struct AppIconChoice: View {
                 }
 
                 Text(colorway.displayName)
-                    .font(.system(size: 12))
+                    .font(WarrenTypography.caption)
                     .foregroundStyle(isSelected ? palette.ink : palette.inkQuiet)
             }
             .contentShape(Rectangle())
@@ -800,11 +803,11 @@ struct TerminalFontPreview: View {
             HStack(spacing: 8) {
                 Circle().fill(palette.success).frame(width: 8, height: 8)
                 Text("zsh")
-                    .font(.system(size: 11))
+                    .font(WarrenTypography.caption)
                     .foregroundStyle(palette.meta)
                 Spacer()
                 Text(title)
-                    .font(.system(size: 11))
+                    .font(WarrenTypography.caption)
                     .foregroundStyle(palette.inkQuiet)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -861,7 +864,7 @@ struct FlowingChips: View {
                 WarrenSettingsTokenChip(token: token.0) {
                     onInsert(token.0)
                 }
-                .help(token.1)
+                .warrenTooltip(token.1)
             }
         }
     }

@@ -80,7 +80,7 @@ struct WarrenDesktopSidebarEmptyState: View {
                                     .font(.system(size: 9.5, weight: .semibold))
                             }
                             Text(action.label)
-                                .font(.system(size: 12, weight: .medium))
+                                .font(WarrenTypography.captionEmphasis)
                         }
                     }
                     .buttonStyle(WarrenDesktopSidebarEmptyActionStyle(isFocused: isActionFocused))

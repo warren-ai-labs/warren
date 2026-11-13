@@ -40,6 +40,32 @@ struct WarrenDesktopDialogFooter<Leading: View>: View {
     }
 }
 
+extension WarrenDesktopDialogFooter {
+    /// A footer with something ahead of its buttons: a progress line, a
+    /// key hint, a secondary action.
+    init(
+        confirmLabel: String,
+        cancelLabel: String = "Cancel",
+        isDestructive: Bool = false,
+        isConfirmEnabled: Bool = true,
+        isCancelEnabled: Bool = true,
+        confirmKey: WarrenDialogConfirmKey? = nil,
+        onCancel: @escaping () -> Void,
+        onConfirm: @escaping () -> Void,
+        @ViewBuilder leading: () -> Leading
+    ) {
+        self.confirmLabel = confirmLabel
+        self.cancelLabel = cancelLabel
+        self.isDestructive = isDestructive
+        self.isConfirmEnabled = isConfirmEnabled
+        self.isCancelEnabled = isCancelEnabled
+        self.confirmKey = confirmKey
+        self.onCancel = onCancel
+        self.onConfirm = onConfirm
+        self.leading = leading()
+    }
+}
+
 extension WarrenDesktopDialogFooter where Leading == EmptyView {
     init(
         confirmLabel: String,

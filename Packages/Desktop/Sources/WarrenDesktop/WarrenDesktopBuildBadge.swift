@@ -109,6 +109,9 @@ struct WarrenDesktopBuildBadge: View {
             if showsBuildMarker {
                 Text("BUILD")
                     .fontWeight(.medium)
+                    // Tracking is for the capitals; the chip beside it is
+                    // mixed case and reads closer.
+                    .tracking(1.0)
                     .foregroundStyle(tokens.amber)
                     .lineLimit(1)
             }
@@ -121,12 +124,11 @@ struct WarrenDesktopBuildBadge: View {
             statusControl(tokens: tokens)
         }
         .font(WarrenTypography.sectionLabel)
-        .tracking(1.0)
         .frame(minWidth: showsBuildMarker && !isCompact ? 132 : 0, alignment: .trailing)
         .frame(height: 28, alignment: .center)
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityElement(children: .contain)
-        .help(helpText)
+        .warrenTooltip(helpText)
     }
 
     @ViewBuilder

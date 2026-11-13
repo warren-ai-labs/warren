@@ -154,7 +154,7 @@ struct WarrenDesktopPresetBar: View {
                 WarrenLoadingIndicator(size: 11, accessibilityLabel: "Starting session")
                 Text("Starting…")
             }
-            .font(.system(size: 11.5))
+            .font(WarrenTypography.popoverMeta)
             .foregroundStyle(palette.meta)
             .padding(.trailing, WarrenDesktopMenuMetrics.rowHorizontalPadding - 2)
         } else if let workspace {
@@ -165,7 +165,7 @@ struct WarrenDesktopPresetBar: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            .font(.system(size: 11.5))
+            .font(WarrenTypography.popoverMeta)
             .foregroundStyle(palette.meta)
             .frame(maxWidth: 140, alignment: .trailing)
             .padding(.trailing, WarrenDesktopMenuMetrics.rowHorizontalPadding - 2)
@@ -210,7 +210,7 @@ struct WarrenDesktopPresetBar: View {
                     .font(.system(size: 11, weight: .medium))
                     .frame(width: WarrenDesktopMenuMetrics.iconSize, height: WarrenDesktopMenuMetrics.iconSize)
                 Text("Launch commands…")
-                    .font(.system(size: 12))
+                    .font(WarrenTypography.popoverItem)
                 Spacer(minLength: 0)
             }
             .foregroundStyle(palette.addText)
@@ -269,7 +269,7 @@ struct WarrenDesktopPresetBar: View {
                 }
 
                 Text(preset.presetBarTitle)
-                    .font(.system(size: 13))
+                    .font(WarrenTypography.popoverItem)
                     .foregroundStyle(isHot ? palette.rowHoverText : palette.rowText)
                     .lineLimit(1)
 
@@ -405,10 +405,10 @@ struct WarrenDesktopPresetBar: View {
                             )
                         VStack(alignment: .leading, spacing: 1) {
                             Text(label)
-                                .font(.system(size: 13))
+                                .font(WarrenTypography.popoverItem)
                                 .foregroundStyle(palette.rowText)
                             Text(hint)
-                                .font(.system(size: 11.5))
+                                .font(WarrenTypography.popoverMeta)
                                 .foregroundStyle(palette.meta)
                         }
                         Spacer(minLength: 0)

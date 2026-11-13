@@ -238,7 +238,7 @@ struct WarrenDesktopTaskCreatorView: View {
                 }
             }
         } footer: {
-            WarrenDialogFooter(
+            WarrenDesktopDialogFooter(
                 confirmLabel: "Create",
                 isConfirmEnabled: coordinator.canSubmit,
                 isCancelEnabled: !coordinator.isSubmitting,

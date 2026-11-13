@@ -39,7 +39,7 @@ struct WarrenDesktopFoldedPaneRail: View {
         .buttonStyle(.plain)
         .warrenCard(fill: isHovered ? tokens.fillHover : nil)
         .onHover { isHovered = $0 }
-        .help("Restore \(title)")
+        .warrenTooltip("Restore \(title)")
         .accessibilityLabel("Restore \(title)")
         .accessibilityHint("Brings the folded pane back at the size it had")
         .warrenSemanticElement(
@@ -58,7 +58,7 @@ struct WarrenDesktopFoldedPaneRail: View {
             // title longer than the rail truncates at the bottom.
             GeometryReader { proxy in
                 Text(title)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(WarrenTypography.paneHeader)
                     .foregroundStyle(tokens.mutedForeground)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -78,7 +78,7 @@ struct WarrenDesktopFoldedPaneRail: View {
         HStack(spacing: WarrenSpacing.compact) {
             WarrenDesktopSessionKindBadge(icon: icon, size: 16)
             Text(title)
-                .font(.system(size: 13, weight: .medium))
+                .font(WarrenTypography.paneHeader)
                 .foregroundStyle(tokens.mutedForeground)
                 .lineLimit(1)
                 .truncationMode(.middle)

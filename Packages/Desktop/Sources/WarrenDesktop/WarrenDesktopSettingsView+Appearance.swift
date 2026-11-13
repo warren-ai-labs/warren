@@ -57,7 +57,7 @@ extension WarrenDesktopSettingsView {
                 .padding(.bottom, 14)
 
                 Text("Changes the icon in the Dock and the app switcher while Warren is running. Finder keeps the Caramel icon.")
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.settingsMeta)
                     .foregroundStyle(palette.meta)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 16)

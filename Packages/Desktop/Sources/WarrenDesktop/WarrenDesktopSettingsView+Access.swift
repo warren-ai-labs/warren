@@ -68,7 +68,7 @@ extension WarrenDesktopSettingsView {
                         .padding(.leading, 14)
                 } else {
                     Text("Set up Server relay first.")
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.settingsMeta)
                         .foregroundStyle(palette.meta)
                         .padding(.leading, 14)
                         .accessibilityIdentifier("settings.public-access.needs-relay")
@@ -90,8 +90,8 @@ extension WarrenDesktopSettingsView {
 
     func accessGroupLabel(_ title: String, palette: WarrenSettingsPalette) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .tracking(0.6)
+            .font(WarrenTypography.settingsNavigationLabel)
+            .tracking(1.1)
             .foregroundStyle(palette.meta)
             .accessibilityAddTraits(.isHeader)
     }
@@ -110,11 +110,11 @@ extension WarrenDesktopSettingsView {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(WarrenTypography.settingsGroupTitle)
                         .foregroundStyle(palette.inkBody)
                     if let tag {
                         Text(tag)
-                            .font(.system(size: 10.5, weight: .medium))
+                            .font(WarrenTypography.badge)
                             .foregroundStyle(palette.meta)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
@@ -125,7 +125,7 @@ extension WarrenDesktopSettingsView {
                     }
                 }
                 Text(detail)
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.settingsMeta)
                     .foregroundStyle(palette.meta)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -136,10 +136,10 @@ extension WarrenDesktopSettingsView {
                         Text(guideLabel)
                         Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .semibold))
                     }
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.caption)
                     .foregroundStyle(palette.inkBody)
                 }
-                .help(guide.absoluteString)
+                .warrenTooltip(guide.absoluteString)
                 .accessibilityIdentifier("settings.access.guide.\(title)")
             }
         }

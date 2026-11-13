@@ -70,7 +70,7 @@ struct WarrenDesktopQuietLoadingMark: View {
         HStack(spacing: 8) {
             WarrenLoadingIndicator(size: 13, accessibilityLabel: title)
             Text(title)
-                .font(.system(size: 12.5))
+                .font(WarrenTypography.popoverItem)
                 .foregroundStyle(tokens.mutedForeground)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -112,10 +112,13 @@ struct WarrenDesktopConnectingStage: View {
 struct WarrenDesktopUpdateHUD: View {
     /// The line the tree exposes to the UI probes.
     static let elementID = "loading.update-restart"
-    static let title = "Updating Warren…"
-    static let reassurance = "Sessions keep running. Warren reopens in a moment."
-    /// Kept for the Host-restart wording, which has no version to name.
-    static let lingeringDetail = "Your Sessions pick up where they were once it is back."
+    static let title = "Updating Warren"
+    /// The card's last line, said once: the old one and the lingering line
+    /// both promised the Sessions were safe, in two wordings.
+    static let reassurance = "Your Sessions keep running while Warren restarts."
+    /// Shown after `lingerDelay`, so a slow restart reads as expected rather
+    /// than stuck. It names the wait instead of repeating the reassurance.
+    static let lingeringDetail = "Still restarting. This can take up to a minute."
 
     /// A more specific line from the Host, when it gives one.
     var detail: String? = nil
@@ -151,11 +154,11 @@ struct WarrenDesktopUpdateHUD: View {
                         appMark(tokens: tokens)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(Self.title)
-                                .font(WarrenTypography.bodyEmphasis)
+                                .font(WarrenTypography.dialogTitle)
                                 .foregroundStyle(tokens.foreground)
                             if let shownDetail {
                                 Text(shownDetail)
-                                    .font(WarrenTypography.settingsMeta)
+                                    .font(WarrenTypography.popoverMeta)
                                     .foregroundStyle(tokens.mutedForeground)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .transition(.opacity)
@@ -167,8 +170,8 @@ struct WarrenDesktopUpdateHUD: View {
                     Self.progress(tokens: tokens, reduceMotion: reduceMotion)
 
                     Text(Self.reassurance)
-                        .font(WarrenTypography.footnote)
-                        .foregroundStyle(tokens.ink4)
+                        .font(WarrenTypography.caption)
+                        .foregroundStyle(tokens.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(WarrenSpacing.large)

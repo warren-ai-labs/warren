@@ -271,7 +271,7 @@ public struct WarrenDesktopUsageCurveView: View {
         }
         .animation(WarrenMotion.selection(reduceMotion: reduceMotion), value: metric)
         .animation(WarrenMotion.selection(reduceMotion: reduceMotion), value: granularity)
-        .help(chartHelp(peak: peak))
+        .warrenTooltip(chartHelp(peak: peak))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(chartAccessibilityLabel(peak: peak))
     }

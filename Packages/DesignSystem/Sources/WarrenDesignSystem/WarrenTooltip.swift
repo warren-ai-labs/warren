@@ -17,11 +17,19 @@ public final class WarrenTooltipCenter: ObservableObject {
         public let shortcut: String?
         /// The control's frame in `WarrenTooltipCenter.coordinateSpace`.
         public let anchor: CGRect
+        /// A list row's tip, which only repeats the row's own name. Rows sit
+        /// edge to edge, so a gliding bubble would trail the pointer down the
+        /// list and cover the next row; a row's tip waits its full dwell
+        /// every time and leaves at once.
+        public var isRow = false
     }
 
     public static let coordinateSpace = "warren.tooltip"
     /// The first tooltip's dwell, shared with the hover detail card.
     public static let showDelay: TimeInterval = 0.45
+    /// A list row's dwell: about the system tooltip's, since a row names
+    /// itself and its tip is only for a name the row cut short.
+    public static let rowShowDelay: TimeInterval = 1.0
     /// How long after a tooltip goes the next control still answers at once.
     public static let warmWindow: TimeInterval = 0.3
     /// Grace between leaving one control and entering its neighbour, so the
@@ -45,13 +53,18 @@ public final class WarrenTooltipCenter: ObservableObject {
         showTask?.cancel()
         hideTask?.cancel()
         pendingID = nil
-        if tip != nil || Date() < warmUntil {
+        // A control's tip answers at once while another control's is up, or
+        // just after one went, and glides there. A row's tip never does: it
+        // waits its own dwell, and a row's tip never hands over to anything.
+        let showsAtOnce = !next.isRow && (tip.map { !$0.isRow } ?? (Date() < warmUntil))
+        if showsAtOnce {
             glides = tip != nil
             tip = next
             return
         }
+        if tip != nil { tip = nil }
         pendingID = next.id
-        showTask = after(Self.showDelay) { center in
+        showTask = after(next.isRow ? Self.rowShowDelay : Self.showDelay) { center in
             center.pendingID = nil
             center.glides = false
             center.tip = next
@@ -65,8 +78,13 @@ public final class WarrenTooltipCenter: ObservableObject {
             showTask?.cancel()
             pendingID = nil
         }
-        guard tip?.id == id else { return }
+        guard let current = tip, current.id == id else { return }
         hideTask?.cancel()
+        if current.isRow {
+            // A row's tip goes with the pointer and warms nothing.
+            tip = nil
+            return
+        }
         hideTask = after(Self.leaveGrace) { center in
             center.tip = nil
             center.warmUntil = Date().addingTimeInterval(Self.warmWindow)
@@ -131,7 +149,14 @@ public extension View {
     /// when it has one (`"⌘K"`). Use it on chrome controls whose only label is
     /// a glyph. The accessibility label stays the control's own.
     func warrenTooltip(_ text: String, shortcut: String? = nil) -> some View {
-        modifier(WarrenTooltipModifier(text: text, shortcut: shortcut))
+        modifier(WarrenTooltipModifier(text: text, shortcut: shortcut, isRow: false))
+    }
+
+    /// The full name of a list row whose label may be cut short. It waits
+    /// the system tooltip's dwell on every row and never glides between
+    /// rows; see `WarrenTooltipCenter.Tip.isRow`.
+    func warrenRowTooltip(_ text: String) -> some View {
+        modifier(WarrenTooltipModifier(text: text, shortcut: nil, isRow: true))
     }
 
     /// Installs the shared tooltip for everything inside. Apply it once, at
@@ -154,6 +179,7 @@ private final class WarrenTooltipAnchor {
 private struct WarrenTooltipModifier: ViewModifier {
     let text: String
     let shortcut: String?
+    let isRow: Bool
 
     @Environment(\.warrenTooltipCenter) private var center
     @State private var id = UUID().uuidString
@@ -174,7 +200,13 @@ private struct WarrenTooltipModifier: ViewModifier {
                 }
                 .onHover { inside in
                     if inside {
-                        center.enter(.init(id: id, text: text, shortcut: shortcut, anchor: anchor.read?() ?? .zero))
+                        center.enter(.init(
+                            id: id,
+                            text: text,
+                            shortcut: shortcut,
+                            anchor: anchor.read?() ?? .zero,
+                            isRow: isRow
+                        ))
                     } else {
                         center.leave(id)
                     }
@@ -264,25 +296,35 @@ private struct WarrenTooltipBubble: View {
     let text: String
     let shortcut: String?
 
+    /// Past this a tooltip wraps rather than growing wider.
+    static let maxWidth: CGFloat = 320
+
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            // A name fits on one line; a row's full title, a path or a
+            // chart's breakdown wraps at the bubble's width instead of
+            // running off the window.
             Text(text)
                 .font(WarrenTypography.tooltip)
                 .foregroundStyle(tokens.foreground)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
             if let shortcut {
                 Text(shortcut)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(tokens.mutedForeground)
+                    .lineLimit(1)
+                    .fixedSize()
             }
         }
-        .lineLimit(1)
+        .frame(maxWidth: Self.maxWidth, alignment: .leading)
         .fixedSize()
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .background(tokens.popoverSurface, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 7, style: .continuous)

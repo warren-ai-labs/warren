@@ -148,6 +148,8 @@ public protocol SupersetImportPathInspecting: Sendable {
     func isGitWorktree(at path: String) -> Bool
 }
 
+// Shells out to git, so the local inspector exists only on macOS.
+#if os(macOS)
 public struct LocalSupersetImportPathInspector: SupersetImportPathInspecting {
     public init() {}
 
@@ -176,6 +178,7 @@ public struct LocalSupersetImportPathInspector: SupersetImportPathInspecting {
         }
     }
 }
+#endif
 
 public enum SupersetImportSourceError: Error, Equatable, CustomStringConvertible {
     case sourceMissing(path: String)

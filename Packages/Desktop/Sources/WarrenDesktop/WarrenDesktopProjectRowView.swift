@@ -272,7 +272,7 @@ struct WarrenDesktopProjectRow: View {
         .contentShape(.rect)
         .onHover { isHovered = $0 }
         // A long name truncates to one line; the whole name is on hover.
-        .help(branchName.map { "\(project.name) · \($0)" } ?? project.name)
+        .warrenRowTooltip(branchName.map { "\(project.name) · \($0)" } ?? project.name)
         .warrenContextMenu(
             !isInteractionDisabled && !isMutationDisabled ? contextMenuActions : []
         )

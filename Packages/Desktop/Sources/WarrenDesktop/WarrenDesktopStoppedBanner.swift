@@ -62,11 +62,11 @@ public struct WarrenDesktopStoppedBanner: View {
                 .foregroundStyle(tokens.treeQuietText)
                 .accessibilityHidden(true)
             Text(detailLine)
-                .font(.system(size: 11))
+                .font(WarrenTypography.footnote)
                 .foregroundStyle(historyFailure == nil && failure == nil ? tokens.mutedForeground : tokens.treeQuietText)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .help(detailLine)
+                .warrenTooltip(detailLine)
             if historyFailure != nil {
                 Button("Retry output", action: onRetryHistory)
                     .buttonStyle(WarrenSecondaryButtonStyle())
@@ -91,7 +91,7 @@ public struct WarrenDesktopStoppedBanner: View {
                 .buttonStyle(WarrenPrimaryButtonStyle())
                 .controlSize(.small)
                 .disabled(isBusy)
-                .help(action.explanation)
+                .warrenTooltip(action.explanation)
                 .accessibilityLabel("\(action.label) stopped Session")
                 .warrenSemanticElement(
                     id: "stopped-banner.action",
@@ -106,7 +106,7 @@ public struct WarrenDesktopStoppedBanner: View {
                     .buttonStyle(WarrenSecondaryButtonStyle())
                     .controlSize(.small)
                     .disabled(isBusy)
-                    .help(resumeAllExplanation)
+                    .warrenTooltip(resumeAllExplanation)
                     .accessibilityLabel(resumeAllExplanation)
                     .warrenSemanticElement(
                         id: "stopped-banner.resume-all",

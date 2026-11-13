@@ -674,7 +674,7 @@ struct WarrenDesktopActionMenu: View {
                     WarrenDesktopMenuCheckColumn(isChecked: isChecked)
                 }
                 Text(title)
-                    .font(.system(size: 13))
+                    .font(WarrenTypography.popoverItem)
                     .foregroundStyle(rowText(danger: danger, isEnabled: isEnabled, palette: palette))
                     .lineLimit(1)
                 Spacer(minLength: 0)

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WarrenDesignSystem
 import WarrenDomain
@@ -105,10 +106,14 @@ struct WarrenDesktopRightSidebar: View {
     struct ExternalIDE {
         /// The editor a plain click opens, and the name the tooltip carries.
         let name: String?
+        /// That editor's own app icon, drawn as the button.
+        let icon: NSImage?
         let canOpen: Bool
         let isMenuPresented: Bool
         let open: () -> Void
         let presentMenu: () -> Void
+        /// The right-click menu: every editor, then Manage Editors….
+        let chooseActions: [WarrenDesktopContextMenuAction]
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -117,7 +122,6 @@ struct WarrenDesktopRightSidebar: View {
     @State private var hoveredTab: WarrenDesktopRightSidebarTab?
     @State private var isCloseHovered = false
     @State private var isIDEBodyHovered = false
-    @State private var isIDEChevronHovered = false
 
     private var tokens: WarrenColorTokens {
         WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
@@ -175,11 +179,10 @@ struct WarrenDesktopRightSidebar: View {
             onSelectTab(page)
         } label: {
             HStack(spacing: 4) {
-                Text(inspector.title)
-                    .font(.system(size: 12, weight: isSelected ? .medium : .regular))
+                WarrenDesktopPanelTabTitle(inspector.title, isSelected: isSelected)
                 if inspector == .changes, changeCount > 0 {
                     Text("\(changeCount)")
-                        .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                        .font(WarrenTypography.count)
                         .warrenNumericTransition(value: changeCount)
                         .foregroundStyle(isSelected ? tokens.foreground.opacity(0.8) : tokens.mutedForeground)
                         .padding(.horizontal, 4)
@@ -235,8 +238,7 @@ struct WarrenDesktopRightSidebar: View {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left.forwardslash.chevron.right")
                         .font(.system(size: 10.5, weight: .medium))
-                    Text("Editor")
-                        .font(.system(size: 12, weight: isSelected ? .medium : .regular))
+                    WarrenDesktopPanelTabTitle("Editor", isSelected: isSelected)
                 }
                 .foregroundStyle(titleColor)
                 .contentShape(.rect)
@@ -299,43 +301,47 @@ struct WarrenDesktopRightSidebar: View {
         )
     }
 
+    /// One button: the current editor's own app icon, which opens the
+    /// Workspace there. The choice of editor moved to a right-click, so the
+    /// row ends in a single control instead of a split button. With no
+    /// editor available a click shows the list instead.
     private func externalIDEControl(_ control: ExternalIDE) -> some View {
         let background = control.isMenuPresented
             ? tokens.foreground.opacity(0.10)
-            : (isIDEBodyHovered || isIDEChevronHovered ? tokens.fillHover : Color.clear)
-        return HStack(spacing: 0) {
-            Button(action: control.open) {
-                Image(systemName: "macwindow")
-                    .font(.system(size: 13, weight: .regular))
-                    .frame(width: 22, height: 26)
-                    .contentShape(.rect)
+            : (isIDEBodyHovered ? tokens.fillHover : Color.clear)
+        return Button(action: control.canOpen ? control.open : control.presentMenu) {
+            Group {
+                if let icon = control.icon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 16, height: 16)
+                        .opacity(control.canOpen ? 1 : 0.45)
+                } else {
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(control.canOpen ? tokens.mutedForeground : tokens.mutedForeground.opacity(0.45))
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(!control.canOpen)
-            .onHover { isIDEBodyHovered = $0 }
-
-            Button(action: control.presentMenu) {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .frame(width: 16, height: 26)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .onHover { isIDEChevronHovered = $0 }
-            .accessibilityLabel("Choose editor")
+            .frame(width: 28, height: 26)
+            .background(background, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(.rect)
         }
-        .foregroundStyle(control.canOpen ? tokens.mutedForeground : tokens.mutedForeground.opacity(0.45))
-        .background(background, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .buttonStyle(.plain)
+        .onHover { isIDEBodyHovered = $0 }
+        .warrenContextMenu(control.chooseActions)
         .warrenTooltip(control.name.map { "Open in \($0)" } ?? "Open in editor")
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Open in editor")
+        .accessibilityLabel(control.name.map { "Open in \($0)" } ?? "Open in editor")
+        .accessibilityActions {
+            Button("Choose editor", action: control.presentMenu)
+        }
         .warrenSemanticElement(
             id: "right-sidebar.external-ide",
             role: .button,
             label: "Open in editor",
             value: control.name,
             isSelected: control.isMenuPresented,
-            action: control.open
+            action: control.canOpen ? control.open : control.presentMenu
         )
     }
 
@@ -365,11 +371,11 @@ struct WarrenDesktopRightSidebar: View {
                 .font(.system(size: 20, weight: .light))
                 .foregroundStyle(tokens.mutedForeground.opacity(0.8))
             Text("Embedded editor is not running")
-                .font(.system(size: 13, weight: .medium))
+                .font(WarrenTypography.emptyStateTitle)
                 .foregroundStyle(tokens.foreground.opacity(0.85))
             Button(action: open) {
                 Text("Open Editor")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(WarrenTypography.captionEmphasis)
                     .foregroundStyle(tokens.foreground)
                     .padding(.horizontal, 10)
                     .frame(height: 24)
@@ -385,5 +391,27 @@ struct WarrenDesktopRightSidebar: View {
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// A panel tab's title. Each tab reserves its selected width, so the bolder
+/// cut never nudges the tabs after it when the selection moves.
+struct WarrenDesktopPanelTabTitle: View {
+    let title: String
+    let isSelected: Bool
+
+    init(_ title: String, isSelected: Bool) {
+        self.title = title
+        self.isSelected = isSelected
+    }
+
+    var body: some View {
+        Text(title)
+            .font(WarrenTypography.panelTabSelected)
+            .hidden()
+            .overlay(alignment: .leading) {
+                Text(title)
+                    .font(isSelected ? WarrenTypography.panelTabSelected : WarrenTypography.panelTab)
+            }
     }
 }

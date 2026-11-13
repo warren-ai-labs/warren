@@ -261,7 +261,7 @@ private struct WarrenScrollEdgeIndicators: View {
         .buttonStyle(.plain)
         .padding(.horizontal, 4)
         .accessibilityLabel(edge == .trailing ? "Scroll tabs forward" : "Scroll tabs backward")
-        .help(edge == .trailing ? "More tabs" : "Earlier tabs")
+        .warrenTooltip(edge == .trailing ? "More tabs" : "Earlier tabs")
     }
 }
 

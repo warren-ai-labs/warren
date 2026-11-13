@@ -408,7 +408,7 @@ struct WarrenDesktopPaneGroupPill: View {
                 if inside { hover.aim(member.id) }
             }
             .warrenContextMenu(actions.contextMenu(member.tab))
-            .help(member.title)
+            .warrenTooltip(member.title)
             .accessibilityElement()
             .accessibilityLabel("Pane \(member.title)")
             .accessibilityAddTraits(isCurrent ? [.isButton, .isSelected] : .isButton)
@@ -694,7 +694,7 @@ struct WarrenDesktopPaneGroupShelf: View {
             HStack(spacing: 6) {
                 icon()
                 Text(title)
-                    .font(.system(size: 12))
+                    .font(WarrenTypography.popoverItem)
             }
             .frame(maxWidth: .infinity)
             .frame(height: 28)
@@ -747,12 +747,12 @@ private struct WarrenDesktopPaneGroupShelfRow: View {
                 }
             VStack(alignment: .leading, spacing: 1) {
                 Text(member.title)
-                    .font(.system(size: 13))
+                    .font(WarrenTypography.popoverItem)
                     .foregroundStyle(isCurrent ? tokens.foreground : tokens.foreground.opacity(0.86))
                     .frame(height: 17)
                 if !member.activity.isEmpty {
                     Text(member.activity)
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.popoverMeta)
                         .foregroundStyle(tokens.mutedForeground)
                 }
             }

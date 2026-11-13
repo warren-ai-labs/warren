@@ -408,7 +408,7 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
             // border says which pane takes keystrokes.
             WarrenDesktopSessionKindBadge(icon: icon, size: 16)
             Text(paneHeaderTitle)
-                .font(.system(size: 13, weight: .medium))
+                .font(WarrenTypography.paneHeader)
                 .foregroundStyle(tokens.foreground.opacity(0.92))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -418,7 +418,7 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
                 // Stays visible without hover: the other panes are hidden,
                 // and nothing else on the card says so.
                 Text("1 / \(paneCount)")
-                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .font(WarrenTypography.count)
                     .foregroundStyle(tokens.treeQuietText)
                     .padding(.horizontal, 4)
                     .frame(height: 16)
@@ -471,7 +471,7 @@ struct WarrenDesktopPaneView<TerminalSurface: View>: View {
         .frame(height: WarrenLayoutMetrics.paneHeaderHeight)
         .contentShape(.rect)
         .onHover { isHeaderHovered = $0 }
-        .help(fullDisplayTitle)
+        .warrenRowTooltip(fullDisplayTitle)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Pane context \(fullDisplayTitle)")
     }
@@ -1024,7 +1024,7 @@ struct WarrenDesktopSplitDivider: View {
                     y: axis == .vertical ? direction * length / 2 : 0
                 )
             Text(releaseFolds ? "Fold" : "\(Int(heldLength.rounded())) pt")
-                .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                .font(WarrenTypography.count)
                 .foregroundStyle(releaseFolds ? tokens.warning : tokens.mutedForeground)
                 .lineLimit(1)
                 .fixedSize()

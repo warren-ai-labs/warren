@@ -311,7 +311,7 @@ struct WarrenDesktopMenuKeycaps: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+            .font(WarrenTypography.codeSmall)
             .foregroundStyle(WarrenDesktopMenuPalette.resolved(for: colorScheme).meta)
             .lineLimit(1)
             .accessibilityHidden(true)
@@ -460,8 +460,8 @@ struct WarrenDesktopMenuInlineButton: View {
     }
 }
 
-/// The row a drilled-in page leads with: ‹ and the page's title at 13
-/// semibold, 30 high, as the menu spec draws it. The whole row goes back,
+/// The row a drilled-in page leads with: ‹ and the page's title, 30 high, as
+/// the menu spec draws it. The whole row goes back,
 /// not only the chevron, so the target is the row rather than a 22pt glyph.
 struct WarrenDesktopMenuBackRow<Leading: View>: View {
     let title: String
@@ -485,7 +485,7 @@ struct WarrenDesktopMenuBackRow<Leading: View>: View {
                     )
                 leading()
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(WarrenTypography.menuPageTitle)
                     .foregroundStyle(palette.rowText)
                     .lineLimit(1)
                 Spacer(minLength: 0)

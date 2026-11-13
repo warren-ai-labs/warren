@@ -29,7 +29,7 @@ struct WarrenDesktopCodeChip: View {
 
     private func chip(tokens: WarrenColorTokens) -> some View {
         Text(text)
-            .font(.system(size: 11.5, design: .monospaced))
+            .font(WarrenTypography.codeSmall)
             .foregroundStyle(tokens.foreground.opacity(0.83))
             .padding(.horizontal, 6)
             .frame(height: 20)

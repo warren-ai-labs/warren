@@ -1,4 +1,5 @@
 import SwiftUI
+import WarrenDesignSystem
 
 /// One SSH alias from `~/.ssh/config`, in the shape the Add SSH Host page
 /// draws. The Desktop never reads the SSH catalog itself; the app maps its
@@ -122,7 +123,7 @@ struct WarrenDesktopSSHHostListView: View {
         isError: Bool = false
     ) -> some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(WarrenTypography.popoverMeta)
             .foregroundStyle(isError ? palette.dangerText : palette.meta)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, Metrics.rowHorizontalPadding)
@@ -141,7 +142,7 @@ struct WarrenDesktopSSHHostListView: View {
                 hostRowContent(host, palette: palette, isHot: isHot)
             }
             .buttonStyle(WarrenDesktopMenuRowStyle())
-            .help(host.route)
+            .warrenTooltip(host.route)
             .accessibilityLabel("Add SSH host \(host.name)")
             .accessibilityValue(host.route)
             .accessibilityHint("Add this Host to Warren")
@@ -157,7 +158,7 @@ struct WarrenDesktopSSHHostListView: View {
                     .padding(.trailing, Metrics.rowHorizontalPadding - 2)
                     .opacity(isHot ? 1 : 0)
                 }
-                .help(host.reason ?? "This alias cannot be forwarded by OpenSSH")
+                .warrenTooltip(host.reason ?? "This alias cannot be forwarded by OpenSSH")
                 .accessibilityElement(children: .contain)
                 .onHover { hover in hoveredID = hover ? host.id : (hoveredID == host.id ? nil : hoveredID) }
         }
@@ -173,15 +174,15 @@ struct WarrenDesktopSSHHostListView: View {
             // tile was a fourth surface inside a 40 pt row, and it drew the eye
             // to the decoration instead of the host name.
             Text(String(host.name.prefix(1)).lowercased())
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .font(WarrenTypography.monoSmall.weight(.medium))
                 .foregroundStyle(palette.meta)
                 .frame(width: Metrics.glyphSlot, alignment: .center)
             VStack(alignment: .leading, spacing: 1) {
                 Text(host.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(WarrenTypography.popoverItem)
                     .foregroundStyle(isHot && host.isSupported ? palette.rowHoverText : palette.rowText)
                 Text(host.route)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(WarrenTypography.monoSmall)
                     .foregroundStyle(palette.meta)
                     .truncationMode(.middle)
             }
@@ -199,7 +200,7 @@ struct WarrenDesktopSSHHostListView: View {
             HStack(spacing: Metrics.iconSpacing) {
                 WarrenDesktopMenuRowIcon(systemImage: "doc.text")
                 Text("Open ~/.ssh/config")
-                    .font(.system(size: 12))
+                    .font(WarrenTypography.popoverItem)
                     .foregroundStyle(palette.rowText)
                 Spacer(minLength: 0)
             }

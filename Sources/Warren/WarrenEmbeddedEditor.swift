@@ -740,6 +740,69 @@ enum WarrenEmbeddedEditorChrome {
         """#
     }
 
+    /// Narrows the file tree to its minimum once the workbench has laid out.
+    ///
+    /// VS Code has no setting for the sidebar's width. Seeding the stored
+    /// `workbench.sideBar.size` does not hold either: on a new workspace
+    /// storage with a window no wider than 1024pt, the layout overrides it
+    /// with `min(300, width / 4)`, and this editor's data store is
+    /// non-persistent, so every open is that case. So the script drags the
+    /// sidebar's own sash once, the way a person would, and the workbench
+    /// keeps every later resize the person makes.
+    ///
+    /// The drag waits until the sidebar's width has held for one poll, since
+    /// the workbench lays out more than once while it boots and a drag before
+    /// the last layout is undone. It stops at the minimum width rather than
+    /// past it: a drag past half the minimum closes the sidebar.
+    /// The file tree's narrowest width: VS Code's own minimum for the sidebar.
+    static let sidebarMinimumWidth = 170
+
+    static let sidebarNarrowingSource = #"""
+    (() => {
+        const minimum = \#(sidebarMinimumWidth);
+        let lastWidth = -1;
+        let polls = 0;
+        const narrow = () => {
+            const sidebar = document.querySelector(".part.sidebar");
+            const editor = document.querySelector(".part.editor");
+            if (!sidebar || !editor) { return false; }
+            const box = sidebar.getBoundingClientRect();
+            if (box.width < 1 || box.width !== lastWidth) {
+                lastWidth = box.width;
+                return false;
+            }
+            if (box.width <= minimum + 1) { return true; }
+            // The sash to drag is the sidebar's edge facing the editor.
+            const onRight = editor.getBoundingClientRect().left < box.left;
+            const edge = onRight ? box.left : box.right;
+            const sash = [...document.querySelectorAll(".monaco-sash.vertical")].find(element => {
+                const r = element.getBoundingClientRect();
+                return r.height > box.height / 2 && Math.abs((r.left + r.width / 2) - edge) < 6;
+            });
+            if (!sash) { return false; }
+            const r = sash.getBoundingClientRect();
+            const y = r.top + r.height / 2;
+            const x = r.left + r.width / 2;
+            const shrink = box.width - minimum;
+            const end = x + (onRight ? shrink : -shrink);
+            // The sash follows mouse events, not pointer events: it starts on
+            // its own mousedown and tracks moves on the window.
+            const fire = (target, type, clientX) => target.dispatchEvent(new MouseEvent(type, {
+                bubbles: true, cancelable: true, button: 0,
+                buttons: type === "mouseup" ? 0 : 1, clientX, clientY: y,
+            }));
+            fire(sash, "mousedown", x);
+            fire(window, "mousemove", end);
+            fire(window, "mouseup", end);
+            return true;
+        };
+        const timer = setInterval(() => {
+            // A workbench that never lays out must not keep the timer.
+            if (narrow() || ++polls > 120) { clearInterval(timer); }
+        }, 250);
+    })();
+    """#
+
     static let statusBarSource = #"""
     (() => {
         let layoutObserver;
@@ -1441,6 +1504,11 @@ enum WarrenEmbeddedEditorChrome {
         configuration.userContentController.addUserScript(WKUserScript(
             source: appearanceSource(appearance: appearance),
             injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: sidebarNarrowingSource,
+            injectionTime: .atDocumentEnd,
             forMainFrameOnly: true
         ))
         configuration.userContentController.addUserScript(WKUserScript(

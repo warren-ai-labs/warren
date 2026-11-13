@@ -193,7 +193,7 @@ struct WarrenSettingsStatusLine: View {
                     .frame(width: 7, height: 7)
             }
             Text(text)
-                .font(.system(size: 12))
+                .font(WarrenTypography.settingsMeta)
                 .foregroundStyle(isError ? palette.errorText : palette.inkQuiet)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -263,7 +263,7 @@ struct WarrenSettingsGroup<Content: View>: View {
                     Spacer(minLength: 8)
                     if let accessory {
                         Text(accessory)
-                            .font(.system(size: 11.5))
+                            .font(WarrenTypography.settingsMeta)
                             .foregroundStyle(palette.meta)
                             .multilineTextAlignment(.trailing)
                     }
@@ -518,7 +518,7 @@ struct WarrenSettingsSegmented<Value: Hashable>: View {
             selection = value
         } label: {
             Text(label)
-                .font(.system(size: 12))
+                .font(WarrenTypography.caption)
                 .foregroundStyle(isSelected ? palette.ink : palette.inkQuiet)
                 .padding(.horizontal, 10)
                 .frame(height: 28)
@@ -600,7 +600,7 @@ struct WarrenSettingsPicker<Value: Hashable>: View {
         }
         .buttonStyle(.plain)
         .focused($isFocused)
-        .help(value)
+        .warrenTooltip(value)
         .accessibilityLabel(label)
         .accessibilityValue(value)
         .accessibilityIdentifier(accessibilityID ?? "")
@@ -637,13 +637,13 @@ private struct WarrenSettingsPickerPanel<Value: Hashable>: View {
                     HStack(spacing: WarrenDesktopMenuMetrics.checkSpacing) {
                         WarrenDesktopMenuCheckColumn(isChecked: isChecked)
                         Text(option.label)
-                            .font(.system(size: 13))
+                            .font(WarrenTypography.popoverItem)
                             .foregroundStyle(palette.inkBody)
                             .lineLimit(1)
                         Spacer(minLength: 8)
                         if let detail = option.detail {
                             Text(detail)
-                                .font(.system(size: 11.5))
+                                .font(WarrenTypography.popoverMeta)
                                 .foregroundStyle(palette.meta)
                                 .lineLimit(1)
                         }
@@ -661,7 +661,7 @@ private struct WarrenSettingsPickerPanel<Value: Hashable>: View {
 
             if let sourceNote {
                 Text(sourceNote)
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.popoverMeta)
                     .foregroundStyle(palette.meta)
                     .padding(.horizontal, WarrenDesktopMenuMetrics.rowHorizontalPadding)
                     .padding(.top, 4)
@@ -724,12 +724,12 @@ struct WarrenSettingsStepper: View {
             Rectangle().fill(palette.controlBorder).frame(width: 1, height: 32)
             HStack(spacing: 2) {
                 Text(display(value))
-                    .font(.system(size: 12.5))
+                    .font(WarrenTypography.settingsMeta)
                     .monospacedDigit()
                     .foregroundStyle(palette.inkBody)
                 if let unit {
                     Text(unit)
-                        .font(.system(size: 12.5))
+                        .font(WarrenTypography.settingsMeta)
                         .foregroundStyle(palette.inkFaint)
                 }
             }
@@ -811,7 +811,7 @@ struct WarrenSettingsTextField: View {
 
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.settingsMeta)
                     .foregroundStyle(palette.errorText)
             }
         }
@@ -864,12 +864,12 @@ struct WarrenSettingsReadout: View {
         let copied = copyFeedback.confirms("settings.readout.\(value)")
         HStack(spacing: 6) {
             Text(value)
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(WarrenTypography.codeSmall)
                 .foregroundStyle(palette.inkBody)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: maxWidth, alignment: .trailing)
-                .help(value)
+                .warrenTooltip(value)
             if copyable {
                 WarrenSettingsInlineButton(
                     systemImage: copied ? "checkmark" : "doc.on.doc",
@@ -976,7 +976,7 @@ struct WarrenSettingsInlineButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help(label)
+        .warrenTooltip(label)
         .accessibilityLabel(label)
     }
 }
@@ -1033,11 +1033,11 @@ struct WarrenSettingsListRow<Leading: View, Trailing: View>: View {
             leading
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 13))
+                    .font(WarrenTypography.settingsBodyEmphasis)
                     .foregroundStyle(isDimmed ? palette.inkFaint : palette.inkBody)
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.settingsMeta)
                         .foregroundStyle(palette.meta)
                         .lineLimit(2)
                 }
@@ -1060,7 +1060,7 @@ struct WarrenSettingsEmptyRow: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11.5))
+            .font(WarrenTypography.settingsMeta)
             .foregroundStyle(WarrenSettingsPalette.resolved(for: colorScheme).meta)
             .padding(.horizontal, 16)
             .frame(minHeight: 44, alignment: .leading)
@@ -1147,7 +1147,7 @@ struct WarrenSettingsKeycaps: View {
 
     var body: some View {
         Text(keys.joined())
-            .font(.system(size: 11.5, design: .monospaced))
+            .font(WarrenTypography.codeSmall)
             .foregroundStyle(WarrenSettingsPalette.resolved(for: colorScheme).inkQuiet)
             .accessibilityHidden(true)
     }

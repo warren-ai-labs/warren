@@ -125,7 +125,7 @@ private struct WarrenCopyReceiptChip: View {
                 .stroke(tokens.success, style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
                 .frame(width: 12, height: 12)
             Text(label)
-                .font(.system(size: 12, weight: .medium))
+                .font(WarrenTypography.captionEmphasis)
                 .foregroundStyle(tokens.hudForeground)
             Text(Self.preview(of: value))
                 .font(WarrenTypography.monoSmall)

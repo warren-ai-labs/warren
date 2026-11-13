@@ -390,7 +390,7 @@ private struct WarrenDesktopWebAddressRow: View {
                 .foregroundStyle(tokens.mutedForeground)
                 .frame(width: address.kind == .publicAccess ? 104 : 36, alignment: .leading)
             Text(displayURL.absoluteString)
-                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .font(WarrenTypography.monoSmall)
                 .foregroundStyle(tokens.foreground.opacity(0.9))
                 .lineLimit(1)
                 .truncationMode(.middle)

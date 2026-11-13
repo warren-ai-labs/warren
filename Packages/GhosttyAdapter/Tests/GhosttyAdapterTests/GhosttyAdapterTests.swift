@@ -962,7 +962,7 @@ private final class LockedInputRecorder: @unchecked Sendable {
     }
 }
 
-private actor AsyncWriteGate {
+actor AsyncWriteGate {
     private var hasEntered = false
     private var isReleased = false
     private var enteredWaiters: [CheckedContinuation<Void, Never>] = []

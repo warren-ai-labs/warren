@@ -241,7 +241,7 @@ function FileRow({ file }) {
   return (
     <div className="conversation-file">
       <button type="button" className="conversation-file-row" disabled={!hasDiff} onClick={() => setOpen(value => !value)} aria-expanded={hasDiff ? open : undefined}>
-        <span className="conversation-file-name" title={file.file}>{displayPath(file.file, root)}</span>
+        <span className="conversation-file-name" data-tooltip={file.file}>{displayPath(file.file, root)}</span>
         <ChangeCount additions={file.additions} deletions={file.deletions} />
         {hasDiff && <span className={`conversation-caret down${open ? " open" : ""}`} aria-hidden="true">›</span>}
       </button>
@@ -264,7 +264,7 @@ function AnswerFooter({ answer, endedAt }) {
   };
   return (
     <div className="conversation-answer-footer">
-      <button type="button" className="conversation-icon-button" onClick={copy} aria-label={copied ? "Copied" : "Copy answer"} title="Copy answer">
+      <button type="button" className="conversation-icon-button" onClick={copy} aria-label={copied ? "Copied" : "Copy answer"} data-tooltip="Copy answer">
         {copied ? "✓" : <CopyIcon />}
       </button>
       {endedAt > 0 && <time dateTime={new Date(endedAt).toISOString()}>{formatAnswerTime(endedAt)}</time>}
@@ -445,7 +445,7 @@ export function SelectorChip({ label, icon = null, config, onSetConfig, canHando
                           className="conversation-menu-item"
                           disabled={Boolean(pending)}
                           aria-busy={pending === `${option.id}\u0000${choice.value}` || undefined}
-                          title={choice.description || undefined}
+                          data-tooltip={choice.description || undefined}
                           onClick={() => choose(option, choice.value)}
                         >
                           <span className="conversation-menu-text">
@@ -494,7 +494,7 @@ export function ContextMeter({ context }) {
   const circumference = 2 * Math.PI * radius;
   const format = value => value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M` : value >= 1000 ? `${Math.round(value / 1000)}k` : String(value);
   return (
-    <span className={`composer-context${fraction > 0.85 ? " high" : ""}`} title={`Context ${percent}% · ${format(context.used)} of ${format(context.size)} tokens`} aria-label={`Context ${percent} percent used`}>
+    <span className={`composer-context${fraction > 0.85 ? " high" : ""}`} data-tooltip={`Context ${percent}% · ${format(context.used)} of ${format(context.size)} tokens`} aria-label={`Context ${percent} percent used`}>
       <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">
         <circle cx="7" cy="7" r={radius} className="composer-context-track" />
         <circle cx="7" cy="7" r={radius} className="composer-context-fill" strokeDasharray={`${circumference * fraction} ${circumference}`} transform="rotate(-90 7 7)" />

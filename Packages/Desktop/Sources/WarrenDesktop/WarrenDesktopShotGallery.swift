@@ -17,6 +17,8 @@ import WarrenDomain
 public struct WarrenDesktopShotGallery: View {
     public enum Surface: String, CaseIterable, Sendable {
         case dialog
+        /// The empty content card a worktree with no Session shows.
+        case empty
         case palette
         /// The split group's stacked icons at rest, which cannot be
         /// photographed without a group in the user's own tabs.
@@ -53,6 +55,7 @@ public struct WarrenDesktopShotGallery: View {
     public var body: some View {
         switch surface {
         case .dialog: DialogGallery()
+        case .empty: emptyStage
         case .palette: palette
         case .fan: FanGallery()
         case .settings: settings
@@ -102,6 +105,20 @@ public struct WarrenDesktopShotGallery: View {
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(WarrenColorTokens.dark.workbenchCardFill)
+    }
+
+    /// A worktree with no Session, the way the app's content card draws it.
+    private var emptyStage: some View {
+        ZStack {
+            galleryBackdrop
+            WarrenDesktopEmptyStage(
+                mark: .symbol("apple.terminal"),
+                title: "No sessions here yet",
+                message: "Start a shell or an Agent from + in the tab bar.",
+                hints: [.init(keys: "⌘T", label: "New shell")]
+            )
+            .padding(.leading, 316)
+        }
     }
 
     /// The update/restart card over a dimmed window.
@@ -395,8 +412,8 @@ private struct DialogGallery: View {
                     width: .m
                 ) {
                     VStack(alignment: .leading, spacing: 14) {
-                        WarrenInputField("Name", text: $taskName, monospaced: false)
-                        WarrenInputField("External ID", text: $externalID)
+                        WarrenInputField("Name", text: $taskName)
+                        WarrenInputField("External ID", text: $externalID, monospaced: true)
                     }
                 } footer: {
                     WarrenDialogFooter(

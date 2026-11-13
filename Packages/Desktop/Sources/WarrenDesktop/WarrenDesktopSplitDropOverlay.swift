@@ -125,7 +125,7 @@ struct WarrenDesktopSplitDropOverlay: View {
                 Image(systemName: iconName)
                     .font(.system(size: 13, weight: .semibold))
                 Text(labelText)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(WarrenTypography.captionEmphasis)
             }
             .foregroundStyle(tokens.info)
             .padding(.horizontal, 10)

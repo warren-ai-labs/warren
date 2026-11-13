@@ -24,13 +24,13 @@ struct WarrenLeadDecisionPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             WarrenLeadEyebrow(text: "Lead needs a decision")
             Text(question)
-                .font(.system(size: 14.5, weight: .semibold))
+                .font(WarrenTypography.dialogTitle)
                 .foregroundStyle(palette.ink)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
             if let reason, !reason.isEmpty {
                 Text(reason)
-                    .font(.system(size: 12.5))
+                    .font(WarrenTypography.popoverMeta)
                     .foregroundStyle(palette.ink3)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 2)
@@ -55,16 +55,16 @@ struct WarrenLeadDecisionPanel: View {
         } label: {
             HStack(spacing: 10) {
                 Text("\(index + 1)")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(WarrenTypography.monoSmall)
                     .foregroundStyle(palette.ink4)
                     .frame(width: 14)
                 Text(option)
-                    .font(.system(size: 13.5))
+                    .font(WarrenTypography.popoverItem)
                     .foregroundStyle(highlight == index ? palette.ink : palette.ink2)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 Text("\u{21B5}")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(WarrenTypography.monoSmall)
                     .foregroundStyle(palette.ink4)
                     .opacity(highlight == index ? 1 : 0)
             }
@@ -122,7 +122,7 @@ struct WarrenLeadChecksPanel: View {
             .padding(.top, 8)
             HStack(spacing: 6) {
                 Text("\(resolved) of \(checks.count) checked")
-                    .font(.system(size: 12))
+                    .font(WarrenTypography.popoverMeta)
                     .monospacedDigit()
                     .foregroundStyle(palette.ink4)
                 Spacer(minLength: 6)
@@ -182,17 +182,17 @@ struct WarrenLeadChecksPanel: View {
             .accessibilityLabel("Mark passed")
             VStack(alignment: .leading, spacing: 1) {
                 Text(check.what)
-                    .font(.system(size: 13.5))
+                    .font(WarrenTypography.popoverItem)
                     .foregroundStyle(outcome == .passed ? palette.ink3 : palette.ink)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(check.at)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(WarrenTypography.monoSmall)
                     .foregroundStyle(palette.ink4)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 if isProblem, !note.isEmpty {
                     Text(note)
-                        .font(.system(size: 12))
+                        .font(WarrenTypography.popoverMeta)
                         .foregroundStyle(palette.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -296,7 +296,7 @@ struct WarrenLeadCrewStrip: View {
                     Spacer(minLength: 0)
                     if !closed.isEmpty {
                         Text("\(closed.count) closed")
-                            .font(.system(size: 11))
+                            .font(WarrenTypography.caption)
                             .foregroundStyle(palette.ink4)
                     }
                     Image(systemName: "chevron.right")
@@ -327,7 +327,7 @@ struct WarrenLeadCrewStrip: View {
                                     .rotationEffect(.degrees(closedOpen ? 90 : 0))
                                 Text("\(closed.count) closed")
                             }
-                            .font(.system(size: 12))
+                            .font(WarrenTypography.caption)
                             .foregroundStyle(palette.ink4)
                             .frame(height: 28)
                             .padding(.horizontal, 6)
@@ -386,20 +386,19 @@ struct WarrenLeadCrewStrip: View {
                     }
                 }
             Text(member.title)
-                .font(.system(size: 12.5))
+                .font(WarrenTypography.popoverItem)
                 .foregroundStyle(closed ? palette.ink3 : palette.ink2)
                 .lineLimit(1)
                 .fixedSize()
             Text(member.result ?? "")
-                .font(.system(size: 12))
+                .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(closed ? palette.ink4 : palette.ink3)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let age = member.ageLabel, !age.isEmpty {
                 Text(age)
-                    .font(.system(size: 11))
-                    .monospacedDigit()
+                    .font(WarrenTypography.monoSmall)
                     .foregroundStyle(palette.ink4)
             }
             if !closed {
@@ -506,13 +505,13 @@ struct WarrenLeadEyebrow: View {
                 .fill(palette.accent)
                 .frame(width: 6, height: 6)
             Text(text)
-                .font(.system(size: 12))
+                .font(WarrenTypography.popoverMeta)
                 .foregroundStyle(palette.ink3)
                 .lineLimit(1)
             if let trailing {
                 Spacer(minLength: 6)
                 Text(trailing)
-                    .font(.system(size: 11).monospacedDigit())
+                    .font(WarrenTypography.count)
                     .foregroundStyle(palette.ink4)
             }
         }
@@ -534,7 +533,7 @@ struct WarrenLeadActionButtonStyle: ButtonStyle {
         let disabled = !isEnabled
         let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
         configuration.label
-            .font(.system(size: 12.5, weight: primary ? .medium : .regular))
+            .font(primary ? WarrenTypography.dialogCriticalAction : WarrenTypography.dialogAction)
             .foregroundStyle(
                 primary
                     ? (disabled ? palette.ink3 : palette.card)
@@ -584,7 +583,7 @@ private struct WarrenLeadProblemButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12))
+            .font(WarrenTypography.caption)
             .foregroundStyle(hovering ? palette.ink : palette.ink3)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)

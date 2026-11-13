@@ -1325,7 +1325,7 @@ private struct WarrenDesktopSidebarHostHeader: View {
                 // Nothing to disclose, so the row is not a control.
                 rowContent(tokens: tokens, isEngaged: isEngaged)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .help(host.title)
+                    .warrenRowTooltip(host.title)
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("Host \(host.title)")
                     .accessibilityValue(accessibilityValue)
@@ -1347,7 +1347,7 @@ private struct WarrenDesktopSidebarHostHeader: View {
                 .buttonStyle(WarrenChromeButtonStyle(isFocused: isToggleFocused))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                 .focused($isToggleFocused)
-                .help(host.title)
+                .warrenRowTooltip(host.title)
                 .accessibilityLabel("Host \(host.title)")
                 .accessibilityValue(accessibilityValue)
                 .accessibilityHint("Show or hide this Host's projects and workspaces")
@@ -1393,7 +1393,7 @@ private struct WarrenDesktopSidebarHostHeader: View {
         HStack(spacing: WarrenSpacing.small) {
             hostTile(tokens: tokens)
             Text(displayName)
-                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                .font(WarrenTypography.codeSmall.weight(.medium))
                 .foregroundStyle(tint)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -1436,7 +1436,7 @@ private struct WarrenDesktopSidebarHostHeader: View {
     private func hostTile(tokens: WarrenColorTokens) -> some View {
         let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
         return Text(String(displayName.prefix(1)).lowercased())
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .font(WarrenTypography.monoSmall.weight(.medium))
             .foregroundStyle(tint)
             .frame(width: 16, height: 16)
             .background {

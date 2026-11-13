@@ -96,21 +96,21 @@ public struct WarrenDesktopProjectWorktreeImportView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: WarrenSpacing.xs) {
                         Text(candidate.name)
-                            .font(.system(size: 13))
+                            .font(WarrenTypography.dialogBody)
                             .foregroundStyle(palette.rowText)
                         if candidate.locked {
                             Label("Locked", systemImage: "lock.fill")
-                                .font(.system(size: 11.5))
+                                .font(WarrenTypography.dialogMeta)
                                 .foregroundStyle(palette.meta)
                         }
                         if candidate.imported {
                             Text("Imported")
-                                .font(.system(size: 11.5))
+                                .font(WarrenTypography.dialogMeta)
                                 .foregroundStyle(palette.meta)
                         }
                     }
                     Text(candidate.path)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(WarrenTypography.monoSmall)
                         .foregroundStyle(palette.meta)
                         .lineLimit(1)
                         .truncationMode(.middle)

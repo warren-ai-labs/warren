@@ -1,5 +1,7 @@
 import Foundation
 
+// Runs the local Superset CLI as a child process, so it exists only on macOS.
+#if os(macOS)
 /// Reads Superset's public CLI JSON interface instead of depending on its
 /// private SQLite schema. Each project gets its own workspace query so the
 /// preview follows the same data Superset currently exposes to users.
@@ -251,3 +253,4 @@ public enum SupersetCLIImportError: Error, CustomStringConvertible, Sendable {
         }
     }
 }
+#endif

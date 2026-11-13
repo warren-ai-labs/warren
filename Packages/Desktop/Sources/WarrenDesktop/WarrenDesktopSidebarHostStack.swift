@@ -288,7 +288,7 @@ struct WarrenDesktopSidebarHostStack: View {
                                 )
                         }
                     Text("Add host")
-                        .font(.system(size: 13))
+                        .font(WarrenTypography.popoverItem)
                         .foregroundStyle(isAddHovered ? tokens.treeGroupText : tokens.treeSecondaryText)
                         .lineLimit(1)
                     Spacer(minLength: 0)
@@ -334,10 +334,10 @@ struct WarrenDesktopSidebarHostStack: View {
             ZStack(alignment: .leading) {
                 HStack(spacing: 6) {
                     Text("Other hosts")
-                        .font(.system(size: 13))
+                        .font(WarrenTypography.popoverItem)
                         .foregroundStyle(tokens.treeSecondaryText)
                     Text("\(hosts.count)")
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.popoverMeta.monospacedDigit())
                         .foregroundStyle(tokens.treeQuietText)
                 }
                 .opacity(isLifted ? 0 : 1)
@@ -346,11 +346,11 @@ struct WarrenDesktopSidebarHostStack: View {
                 if let host = hotHost {
                     HStack(spacing: 6) {
                         Text(host.name)
-                            .font(.system(size: 13))
+                            .font(WarrenTypography.hostName)
                             .foregroundStyle(tokens.treeGroupText)
                         if let detail = host.pickDetail {
                             Text(detail)
-                                .font(.system(size: 11.5, design: .monospaced))
+                                .font(WarrenTypography.codeSmall)
                                 .foregroundStyle(tokens.treeQuietText)
                         }
                     }
@@ -470,7 +470,7 @@ struct WarrenDesktopSidebarHostStack: View {
                             .font(.system(size: 10, weight: .semibold))
                             .frame(width: WarrenDesktopMenuMetrics.glyphSlot, height: 12)
                         Text("Add host…")
-                            .font(.system(size: 12))
+                            .font(WarrenTypography.popoverMeta)
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(isAddHovered ? menuPalette.rowHoverText : menuPalette.addText)
@@ -518,10 +518,10 @@ struct WarrenDesktopSidebarHostStack: View {
                 )
                 VStack(alignment: .leading, spacing: 1) {
                     Text(host.name)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(WarrenTypography.hostName)
                         .foregroundStyle(isHot ? tokens.treeSessionSelectedText : tokens.treeSessionText)
                     Text(host.panelSubtitle)
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.popoverMeta)
                         .foregroundStyle(tokens.treeSecondaryText)
                 }
                 .lineLimit(1)
@@ -536,7 +536,9 @@ struct WarrenDesktopSidebarHostStack: View {
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            // Avenir's line box is taller than SF's; 4 keeps the row about
+            // the height it had.
+            .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isHot ? tokens.treeRowHover : .clear)
@@ -579,10 +581,10 @@ struct WarrenDesktopSidebarHostStack: View {
             )
             VStack(alignment: .leading, spacing: 1) {
                 Text(host.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(WarrenTypography.hostName)
                     .foregroundStyle(tokens.treeSessionSelectedText)
                 Text(host.panelSubtitle)
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.popoverMeta)
                     .foregroundStyle(tokens.treeSecondaryText)
             }
             .lineLimit(1)
@@ -590,7 +592,7 @@ struct WarrenDesktopSidebarHostStack: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
         // Selected the way a tree row is: a filled row with a bar on its
         // leading edge, drawn over the padding so every row keeps one inset.
         .background(
@@ -754,7 +756,7 @@ struct WarrenDesktopHostTile: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let shape = RoundedRectangle(cornerRadius: Metrics.tileRadius, style: .continuous)
         Text(host.initial)
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .font(WarrenTypography.monoSmall.weight(.medium))
             .foregroundStyle(host.isOnline ? tokens.treeSessionText : tokens.treeChevron)
             .frame(width: Metrics.tileSize, height: Metrics.tileSize)
             .background {
@@ -847,21 +849,13 @@ struct WarrenDesktopDeleteHostConfirmation: View {
     let onConfirm: () -> Void
 
     var body: some View {
-        WarrenDialog(
-            "Delete host?",
+        WarrenDesktopConfirmationDialog(
+            title: "Delete host?",
             message: "\u{201C}\(hostName)\u{201D} will be removed from Warren's hosts. "
                 + "Its sessions keep running on that machine."
-                + (isWindowHost ? "\nThis window switches to this Mac." : "")
-        ) {
-            EmptyView()
-        } footer: {
-            WarrenDesktopDialogFooter(
-                confirmLabel: "Delete",
-                isDestructive: true,
-                onCancel: onCancel,
-                onConfirm: onConfirm
-            )
-        }
-        .onExitCommand(perform: onCancel)
+                + (isWindowHost ? "\nThis window switches to this Mac." : ""),
+            onCancel: onCancel,
+            onConfirm: onConfirm
+        )
     }
 }

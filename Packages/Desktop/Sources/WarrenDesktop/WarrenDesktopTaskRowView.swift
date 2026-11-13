@@ -119,7 +119,7 @@ struct WarrenDesktopTaskRow: View {
         .onHover { isHovered = $0 }
         // A long name truncates to one line; the whole name, and the external
         // ID the row keeps out of its layout, are on hover.
-        .help(externalID.map { "\(task.name) · \($0)" } ?? task.name)
+        .warrenRowTooltip(externalID.map { "\(task.name) · \($0)" } ?? task.name)
         .warrenContextMenu(taskContextMenuActions)
         .accessibilityElement(children: .contain)
     }

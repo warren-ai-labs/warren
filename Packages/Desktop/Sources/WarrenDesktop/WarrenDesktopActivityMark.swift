@@ -96,4 +96,13 @@ extension WarrenDesktopSession {
         if shell.didFail { return .failed }
         return nil
     }
+
+    /// The dot a plain shell's Tab draws: the same OSC 133 state as its row,
+    /// so the bar and the sidebar agree on whether a command is running. Nil
+    /// for an Agent, whose status the Tab leaves to the sidebar, and for a
+    /// shell that reported no marker.
+    public var shellStatusMark: WarrenActivityMark? {
+        guard !isAgentSession, shellState != nil else { return nil }
+        return rowStatusMark
+    }
 }

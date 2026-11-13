@@ -28,7 +28,7 @@ extension WarrenDesktopSettingsView {
                                 .font(.system(size: 20))
                                 .foregroundStyle(palette.inkQuiet.opacity(0.5))
                             Text("No settings match your search")
-                                .font(.system(size: 12))
+                                .font(WarrenTypography.caption)
                                 .foregroundStyle(palette.inkQuiet)
                         }
                         .frame(maxWidth: .infinity)
@@ -64,7 +64,7 @@ extension WarrenDesktopSettingsView {
                 .foregroundStyle(palette.inkQuiet)
             Spacer(minLength: 0)
         }
-        .font(.system(size: 10.5, weight: .medium))
+        .font(WarrenTypography.settingsNavigationScope)
         .lineLimit(1)
         // Lines up with the section headings above, not with the card edge.
         .padding(.horizontal, 20)
@@ -89,7 +89,7 @@ extension WarrenDesktopSettingsView {
 
             TextField("Search settings…", text: $searchQuery)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12.5))
+                .font(WarrenTypography.body)
                 .foregroundStyle(palette.inkBody)
                 .focused($searchFocused)
 
@@ -276,7 +276,7 @@ extension WarrenDesktopSettingsView {
                         // The Host's initial, in the quiet tier and in no box:
                         // the menu's own rows name a Host the same way.
                         Text(String(option.label.prefix(1)).lowercased())
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .font(WarrenTypography.monoSmall.weight(.medium))
                             .foregroundStyle(palette.inkFaint)
                             .frame(width: 20, height: 20)
                             .overlay(alignment: .bottomTrailing) {
@@ -284,12 +284,12 @@ extension WarrenDesktopSettingsView {
                             }
                         VStack(alignment: .leading, spacing: 1) {
                             Text(option.label)
-                                .font(.system(size: 13))
+                                .font(WarrenTypography.popoverItem)
                                 .foregroundStyle(palette.inkBody)
                                 .lineLimit(1)
                             if let detail = option.detail {
                                 Text(detail)
-                                    .font(.system(size: 11.5))
+                                    .font(WarrenTypography.popoverMeta)
                                     .foregroundStyle(palette.meta)
                                     .lineLimit(1)
                             }

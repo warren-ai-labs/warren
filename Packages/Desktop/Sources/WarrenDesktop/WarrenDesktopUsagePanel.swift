@@ -979,7 +979,7 @@ public struct WarrenDesktopUsagePanel: View {
             .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .help(
+        .warrenTooltip(
             "\(label)\n\(WarrenUsageFormatting.exact(value)) tokens"
                 + " · \(WarrenUsageFormatting.percent(tokenShare)) of tokens"
                 + (costShare.map {
@@ -1232,7 +1232,7 @@ public struct WarrenDesktopUsagePanel: View {
         .onTapGesture {
             onSelect?()
         }
-        .help(
+        .warrenTooltip(
             "\(group.displayName)\n"
                 + WarrenUsageFormatting.money(group.cost)
                 + " · \(WarrenUsageFormatting.calls(group.cost.calls))\n"
@@ -1298,7 +1298,7 @@ public struct WarrenDesktopUsagePanel: View {
         .foregroundStyle(tokens.mutedForeground)
         .lineLimit(1)
         .padding(.horizontal, WarrenSpacing.xxs)
-        .help(
+        .warrenTooltip(
             "Costs are derived from token counts each time this panel loads, "
                 + "so a price correction restates history.\n"
                 + "A rebuild re-reads the stored transcripts and recounts every call."

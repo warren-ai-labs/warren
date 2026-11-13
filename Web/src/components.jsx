@@ -1,4 +1,4 @@
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { webAssetURL } from "./runtime.js";
 import { terminalSearchSummary } from "./terminal.js";
 import { terminalTabTitle } from "./title.js";
@@ -238,6 +238,22 @@ function useFocusRestore(active) {
 // Keep keyboard focus inside an app-owned dialog, sheet, or menu while it is
 // open. Native browser focus can otherwise move behind the scrim after the
 // initial focus lands, which is especially disorienting on compact screens.
+// The drawn tooltip is hidden from assistive technology, so a tooltip that
+// adds to a control's name, rather than being it, is also the control's
+// description. Spread `props` onto the control and render `note` beside it;
+// a `hidden` element still supplies an aria-describedby description.
+export function tooltipDescription(id, text) {
+  if (!text) return { props: {}, note: null };
+  return {
+    props: { "data-tooltip": text, "aria-describedby": id },
+    note: <span id={id} hidden>{text}</span>,
+  };
+}
+
+export function useTooltipDescription(text) {
+  return tooltipDescription(useId(), text);
+}
+
 export function useFocusTrap(active, containerRef) {
   useEffect(() => {
     if (!active) return undefined;
@@ -331,7 +347,7 @@ export function ActivityDot({ session, mark: resolvedMark }) {
     activityMarkLifecycle(mark),
     activityMarkIsAnimated(mark) ? "pulse" : "",
   ].filter(Boolean).join(" ");
-  return <span className={className} title={label} aria-label={label} role="img" />;
+  return <span className={className} data-tooltip={label} aria-label={label} role="img" />;
 }
 
 function mergedBadgeTitle(tabs, acknowledgments) {
@@ -347,7 +363,7 @@ export function MergedBadge({ tabs = [] }) {
   const acknowledgments = useContext(ActivityAcknowledgmentsContext);
   const label = mergedBadgeTitle(tabs, acknowledgments);
   return (
-    <span className="merge-badge" title={label} aria-label={label} role="img">
+    <span className="merge-badge" data-tooltip={label} aria-label={label} role="img">
       {mergeIcon}
     </span>
   );
@@ -438,7 +454,7 @@ function SidebarSessionRow({ session, workspace, active, acknowledgedLifecycle, 
   );
 }
 
-/// A branch in monospace with its `feat/…/` prefix a step quieter.
+/// A branch in Avenir Next Condensed with its `feat/…/` prefix a step quieter.
 function BranchName({ branch }) {
   const { prefix, name } = branchParts(branch);
   return (
@@ -611,7 +627,7 @@ function SidebarView({
         </span>
         {isBuild && <span className="build-badge">Build</span>}
         {onOpenSearch && (
-          <button type="button" className="tree-icon-button" aria-label="Search projects" title="Search" onClick={onOpenSearch}>
+          <button type="button" className="tree-icon-button" aria-label="Search projects" data-tooltip="Search" onClick={onOpenSearch}>
             <SearchIcon />
           </button>
         )}
@@ -627,7 +643,7 @@ function SidebarView({
           disabled={!activeWorkspace || creatingSession}
           aria-busy={creatingSession || undefined}
           aria-label="New session"
-          title="New session"
+          data-tooltip="New session"
           onClick={onNewSession}
         >
           <PlusIcon />
@@ -669,7 +685,7 @@ function SidebarView({
                     <span className="project-tile" style={{ "--tint": identityTint(project.id) }} aria-hidden="true">{monogram(project.name)}</span>
                   </span>
                   <span className="group-name">{project.name}</span>
-                  {project.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
+                  {project.pinned && <span className="pin-icon" role="img" aria-label="Pinned" data-tooltip="Pinned">{pinIcon}</span>}
                 </button>
                 {workspaces[0] && (
                   <button
@@ -678,7 +694,7 @@ function SidebarView({
                     disabled={creatingSession || creatingWorkspaceIDs.has(workspaces[0].id)}
                     aria-busy={creatingWorkspaceIDs.has(workspaces[0].id) || undefined}
                     aria-label={`New session in ${project.name}`}
-                    title="New session"
+                    data-tooltip="New session"
                     onClick={event => {
                       event.stopPropagation();
                       (onNewSessionInWorkspace || onOpenWorkspace)(workspaces[0].id);
@@ -737,7 +753,7 @@ function SidebarView({
                             : <BranchIcon />}
                         </span>
                         <BranchName branch={workspace.branch || workspace.name || "Workspace"} />
-                        {workspace.pinned && <span className="pin-icon" title="Pinned">{pinIcon}</span>}
+                        {workspace.pinned && <span className="pin-icon" role="img" aria-label="Pinned" data-tooltip="Pinned">{pinIcon}</span>}
                       </button>
                       {creating && <span className="workspace-pending" role="status">Creating…</span>}
                     </div>
@@ -860,13 +876,14 @@ function TopBarView({
   creatingSession = false,
   agentToggle = null,
 }) {
+  const agentAttention = useTooltipDescription(agentToggle?.attention ? "Agent needs attention" : null);
   const sessionTitle = session ? terminalTabTitle(session, workspace || {}) : "";
   const fallbackTitle = workspace?.branch || workspace?.name || "";
 
   return (
     <header className="topbar">
       <button type="button" className="menu-button" aria-label="Open navigation" onClick={onOpenMenu}>{MenuIcon}</button>
-      <div className="topbar-title" title={sessionTitle || fallbackTitle || "Session"}>
+      <div className="topbar-title" data-tooltip={sessionTitle || fallbackTitle || "Session"}>
         <span className="topbar-session">{sessionTitle || fallbackTitle || "Session"}</span>
       </div>
       <div className="chrome-spacer" />
@@ -877,11 +894,12 @@ function TopBarView({
             type="button"
             aria-pressed={agentToggle.active}
             className={agentToggle.attention ? "has-attention" : undefined}
-            title={agentToggle.attention ? "Agent needs attention" : undefined}
+            {...agentAttention.props}
             onClick={() => agentToggle.onSelect("agent")}
           >
             Agent
           </button>
+          {agentAttention.note}
         </div>
       )}
       {/* The panels and "+" sit in one capsule, as on the Desktop. */}
@@ -898,7 +916,7 @@ function TopBarView({
         >
           {GitIcon}
         </button>
-        <button type="button" className="new-session" aria-label="New session" title="New session" disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={onNewSession}>
+        <button type="button" className="new-session" aria-label="New session" data-tooltip="New session" disabled={creatingSession} aria-busy={creatingSession || undefined} onClick={onNewSession}>
           <PlusIcon />
         </button>
       </div>
@@ -955,7 +973,7 @@ export function MobileInbox({
       inert={open ? undefined : true}
     >
       <header className="inbox-bar">
-        <span className={connectionClassName("inbox-host", connection)} title={connection.message}>
+        <span className={connectionClassName("inbox-host", connection)} data-tooltip={connection.message}>
           <span className="inbox-host-tile" aria-hidden="true">
             {monogram(hostName || "Warren")}
             <span className="connection-dot" />
@@ -1089,7 +1107,7 @@ export function MobileShell({
         {onBack ? (
           // Pushed from the inbox, the header names the Session first and
           // where it lives second, like a detail view's two-line title.
-          <div className="mobile-session-title" title={connection.message}>
+          <div className="mobile-session-title" data-tooltip={connection.message}>
             <span className="mobile-session-name">
               {(() => {
                 const current = tabs.find(session => session.id === activeSession);
@@ -1104,7 +1122,7 @@ export function MobileShell({
             </span>
           </div>
         ) : (
-        <div className="mobile-workspace" title={connection.message}>
+        <div className="mobile-workspace" data-tooltip={connection.message}>
           <div className="mobile-workspace-context" aria-label="Project, workspace and branch">
             {projectName && (
               <>
@@ -1132,7 +1150,7 @@ export function MobileShell({
               className={agentViewActive ? undefined : "active"}
               aria-pressed={!agentViewActive}
               aria-label="Terminal"
-              title="Terminal"
+              data-tooltip="Terminal"
               onClick={() => onToggleAgentView("terminal")}
             >
               {terminalIcon}
@@ -1142,7 +1160,7 @@ export function MobileShell({
               className={agentViewActive ? "active" : undefined}
               aria-pressed={agentViewActive}
               aria-label="Agent chat"
-              title="Agent chat"
+              data-tooltip="Agent chat"
               onClick={() => onToggleAgentView("agent")}
             >
               {agentChatIcon}
@@ -1455,8 +1473,8 @@ export function EmptyTerminal({
     content = (
       <div className="empty-state">
         {terminalIcon}
-        <div className="empty-title">Start a session</div>
-        <p className="empty-hint">Create a shell in this workspace to get started.</p>
+        <div className="empty-title">No sessions here yet</div>
+        <p className="empty-hint">Start a shell or an Agent from + in the tab bar.</p>
         <button type="button" className="empty-action" onClick={onNewSession}>New session</button>
       </div>
     );
@@ -1530,13 +1548,13 @@ export const TerminalSearch = memo(function TerminalSearch({
         spellCheck="false"
       />
       <span className="terminal-search-count">{summary}</span>
-      <button type="button" aria-label="Previous match" title="Previous match (⇧↵)" disabled={!hasMatches} onClick={onPrevious}>
+      <button type="button" aria-label="Previous match" data-tooltip="Previous match" data-tooltip-shortcut="⇧↵" disabled={!hasMatches} onClick={onPrevious}>
         <ChevronUpIcon />
       </button>
-      <button type="button" aria-label="Next match" title="Next match (↵)" disabled={!hasMatches} onClick={onNext}>
+      <button type="button" aria-label="Next match" data-tooltip="Next match" data-tooltip-shortcut="↵" disabled={!hasMatches} onClick={onNext}>
         <ChevronDownIcon />
       </button>
-      <button type="button" aria-label="Close search" title="Close search (esc)" onClick={onClose}>
+      <button type="button" aria-label="Close search" data-tooltip="Close search" data-tooltip-shortcut="esc" onClick={onClose}>
         <CloseIcon />
       </button>
     </div>
@@ -2155,6 +2173,7 @@ export function SettingsPage({
   onAppendPlaceholder,
   onRestore,
 }) {
+  const placeholderNoteID = useId();
   const [activeSection, setActiveSection] = useState("font");
   const [searchQuery, setSearchQuery] = useState("");
   useBodyScrollLock(open);
@@ -2476,9 +2495,15 @@ export function SettingsPage({
                 </label>
                 <div className="settings-preview">Preview: {titlePreview}</div>
                 <div className="placeholder-list">
-                  {placeholders.map(([key, description]) => (
-                    <button type="button" className="placeholder" key={key} title={description} onClick={() => onAppendPlaceholder(`{${key}}`)}>{`{${key}}`}</button>
-                  ))}
+                  {placeholders.map(([key, description]) => {
+                    const described = tooltipDescription(`${placeholderNoteID}-${key}`, description);
+                    return (
+                      <Fragment key={key}>
+                        <button type="button" className="placeholder" {...described.props} onClick={() => onAppendPlaceholder(`{${key}}`)}>{`{${key}}`}</button>
+                        {described.note}
+                      </Fragment>
+                    );
+                  })}
                 </div>
               </section>
             )
@@ -2693,7 +2718,7 @@ function SearchResultRow({ row, active, onHover, onChoose, registerRef }) {
       {/* Activity is a dot, not the glyph's colour: the glyph now carries the
           provider's own mark, and this is the marker the sidebar already uses. */}
       {row.mark && <ActivityDot mark={row.mark} />}
-      {row.pinned && <span className="search-pin" title="Pinned">{pinIcon}</span>}
+      {row.pinned && <span className="search-pin" role="img" aria-label="Pinned" data-tooltip="Pinned">{pinIcon}</span>}
       {active && <kbd className="search-enter">⏎</kbd>}
     </button>
   );

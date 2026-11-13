@@ -96,8 +96,11 @@ struct WarrenDesktopSidebarHeader: View {
                         HStack(spacing: 4) {
                             // 13 rather than the design's 13.5, like a
                             // Session title: a Chinese name sets larger.
-                            Text(host?.name ?? "This Mac")
-                                .font(.system(size: 13, weight: .semibold))
+                            WarrenDesktopTreeTypography.scriptText(
+                                host?.name ?? "This Mac",
+                                latin: WarrenTypography.hostHeaderName,
+                                wide: WarrenTypography.hostHeaderNameWide
+                            )
                                 // The column's own title, so it takes the
                                 // solid ink rather than a fade of it: a fade
                                 // here had to be re-tuned whenever the ground
@@ -120,13 +123,17 @@ struct WarrenDesktopSidebarHeader: View {
                                     .accessibilityHidden(true)
                             }
                         }
-                        if let subtitle = host?.subtitle, !subtitle.isEmpty {
-                            // "Local · <endpoint>", drawn as two runs: the place
-                            // keeps its width and only the endpoint truncates.
-                            // Truncating the pair in the middle ate the address
-                            // from its own middle and left "1…0.1:8789", which
-                            // reads as neither.
-                            HostSubtitleLine(subtitle: subtitle, color: tokens.treeQuietText)
+                        if let host, !host.subtitle.isEmpty {
+                            // "This Mac", "Remote · Studio", or how the
+                            // connection is doing. The address is a detail for
+                            // the hover card, not the header.
+                            HostSubtitleLine(
+                                subtitle: host.subtitle,
+                                color: tokens.treeQuietText,
+                                stateColor: host.connectionState.isConnected
+                                    ? nil
+                                    : Self.toneColor(host.connectionTone, tokens: tokens)
+                            )
                         }
                     }
                     Spacer(minLength: 0)
@@ -145,7 +152,9 @@ struct WarrenDesktopSidebarHeader: View {
             }
             .buttonStyle(.plain)
             .onHover { isHostRowHovered = $0 }
-            .help(host.map { "\($0.name) · \($0.connectionLabel)" } ?? "Host")
+            // The same hover card a Session wears: the row already shows the
+            // name, so the card adds the route and the connection's state.
+            .warrenDetailHover { host?.detailRows ?? [] }
             .accessibilityLabel("Host \(host?.name ?? "")")
             .accessibilityValue(host?.connectionLabel ?? "")
             .warrenSemanticElement(
@@ -205,6 +214,15 @@ struct WarrenDesktopSidebarHeader: View {
         )
     }
 
+    static func toneColor(_ tone: WarrenDesktopConnectionTone, tokens: WarrenColorTokens) -> Color {
+        switch tone {
+        case .success: tokens.success
+        case .info: tokens.treeQuietText
+        case .warning: tokens.warning
+        case .destructive: tokens.destructive
+        }
+    }
+
     private func buildMarker(isCompact: Bool = false) -> some View {
         WarrenDesktopBuildBadge(
             updateStatus: .none,
@@ -218,13 +236,29 @@ struct WarrenDesktopSidebarHeader: View {
 /// What the sidebar's Host row says about the Host this window works on.
 struct WarrenDesktopSidebarHostIdentity: Equatable {
     let name: String
-    /// "Local · Mac Studio", "Remote · fsn1-dev" and the like.
+    /// "This Mac", "Remote · Studio" and the like.
     let subtitle: String
     let isLocal: Bool
     let connectionState: WarrenDesktopConnectionState
+    /// How the window reaches the Host (`127.0.0.1:8789`, an SSH alias),
+    /// shown on the hover card only.
+    var address: String? = nil
 
     var connectionLabel: String {
         WarrenDesktopConnectionPresentation(connectionState).label
+    }
+
+    /// The Host's hover card.
+    var detailRows: [WarrenDesktopDetailCard.Row] {
+        var rows: [WarrenDesktopDetailCard.Row] = [
+            .init(label: "Host", value: name, style: .text),
+            .init(label: "Where", value: isLocal ? "This Mac" : "Remote", style: .text),
+        ]
+        if let address = address?.trimmingCharacters(in: .whitespacesAndNewlines), !address.isEmpty {
+            rows.append(.init(label: "Address", value: address))
+        }
+        rows.append(.init(label: "Status", value: connectionLabel, style: .text))
+        return rows
     }
 
     var connectionTone: WarrenDesktopConnectionTone {
@@ -233,7 +267,8 @@ struct WarrenDesktopSidebarHostIdentity: Equatable {
 
     /// The row's title is the Host's own name, so the row names the machine
     /// rather than the connection. The endpoint's label moves to the subtitle
-    /// when it says something the name does not; otherwise its address does.
+    /// when it says something the name does not. Its address never does: an
+    /// `ip:port` under the name was noise, and the hover card carries it.
     static func names(
         hostName: String,
         endpointLabel: String?,
@@ -245,12 +280,12 @@ struct WarrenDesktopSidebarHostIdentity: Equatable {
         }
         let label = endpointLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !host.isEmpty else {
-            return (label.isEmpty ? "This Mac" : label, endpointDetail)
+            return (label.isEmpty ? "This Mac" : label, nil)
         }
         let labelIsDistinct = !label.isEmpty
             && label.caseInsensitiveCompare(host) != .orderedSame
             && !["local", "remote"].contains(label.lowercased())
-        return (host, labelIsDistinct ? label : endpointDetail)
+        return (host, labelIsDistinct ? label : nil)
     }
 
     /// The subtitle: where the Host is, then what it is, or how the
@@ -260,7 +295,7 @@ struct WarrenDesktopSidebarHostIdentity: Equatable {
         detail: String?,
         connectionState: WarrenDesktopConnectionState
     ) -> String {
-        let place = isLocal ? "Local" : "Remote"
+        let place = isLocal ? "This Mac" : "Remote"
         guard connectionState.isConnected else {
             return "\(place) · \(WarrenDesktopConnectionPresentation(connectionState).label)"
         }
@@ -269,10 +304,12 @@ struct WarrenDesktopSidebarHostIdentity: Equatable {
     }
 }
 
-/// The Host row's second line, split so only its detail can truncate.
+/// The Host row's second line, split so only its detail can truncate. A
+/// connection that is not up draws its state in the state's tone.
 private struct HostSubtitleLine: View {
     let subtitle: String
     let color: Color
+    var stateColor: Color? = nil
 
     private var parts: (place: String, detail: String?) {
         let pieces = subtitle.components(separatedBy: " · ")
@@ -290,12 +327,12 @@ private struct HostSubtitleLine: View {
                     .opacity(0.7)
                     .fixedSize(horizontal: true, vertical: false)
                 Text(detail)
-                    .truncationMode(.middle)
+                    .foregroundStyle(stateColor ?? color)
+                    .truncationMode(.tail)
             }
         }
-        .font(.system(size: 11))
+        .font(WarrenTypography.hostHeaderMeta)
         .foregroundStyle(color)
         .lineLimit(1)
     }
 }
-

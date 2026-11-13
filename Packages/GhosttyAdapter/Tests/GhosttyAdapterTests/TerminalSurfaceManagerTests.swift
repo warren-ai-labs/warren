@@ -1,5 +1,6 @@
 import AppKit
 import GhosttyKit
+import os
 import WarrenDomain
 import XCTest
 @testable import GhosttyAdapter
@@ -360,9 +361,14 @@ final class TerminalSurfaceManagerTests: XCTestCase {
         let manager = TerminalSurfaceManager(warmLimit: 2)
         var postRevealRedraws: [TerminalSessionID] = []
         manager.postRevealRedrawObserver = { postRevealRedraws.append($0) }
+        // The writer gate below holds the drain mid-burst, so the budget only
+        // has to split the burst into several slices. The drain must not be
+        // slow: once released, it has to reach the boundary well inside the
+        // promotion's 2s output-stall deadline, after which the manager
+        // deliberately reveals a partial boundary.
         let first = makeSurface(
-            outputRenderBudgetBytes: 256,
-            outputRenderYield: .milliseconds(2)
+            outputRenderBudgetBytes: 4096,
+            outputRenderYield: .microseconds(200)
         )
         let second = makeSurface()
         manager.insert(first)
@@ -377,7 +383,10 @@ final class TerminalSurfaceManagerTests: XCTestCase {
             defer: false
         )
         window.contentView = host
+        let writeGate = AsyncWriteGate()
         defer {
+            first.outputWriter.setBeforeWriteHook(nil)
+            Task { await writeGate.release() }
             manager.shutdown()
             window.orderOut(nil as Any?)
         }
@@ -389,14 +398,28 @@ final class TerminalSurfaceManagerTests: XCTestCase {
                 && manager.isDisplayVisible(first.id)
         }
 
+        // Let the first slice reach Ghostty, then hold the drain before the
+        // second one so the promotion starts from a known partial boundary.
+        let writes = OSAllocatedUnfairLock(initialState: 0)
+        first.outputWriter.setBeforeWriteHook {
+            let write = writes.withLock { count -> Int in
+                count += 1
+                return count
+            }
+            if write > 1 {
+                await writeGate.enterAndWait()
+            }
+        }
+
         // Capture the promotion boundary before switching away. The display
         // must remain occluded until the hidden writer consumes this fixed
         // boundary; output arriving after it must not extend the wait.
         first.outputWriter.enqueueRaw(Data(repeating: 0x78, count: 100_000))
-        try await waitUntil {
-            first.outputWriter.enqueuedSequence > first.outputWriter.renderedSequence
-        }
+        await writeGate.waitUntilEntered()
         let promotionTarget = first.outputWriter.enqueuedBoundary
+        let heldBoundary = first.outputWriter.renderedBoundary
+        XCTAssertEqual(heldBoundary.epoch, promotionTarget.epoch)
+        XCTAssertLessThan(heldBoundary.sequence, promotionTarget.sequence)
 
         manager.insert(second)
         submit(second.id, to: manager, host: host)
@@ -407,12 +430,14 @@ final class TerminalSurfaceManagerTests: XCTestCase {
             manager.snapshot().activeSessionID == first.id
                 && first.terminalViewIsPresentable
         }
-        if first.outputWriter.renderedBoundary != promotionTarget {
-            XCTAssertFalse(
-                manager.isDisplayVisible(first.id),
-                "promotion must not reveal a partially drained output boundary"
-            )
-        }
+        XCTAssertEqual(first.outputWriter.renderedBoundary, heldBoundary)
+        XCTAssertFalse(
+            manager.isDisplayVisible(first.id),
+            "promotion must not reveal a partially drained output boundary"
+        )
+
+        first.outputWriter.setBeforeWriteHook(nil)
+        await writeGate.release()
         try await waitUntil(timeout: 5) {
             manager.isDisplayVisible(first.id)
         }

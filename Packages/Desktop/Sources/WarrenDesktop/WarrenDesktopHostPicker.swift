@@ -276,7 +276,7 @@ struct WarrenDesktopCurrentHostPanel: View {
         return Button(action: open) {
             HStack(spacing: Metrics.iconSpacing) {
                 Image(systemName: "globe")
-                    .font(.system(size: 15, weight: .regular))
+                    .font(WarrenTypography.popoverGlyph)
                     .foregroundStyle(isHot ? palette.iconHover : palette.icon)
                     .frame(width: Metrics.glyphSlot, height: Metrics.glyphSlot)
                     .overlay(alignment: .bottomTrailing) {
@@ -295,7 +295,7 @@ struct WarrenDesktopCurrentHostPanel: View {
                         .foregroundStyle(isHot ? palette.rowHoverText : palette.rowText)
                     if publicAccess.isOn, let url = publicAccess.url {
                         Text(WarrenDesktopHostPanelPublicAccess.displayAddress(url))
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(WarrenTypography.monoSmall)
                             .foregroundStyle(palette.meta)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -369,7 +369,7 @@ struct WarrenDesktopCurrentHostPanel: View {
         return Button(action: action) {
             HStack(spacing: Metrics.iconSpacing) {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 15, weight: .regular))
+                    .font(WarrenTypography.popoverGlyph)
                     .foregroundStyle(isHot ? palette.iconHover : palette.icon)
                     .frame(width: Metrics.glyphSlot, height: Metrics.glyphSlot)
                 Text("Settings…")
@@ -431,7 +431,7 @@ struct WarrenDesktopCurrentHostPanel: View {
         return Button(action: action) {
             HStack(spacing: Metrics.iconSpacing) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 15, weight: .regular))
+                    .font(WarrenTypography.popoverGlyph)
                     .foregroundStyle(isHot ? palette.iconHover : palette.icon)
                     .frame(width: Metrics.glyphSlot, height: Metrics.glyphSlot)
                 Text(title)

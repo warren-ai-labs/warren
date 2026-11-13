@@ -126,7 +126,7 @@ struct WarrenDesktopNoticeContent: View {
                         .font(.system(size: 20, weight: .light))
                         .foregroundStyle(tokens.mutedForeground)
                     Text("No notifications")
-                        .font(WarrenTypography.popoverItem)
+                        .font(WarrenTypography.popoverTitle)
                         .foregroundStyle(tokens.foreground)
                     Text("Errors and system messages will appear here.")
                         .font(WarrenTypography.popoverMeta)
@@ -148,7 +148,7 @@ struct WarrenDesktopNoticeContent: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         HStack(alignment: .firstTextBaseline, spacing: WarrenSpacing.xs) {
                                             Text(notice.title)
-                                                .font(.system(size: 13))
+                                                .font(WarrenTypography.popoverTitle)
                                                 .foregroundStyle(palette.rowText)
                                                 .lineLimit(1)
                                             if notice.isUnread {
@@ -159,11 +159,11 @@ struct WarrenDesktopNoticeContent: View {
                                             }
                                             Spacer(minLength: 0)
                                             Text(relativeDate(notice.createdAt))
-                                                .font(.system(size: 11.5))
+                                                .font(WarrenTypography.popoverMeta)
                                                 .foregroundStyle(palette.meta)
                                         }
                                         Text(notice.message)
-                                            .font(.system(size: 11.5))
+                                            .font(WarrenTypography.popoverMeta)
                                             .foregroundStyle(palette.meta)
                                             .lineLimit(2)
                                             .multilineTextAlignment(.leading)

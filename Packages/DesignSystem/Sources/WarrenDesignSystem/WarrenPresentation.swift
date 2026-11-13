@@ -271,7 +271,10 @@ public struct WarrenInputField: View {
         _ label: String,
         text: Binding<String>,
         placeholder: String = "",
-        monospaced: Bool = true,
+        // A field holds a name unless it says otherwise: defaulting to
+        // monospaced set every rename in code. Branches, IDs, URLs and
+        // arguments opt in.
+        monospaced: Bool = false,
         focusOnAppear: Bool = false,
         labelFont: Font = WarrenTypography.dialogFieldLabel,
         inputFont: Font? = nil,
@@ -524,10 +527,7 @@ public struct WarrenTextInputDialog: View {
             WarrenInputField(
                 fieldLabel,
                 text: $text,
-                monospaced: false,
                 focusOnAppear: true,
-                labelFont: WarrenTypography.dialogFieldLabel,
-                inputFont: WarrenTypography.dialogInput,
                 onSubmit: onConfirm
             )
         } footer: {

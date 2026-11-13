@@ -12,7 +12,7 @@ struct WarrenDesktopLeadMark: View {
 
     var body: some View {
         Text("LEAD")
-            .font(.system(size: 9.5, weight: .semibold))
+            .font(WarrenTypography.badge)
             .tracking(0.6)
             .foregroundStyle(tokens.sessionMetaIdleText)
             .lineLimit(1)

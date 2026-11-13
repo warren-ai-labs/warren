@@ -178,6 +178,46 @@
   --text-display: 30px;
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  /* Desktop typography parity (WarrenTypography, WarrenDesktopTreeTypography).
+     Text read once rather than scanned (project names, page and section
+     titles, empty states, menu captions) takes Avenir Next; branch names take
+     its condensed cut; the Projects tab takes Seravek. Controls, body text and
+     dense rows stay on --font-sans. These faces ship only on Apple platforms,
+     so each stack falls back to the system face, and CJK text, which Avenir
+     and Seravek have no glyphs for, falls through to PingFang and its peers.
+     Avenir sizes run half a pixel over the system size they replace. */
+  --font-cjk-fallback: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-system-fallback: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui;
+  --font-display: "Avenir Next", "Avenir", var(--font-system-fallback), var(--font-cjk-fallback);
+  --font-display-condensed: "Avenir Next Condensed", "Avenir Next", "Avenir", var(--font-system-fallback), var(--font-cjk-fallback);
+  --font-tab: "Seravek", "Avenir Next", "Avenir", var(--font-system-fallback), var(--font-cjk-fallback);
+  /* The display face's read-once roles, as `font` shorthands so a role's face,
+     weight, size and leading travel together (WarrenTypography). Each size sits
+     half a pixel over the system size it replaces (the half-pixel opens up the
+     lowercase), and on Avenir Next the two nudged weights above resolve to its
+     Medium and DemiBold cuts. */
+  --type-section-title: var(--weight-semibold) 12.5px/1.3 var(--font-display);
+  --type-panel-title: var(--weight-semibold) 13.5px/1.3 var(--font-display);
+  /* A row read once rather than scanned (a commit subject, a diff's title) and
+     the quieter line under it. */
+  --type-row: var(--weight-regular) 12.5px/1.35 var(--font-display);
+  --type-row-meta: var(--weight-regular) 11.5px/1.35 var(--font-display);
+  /* A panel's own tabs: medium at rest, demibold when selected. */
+  --type-panel-tab: var(--weight-medium) 13px/1.2 var(--font-display);
+  --type-panel-tab-selected: var(--weight-semibold) 13px/1.2 var(--font-display);
+  /* Every floating surface's rows, their second lines, their group captions and
+     a submenu's title. */
+  --type-popover-row: var(--weight-regular) 13.5px/1.35 var(--font-display);
+  --type-popover-meta: var(--weight-regular) 12px/1.35 var(--font-display);
+  --type-popover-caption: var(--weight-medium) 12px/1.35 var(--font-display);
+  --type-popover-title: var(--weight-semibold) 13.5px/1.3 var(--font-display);
+  /* A dialog's title and the label above its field. */
+  --type-dialog-title: var(--weight-semibold) 15.5px/1.3 var(--font-display);
+  --type-field-label: var(--weight-medium) 12px/1.3 var(--font-display);
+  /* An empty stage: its title, and the one line under it. */
+  --type-empty-title: var(--weight-semibold) 16.5px/1.3 var(--font-display);
+  --type-empty-message: var(--weight-regular) 13.5px/1.5 var(--font-display);
+  --type-settings-item: var(--weight-medium) 13.5px/1.3 var(--font-display);
   --weight-light: 300;
   --weight-regular: 400;
   /* The Web client is dark-only, where light-on-dark text blooms and reads a
@@ -358,6 +398,62 @@ button:disabled {
   border: 0;
 }
 
+/* The page's one drawn tooltip (tooltip.js), matching the Desktop bubble. It
+   sits over every surface, never takes the pointer, and moves by transform. */
+.tooltip {
+  position: fixed;
+  z-index: var(--layer-toast);
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-md);
+  width: max-content;
+  max-width: 320px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 7px;
+  background: var(--color-bg-raised);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
+  color: var(--color-text-primary);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.tooltip.visible {
+  opacity: 1;
+}
+
+.tooltip.glides {
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    transform var(--duration-spring) var(--ease-spring);
+}
+
+.tooltip-text {
+  min-width: 0;
+  font: var(--weight-medium) 11.5px/1.35 var(--font-display);
+  overflow-wrap: anywhere;
+}
+
+.tooltip-shortcut {
+  flex: none;
+  color: var(--color-text-secondary);
+  font: var(--weight-medium) 11px/1 var(--font-mono);
+  white-space: nowrap;
+}
+
+.tooltip-shortcut[hidden] {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip.glides {
+    transition: opacity var(--duration-fast) var(--ease-out);
+  }
+}
+
 .skip-link {
   position: fixed;
   z-index: var(--layer-menu);
@@ -521,10 +617,10 @@ button:disabled {
   margin: 0;
   padding: 8px 8px 0;
   color: var(--tree-t1);
-  font-size: 13px;
-  font-weight: var(--weight-semibold);
+  font-family: var(--font-tab);
+  font-size: 14px;
+  font-weight: var(--weight-medium);
   line-height: 16px;
-  letter-spacing: -0.006em;
 }
 
 .sidebar-tab::after {
@@ -539,7 +635,8 @@ button:disabled {
 
 .sidebar-tab-count {
   color: var(--tree-t4);
-  font: var(--weight-medium) 10px var(--font-mono);
+  font: var(--weight-regular) 12px var(--font-tab);
+  font-variant-numeric: tabular-nums;
   letter-spacing: 0;
 }
 
@@ -783,8 +880,9 @@ button:disabled {
   min-width: 0;
   overflow: hidden;
   color: var(--tree-t1);
-  font-size: 13.5px;
-  font-weight: var(--weight-semibold);
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: var(--weight-medium);
   white-space: nowrap;
   /* The fade lives in a 24px end padding the text only reaches when it
      overflows, so a name that fits is never dimmed (WarrenDesktopFadingName). */
@@ -970,8 +1068,7 @@ button:disabled {
 .lane-branch {
   min-width: 0;
   overflow: hidden;
-  font: var(--weight-regular) 11px var(--font-mono);
-  letter-spacing: -0.01em;
+  font: var(--weight-medium) 12.5px var(--font-display-condensed);
   white-space: nowrap;
   padding-inline-end: 20px;
   margin-inline-end: -20px;
@@ -1135,7 +1232,7 @@ button:disabled {
   border-radius: 7px;
   background: transparent;
   color: var(--tree-t4);
-  font-size: 11.5px;
+  font: italic var(--weight-regular) 12px var(--font-display);
   cursor: pointer;
 }
 
@@ -1153,7 +1250,8 @@ button:disabled {
 }
 
 .idle-label b {
-  font: var(--weight-medium) 11px var(--font-mono);
+  font: normal var(--weight-medium) 12px var(--font-display);
+  font-variant-numeric: tabular-nums;
 }
 
 /* A folded row turns its chevron the same quarter as a Project row, at the
@@ -1340,7 +1438,7 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-regular);
   color: var(--color-text-primary);
 }
 
@@ -1763,14 +1861,14 @@ button:disabled {
 
 .agent-empty-title {
   margin-top: var(--space-lg);
-  font-size: var(--text-lg);
-  font-weight: var(--weight-regular);
+  font: var(--type-empty-title);
   color: var(--color-text-primary);
 }
 
 .agent-empty-hint {
-  margin-top: var(--space-sm);
-  font-size: var(--text-sm);
+  margin: var(--space-sm) auto 0;
+  font: var(--type-empty-message);
+  max-width: 300px;
 }
 
 .agent-message {
@@ -3084,16 +3182,14 @@ button:disabled {
 
 .empty-title {
   color: var(--color-text-primary);
-  font-size: var(--text-lg);
-  font-weight: var(--weight-light);
+  font: var(--type-empty-title);
 }
 
 .empty-hint {
-  max-width: 42ch;
+  max-width: 300px;
   margin-top: -8px;
   color: var(--color-text-secondary);
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
+  font: var(--type-empty-message);
 }
 
 .empty-action {
@@ -3147,7 +3243,8 @@ button:disabled {
 .welcome-title {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: var(--text-2xl);
+  font-family: var(--font-display);
+  font-size: calc(var(--text-2xl) + 0.5px);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
 }
@@ -3360,8 +3457,9 @@ button:disabled {
 
 .settings-title {
   margin: var(--space-lg) var(--space-md) var(--space-xs);
-  font-size: var(--text-2xl);
-  font-weight: var(--weight-light);
+  font-family: var(--font-display);
+  font-size: calc(var(--text-2xl) + 0.5px);
+  font-weight: var(--weight-semibold);
 }
 
 .settings-search {
@@ -3381,9 +3479,13 @@ button:disabled {
   pointer-events: none;
 }
 
-.settings-search input {
+/* Scoped under .settings so it outranks the generic `.settings input` field
+   rule below, which sets a monospace face and padding that runs under the
+   search icon. */
+.settings .settings-search input {
   width: 100%;
   height: 32px;
+  margin: 0;
   padding-inline: 32px 28px;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
@@ -3393,12 +3495,12 @@ button:disabled {
   outline: 0;
 }
 
-.settings-search input:focus {
+.settings .settings-search input:focus {
   border-color: var(--color-focus-ring);
   box-shadow: var(--shadow-focus-ring);
 }
 
-.settings-search input::placeholder {
+.settings .settings-search input::placeholder {
   color: var(--color-text-secondary);
 }
 
@@ -3436,8 +3538,9 @@ button:disabled {
 .settings-nav-label {
   padding: var(--space-lg) 10px var(--space-sm);
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-regular);
+  font-family: var(--font-display);
+  font-size: 10.5px;
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.1em;
   opacity: 0.55;
   text-transform: uppercase;
@@ -3455,8 +3558,7 @@ button:disabled {
   background: transparent;
   color: var(--color-text-secondary);
   text-align: start;
-  font-size: var(--text-md);
-  font-weight: var(--weight-regular);
+  font: var(--type-settings-item);
   cursor: pointer;
 }
 
@@ -3497,8 +3599,9 @@ button:disabled {
 
 .settings-page-heading h2 {
   margin: 0;
-  font-size: var(--text-xl);
-  font-weight: var(--weight-regular);
+  font-family: var(--font-display);
+  font-size: calc(var(--text-xl) + 0.5px);
+  font-weight: var(--weight-semibold);
 }
 
 .settings-page-heading p {
@@ -3630,8 +3733,9 @@ button:disabled {
 .settings-subheading h3 {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: var(--text-md);
-  font-weight: var(--weight-regular);
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: var(--weight-semibold);
 }
 
 .settings-subheading p {
@@ -3878,7 +3982,7 @@ button:disabled {
   color: var(--color-text-primary);
   text-align: start;
   cursor: pointer;
-  font-size: var(--text-2sm);
+  font: var(--type-popover-row);
 }
 
 .search-item.active {
@@ -3914,14 +4018,13 @@ button:disabled {
 
 .search-name {
   flex: 0 1 auto;
-  font-size: var(--text-2sm);
-  font-weight: var(--weight-regular);
+  font: var(--type-popover-row);
 }
 
 .search-context {
   flex: 0 1 auto;
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font: var(--type-popover-meta);
 }
 
 /* The match explanation sits at the trailing edge: it answers a question the
@@ -3930,7 +4033,7 @@ button:disabled {
   margin-inline-start: auto;
   flex: 0 1 auto;
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font: var(--type-popover-meta);
   opacity: 0.85;
 }
 
@@ -3981,7 +4084,7 @@ button:disabled {
   padding: 32px;
   color: var(--color-text-secondary);
   text-align: center;
-  font-size: var(--text-md);
+  font: var(--type-empty-message);
 }
 
 .worktree-dialog-overlay {
@@ -4024,8 +4127,7 @@ button:disabled {
 .worktree-dialog-header h2 {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: var(--text-dialog);
-  font-weight: var(--weight-light);
+  font: var(--type-dialog-title);
 }
 
 .worktree-dialog-header p {
@@ -4242,8 +4344,7 @@ button:disabled {
 .warren-dialog-title {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: var(--text-dialog);
-  font-weight: var(--weight-light);
+  font: var(--type-dialog-title);
 }
 
 .warren-dialog-message {
@@ -4269,6 +4370,12 @@ button:disabled {
   font-weight: var(--weight-regular);
 }
 
+/* The label above the field takes the display face; the input under it keeps
+   the system face, where the caret lives (WarrenTypography.fieldLabel). */
+.warren-dialog-field > span {
+  font: var(--type-field-label);
+}
+
 .warren-dialog-field input {
   width: 100%;
   height: 36px;
@@ -4277,6 +4384,7 @@ button:disabled {
   border-radius: var(--radius-sm);
   background: var(--color-bg-sunken);
   color: var(--color-text-primary);
+  font-family: var(--font-sans);
   font-size: var(--text-md);
   font-weight: var(--weight-regular);
 }
@@ -4362,7 +4470,7 @@ button:disabled {
   color: var(--color-text-primary);
   text-align: start;
   cursor: pointer;
-  font-size: var(--text-base);
+  font: var(--type-popover-row);
   transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 
@@ -5148,7 +5256,8 @@ button:disabled {
 
   .inbox-heading h2 {
     margin: 0;
-    font-size: var(--text-display);
+    font-family: var(--font-display);
+    font-size: calc(var(--text-display) + 0.5px);
     font-weight: var(--weight-semibold);
     letter-spacing: -0.02em;
     line-height: var(--leading-tight);
@@ -5202,7 +5311,8 @@ button:disabled {
     margin: 0 0 var(--space-md);
     padding-inline: var(--space-xs);
     color: var(--color-text-secondary);
-    font-size: var(--text-2sm);
+    font-family: var(--font-display);
+    font-size: 13.5px;
     font-weight: var(--weight-semibold);
   }
 
@@ -5341,14 +5451,14 @@ button:disabled {
 
   .inbox-empty-title {
     margin: 0;
-    font-size: var(--text-lg);
-    font-weight: var(--weight-medium);
+    font: var(--type-empty-title);
   }
 
   .inbox-empty-hint {
-    margin: var(--space-sm) 0 0;
+    margin: var(--space-sm) auto 0;
     color: var(--color-text-secondary);
-    font-size: var(--text-md);
+    font: var(--type-empty-message);
+    max-width: 300px;
   }
 
   /* The one primary action, in the header and out of the list's way: a
@@ -5603,6 +5713,8 @@ button:disabled {
 
   .mobile-tab-title {
     max-width: 120px;
+    /* A Session's title: the system face, regular, like the header's. */
+    font-weight: var(--weight-regular);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -5651,7 +5763,7 @@ button:disabled {
 
   .settings-title {
     margin: 0 var(--space-md) 0 var(--space-xs);
-    font-size: var(--text-lg);
+    font-size: calc(var(--text-lg) + 0.5px);
   }
 
   .settings-search {
@@ -6368,7 +6480,7 @@ button:disabled {
 
 .git-panel-title {
   color: var(--color-text-primary);
-  font-size: var(--text-base);
+  font: var(--type-panel-title);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6526,6 +6638,7 @@ button:disabled {
   align-items: center;
   gap: var(--space-sm);
   min-width: 0;
+  font: var(--type-section-title);
 }
 
 .git-pane-icon {
@@ -6565,8 +6678,7 @@ button:disabled {
 
 .git-section-title {
   margin: 0 0 var(--space-sm);
-  font-size: var(--text-sm);
-  font-weight: 600;
+  font: var(--type-section-title);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--color-text-secondary);
@@ -6831,14 +6943,14 @@ button:disabled {
 }
 
 .git-commit-subject {
-  font-size: var(--text-sm);
+  font: var(--type-row);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .git-commit-meta {
-  font-size: var(--text-xs);
+  font: var(--type-row-meta);
   color: var(--color-text-secondary);
 }
 
@@ -7029,21 +7141,20 @@ button:disabled {
 
 .git-pr-title {
   margin: 0;
-  font-size: var(--text-sm);
-  font-weight: 600;
+  font: var(--type-section-title);
   color: var(--color-text-primary);
   overflow-wrap: anywhere;
 }
 
 .git-pr-meta {
   margin: 0;
-  font-size: var(--text-xs);
+  font: var(--type-row-meta);
   color: var(--color-text-secondary);
 }
 
 .git-pr-body {
   margin: 0;
-  font-size: var(--text-sm);
+  font: var(--type-row);
   color: var(--color-text-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -7140,6 +7251,9 @@ button:disabled {
   align-items: center;
   gap: var(--space-sm);
   min-width: 0;
+  /* The path and the hash inside keep the monospaced face and its regular
+     weight; this is the row's own type, which the badge inherits. */
+  font: var(--type-panel-title);
 }
 
 .file-diff-path {
@@ -7148,6 +7262,7 @@ button:disabled {
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
   color: var(--color-text-primary);
 }
 
@@ -7164,6 +7279,7 @@ button:disabled {
 .file-diff-commit {
   flex: 0 0 auto;
   font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
   color: var(--color-text-secondary);
 }
 
@@ -7187,7 +7303,7 @@ button:disabled {
 
 .file-diff-tab {
   padding: var(--space-xs) var(--space-md);
-  font-size: var(--text-sm);
+  font: var(--type-panel-tab);
   color: var(--color-text-secondary);
   background: transparent;
   border: none;
@@ -7195,7 +7311,19 @@ button:disabled {
   cursor: pointer;
 }
 
+/* Every tab reserves its selected width, so the bolder cut never nudges the
+   tabs after it when the selection moves (WarrenDesktopPanelTabTitle). */
+.file-diff-tab::after {
+  content: attr(data-label);
+  display: block;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  font-weight: var(--weight-semibold);
+}
+
 .file-diff-tab.active {
+  font: var(--type-panel-tab-selected);
   color: var(--color-text-primary);
   border-bottom-color: var(--color-accent);
 }
@@ -7287,7 +7415,7 @@ button:disabled {
 .conversation-menu-group {
   padding: var(--space-xs) var(--space-lg);
   color: var(--color-text-tertiary);
-  font-size: var(--text-xs);
+  font: var(--type-popover-caption);
 }
 
 .conversation-menu-group {
@@ -7325,8 +7453,7 @@ button:disabled {
   border: 0;
   background: none;
   color: var(--color-text-primary);
-  font: inherit;
-  font-size: var(--text-sm);
+  font: var(--type-popover-row);
   text-align: start;
   cursor: pointer;
 }
@@ -8009,7 +8136,7 @@ button:disabled {
 
 .conversation-menu-description {
   color: var(--color-text-tertiary);
-  font-size: var(--text-xs);
+  font: var(--type-popover-meta);
 }
 
 .conversation-switch {

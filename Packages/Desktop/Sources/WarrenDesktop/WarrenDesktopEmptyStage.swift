@@ -60,22 +60,22 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
         VStack(spacing: 0) {
             if let mark {
                 tile(mark, tokens: tokens)
-                    .padding(.bottom, 16)
+                    .padding(.bottom, 14)
             }
 
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(WarrenTypography.emptyStageTitle)
                 .foregroundStyle(tokens.foreground.opacity(0.9))
                 .multilineTextAlignment(.center)
 
             if let message {
                 Text(message)
-                    .font(.system(size: 12.5))
+                    .font(WarrenTypography.emptyStageMessage)
                     .foregroundStyle(tokens.mutedForeground)
                     .multilineTextAlignment(.center)
                     .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 320)
+                    .frame(maxWidth: 300)
                     .padding(.top, 6)
             }
 
@@ -102,24 +102,26 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
     }
 
     private func tile(_ mark: Mark, tokens: WarrenColorTokens) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        // A quiet 40pt tile: at 48 with a full-weight border it was the
+        // loudest thing on a stage whose job is to point elsewhere.
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         return Group {
             switch mark {
             case .symbol(let name):
                 Image(systemName: name)
-                    .font(.system(size: 19, weight: .regular))
+                    .font(.system(size: 17, weight: .light))
                     .foregroundStyle(tokens.treeSecondaryText)
             case .progress:
-                WarrenLoadingIndicator(size: 18, accessibilityLabel: title)
+                WarrenLoadingIndicator(size: 16, accessibilityLabel: title)
             case .warning(let name):
                 Image(systemName: name)
-                    .font(.system(size: 19, weight: .regular))
+                    .font(.system(size: 17, weight: .light))
                     .foregroundStyle(tokens.warning)
             }
         }
-        .frame(width: 48, height: 48)
+        .frame(width: 40, height: 40)
         .background(shape.fill(tokens.treeRowHover))
-        .overlay(shape.strokeBorder(tokens.cardBorder, lineWidth: 1))
+        .overlay(shape.strokeBorder(tokens.cardBorder.opacity(0.6), lineWidth: 1))
         .accessibilityHidden(true)
     }
 
@@ -132,7 +134,7 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
                 HStack(spacing: 8) {
                     WarrenDesktopMenuKeycaps(keys: hint.keys)
                     Text(hint.label)
-                        .font(.system(size: 12))
+                        .font(WarrenTypography.popoverMeta)
                         .foregroundStyle(tokens.mutedForeground)
                 }
                 .accessibilityElement(children: .ignore)

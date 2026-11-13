@@ -845,7 +845,7 @@ struct WarrenDesktopSidebarRows: View {
                 // The tab says what the list is; the line says it is empty,
                 // and the bar's own "+" says what to do about it.
                 Text("No Tasks yet")
-                    .font(.system(size: 12))
+                    .font(WarrenTypography.navigationMeta)
                     .foregroundStyle(WarrenColorTokens.resolved(
                         for: colorScheme,
                         material: windowMaterial
@@ -1631,8 +1631,6 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     @State private var isSubagentChipHovered = false
     /// The shell row's hover card, which trails the pointer by a beat so a row
     /// it only passes over never makes one.
-    @State private var showsShellDetails = false
-    @State private var shellDetailTask: Task<Void, Never>?
 
     private var providerName: String {
         session.presentedKind.displayName
@@ -1812,10 +1810,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             )
         )
         .opacity(isInteractionDisabled ? 0.62 : 1)
-        .onHover { inside in
-            isHovered = inside
-            shellHover(inside)
-        }
+        .onHover { isHovered = $0 }
         .accessibilityLabel(semanticLabel)
         .accessibilityValue(semanticValue)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -1828,18 +1823,9 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             isSelected: isSelected,
             action: { if !isInteractionDisabled { onOpen() } }
         )
-        // The title truncates to one line; the whole of it is on hover. A shell
-        // row moves that detail to its own card.
-        .modifier(WarrenDesktopRowHelp(
-            text: Self.usesLocationTitle(for: session) ? nil : helpText
-        ))
-        .warrenMenuPanel(
-            isPresented: $showsShellDetails,
-            width: WarrenDesktopDetailCard.width,
-            isPassive: true
-        ) {
-            WarrenDesktopDetailCard(rows: shellDetailRows())
-        }
+        // The row draws one line each for its title and activity; the whole
+        // of both, and where the Session runs, are on the shared hover card.
+        .warrenDetailHover(delay: WarrenDesktopSidebarMetrics.detailHoverDelay) { detailRows() }
         .warrenContextMenu(isInteractionDisabled ? [] : contextMenuActions)
         .onChange(of: session.activity) { activity in
             // The design closes an open, all-done group when the parent's turn
@@ -1876,17 +1862,32 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     }
 
     /// The title line's trailing age column, which the second line leaves
-    /// empty: the widest age, `59m`, and the gap before it.
+    /// empty: the age's own width and the title line's 6pt gap before it.
     ///
     /// Both lines end on this column, so a title and its activity line stop at
-    /// the same x. It used to be 34 while the title's age took only its own
-    /// width, which left the second line four to eight points short of the
-    /// title and put the seam in a different place on every row.
-    static let ageColumnWidth: CGFloat = 30
+    /// the same x. It used to be a fixed 30, sized for the widest age, so a
+    /// `2h` or `5s` row left the second line about 10pt short of the title's
+    /// last glyph. The age is monospaced, so its width is its length times one
+    /// advance, measured from the font the title line draws it in.
+    static func ageColumnWidth(for age: String) -> CGFloat {
+        ceil(CGFloat(age.count) * ageAdvance) + ageGap
+    }
 
+    /// The gap between the title (or its trailing marks) and the age.
+    static let ageGap: CGFloat = 6
+
+    /// One glyph's advance in `WarrenDesktopTreeTypography.age`.
+    private static let ageAdvance: CGFloat = {
+        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        return font.advancement(forGlyph: font.glyph(withName: "zero")).width
+    }()
+
+    /// Only while the title actually draws an age. Reserving the column on
+    /// every row stopped an ageless row's activity line 30pt short of the
+    /// card's edge, and that empty band read as a very wide fade.
     static func reservesAgeColumn(_ line: WarrenDesktopSessionSecondLine) -> Bool {
         if case .plan = line.meta { return false }
-        return true
+        return titleAge(for: line) != nil
     }
 
     /// The age at the title line's end: the duration the second line used to
@@ -1932,7 +1933,12 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                     // The line ends where the title's age column starts,
                     // so every row's right edge is that one column. A
                     // plan's progress is the line's own column instead.
-                    .padding(.trailing, Self.reservesAgeColumn(line) ? Self.ageColumnWidth : 0)
+                    .padding(
+                        .trailing,
+                        Self.reservesAgeColumn(line)
+                            ? Self.titleAge(for: line).map(Self.ageColumnWidth(for:)) ?? 0
+                            : 0
+                    )
             }
         }
         .padding(.vertical, Self.verticalInset)
@@ -1981,7 +1987,8 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                 Text(age)
                     .font(WarrenDesktopTreeTypography.age)
                     .foregroundStyle(tokens.treeFaintText)
-                    .frame(width: Self.ageColumnWidth - 6, alignment: .trailing)
+                    .fixedSize()
+                    .frame(width: Self.ageColumnWidth(for: age) - Self.ageGap, alignment: .trailing)
             }
         }
     }
@@ -2094,8 +2101,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                     Image(systemName: "arrow.triangle.branch")
                         .font(.system(size: 10))
                     Text(allDone ? "✓\(completedSubagents.count)" : "\(runningSubagents.count)")
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .monospacedDigit()
+                        .font(WarrenTypography.monoSmall)
                 }
                 .foregroundStyle(allDone ? tokens.treeQuietText : tokens.sessionExtraRunningText)
                 .padding(.horizontal, 4)
@@ -2155,7 +2161,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         HStack(spacing: 8) {
             subagentDot(agent, tokens: tokens)
             Text(agent.title)
-                .font(.system(size: 11, design: .monospaced))
+                .font(WarrenTypography.monoSmall)
                 .foregroundStyle(tokens.treeQuietText)
                 .lineLimit(1)
                 .fixedSize()
@@ -2202,12 +2208,12 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             // has to act on, so it stays bright and still while the others
             // shimmer or dim.
             Text(WarrenDesktopActivityText.shortened(text))
-                .font(.system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize))
+                .font(WarrenTypography.caption)
                 .foregroundStyle(tokens.treeSessionText)
                 .lineLimit(1)
         } else if agent.isRunning {
             Text(WarrenDesktopActivityText.shortened(text))
-                .font(.system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize))
+                .font(WarrenTypography.caption)
                 .lineLimit(1)
                 .modifier(WarrenDesktopActivityShimmer(
                     base: tokens.treeSecondaryText,
@@ -2216,7 +2222,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
                 ))
         } else {
             Text(WarrenDesktopActivityText.shortened(text))
-                .font(.system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize))
+                .font(WarrenTypography.caption)
                 .foregroundStyle(tokens.treeQuietText)
                 .lineLimit(1)
         }
@@ -2227,7 +2233,7 @@ struct WarrenDesktopWorkspaceSessionRow: View {
             onToggleSubagentsDone?()
         } label: {
             Text("\(completedSubagents.count) done")
-                .font(.system(size: 11.5))
+                .font(WarrenTypography.caption)
                 .foregroundStyle(tokens.treeQuietText)
                 .frame(height: Self.subagentRowHeight)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2359,29 +2365,55 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         return actions
     }
 
-    /// The whole of both lines on hover. The row draws one line each, so the
-    /// untruncated title and the untruncated activity have to be reachable
-    /// somewhere, and the tooltip is where. The row shortens a command for its
-    /// own width; this is the command as the Session reported it.
-    private var helpText: String {
-        var lines = ["\(providerName) · \(title)"]
-        if let activity = Self.secondLine(for: session, worktreeRoot: scope.worktreePath).announcement, activity != title {
-            lines.append(activity)
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    /// The shell row's card: what it last ran, how it exited, where it is, and
-    /// the branch it is on. The second line drops these once the row rests.
-    private func shellDetailRows() -> [WarrenDesktopDetailCard.Row] {
+    /// A shell's card rows about its command: the one running and when it
+    /// started, else the one it last ran and how that exited. A program whose
+    /// name does not say what it is can only be told apart by these.
+    static func shellCommandRows(
+        for session: WarrenDesktopSession,
+        now: Date
+    ) -> [WarrenDesktopDetailCard.Row] {
+        guard let shell = session.shellState else { return [] }
         var rows: [WarrenDesktopDetailCard.Row] = []
-        let last = (session.shellState?.lastCommand ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let running = shell.runningCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        if shell.isRunningCommand, !running.isEmpty {
+            rows.append(.init(label: "Command", value: running))
+            if let started = shell.commandStartedAt {
+                rows.append(.init(label: "Started", value: startedText(started, now: now), style: .text))
+            }
+            return rows
+        }
+        let last = shell.lastCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         if !last.isEmpty {
             rows.append(.init(label: "Last command", value: last))
         }
-        if let code = session.shellState?.displayedExitCode {
+        if let code = shell.displayedExitCode {
             rows.append(.init(label: "Exit code", value: "\(code)"))
+        }
+        return rows
+    }
+
+    /// `13:12 · 2h ago`: the clock time to place it, the age to weigh it.
+    static func startedText(_ started: Date, now: Date) -> String {
+        let clock = started.formatted(date: .omitted, time: .shortened)
+        let age = WarrenDesktopSessionSecondLineLayout.elapsed(now.timeIntervalSince(started))
+        return "\(clock) · \(age) ago"
+    }
+
+    /// The row's hover card. A shell names itself by where it is, so its
+    /// card leads with what it last ran and how that exited; an Agent's leads
+    /// with its whole title and activity, which the row cuts to one line
+    /// each. Both end with where the Session runs.
+    private func detailRows() -> [WarrenDesktopDetailCard.Row] {
+        var rows: [WarrenDesktopDetailCard.Row] = []
+        if Self.usesLocationTitle(for: session) {
+            rows.append(contentsOf: Self.shellCommandRows(for: session, now: Date()))
+        } else {
+            rows.append(.init(label: "Title", value: title, style: .text))
+            rows.append(.init(label: "Agent", value: providerName, style: .text))
+            if let activity = Self.secondLine(for: session, worktreeRoot: scope.worktreePath).announcement,
+               activity != title {
+                rows.append(.init(label: "Activity", value: activity, style: .text))
+            }
         }
         let directory = session.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         if !directory.isEmpty {
@@ -2390,37 +2422,9 @@ struct WarrenDesktopWorkspaceSessionRow: View {
         let branch = (scope.workspace.branch ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !branch.isEmpty {
-            rows.append(.init(label: "Branch", value: branch))
+            rows.append(.init(label: "Branch", value: branch, style: .branch))
         }
         return rows
-    }
-
-    private func shellHover(_ isInside: Bool) {
-        shellDetailTask?.cancel()
-        shellDetailTask = nil
-        guard isInside, Self.usesLocationTitle(for: session) else {
-            showsShellDetails = false
-            return
-        }
-        shellDetailTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 450_000_000)
-            guard !Task.isCancelled else { return }
-            showsShellDetails = true
-        }
-    }
-}
-
-/// Applies the native tooltip only when a row still needs one. A shell row
-/// replaced it with the detail card.
-private struct WarrenDesktopRowHelp: ViewModifier {
-    let text: String?
-
-    func body(content: Content) -> some View {
-        if let text {
-            content.help(text)
-        } else {
-            content
-        }
     }
 }
 
@@ -2750,28 +2754,15 @@ struct WarrenDesktopDeleteTaskConfirmation: View {
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        WarrenDialog(
-            "Delete task?",
+        WarrenDesktopConfirmationDialog(
+            title: "Delete task?",
             message: "\u{201C}\(task.name)\u{201D} will be removed from Warren.\n"
-                + "Linked workspaces and their terminal sessions will be kept and detached from this task."
-        ) {
-            if let validationMessage {
-                Text(validationMessage)
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.destructive)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        } footer: {
-            WarrenDesktopDialogFooter(
-                confirmLabel: "Delete",
-                isDestructive: true,
-                isConfirmEnabled: isConfirmEnabled,
-                onCancel: onCancel,
-                onConfirm: onConfirm
-            )
-        }
-        .onExitCommand(perform: onCancel)
+                + "Linked workspaces and their terminal sessions will be kept and detached from this task.",
+            isConfirmEnabled: isConfirmEnabled,
+            validationMessage: validationMessage,
+            onCancel: onCancel,
+            onConfirm: onConfirm
+        )
     }
 }
 
@@ -2797,18 +2788,22 @@ struct WarrenDesktopDeleteWorkspaceConfirmation: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        WarrenDialog(
-            "Delete workspace?",
-            message: "\u{201C}\(workspace.name)\u{201D} and every session it owns will be removed from Warren."
+        WarrenDesktopConfirmationDialog(
+            title: "Delete workspace?",
+            message: "\u{201C}\(workspace.name)\u{201D} and every session it owns will be removed from Warren.",
+            isConfirmEnabled: isConfirmEnabled,
+            validationMessage: validationMessage,
+            onCancel: onCancel,
+            onConfirm: onConfirm
         ) {
-            VStack(alignment: .leading, spacing: 14) {
+            Group {
                 if canRemoveWorktree {
                     Toggle("Also delete the local worktree directory", isOn: $removeWorktree)
                         .toggleStyle(.checkbox)
                         .font(WarrenTypography.dialogBody)
                         .foregroundStyle(tokens.foreground)
                         .tint(tokens.highlight)
-                        .help("Leave unchecked to keep the Git worktree and branch on disk.")
+                        .warrenTooltip("Leave unchecked to keep the Git worktree and branch on disk.")
                         .disabled(!isConfirmEnabled)
                 } else if isWorktree && workspace.worktreeLocked {
                     Text("This Git worktree is locked and will be kept on disk.")
@@ -2820,23 +2815,8 @@ struct WarrenDesktopDeleteWorkspaceConfirmation: View {
                         .font(WarrenTypography.dialogBody)
                         .foregroundStyle(tokens.mutedForeground)
                 }
-                if let validationMessage {
-                    Text(validationMessage)
-                        .font(WarrenTypography.dialogBody)
-                        .foregroundStyle(tokens.destructive)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
-        } footer: {
-            WarrenDesktopDialogFooter(
-                confirmLabel: "Delete",
-                isDestructive: true,
-                isConfirmEnabled: isConfirmEnabled,
-                onCancel: onCancel,
-                onConfirm: onConfirm
-            )
         }
-        .onExitCommand(perform: onCancel)
     }
 }
 
@@ -2860,28 +2840,15 @@ struct WarrenDesktopDeleteProjectConfirmation: View {
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        WarrenDialog(
-            "Delete project?",
+        WarrenDesktopConfirmationDialog(
+            title: "Delete project?",
             message: "\u{201C}\(project.name)\u{201D} and its \(workspaceCount) workspaces will be removed from Warren.\n"
-                + "Local Git worktree directories are kept on disk."
-        ) {
-            if let validationMessage {
-                Text(validationMessage)
-                    .font(WarrenTypography.dialogBody)
-                    .foregroundStyle(tokens.destructive)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        } footer: {
-            WarrenDesktopDialogFooter(
-                confirmLabel: "Delete",
-                isDestructive: true,
-                isConfirmEnabled: isConfirmEnabled,
-                onCancel: onCancel,
-                onConfirm: onConfirm
-            )
-        }
-        .onExitCommand(perform: onCancel)
+                + "Local Git worktree directories are kept on disk.",
+            isConfirmEnabled: isConfirmEnabled,
+            validationMessage: validationMessage,
+            onCancel: onCancel,
+            onConfirm: onConfirm
+        )
     }
 }
 

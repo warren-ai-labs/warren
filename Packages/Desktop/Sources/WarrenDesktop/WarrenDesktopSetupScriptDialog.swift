@@ -36,7 +36,7 @@ public struct WarrenDesktopSetupScriptDialog: View {
             width: .l
         ) {
             TextEditor(text: $script)
-                .font(.system(size: 12.5, design: .monospaced))
+                .font(WarrenTypography.mono)
                 .scrollContentBackground(.hidden)
                 .padding(10)
                 .frame(minHeight: 220)
@@ -57,7 +57,7 @@ public struct WarrenDesktopSetupScriptDialog: View {
         } footer: {
             // A text editor keeps plain Return, so this confirm answers
             // Command-Return and the footer says so.
-            WarrenDialogFooter(
+            WarrenDesktopDialogFooter(
                 confirmLabel: "Save",
                 confirmKey: .commandReturn,
                 onCancel: onCancel,
@@ -73,7 +73,7 @@ public struct WarrenDesktopSetupScriptDialog: View {
                         .accessibilityIdentifier("project.setup-script.clear")
                 }
                 Text("Tab switches fields")
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.dialogMeta)
                     .foregroundStyle(tokens.ink4)
             }
         }

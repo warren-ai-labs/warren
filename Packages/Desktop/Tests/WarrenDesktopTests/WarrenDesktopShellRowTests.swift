@@ -67,7 +67,11 @@ final class WarrenDesktopShellRowTests: XCTestCase {
         XCTAssertEqual(title(session), "npm run dev")
         let line = line(session)
         XCTAssertEqual(line.tone, .running)
-        XCTAssertEqual(line.primary, "warren", "At the worktree root the line names the worktree")
+        XCTAssertEqual(
+            line.primary,
+            "/work/warren",
+            "At the worktree root the line is the path's tail, not the bare name the tree already shows"
+        )
         XCTAssertEqual(line.extras, [.init(text: "running")])
         XCTAssertTrue(line.isMonospaced, "A path draws in the monospaced face")
         XCTAssertEqual(line.meta, .time("3m"))
@@ -167,6 +171,70 @@ final class WarrenDesktopShellRowTests: XCTestCase {
         XCTAssertEqual(line.primary, "~/src/ak")
         XCTAssertEqual(line.extras, [.init(text: "exit 2", isFailure: true)])
         XCTAssertEqual(line.meta, .time("24h"))
+    }
+
+    func testALongPathAtTheRootKeepsItsLastTwoDirectories() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let worktree = home + "/Workspace/gh/abcdlsj/emby"
+        let session = shell(
+            state: WarrenDesktopShellState(
+                atPrompt: false,
+                runningCommand: "ember",
+                commandStartedAt: now.addingTimeInterval(-2 * 3600)
+            ),
+            directory: worktree
+        )
+        let line = WarrenDesktopWorkspaceSessionRow.secondLine(for: session, now: now, worktreeRoot: worktree)
+        XCTAssertEqual(title(session), "ember")
+        XCTAssertEqual(line.primary, "…/abcdlsj/emby")
+        XCTAssertEqual(line.extras, [.init(text: "running")])
+        XCTAssertTrue(line.isLocation)
+    }
+
+    func testACommandWithArgumentsTheTitleDroppedIsTheLine() {
+        let session = shell(
+            state: WarrenDesktopShellState(
+                atPrompt: false,
+                runningCommand: "tail -f /var/log/relay.log",
+                commandStartedAt: now.addingTimeInterval(-30)
+            ),
+            directory: root
+        )
+        XCTAssertEqual(title(session), "tail relay.log")
+        let line = line(session)
+        XCTAssertEqual(line.primary, "tail -f /var/log/relay.log")
+        XCTAssertEqual(line.extras, [.init(text: "running")])
+        XCTAssertTrue(line.isMonospaced)
+        XCTAssertFalse(line.isLocation, "A command keeps its verb when it overflows")
+    }
+
+    func testARunningShellsCardSaysWhatRunsAndWhenItStarted() {
+        let started = now.addingTimeInterval(-2 * 3600)
+        let session = shell(
+            state: WarrenDesktopShellState(
+                atPrompt: false,
+                runningCommand: "ember --port 8080",
+                commandStartedAt: started
+            ),
+            directory: root
+        )
+        let rows = WarrenDesktopWorkspaceSessionRow.shellCommandRows(for: session, now: now)
+        XCTAssertEqual(rows.map(\.label), ["Command", "Started"])
+        XCTAssertEqual(rows.first?.value, "ember --port 8080")
+        XCTAssertTrue(rows.last?.value.hasSuffix(" · 2h ago") ?? false)
+    }
+
+    func testAFinishedShellsCardKeepsTheLastCommandAndItsExit() {
+        let session = shell(
+            state: WarrenDesktopShellState(
+                atPrompt: true,
+                lastCommand: "swift test",
+                lastExitCode: 1,
+                lastExitAt: now.addingTimeInterval(-60)
+            )
+        )
+        let rows = WarrenDesktopWorkspaceSessionRow.shellCommandRows(for: session, now: now)
+        XCTAssertEqual(rows.map(\.label), ["Last command", "Exit code"])
     }
 
     func testAShellWithoutOSC133StateKeepsTheForegroundFallback() {

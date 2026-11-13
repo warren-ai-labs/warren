@@ -568,6 +568,20 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let tabMarks = Dictionary(uniqueKeysWithValues: projection.sessions.compactMap { session in
             session.effectiveActivityMark.map { (session.id, $0) }
         })
+        let shellMarks = Dictionary(uniqueKeysWithValues: projection.sessions.compactMap { session in
+            session.shellStatusMark.map { (session.id, $0) }
+        })
+        // A shell's running command, which a split Tab appends to its title
+        // the way the single pane's pill does.
+        let tabCommands = Dictionary(uniqueKeysWithValues: presentation.tabs.compactMap { tab -> (String, String)? in
+            guard let session = tab.sessionID.flatMap({ projection.session(id: $0) }) else { return nil }
+            let workspace = projection.workspace(for: session.id) ?? presentation.workspace
+            let command = WarrenDesktopTabTitle.sessionTitle(
+                for: session,
+                worktreeRoot: workspace?.path ?? ""
+            ).runningCommand
+            return command.isEmpty ? nil : (tab.id, command)
+        })
         let leadSessionIDs = Set(projection.sessions.filter(\.isLead).map(\.id))
         // A stopped Session keeps its Tab; the bar draws it quiet so it does not
         // read as a live pane beside the running ones.
@@ -585,6 +599,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             presentation: presentation,
             tabTitles: tabTitles,
             tabMarks: tabMarks,
+            shellMarks: shellMarks,
+            tabCommands: tabCommands,
             leadSessionIDs: leadSessionIDs,
             stoppedSessionIDs: stoppedSessionIDs,
             pinnedSessionIDs: pinnedSessionIDs,
@@ -1007,7 +1023,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             if emacsChordActive {
                 let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
                 Text("C-x-")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .font(WarrenTypography.mono.weight(.bold))
                     .foregroundStyle(tokens.hudForeground)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -1102,7 +1118,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 connectionState: projection.connectionState
             ),
             isLocal: isLocal,
-            connectionState: projection.connectionState
+            connectionState: projection.connectionState,
+            address: option?.detail
         )
     }
 
@@ -1486,6 +1503,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         presentation: Presentation,
         tabTitles: [String: String],
         tabMarks: [TerminalSessionID: WarrenActivityMark],
+        shellMarks: [TerminalSessionID: WarrenActivityMark] = [:],
+        tabCommands: [String: String] = [:],
         leadSessionIDs: Set<TerminalSessionID> = [],
         stoppedSessionIDs: Set<TerminalSessionID> = [],
         pinnedSessionIDs: Set<TerminalSessionID>,
@@ -1514,7 +1533,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     entries: entries,
                     presentation: presentation,
                     tabTitles: tabTitles,
-                    tabMarks: tabMarks
+                    tabMarks: tabMarks,
+                    shellMarks: shellMarks
                 )
             }
         )
@@ -1522,6 +1542,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             presentation: paneBar,
             tabTitles: tabTitles,
             tabMarks: tabMarks,
+            shellMarks: shellMarks,
+            tabCommands: tabCommands,
             leadSessionIDs: leadSessionIDs,
             stoppedSessionIDs: stoppedSessionIDs,
             pinnedSessionIDs: pinnedSessionIDs,
@@ -1790,12 +1812,14 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         let externalIDE = externalIDEOptions.map { _ in
             WarrenDesktopRightSidebar.ExternalIDE(
                 name: currentIDE?.name,
+                icon: currentIDE?.icon,
                 canOpen: currentIDE?.isEnabled ?? false,
                 isMenuPresented: chromePopover == .externalIDE,
                 open: {
                     if let currentIDE { openInExternalIDE(currentIDE) }
                 },
-                presentMenu: { setChromePopover(.externalIDE) }
+                presentMenu: { setChromePopover(.externalIDE) },
+                chooseActions: externalIDEChooseActions(externalIDEOptions ?? [])
             )
         }
         return AnyView(WarrenDesktopRightSidebar(
@@ -2238,6 +2262,26 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         }
     }
 
+    /// The editor button's right-click menu. Choosing an editor opens the
+    /// Workspace there and makes it the button's editor, as the old drop-down
+    /// did.
+    func externalIDEChooseActions(
+        _ options: [WarrenDesktopExternalIDEOption]
+    ) -> [WarrenDesktopContextMenuAction] {
+        let currentID = currentExternalIDEID(in: options)
+        var actions: [WarrenDesktopContextMenuAction] = options.map { option in
+            .check(title: option.name, isOn: option.id == currentID) {
+                externalIDEID = option.id
+                openInExternalIDE(option)
+            }
+        }
+        if !actions.isEmpty { actions.append(.divider) }
+        actions.append(.button(title: "Manage Editors…") {
+            openSettings(WarrenDesktopSettingsDeepLink(section: .externalIDEs))
+        })
+        return actions
+    }
+
     func openInExternalIDE(_ option: WarrenDesktopExternalIDEOption) {
         guard endpointCapabilities.canOpenExternalIDE else { return }
         Task {
@@ -2330,7 +2374,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         entries: [ClientTab],
         presentation: Presentation,
         tabTitles: [String: String],
-        tabMarks: [TerminalSessionID: WarrenActivityMark]
+        tabMarks: [TerminalSessionID: WarrenActivityMark],
+        shellMarks: [TerminalSessionID: WarrenActivityMark] = [:]
     ) -> WarrenDesktopSoloPaneIdentity.Model? {
         guard let tab = entries.first ?? presentation.tab, tab.sessionID != nil else { return nil }
         let session = tab.sessionID.flatMap { projection.session(id: $0) }
@@ -2363,6 +2408,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     .first { $0.request.kind == session.presentedKind }?.id
             },
             mark: tab.sessionID.flatMap { tabMarks[$0] },
+            shellMark: tab.sessionID.flatMap { shellMarks[$0] },
             isLead: session?.isLead ?? false,
             canClose: true
         )

@@ -171,9 +171,14 @@ enum WarrenDesktopSidebarMetrics {
     static let sessionDotSize: CGFloat = 8
     static let sessionDotOffset: CGFloat = 3
     /// How much of an overflowing line fades out at its trailing end. 24 ate
-    /// most of a word at the sidebar's edge; 14 is about two glyphs, enough
-    /// to say the line goes on.
-    static let sessionLineFadeWidth: CGFloat = 14
+    /// most of a word at the sidebar's edge, and 14 still read wide; 10 is
+    /// about one and a half glyphs, enough to say the line goes on.
+    static let sessionLineFadeWidth: CGFloat = 10
+
+    /// How long the pointer rests on a Session row before its card opens.
+    /// Longer than a control's tooltip: the pointer crosses rows on its way
+    /// somewhere, and a card is a bigger interruption than a bubble.
+    static let detailHoverDelay: TimeInterval = 0.8
 
     static let foldDotSize: CGFloat = 6
     static let foldDotSpacing: CGFloat = 3
@@ -280,7 +285,7 @@ enum WarrenDesktopTreeTypography {
     /// Set in Avenir Next Condensed: it belongs to the project name's family,
     /// so the two read as one block, and its narrower glyphs leave long refs
     /// more of their letters.
-    static let branchName = Font.custom("AvenirNextCondensed-Medium", size: 12.5)
+    static let branchName = WarrenTypography.branchName
     static let branchNameWide = Font.system(size: 11, weight: .medium)
     /// The project a Task's worktree belongs to, ahead of its branch.
     static let worktreeProjectName = Font.system(size: 11.5, weight: .medium)

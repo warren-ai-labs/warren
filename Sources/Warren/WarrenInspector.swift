@@ -300,11 +300,11 @@ private struct WarrenInspectorChanges: View {
         HStack(spacing: WarrenSpacing.compact) {
             WarrenBranchGlyph(size: 11)
             Text(panel.branch.isEmpty ? "detached" : panel.branch)
-                .font(.system(size: 11.5))
+                .font(WarrenTypography.branchName)
                 .foregroundStyle(tokens.ink2)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(panel.upstream.map { "Tracks \($0)" } ?? "No upstream")
+                .warrenTooltip(panel.upstream.map { "Tracks \($0)" } ?? "No upstream")
             Spacer(minLength: 0)
             Button {
                 Task { await inspector.refresh(force: true) }
@@ -327,8 +327,8 @@ private struct WarrenInspectorChanges: View {
         let deletions = changes.reduce(0) { $0 + $1.deleted }
         return VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
             HStack(spacing: WarrenSpacing.small) {
-                Text(title).font(.system(size: 11.5, weight: .medium)).foregroundStyle(tokens.mutedForeground)
-                Text("\(changes.count)").font(.system(size: 11.5).monospacedDigit()).warrenNumericTransition(value: changes.count).foregroundStyle(tokens.mutedForeground.opacity(0.7))
+                Text(title).font(WarrenTypography.settingsGroupTitle).foregroundStyle(tokens.mutedForeground)
+                Text("\(changes.count)").font(WarrenTypography.count).warrenNumericTransition(value: changes.count).foregroundStyle(tokens.mutedForeground.opacity(0.7))
                 Spacer(minLength: 0)
                 WarrenInspectorCounts(additions: additions, deletions: deletions)
             }
@@ -389,7 +389,7 @@ private struct WarrenInspectorBranchCard: View {
                     .foregroundStyle(tokens.mutedForeground)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(panel.branch.isEmpty ? "Detached HEAD" : panel.branch)
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(WarrenTypography.branchName)
                         .foregroundStyle(tokens.foreground)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -404,7 +404,7 @@ private struct WarrenInspectorBranchCard: View {
             }
             if let operation = panel.operation, !operation.isEmpty {
                 Label("A \(operation) is in progress", systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(WarrenTypography.statusChip)
                     .foregroundStyle(tokens.warning)
             }
             if inspector.canCreatePullRequest {
@@ -413,10 +413,10 @@ private struct WarrenInspectorBranchCard: View {
                         Rectangle().fill(tokens.border).frame(height: WarrenSpacing.hairline)
                         TextField("Title", text: $prTitle)
                             .textFieldStyle(.plain)
-                            .font(.system(size: 12.5, weight: .medium))
+                            .font(WarrenTypography.bodyEmphasis)
                         TextField("Description", text: $prBody, axis: .vertical)
                             .textFieldStyle(.plain)
-                            .font(.system(size: 12))
+                            .font(WarrenTypography.dialogInput)
                             .lineLimit(2...6)
                         HStack {
                             Spacer(minLength: 0)
@@ -425,7 +425,7 @@ private struct WarrenInspectorBranchCard: View {
                                 prError = nil
                             }
                                 .buttonStyle(.plain)
-                                .font(.system(size: 11.5))
+                                .font(WarrenTypography.caption)
                                 .foregroundStyle(tokens.mutedForeground)
                                 .disabled(submittingPR)
                             Button {
@@ -434,7 +434,7 @@ private struct WarrenInspectorBranchCard: View {
                                 inspector.createPullRequest(title: prTitle, body: prBody)
                             } label: {
                                 Text(submittingPR ? "Creating…" : "Create")
-                                    .font(.system(size: 11.5, weight: .medium))
+                                    .font(WarrenTypography.captionEmphasis)
                                     .foregroundStyle(tokens.background)
                                     .padding(.horizontal, 10)
                                     .frame(height: 22)
@@ -475,7 +475,7 @@ private struct WarrenInspectorBranchCard: View {
                                 Image(systemName: "arrow.triangle.pull").font(.system(size: 10.5))
                             }
                             Text("Create pull request into \(panel.mainBranchShortName ?? "main")")
-                                .font(.system(size: 11.5))
+                                .font(WarrenTypography.caption)
                                 .lineLimit(1)
                             Spacer(minLength: 0)
                         }
@@ -495,13 +495,13 @@ private struct WarrenInspectorBranchCard: View {
                             .font(.system(size: 10.5))
                             .foregroundStyle(pr.state.lowercased() == "merged" ? tokens.success : tokens.info)
                         Text(pr.title)
-                            .font(.system(size: 11.5, weight: .medium))
+                            .font(WarrenTypography.popoverItem)
                             .foregroundStyle(tokens.foreground)
                             .lineLimit(1)
                             .truncationMode(.tail)
                         Text([pr.number > 0 ? "#\(pr.number)" : nil, pr.draft ? "Draft" : pr.state.capitalized]
                             .compactMap { $0 }.joined(separator: " · "))
-                            .font(.system(size: 11))
+                            .font(WarrenTypography.popoverMeta)
                             .foregroundStyle(tokens.mutedForeground)
                             .lineLimit(1)
                             .layoutPriority(1)
@@ -511,7 +511,7 @@ private struct WarrenInspectorBranchCard: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help([pr.title, pr.base.isEmpty ? nil : "into \(pr.base)", pr.url].compactMap { $0 }.joined(separator: "\n"))
+                .warrenTooltip([pr.title, pr.base.isEmpty ? nil : "into \(pr.base)", pr.url].compactMap { $0 }.joined(separator: "\n"))
             }
         }
         .padding(.horizontal, WarrenSpacing.medium)
@@ -546,7 +546,7 @@ private struct WarrenInspectorBranchCard: View {
 
     private func meta(_ text: String, tokens: WarrenColorTokens) -> some View {
         Text(text)
-            .font(.system(size: 11))
+            .font(WarrenTypography.popoverMeta)
             .foregroundStyle(tokens.mutedForeground)
             .lineLimit(1)
             .truncationMode(.middle)
@@ -568,7 +568,7 @@ private struct WarrenInspectorBranchCard: View {
                     Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
                 }
                 if badge > 0 {
-                    Text("\(badge)").font(.system(size: 11, weight: .medium).monospacedDigit())
+                    Text("\(badge)").font(WarrenTypography.count)
                 }
             }
             .foregroundStyle(badge > 0 ? tokens.foreground : tokens.mutedForeground)
@@ -631,7 +631,7 @@ private struct WarrenInspectorCommitBox: View {
         VStack(alignment: .leading, spacing: 0) {
             TextField("Commit message", text: $inspector.commitMessage, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12.5))
+                .font(WarrenTypography.dialogInput)
                 .lineLimit(1...5)
                 .focused($focused)
                 .padding(.horizontal, WarrenSpacing.medium)
@@ -640,7 +640,7 @@ private struct WarrenInspectorCommitBox: View {
                 .onSubmit { if canCommit { inspector.commit() } }
             HStack {
                 Text(count == 1 ? "Commits 1 file" : "Commits all \(count) files")
-                    .font(.system(size: 11))
+                    .font(WarrenTypography.footnote)
                     .foregroundStyle(tokens.mutedForeground)
                 Spacer(minLength: 0)
                 Button {
@@ -652,7 +652,7 @@ private struct WarrenInspectorCommitBox: View {
                         }
                         Text("Commit")
                     }
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(WarrenTypography.captionEmphasis)
                     .foregroundStyle(canCommit ? tokens.background : tokens.mutedForeground)
                     .padding(.horizontal, 10)
                     .frame(height: 22)
@@ -718,8 +718,8 @@ private struct WarrenInspectorHistory: View {
     private func section(_ title: String, commits: [WarrenRemoteGitCommit], highlighted: Bool, tokens: WarrenColorTokens) -> some View {
         VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
             HStack(spacing: WarrenSpacing.small) {
-                Text(title).font(.system(size: 11.5, weight: .medium)).foregroundStyle(tokens.mutedForeground)
-                Text("\(commits.count)").font(.system(size: 11.5).monospacedDigit()).warrenNumericTransition(value: commits.count).foregroundStyle(tokens.mutedForeground.opacity(0.7))
+                Text(title).font(WarrenTypography.settingsGroupTitle).foregroundStyle(tokens.mutedForeground)
+                Text("\(commits.count)").font(WarrenTypography.count).warrenNumericTransition(value: commits.count).foregroundStyle(tokens.mutedForeground.opacity(0.7))
             }
             .padding(.horizontal, WarrenSpacing.xs)
             VStack(spacing: 0) {
@@ -748,12 +748,12 @@ private struct WarrenInspectorHistory: View {
                     .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(commit.subject)
-                        .font(.system(size: 12.5))
+                        .font(WarrenTypography.popoverItem)
                         .foregroundStyle(tokens.foreground)
                         .lineLimit(open ? nil : 1)
                         .multilineTextAlignment(.leading)
                     HStack(spacing: 5) {
-                        Text(commit.short).font(.system(size: 11, design: .monospaced))
+                        Text(commit.short).font(WarrenTypography.monoSmall)
                         Text("·")
                         Text(commit.author).lineLimit(1)
                         if let time = commit.time {
@@ -761,7 +761,7 @@ private struct WarrenInspectorHistory: View {
                             Text(time, format: .relative(presentation: .named))
                         }
                     }
-                    .font(.system(size: 11))
+                    .font(WarrenTypography.popoverMeta)
                     .foregroundStyle(tokens.mutedForeground)
                 }
                 Spacer(minLength: 0)
@@ -831,13 +831,13 @@ private struct WarrenInspectorFileRow: View {
                 WarrenFileIcon(name: name, isDirectory: false)
                 HStack(spacing: 5) {
                     Text(name)
-                        .font(.system(size: 12.5))
+                        .font(WarrenTypography.navigationItem)
                         .foregroundStyle(status == "D" ? tokens.mutedForeground : tokens.foreground)
                         .strikethrough(status == "D", color: tokens.mutedForeground)
                         .lineLimit(1)
                         .layoutPriority(1)
                     Text(detail ?? directory)
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.navigationMeta)
                         .foregroundStyle(tokens.mutedForeground.opacity(0.8))
                         .lineLimit(1)
                         .truncationMode(.head)
@@ -856,7 +856,7 @@ private struct WarrenInspectorFileRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(WarrenInspectorRowStyle())
-        .help(path)
+        .warrenTooltip(path)
         .warrenContextMenu([
             .button(title: "Copy Path") {
                 WarrenCopyFeedback.shared.copy(path, announcing: "Copied path")
@@ -876,7 +876,7 @@ struct WarrenInspectorStatus: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let letter = status == "?" || status == "??" ? "U" : String(status.prefix(1))
         Text(letter.isEmpty ? "M" : letter)
-            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .font(WarrenTypography.monoSmall.weight(.semibold))
             .foregroundStyle(Self.tint(for: status, tokens: tokens))
             .frame(width: 13)
     }
@@ -906,7 +906,7 @@ private struct WarrenInspectorCounts: View {
                 if additions > 0 { Text("+\(additions)").foregroundStyle(tokens.success) }
                 if deletions > 0 { Text("−\(deletions)").foregroundStyle(tokens.destructive) }
             }
-            .font(.system(size: 11, design: .monospaced))
+            .font(WarrenTypography.monoSmall)
         }
     }
 }
@@ -957,10 +957,10 @@ struct WarrenInspectorEmpty: View {
                 .font(.system(size: 20, weight: .light))
                 .foregroundStyle(tokens.mutedForeground.opacity(0.8))
             Text(title)
-                .font(.system(size: 13, weight: .medium))
+                .font(WarrenTypography.emptyStateTitle)
                 .foregroundStyle(tokens.ink2)
             Text(detail)
-                .font(.system(size: 12))
+                .font(WarrenTypography.body)
                 .foregroundStyle(tokens.mutedForeground)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1012,7 +1012,7 @@ private struct WarrenInspectorDiffState: View {
             case .loaded(let diff):
                 if diff.diff.isEmpty {
                     Text(diff.content.isEmpty ? "No textual changes." : "Binary or unchanged content.")
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.supporting)
                         .foregroundStyle(tokens.mutedForeground)
                         .padding(WarrenSpacing.medium)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1021,7 +1021,7 @@ private struct WarrenInspectorDiffState: View {
                 }
             case .failed(let message):
                 Text(message)
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.supporting)
                     .foregroundStyle(tokens.destructive)
                     .padding(WarrenSpacing.medium)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1102,7 +1102,7 @@ struct WarrenDiffView: View {
             WarrenDiffTextView(diff: diff, dark: colorScheme == .dark)
             if truncated {
                 Text("Diff truncated by the Host.")
-                    .font(.system(size: 11))
+                    .font(WarrenTypography.footnote)
                     .foregroundStyle(tokens.mutedForeground)
                     .padding(WarrenSpacing.compact)
             }

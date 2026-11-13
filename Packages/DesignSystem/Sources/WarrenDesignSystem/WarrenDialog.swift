@@ -66,7 +66,7 @@ public struct WarrenDialog<Content: View, Footer: View>: View {
                         // row, out of every button, and so does this.
                         HStack(alignment: .firstTextBaseline, spacing: 12) {
                             Text(title)
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(WarrenTypography.dialogTitle)
                                 .foregroundStyle(tokens.foreground)
                             Spacer(minLength: 0)
                             #if os(macOS)
@@ -229,7 +229,11 @@ public struct WarrenDialogFooter<Leading: View>: View {
             ))
             .keyboardShortcut(.cancelAction)
             .disabled(!isCancelEnabled)
+            #if os(macOS)
+            .warrenTooltip("Esc")
+            #else
             .help("Esc")
+            #endif
             Button(action: onConfirm) {
                 Text(confirmLabel)
             }
@@ -238,7 +242,11 @@ public struct WarrenDialogFooter<Leading: View>: View {
                 isEnabled: isConfirmEnabled,
                 confirmKey: confirmKey
             ))
+            #if os(macOS)
+            .warrenTooltip(confirmKey.helpText)
+            #else
             .help(confirmKey.helpText)
+            #endif
         }
     }
 }

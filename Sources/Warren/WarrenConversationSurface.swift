@@ -707,10 +707,10 @@ struct WarrenConversationView: View {
                 let check = checks[index]
                 HStack(spacing: 6) {
                     Text("Problem")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(WarrenTypography.captionEmphasis)
                         .foregroundStyle(palette.red)
                     Text(check.what)
-                        .font(.system(size: 12))
+                        .font(WarrenTypography.caption)
                         .foregroundStyle(palette.ink2)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -894,7 +894,7 @@ struct WarrenConversationView: View {
         let place = root.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
         return VStack(alignment: .leading, spacing: 6) {
             Text("What should we work on?")
-                .font(.system(size: 20, weight: .semibold))
+                .font(WarrenTypography.emptyStateTitle)
                 .foregroundStyle(palette.ink)
             HStack(spacing: 6) {
                 Image(systemName: "arrow.triangle.branch")
@@ -2542,7 +2542,7 @@ private struct WarrenConversationFilesCard: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Open \(file.file) in Changes")
+                .warrenTooltip("Open \(file.file) in Changes")
                 if index < files.count - 1 {
                     Rectangle().fill(palette.line.opacity(0.5)).frame(height: 1)
                 }
@@ -2953,7 +2953,7 @@ private struct WarrenConversationQueueRow: View {
                 .foregroundStyle(palette.ink2)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .help(text)
+                .warrenTooltip(text)
             Spacer(minLength: 8)
             if hovering {
                 iconButton("pencil", label: "Edit queued message", action: onEdit)
@@ -3062,7 +3062,7 @@ private struct WarrenConversationDecisionDock: View {
             }
             if let reason = reasonLine {
                 Text(reason)
-                    .font(.system(size: 12.5))
+                    .font(WarrenTypography.body)
                     .foregroundStyle(palette.ink3)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -3101,7 +3101,7 @@ private struct WarrenConversationDecisionDock: View {
         let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
         return VStack(alignment: .leading, spacing: 6) {
             (decision.toolKind == "ran" ? Text("$ ").foregroundColor(palette.ink4) + Text(decision.detail) : Text(decision.detail))
-                .font(.system(size: 12, design: .monospaced))
+                .font(WarrenTypography.code)
                 .foregroundStyle(palette.ink2)
                 .lineSpacing(2)
                 .textSelection(.enabled)

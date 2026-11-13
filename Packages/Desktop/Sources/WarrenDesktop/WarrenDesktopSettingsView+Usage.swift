@@ -151,20 +151,16 @@ extension WarrenDesktopSettingsView {
         confirmLabel: String,
         onConfirm: @escaping () -> Void
     ) -> some View {
-        WarrenDialog(title, message: message) {
-            EmptyView()
-        } footer: {
-            WarrenDesktopDialogFooter(
-                confirmLabel: confirmLabel,
-                isDestructive: true,
-                onCancel: { confirmation = nil },
-                onConfirm: {
-                    confirmation = nil
-                    onConfirm()
-                }
-            )
-        }
-        .onExitCommand { confirmation = nil }
+        WarrenDesktopConfirmationDialog(
+            title: title,
+            message: message,
+            confirmLabel: confirmLabel,
+            onCancel: { confirmation = nil },
+            onConfirm: {
+                confirmation = nil
+                onConfirm()
+            }
+        )
     }
 
     /// The usage panels still read the appearance tokens for their own cards.

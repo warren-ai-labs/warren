@@ -85,6 +85,95 @@ final class WarrenDesktopSessionRowRenderTests: XCTestCase {
         return Harness(hosting: hosting, recorder: recorder, projection: projection)
     }
 
+    /// An overflowing row's text runs to the card's edge before it fades. The
+    /// activity line used to stop 30pt short whenever the title had no age,
+    /// which read as a fade three times its width.
+    @MainActor
+    func testOverflowingRowFadesAtTheEdgeNotAColumnShort() throws {
+        let workspaceID = WorkspaceID()
+        let long = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspaceID,
+            tabID: "tab-long",
+            title: "Desktop sidebar typography sweep for the next release",
+            kind: .codex,
+            activity: .ready,
+            lastActivity: "Edited WarrenDesktopSidebarRowsView.swift and WarrenDesktopWorkbenchStyle.swift"
+        )
+        let harness = mount(workspaceID: workspaceID, sessions: [long], width: 260, height: 200)
+        let hosting = harness.hosting
+        let rep = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: rep)
+        if let path = ProcessInfo.processInfo.environment["WARREN_FADE_SHOT"] {
+            try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
+        // The rightmost column on each line that still carries text ink.
+        let ground = WarrenColorTokens.resolved(for: .dark, material: .opaque).workbenchCardFill
+        let groundLevel = NSColor(ground).usingColorSpace(.deviceRGB)?.redComponent ?? 0
+        let scale = CGFloat(rep.pixelsWide) / hosting.bounds.width
+        func lastInk(inRows rows: ClosedRange<CGFloat>) -> CGFloat {
+            var last: CGFloat = 0
+            for x in stride(from: CGFloat(0), to: hosting.bounds.width, by: 1) {
+                for y in stride(from: rows.lowerBound, through: rows.upperBound, by: 1) {
+                    let c = rep.colorAt(x: Int(x * scale), y: Int(y * scale))?.usingColorSpace(.deviceRGB)
+                    if let c, c.redComponent - groundLevel > 0.08 { last = x; break }
+                }
+            }
+            return last
+        }
+        let nodes = harness.recorder.snapshot().nodes
+        let row = try XCTUnwrap(nodes.first { $0.id.hasPrefix("workspace-session.") || $0.id.hasPrefix("session.") && $0.label.contains("typography") })
+        let secondLine = lastInk(inRows: (row.frame.y + row.frame.height * 0.62)...(row.frame.y + row.frame.height * 0.85))
+        let rowRight = row.frame.x + row.frame.width
+        print("FADEEDGE secondLine=\(secondLine) rowRight=\(rowRight)")
+        XCTAssertGreaterThan(secondLine, rowRight - 24, "the activity line stops well short of the row's edge")
+    }
+
+    /// The second line gives way to the title's age by the age's own width.
+    /// A fixed column sized for `59m` left a `2h` row's activity line ending
+    /// well short of the title above it.
+    @MainActor
+    func testTheSecondLineGivesWayOnlyToTheAgesOwnWidth() throws {
+        let workspaceID = WorkspaceID()
+        let aged = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: workspaceID,
+            tabID: "tab-aged",
+            title: "Desktop sidebar typography sweep for the next release",
+            kind: .codex,
+            activity: .ready,
+            activityUpdatedAt: Date().addingTimeInterval(-2 * 3600),
+            lastActivity: "Edited WarrenDesktopSidebarRowsView.swift and WarrenDesktopWorkbenchStyle.swift"
+        )
+        let harness = mount(workspaceID: workspaceID, sessions: [aged], width: 260, height: 200)
+        let hosting = harness.hosting
+        let rep = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: rep)
+        if let path = ProcessInfo.processInfo.environment["WARREN_AGE_SHOT"] {
+            try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
+        let ground = WarrenColorTokens.resolved(for: .dark, material: .opaque).workbenchCardFill
+        let groundLevel = NSColor(ground).usingColorSpace(.deviceRGB)?.redComponent ?? 0
+        let scale = CGFloat(rep.pixelsWide) / hosting.bounds.width
+        func lastInk(inRows rows: ClosedRange<CGFloat>) -> CGFloat {
+            var last: CGFloat = 0
+            for x in stride(from: CGFloat(0), to: hosting.bounds.width, by: 1) {
+                for y in stride(from: rows.lowerBound, through: rows.upperBound, by: 1) {
+                    let c = rep.colorAt(x: Int(x * scale), y: Int(y * scale))?.usingColorSpace(.deviceRGB)
+                    if let c, c.redComponent - groundLevel > 0.08 { last = x; break }
+                }
+            }
+            return last
+        }
+        let nodes = harness.recorder.snapshot().nodes
+        let row = try XCTUnwrap(nodes.first { $0.id.hasPrefix("workspace-session.") || $0.id.hasPrefix("session.") && $0.label.contains("typography") })
+        let title = lastInk(inRows: (row.frame.y + row.frame.height * 0.2)...(row.frame.y + row.frame.height * 0.45))
+        let second = lastInk(inRows: (row.frame.y + row.frame.height * 0.62)...(row.frame.y + row.frame.height * 0.85))
+        let column = WarrenDesktopWorkspaceSessionRow.ageColumnWidth(for: "2h")
+        XCTAssertLessThan(column, 24, "a two-glyph age must not reserve the widest age's column")
+        XCTAssertGreaterThan(second, title - column - 6, "the activity line ends where the age begins, not a column short")
+    }
+
     @MainActor
     func testEverySessionRowIsTheSameTwoLineHeight() {
         let workspaceID = WorkspaceID()

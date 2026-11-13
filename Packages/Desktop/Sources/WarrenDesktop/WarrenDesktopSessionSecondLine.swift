@@ -307,7 +307,7 @@ struct WarrenDesktopSecondLineView: View {
     static func proseText(_ text: String) -> Text {
         WarrenDesktopTreeTypography.scriptText(
             text,
-            latin: .system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize),
+            latin: WarrenTypography.caption,
             wide: .system(size: WarrenDesktopSessionSecondLineLayout.primaryWideFontSize)
         )
     }
@@ -324,20 +324,17 @@ struct WarrenDesktopSecondLineView: View {
         return HStack(spacing: 0) {
             if let lead = line.lead {
                 Text(lead)
-                    .font(.system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize, weight: .medium))
+                    .font(WarrenTypography.captionEmphasis)
                     .foregroundStyle(tint.primary)
                 Text("·")
-                    .font(.system(size: WarrenDesktopSessionSecondLineLayout.primaryFontSize))
+                    .font(WarrenTypography.caption)
                     .foregroundStyle(tint.separator)
                     .frame(width: WarrenDesktopSessionSecondLineLayout.separatorWidth)
             }
             Group {
                 if line.isMonospaced {
                     Text(primaryText)
-                        .font(.system(
-                            size: WarrenDesktopSessionSecondLineLayout.commandFontSize,
-                            design: .monospaced
-                        ))
+                        .font(WarrenTypography.codeSmall)
                 } else {
                     Self.proseText(primaryText)
                 }
@@ -351,7 +348,7 @@ struct WarrenDesktopSecondLineView: View {
                 // The exit code's separator is one step smaller, as the design
                 // draws it, so it does not read as part of the code itself.
                 Text("·")
-                    .font(.system(size: extra.isFailure ? 10 : WarrenDesktopSessionSecondLineLayout.primaryFontSize))
+                    .font(extra.isFailure ? WarrenTypography.footnote : WarrenTypography.caption)
                     .foregroundStyle(tint.separator)
                     .frame(width: WarrenDesktopSessionSecondLineLayout.separatorWidth)
                 Self.proseText(extra.text)
@@ -374,8 +371,7 @@ struct WarrenDesktopSecondLineView: View {
                 Image(systemName: "circle.dashed")
                     .font(.system(size: WarrenDesktopSessionSecondLineLayout.planIconWidth))
                 Text("\(done)/\(total)")
-                    .font(.system(size: WarrenDesktopSessionSecondLineLayout.metaFontSize))
-                    .monospacedDigit()
+                    .font(WarrenTypography.count)
             }
             .foregroundStyle(tint.meta)
             .fixedSize()
@@ -512,11 +508,15 @@ extension WarrenDesktopWorkspaceSessionRow {
     /// Agent bound inside the shell keeps the Agent rule.
     ///
     /// The title line already names the command (see `shellTitle`), so this
-    /// line says where it runs and how it went: the directory, then
-    /// `running`, `done`, `stopped` or the failure's `exit N`. Before anything
-    /// has run, the title is the directory's name and this line is the whole
-    /// path. A Session that has ended is not one of these: the sidebar lists
-    /// only active Sessions, so an ended shell has no row to draw.
+    /// line says what the title did not: the whole command line when the
+    /// title had to summarize it (`tail -f relay.log` under `tail relay.log`),
+    /// else where it runs, then `running`, `done`, `stopped` or the failure's
+    /// `exit N`. Where it runs is the path inside the worktree, or the tail of
+    /// the absolute path at the root and outside: the tree above already names
+    /// the Workspace, so the line never repeats it. Before anything has run,
+    /// the title is the directory's name and this line is the whole path. A
+    /// Session that has ended is not one of these: the sidebar lists only
+    /// active Sessions, so an ended shell has no row to draw.
     static func shellSecondLine(
         for session: WarrenDesktopSession,
         now: Date,
@@ -528,12 +528,23 @@ extension WarrenDesktopWorkspaceSessionRow {
             return nil
         }
         let location = shellLocation(directory: session.workingDirectory, worktreeRoot: worktreeRoot)
+        let fullCommand = (runningCommand(of: session) ?? lastCommand(of: session))
+            .flatMap { CommandSummary.summarize($0) == $0 ? nil : $0 }
         func line(
             tone: WarrenDesktopSessionSecondLine.Tone,
             status: WarrenDesktopSessionSecondLine.Extra,
             since: Date?
         ) -> WarrenDesktopSessionSecondLine {
-            WarrenDesktopSessionSecondLine(
+            if let fullCommand {
+                return WarrenDesktopSessionSecondLine(
+                    tone: tone,
+                    primary: fullCommand,
+                    extras: [status],
+                    meta: shellDuration(from: since, now: now),
+                    isMonospaced: true
+                )
+            }
+            return WarrenDesktopSessionSecondLine(
                 tone: tone,
                 primary: location ?? status.text,
                 extras: location == nil ? [] : [status],
@@ -619,19 +630,18 @@ extension WarrenDesktopWorkspaceSessionRow {
         return command.isEmpty ? nil : command
     }
 
-    /// Where a shell is, short: the worktree's own name at its root, the path
-    /// inside it relative to the root, and a `~`-shortened path outside.
+    /// Where a shell is, short: the path inside the worktree relative to its
+    /// root, else the tail of the absolute path (`…/abcdlsj/emby`). At the
+    /// root the tail still names the worktree, but with the directory above
+    /// it, which the tree does not show.
     static func shellLocation(directory: String, worktreeRoot: String) -> String? {
         let path = TerminalSessionPresentation.normalizedPath(directory)
         guard !path.isEmpty else { return nil }
         let root = TerminalSessionPresentation.normalizedPath(worktreeRoot)
-        if !root.isEmpty, path == root {
-            return TerminalSessionPresentation.directoryName(path)
-        }
         if !root.isEmpty, path.hasPrefix(root + "/") {
             return String(path.dropFirst(root.count + 1))
         }
-        return TerminalSessionPresentation.abbreviatedPath(path)
+        return TerminalSessionPresentation.shortenedPath(path)
     }
 
     /// A short duration from a recorded instant, or `.none` when there is no

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   normalizeGitPanel,
   relativeTime,
@@ -66,15 +66,20 @@ function BranchIcon() {
 }
 
 function ChangeRow({ change, commit = "", selected, onOpenFile }) {
+  // The status letter's meaning is the row's description, so a screen
+  // reader hears "Modified" rather than only "M".
+  const statusNoteID = useId();
   return (
     <li>
       <button
         type="button"
         className={`git-change${selected ? " selected" : ""}`}
         aria-pressed={selected}
+        aria-describedby={statusNoteID}
         onClick={() => onOpenFile(change, commit)}
       >
-        <span className={`git-status git-status-${change.status}`} title={statusLabel(change.status)}>
+        <span id={statusNoteID} hidden>{statusLabel(change.status)}</span>
+        <span className={`git-status git-status-${change.status}`} data-tooltip={statusLabel(change.status)}>
           {statusSymbol(change.status)}
         </span>
         <span className="git-change-path">
@@ -330,10 +335,10 @@ export function GitPanel({
   return (
     <aside className="git-panel" aria-label="Git">
       <header className="git-panel-header">
-        <strong className="git-panel-title" title={panelTitle}>{panelTitle}</strong>
+        <strong className="git-panel-title" data-tooltip={panelTitle}>{panelTitle}</strong>
         <div className="git-panel-header-actions">
           {(refreshing && data) || asyncNotice ? (
-            <span className="git-spinner" title={asyncNotice ? "Refreshing in the background" : "Refreshing"} aria-label="Refreshing" />
+            <span className="git-spinner" data-tooltip={asyncNotice ? "Refreshing in the background" : "Refreshing"} aria-label="Refreshing" />
           ) : null}
           <button type="button" className="chrome-button" aria-label="Close Git panel" onClick={onClose}>
             ✕

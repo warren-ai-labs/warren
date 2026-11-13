@@ -549,7 +549,7 @@ struct WarrenDesktopIdleWorktreeRow: View {
         .onHover { isHovered = $0 }
         .warrenContextMenu(isEnabled && !isMutationDisabled ? contextMenuActions : [])
         // The cut name is whole on hover.
-        .help(name)
+        .warrenRowTooltip(name)
         .accessibilityLabel("Workspace \(name)")
         .accessibilityValue(spokenAge.isEmpty ? "No sessions" : "No sessions · last active \(spokenAge)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -617,7 +617,7 @@ struct WarrenDesktopInactiveProjectRow: View {
         .disabled(!isEnabled)
         .onHover { isHovered = $0 }
         .warrenContextMenu(isEnabled && !isMutationDisabled ? contextMenuActions : [])
-        .help(project.name)
+        .warrenRowTooltip(project.name)
         .accessibilityLabel("Project \(project.name)")
         .accessibilityValue(spokenAge.isEmpty ? "No open sessions" : "No open sessions · last active \(spokenAge)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])

@@ -206,4 +206,21 @@ final class TerminalSessionPresentationTests: XCTestCase {
             "fish"
         )
     }
+
+    func testShortenedPathKeepsTheLastDirectoriesAfterTheTilde() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertEqual(
+            TerminalSessionPresentation.shortenedPath(home + "/Workspace/gh/abcdlsj/emby"),
+            "…/abcdlsj/emby"
+        )
+        XCTAssertEqual(
+            TerminalSessionPresentation.shortenedPath(home + "/Workspace/gh/abcdlsj/emby", maxComponents: 3),
+            "…/gh/abcdlsj/emby"
+        )
+        XCTAssertEqual(TerminalSessionPresentation.shortenedPath(home + "/src/ak"), "~/src/ak")
+        XCTAssertEqual(TerminalSessionPresentation.shortenedPath("/work/warren"), "/work/warren")
+        XCTAssertEqual(TerminalSessionPresentation.shortenedPath("/opt/homebrew/var/log"), "…/var/log")
+        XCTAssertEqual(TerminalSessionPresentation.shortenedPath(home), "~")
+        XCTAssertEqual(TerminalSessionPresentation.shortenedPath(""), "")
+    }
 }

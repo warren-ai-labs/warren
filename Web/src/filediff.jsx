@@ -83,6 +83,7 @@ export const FileDiffView = memo(function FileDiffView({
               <button
                 type="button"
                 className={viewTab === "diff" ? "file-diff-tab active" : "file-diff-tab"}
+                data-label="Diff"
                 aria-selected={viewTab === "diff"}
                 role="tab"
                 onClick={() => onViewTabChange?.("diff")}
@@ -92,6 +93,7 @@ export const FileDiffView = memo(function FileDiffView({
               <button
                 type="button"
                 className={viewTab === "file" ? "file-diff-tab active" : "file-diff-tab"}
+                data-label="File"
                 aria-selected={viewTab === "file"}
                 role="tab"
                 onClick={() => onViewTabChange?.("file")}

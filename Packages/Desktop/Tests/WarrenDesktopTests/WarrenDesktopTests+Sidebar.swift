@@ -196,7 +196,7 @@ extension WarrenDesktopTests {
                 detail: "Mac Studio",
                 connectionState: .attached
             ),
-            "Local · Mac Studio"
+            "This Mac · Mac Studio"
         )
         XCTAssertEqual(
             WarrenDesktopSidebarHostIdentity.subtitle(
@@ -214,6 +214,24 @@ extension WarrenDesktopTests {
             ),
             "Remote · Connection failed"
         )
+    }
+    /// The header names the machine and never its address: `ip:port` moved
+    /// to the hover card.
+    func testSidebarHostNamesNeverFallBackToTheAddress() {
+        let local = WarrenDesktopSidebarHostIdentity.names(
+            hostName: "mbp14-m3.local",
+            endpointLabel: "Local",
+            endpointDetail: "127.0.0.1:8789"
+        )
+        XCTAssertEqual(local.name, "mbp14-m3")
+        XCTAssertNil(local.detail)
+
+        let aliased = WarrenDesktopSidebarHostIdentity.names(
+            hostName: "fsn1-dev",
+            endpointLabel: "Studio",
+            endpointDetail: "10.0.0.4:8789"
+        )
+        XCTAssertEqual(aliased.detail, "Studio")
     }
     /// A project keeps its avatar colour across launches and reorderings, so
     /// the index comes from its ID and nothing else.

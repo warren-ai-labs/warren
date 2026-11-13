@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -13,7 +13,7 @@ import {
   saveAgentDraft,
   validateAgentAttachment,
 } from "./agent.js";
-import { useFocusTrap } from "./components.jsx";
+import { tooltipDescription, useFocusTrap } from "./components.jsx";
 import { activityMarkWord } from "./activity.js";
 import { composerChips, projectConversation, reuseUnchangedTurns, withStateEvents } from "./conversation.js";
 import { ContextMeter, ConversationRoot, ModeIcon, PlanStrip, SelectorChip, Turn } from "./conversation.jsx";
@@ -55,6 +55,7 @@ export function AgentView({
   onOpenSession = () => {},
   sessionExists = () => false,
 }) {
+  const attachmentNoteID = useId();
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const loadMoreRef = useRef(null);
@@ -546,15 +547,21 @@ export function AgentView({
                   <span className="agent-attachment-icon" aria-hidden="true">
                     {item.file.type?.startsWith("image/") ? "🖼️" : "📄"}
                   </span>
-                  <span className="agent-attachment-name" title={item.file.name}>{item.file.name}</span>
+                  <span className="agent-attachment-name" data-tooltip={item.file.name}>{item.file.name}</span>
                   {item.status === "uploading" && <small className="agent-attachment-progress">{Math.round(item.progress * 100)}%</small>}
                   {item.status === "ready" && <span className="agent-attachment-ready" aria-label="Ready">✓</span>}
-                  {item.status === "failed" && (
-                    <>
-                      <small className="agent-attachment-failed" title={item.error}>Failed</small>
-                      <button type="button" className="agent-attachment-retry" onClick={() => retryAttachment(index)}>Retry</button>
-                    </>
-                  )}
+                  {item.status === "failed" && (() => {
+                    // Why it failed is the Retry button's description too, so
+                    // a screen reader hears it on the control it acts through.
+                    const reason = tooltipDescription(`${attachmentNoteID}-${index}`, item.error);
+                    return (
+                      <>
+                        <small className="agent-attachment-failed" data-tooltip={item.error}>Failed</small>
+                        <button type="button" className="agent-attachment-retry" aria-describedby={reason.props["aria-describedby"]} onClick={() => retryAttachment(index)}>Retry</button>
+                        {reason.note}
+                      </>
+                    );
+                  })()}
                   {!uploadingAttachments && (
                     <button type="button" className="agent-attachment-remove" onClick={() => removeAttachment(index)} aria-label={`Remove ${item.file.name}`}>×</button>
                   )}
@@ -603,7 +610,7 @@ export function AgentView({
               />
             </div>
             <div className="agent-input-controls" aria-label="Agent details">
-              <label className="agent-attachment-picker" title="Attach files">
+              <label className="agent-attachment-picker" data-tooltip="Attach files">
                 <span aria-hidden="true">＋</span>
                 <input
                   type="file"
@@ -656,7 +663,7 @@ export function AgentView({
                     disabled={cancelPending}
                     onClick={cancelTurn}
                     aria-label={cancelPending ? "Stopping Agent" : "Stop Agent"}
-                    title={cancelPending ? "Stopping Agent" : "Stop Agent"}
+                    data-tooltip={cancelPending ? "Stopping Agent" : "Stop Agent"}
                   >
                     <StopIcon />
                     <span>{cancelPending ? "Stopping…" : "Stop"}</span>
@@ -724,12 +731,12 @@ function AgentAttention({ attention, onOpenTerminal, onFocusComposer }) {
         <span>{reasonLabel}</span>
       </span>
       {kind === "input" && onFocusComposer && (
-        <button type="button" className="agent-attention-action" onClick={onFocusComposer} title="Focus composer to reply">
+        <button type="button" className="agent-attention-action" onClick={onFocusComposer} data-tooltip="Focus composer to reply">
           Reply ↵
         </button>
       )}
       {kind !== "input" && onOpenTerminal && (
-        <button type="button" className="agent-attention-action" onClick={onOpenTerminal} title="Open Terminal to resolve">
+        <button type="button" className="agent-attention-action" onClick={onOpenTerminal} data-tooltip="Open Terminal to resolve">
           Terminal ↗
         </button>
       )}
@@ -850,7 +857,8 @@ function PendingAgentMessage({ item, stale, onDelete, onOpenTerminal }) {
           <button
             type="button"
             className="agent-queue-inline-delete"
-            title="Remove queued message"
+            aria-label="Remove queued message"
+            data-tooltip="Remove queued message"
             onClick={() => onDelete && onDelete(item.id)}
           >
             ×
@@ -1384,7 +1392,7 @@ function AgentQueuePanel({ items, onClose, onEdit, onDelete, onMoveToFront, onRe
               </>
             ) : item.status === "failed" && <button type="button" onClick={() => onRetry(item.id)}>Retry</button>}
             {item.status !== "sending" && editingID !== item.id && (
-              <button type="button" className="agent-icon-button" onClick={() => beginEdit(item)} aria-label="Edit queued message" title="Edit queued message">
+              <button type="button" className="agent-icon-button" onClick={() => beginEdit(item)} aria-label="Edit queued message" data-tooltip="Edit queued message">
                 <EditIcon />
               </button>
             )}

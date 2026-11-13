@@ -116,6 +116,51 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.38.0",
+        dateISO: "2026-11-13",
+        date: "November 13, 2026",
+        title: "One type system across three apps, and one bubble for what floats.",
+        summary:
+          "A release that carries one type system across Desktop, iOS and the Web and draws every floating surface with one bubble of Warren's own. Text a person reads once - a title, a name, a dialog, a popover row, a settings page, an empty state, a tooltip - takes Avenir Next, a branch ref takes its condensed cut, and the dense rows beside them keep the system face. Tooltips and hover cards are drawn by Warren now rather than by the system; every confirmation goes through one dialog; the right sidebar's tabs share one external-editor button; a Shell Session's Tab says whether it is running and what, and its second line says where. The JSON control protocol remains at 4.0 and this release migrates no state.",
+        sections: [
+          {
+            title: "Changed",
+            items: [
+              "Set the text a person reads once in Avenir Next across all three apps: page and screen titles, project names, dialog titles, popover rows, settings page and group headings, the settings navigation, empty states and tooltips. Each size sits a half point over the SF size it replaces, because Avenir's lowercase sits lower. Only Latin runs change - Avenir Next has no CJK glyphs, so a Chinese name keeps the system face and its fallback - and every iOS size is set relativeTo: its text style so Dynamic Type still scales it.",
+              "Set a branch ref in Avenir Next Condensed Medium wherever a ref is named: the sidebar, the Inspector's branch strip and branch card, the iOS Changes page and the Web's Git panel. The face moved into WarrenTypography so app-target views set branches the way the sidebar always did.",
+              "Name the remaining roles instead of restating a size at each call site. A dense row keeps the system face, but its cells now take named tokens, including a new count for a number drawn on its own - the Inspector's section counts and the sidebar's tab count were three sizes of one role, and count sets it in tabular digits so a changing number does not shift the text beside it. A +12 -3 sum stays monospaced, because those digits form a column down the rows.",
+              "Draw tooltips with one shared bubble. The remaining AppKit .help tips on Desktop moved onto warrenTooltip, so every tooltip takes the same Avenir Next bubble, the same dwell and the same wrapping, which breaks a long tip at 320 points instead of running off the window. On the Web the native title tips became one delegated bubble per page: the first waits 450ms, the next shows at once while one is up or within 300ms of it hiding, a 60ms grace lets it glide between neighbours, and click, key or scroll dismisses it. It flips above a control with no room below, stays 8 points inside the viewport, shows nothing on touch input, and drops the glide under reduced motion. Since the drawn bubble is hidden from assistive technology, a control whose tip also describes it now carries that text as its description.",
+              "Give every Session hover one shared detail card: shell rows, Agent rows and the pane title rest on one card with one dwell and one placement, with each value in its own face. A list row's tip also stopped trailing the pointer - it waits a full second every time and never glides between rows.",
+              "Ask every confirmation through one dialog. Task, Workspace, project and Host deletion and the usage reset now use the same confirmation dialog and the same footer, a field's label is Avenir Next Medium at 12, and input fields default to the proportional face the names in them want, with code-like fields opting into monospaced.",
+              "Draw the update card from the popover tokens and say one thing per line: the footnote says Sessions keep running, and a slow restart says it is still restarting rather than repeating the progress above it. The update chip takes Avenir Next, with letter spacing kept for the BUILD capitals only.",
+              "Give the Settings rail an icon per page, so the navigation names what it leads to instead of asking the label to carry it alone.",
+              "Set the right sidebar's Changes, History, Files and Editor tabs in Avenir Next, medium at rest and demibold when selected, each reserving its selected width so switching one does not nudge its neighbour. The external editor's split button became a single button drawn with the editor's own app icon; choosing another editor moved to its right-click menu, which also links to Manage Editors.",
+              "Report a Shell Session on its Tab: a dot says whether it is running or failed and the label carries the running command, so the state is readable without opening the pane. The sidebar's second line says the full command when there is room and the tail of the path when the row is working in a directory.",
+              "Quiet the empty stage: its title and line take Avenir Next, and its tile drops to 40 points with a light glyph and a softer border. A worktree with no Session now says so instead of showing the stage bare, and an iPhone Workspace with no Sessions says what the empty state is and what starts one, in the words Desktop uses.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Narrow the sidebar's trailing overflow fade from 14 points to 10: at 14 it still ate most of the last word, and 10 is about one glyph, enough to say the line goes on.",
+              "Size a Session row's age column to the age it draws, and let the activity line run to the row's edge. The line reserved the title's 30-point age column on every row, so when the title had no age the line stopped 30 points short and that empty band read as a fade three times its width.",
+              "End the solo pane pill at its title until the pointer reveals its controls, so a single pane no longer draws an empty strip beside its own name.",
+              "Name the Host in the sidebar header without its address. The second line no longer falls back to the endpoint's ip:port: it reads This Mac or Remote, then an endpoint label when that says more than the name, or the connection state in its tone, and the address moves to the hover card.",
+              "Open the embedded editor's file tree at its minimum width, so the tree starts where a file name still fits and the editor keeps the rest of the pane.",
+              "Keep a Session's card closed once its row is clicked: a click, key or scroll while the pointer rests on a Session now ends the card and holds it shut until the pointer leaves.",
+              "Keep the Web settings search text clear of its icon: the generic settings rule outranked the search field's own, so the text took a monospaced face and padding meant for another control, and the placeholder ran under the icon.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. The Host, CLI and Relay are unchanged; the work is in the design system's text tokens and the Desktop, iOS and Web views that read them, plus the two iOS-only build fixes needed to compile that target.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.37.0",
         dateISO: "2026-11-13",
         date: "November 13, 2026",
@@ -1982,6 +2027,51 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.38.0",
+        dateISO: "2026-11-13",
+        date: "2026 年 11 月 13 日",
+        title: "三端一套字体，浮起来的东西共用一个气泡。",
+        summary:
+          "Desktop、iOS 与 Web 共用一套字体，浮在窗口上的东西也统一由 Warren 自己画成一个气泡。只读一次的字——标题、名字、对话框、浮层行、设置页、空状态、浮层提示——改用 Avenir Next，分支名改用其窄体，旁边的密集行仍用系统字体。浮层提示与悬停卡片不再交给系统，而由 Warren 绘制；确认操作走同一个对话框；右侧栏的标签共用一个外部编辑器按钮；Shell Session 的标签标出是否在运行、在跑什么，第二行标出位置。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "调整",
+            items: [
+              "三端都把只读一次的字改用 Avenir Next：页面与屏幕标题、项目名、对话框标题、浮层行、设置页与分组标题、设置导航、空状态与浮层提示。字号比它替换的 SF 大半点，因为 Avenir 的下半部分更低。只有拉丁文字变化——Avenir Next 没有中日韩字形，中文名仍用系统字体与其回退；iOS 上的每个字号都用 relativeTo: 设置，动态字体仍可缩放。",
+              "凡是要写出分支名的地方都改用 Avenir Next Condensed Medium：侧边栏、Inspector 的分支条与分支卡、iOS 的 Changes 页、Web 的 Git 面板。字形移进了 WarrenTypography，app target 的视图也能像侧边栏一样设置分支名。",
+              "其余角色也改成命名 token，不再在每个调用点重写字号。密集行仍用系统字体，但其中各项改用具名 token，并新增 count 表示单独画出的数字：Inspector 的分节计数与侧边栏的标签计数原本是同一角色的三种字号，count 用等宽数字设置它，数字变化时旁边的字不会跟着动。+12 -3 这类和仍用等宽，因为它们的数字要在行间排成一列。",
+              "浮层提示统一用一个气泡绘制。Desktop 上剩余的 AppKit .help 提示都改用 warrenTooltip，于是所有提示共用同一个 Avenir Next 气泡、同样的悬停时长与换行，长提示在 320 点处折行，不会跑出窗口。Web 上原先的原生 title 提示换成一页一个代理气泡：第一个等 450ms，有气泡在显示或刚隐去 300ms 内则立即显示，60ms 的宽限让它能在相邻控件间滑过去，点击、按键或滚动即关闭；下方没位置时翻到控件上方，始终距视口边缘 8 点，触控输入不显示提示，开启减少动态效果时取消滑动。由于画出的气泡对辅助技术隐藏，提示同时补充控件名称的，该文本现在也作为控件的描述。",
+              "Session 的悬停统一成一张详情卡：Shell 行、Agent 行与窗格标题都用同一张卡、同样的无从时长与位置，每个值用各自该用的字体。列表行的提示也不再尾随指针——每次都要等满一秒，且不在行间滑动。",
+              "所有确认都走同一个对话框：Task、Workspace、项目与 Host 的删除以及用量重置现在共用同一个确认对话框和同一个页脚；字段标签用 Avenir Next Medium 12，输入框默认用比例字体（里面多半是名字），类代码的字段显式改成等宽。",
+              "更新卡片改用浮层 token 绘制，并且每行只说一件事：脚注说 Session 会继续运行，重启较慢时说明仍在重启，不再重复上面的进度。更新小标签改用 Avenir Next，字距只留给 BUILD 大写。",
+              "设置导航每一项都有自己的图标，导航本身就能说明会去哪里，不必全靠文字。",
+              "右侧栏的 Changes、History、Files 与 Editor 标签改用 Avenir Next，未选中 medium、选中 demibold，每个标签预留选中时的宽度，切换时不会顶动旁边的标签。外部编辑器的分体按钮改成一个按钮，用编辑器自己的应用图标绘制；切换编辑器移到它的右键菜单，菜单里也能进入 Manage Editors。",
+              "Shell Session 在标签上报状态：一个圆点说明在运行还是失败，标签带上正在运行的命令，不必打开窗格就知道情况。侧边栏的第二行放得下时显示完整命令，在某个目录里做事时显示路径末尾。",
+              "空舞台更安静：标题与正文改用 Avenir Next，图块缩到 40 点，字形更轻、描边更淡。没有 Session 的工作树会直接说明这一点，不再只留一块空舞台；iPhone 上没有 Session 的 Workspace 也会说清空状态是什么、怎样开始，用词与 Desktop 一致。",
+            ],
+          },
+          {
+            title: "修正",
+            items: [
+              "侧边栏行尾溢出渐变由 14 点收窄到 10 点：14 点仍会吃掉大半个词，10 点约一个字，足够说明这一行还没结束。",
+              "Session 行的年龄列按实际画出的年龄取宽，活动行也能画到行的边缘。原先每一行都预留标题那 30 点的年龄列，标题没有年龄时活动行就提前 30 点结束，那条空带看起来像宽了三倍的渐变。",
+              "单一窗格的小药丸到标题就结束，指针移上去才显示控件，不再在自己的名字旁边留一段空白。",
+              "侧边栏标题只写 Host 的名字，不再带上地址：第二行不再回落到端点的 ip:port，而是显示 This Mac 或 Remote，再按情况给出比名字更有信息的端点标签或按语气显示的连接状态，地址移到悬停卡片里。",
+              "内嵌编辑器的文件树以最小宽度打开，树从还能放下文件名的地方开始，剩下的宽度留给编辑器。",
+              "点过 Session 行之后卡片保持关闭：指针停在某个 Session 上时，点击、按键或滚动都会收起卡片，并一直保持到指针离开。",
+              "Web 设置页的搜索文字不再压到图标上：通用的设置规则覆盖了搜索框自己的规则，导致文字用了等宽字体和本属于其它控件的内边距，占位文字跑到图标下面。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。Host、CLI 与 Relay 均未改动；改动限于设计系统的文字 token 与读取它们的 Desktop、iOS、Web 视图，以及让该平台编译通过的两处 iOS 专属修复。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.37.0",
         dateISO: "2026-11-13",

@@ -474,7 +474,7 @@ struct WarrenDesktopApprovalTrayPanel: View {
                 }
                 .frame(minWidth: 10, minHeight: 18)
                 Text(option.label)
-                    .font(.system(size: 13, weight: recommended ? .semibold : .medium))
+                    .font(WarrenTypography.bodyEmphasis.weight(recommended ? .semibold : .medium))
                     .foregroundStyle(option.isReject ? palette.secondaryGlyph : palette.rowText)
                     .lineLimit(1)
             }

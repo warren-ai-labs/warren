@@ -19,6 +19,10 @@ struct WarrenDesktopTabBar: View {
     let presentation: WarrenDesktopPaneBarPresentation
     let tabTitles: [String: String]
     let tabMarks: [TerminalSessionID: WarrenActivityMark]
+    /// A plain shell's running or failed state, which its Tab's icon carries.
+    var shellMarks: [TerminalSessionID: WarrenActivityMark] = [:]
+    /// The command a shell's Tab appends to its title, by Tab id.
+    var tabCommands: [String: String] = [:]
     /// The Conversation Sessions this Host's client reads as Leads.
     var leadSessionIDs: Set<TerminalSessionID> = []
     /// The Sessions whose runtime is gone. Their Tabs stay, drawn quiet.
@@ -109,6 +113,8 @@ struct WarrenDesktopTabBar: View {
         presentation: WarrenDesktopPaneBarPresentation,
         tabTitles: [String: String],
         tabMarks: [TerminalSessionID: WarrenActivityMark],
+        shellMarks: [TerminalSessionID: WarrenActivityMark] = [:],
+        tabCommands: [String: String] = [:],
         leadSessionIDs: Set<TerminalSessionID> = [],
         stoppedSessionIDs: Set<TerminalSessionID> = [],
         pinnedSessionIDs: Set<TerminalSessionID>,
@@ -152,6 +158,8 @@ struct WarrenDesktopTabBar: View {
         self.presentation = presentation
         self.tabTitles = tabTitles
         self.tabMarks = tabMarks
+        self.shellMarks = shellMarks
+        self.tabCommands = tabCommands
         self.leadSessionIDs = leadSessionIDs
         self.stoppedSessionIDs = stoppedSessionIDs
         self.pinnedSessionIDs = pinnedSessionIDs
@@ -340,6 +348,8 @@ struct WarrenDesktopTabBar: View {
             tab: tab,
             displayTitle: tabTitles[tab.id] ?? tab.title,
             mark: mark,
+            shellMark: tab.sessionID.flatMap { shellMarks[$0] },
+            shellCommand: tabCommands[tab.id] ?? "",
             isLead: tab.sessionID.map(leadSessionIDs.contains) ?? false,
             isSelected: selectedTabID == tab.id,
             isStopped: tab.sessionID.map(stoppedSessionIDs.contains) ?? false,
@@ -1075,6 +1085,8 @@ struct WarrenDesktopSoloPaneIdentity: View {
         var kindName: String = "Shell"
         let providerPresetID: String?
         let mark: WarrenActivityMark?
+        /// A plain shell's running or failed state, drawn on the icon.
+        var shellMark: WarrenActivityMark? = nil
         /// A Lead's outlined word, and the reason its pill may carry the
         /// attention dot.
         var isLead: Bool = false
@@ -1095,8 +1107,6 @@ struct WarrenDesktopSoloPaneIdentity: View {
     @State private var isHovered = false
     /// The detail card trails the pointer by a beat so a title the pointer only
     /// passes over never makes one.
-    @State private var showsDetails = false
-    @State private var detailTask: Task<Void, Never>?
 
     private var preset: WarrenDesktopSessionPreset? {
         identity.providerPresetID.flatMap { id in
@@ -1110,7 +1120,7 @@ struct WarrenDesktopSoloPaneIdentity: View {
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        HStack(spacing: 8) {
+        HStack(spacing: 0) {
             Group {
                 if let preset {
                     WarrenDesktopSessionKindBadge(kind: preset.request.kind, size: 16)
@@ -1119,7 +1129,9 @@ struct WarrenDesktopSoloPaneIdentity: View {
                 }
             }
             .overlay(alignment: .bottomTrailing) {
-                if identity.isLead, let mark = identity.mark, mark.tier == .actionable {
+                if let mark = identity.isLead && identity.mark?.tier == .actionable
+                    ? identity.mark
+                    : identity.shellMark {
                     WarrenDesktopStatusDot(
                         mark: mark,
                         size: 6,
@@ -1132,14 +1144,8 @@ struct WarrenDesktopSoloPaneIdentity: View {
 
             titleArea(tokens: tokens)
                 .warrenMenuButton(menuActions)
-                .onHover(perform: titleHover)
-                .warrenMenuPanel(
-                    isPresented: $showsDetails,
-                    width: WarrenDesktopDetailCard.width,
-                    isPassive: true
-                ) {
-                    WarrenDesktopDetailCard(rows: detailRows)
-                }
+                .warrenDetailHover { detailRows }
+                .padding(.leading, 8)
 
             HStack(spacing: 0) {
                 Button(action: onCopyTitle) {
@@ -1176,16 +1182,25 @@ struct WarrenDesktopSoloPaneIdentity: View {
             // The controls keep their own width so a squeezed pill truncates
             // the title instead of overlapping the buttons with it.
             .fixedSize(horizontal: true, vertical: false)
+            .padding(.leading, 4)
+            // At rest the controls take no width, so the plate ends just past
+            // the title instead of around an empty slot. The pointer grows the
+            // pill into them; the drag area beside it gives up the width, so
+            // nothing else in the bar moves.
+            .frame(width: showsControls ? nil : 0, alignment: .leading)
+            .clipped()
             .opacity(showsControls ? 1 : 0)
-            .animation(
-                WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
-                value: showsControls
-            )
             .allowsHitTesting(showsControls)
             .accessibilityHidden(!showsControls)
         }
         .padding(.leading, 4)
-        .padding(.trailing, 4)
+        // The resting plate leaves the title the same room the badge has on
+        // the leading side.
+        .padding(.trailing, showsControls ? 4 : 10)
+        .animation(
+            WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
+            value: showsControls
+        )
         .frame(height: WarrenLayoutMetrics.tabPillHeight)
         .background(
             tokens.selectedTabPillFill,
@@ -1282,26 +1297,12 @@ struct WarrenDesktopSoloPaneIdentity: View {
             rows.append(.init(label: "Directory", value: identity.directory))
         }
         if !identity.branch.isEmpty {
-            rows.append(.init(label: "Branch", value: identity.branch))
+            rows.append(.init(label: "Branch", value: identity.branch, style: .branch))
         }
-        rows.append(.init(label: "Kind", value: identity.kindName))
+        rows.append(.init(label: "Kind", value: identity.kindName, style: .text))
         return rows
     }
 
-    /// Shows the detail card only after the pointer has rested on the title.
-    private func titleHover(_ isInside: Bool) {
-        detailTask?.cancel()
-        detailTask = nil
-        guard isInside else {
-            showsDetails = false
-            return
-        }
-        detailTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 450_000_000)
-            guard !Task.isCancelled else { return }
-            showsDetails = true
-        }
-    }
 }
 
 private struct WarrenDesktopCollapsedWorkspaceLeading: View {
@@ -1377,7 +1378,7 @@ private struct WarrenDesktopCollapsedWorkspaceLeading: View {
             .contentShape(.rect)
         }
         .buttonStyle(WarrenChromeButtonStyle())
-        .help("Host \(host.name)")
+        .warrenDetailHover { host.detailRows }
         .accessibilityLabel("Host \(host.name)")
         .accessibilityValue(host.accessibilityValue)
         .warrenSemanticElement(
@@ -1399,6 +1400,21 @@ struct WarrenDesktopCollapsedHost {
     let isPublicAccessOn: Bool
     let isPickerPresented: Bool
     let toggle: () -> Void
+
+    /// The pill's hover card, the same one the sidebar's Host row shows.
+    var detailRows: [WarrenDesktopDetailCard.Row] {
+        var rows: [WarrenDesktopDetailCard.Row] = [.init(label: "Host", value: name, style: .text)]
+        let status = switch reachability {
+        case .unreachable: "Not connected"
+        case .connecting: "Connecting"
+        default: "Connected"
+        }
+        rows.append(.init(label: "Status", value: status, style: .text))
+        if isPublicAccessOn {
+            rows.append(.init(label: "Access", value: "Public Access on", style: .text))
+        }
+        return rows
+    }
 
     var accessibilityValue: String {
         var parts: [String] = []

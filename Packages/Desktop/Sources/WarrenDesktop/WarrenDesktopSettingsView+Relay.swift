@@ -25,14 +25,14 @@ extension WarrenDesktopSettingsView {
                         Text(relaySettings.isEnrolled
                             ? (relaySettings.relayURL.isEmpty ? "Relay" : relaySettings.relayURL)
                             : "Not configured")
-                            .font(.system(size: 12.5, design: .monospaced))
+                            .font(WarrenTypography.mono)
                             .foregroundStyle(palette.inkBody)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Text(relaySettings.isEnrolled
                             ? "Enrolled. Reconnects on its own after sleep."
                             : "Enter an enrollment key from your Relay administrator to connect this Host.")
-                            .font(.system(size: 11.5))
+                            .font(WarrenTypography.settingsMeta)
                             .foregroundStyle(palette.meta)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -211,13 +211,13 @@ extension WarrenDesktopSettingsView {
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     Text(invite.url.absoluteString)
-                        .font(.system(size: 11.5, design: .monospaced))
+                        .font(WarrenTypography.codeSmall)
                         .foregroundStyle(palette.inkBody)
                         .textSelection(.enabled)
                         .lineLimit(3)
                         .truncationMode(.middle)
                     Text(relayInviteExpiryText(invite))
-                        .font(.system(size: 11.5))
+                        .font(WarrenTypography.settingsMeta)
                         .foregroundStyle(palette.meta)
                     WarrenSettingsCountdownBar(
                         expiresAt: invite.expiresAt,
@@ -314,10 +314,10 @@ extension WarrenDesktopSettingsView {
                                 .accessibilityIdentifier("settings.lan-pairing.pin")
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Enter this PIN on the iPhone.")
-                                    .font(.system(size: 11.5))
+                                    .font(WarrenTypography.settingsMeta)
                                     .foregroundStyle(palette.meta)
                                 Text(lanPairingExpiryText(at: date))
-                                    .font(.system(size: 11.5))
+                                    .font(WarrenTypography.settingsMeta)
                                     .foregroundStyle(palette.meta)
                                 WarrenSettingsCountdownBar(
                                     expiresAt: lanPairing.expiresAt,
@@ -398,14 +398,14 @@ extension WarrenDesktopSettingsView {
                     // An address is code; the state is a sentence.
                     .font(webStatus.tunnelRunning
                         ? .system(size: 12.5, design: .monospaced)
-                        : .system(size: 13))
+                        : WarrenTypography.body)
                     .foregroundStyle(palette.inkBody)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(webStatus.tunnelRunning
                     ? "Anyone with the link can open this Host's Web UI."
                     : "Turn on to publish at the route below.")
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.settingsMeta)
                     .foregroundStyle(palette.meta)
                     .fixedSize(horizontal: false, vertical: true)
             }

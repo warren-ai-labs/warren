@@ -152,7 +152,7 @@ struct WarrenDesktopSidebarResizeHandle: View {
     /// Names what letting go does: stay at the minimum, or hide the sidebar.
     private func pullTag(_ tokens: WarrenColorTokens) -> some View {
         Text(releaseHides ? "Hide" : "\(Int(WarrenLayoutMetrics.sidebarMinimumWidth)) pt")
-            .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+            .font(WarrenTypography.count)
             .foregroundStyle(releaseHides ? tokens.warning : tokens.mutedForeground)
             .lineLimit(1)
             .fixedSize()

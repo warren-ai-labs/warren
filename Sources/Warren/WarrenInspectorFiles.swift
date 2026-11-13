@@ -108,7 +108,7 @@ struct WarrenInspectorFiles: View {
                             .foregroundStyle(tokens.mutedForeground)
                         TextField("Filter files", text: $filter)
                             .textFieldStyle(.plain)
-                            .font(.system(size: 12.5))
+                            .font(WarrenTypography.dialogInput)
                         if !filter.isEmpty {
                             Button { filter = "" } label: {
                                 Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(tokens.mutedForeground)
@@ -192,13 +192,13 @@ struct WarrenInspectorFiles: View {
                     .frame(width: 10)
                 WarrenFileIcon(name: node.name, isDirectory: node.isDirectory, open: isOpen)
                 Text(node.name)
-                    .font(.system(size: 12.5))
+                    .font(WarrenTypography.navigationItem)
                     .foregroundStyle(status != nil ? WarrenInspectorStatus.tint(for: status!, tokens: tokens) : tokens.foreground.opacity(0.9))
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if let status {
                     Text(status == "?" ? "U" : String(status.prefix(1)))
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .font(WarrenTypography.monoSmall.weight(.semibold))
                         .foregroundStyle(WarrenInspectorStatus.tint(for: status, tokens: tokens))
                 } else if containsChange {
                     Circle().fill(tokens.warning.opacity(0.8)).frame(width: 5, height: 5)
@@ -238,11 +238,11 @@ struct WarrenInspectorFiles: View {
                         HStack(spacing: 6) {
                             WarrenFileIcon(name: (path as NSString).lastPathComponent, isDirectory: false)
                             Text((path as NSString).lastPathComponent)
-                                .font(.system(size: 12.5))
+                                .font(WarrenTypography.navigationItem)
                                 .foregroundStyle(tokens.foreground)
                                 .lineLimit(1)
                             Text((path as NSString).deletingLastPathComponent)
-                                .font(.system(size: 11.5))
+                                .font(WarrenTypography.navigationMeta)
                                 .foregroundStyle(tokens.mutedForeground)
                                 .lineLimit(1)
                                 .truncationMode(.head)
@@ -302,7 +302,7 @@ struct WarrenFileEditor: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 5) {
                         Text((relativePath as NSString).lastPathComponent)
-                            .font(.system(size: 12.5, weight: .medium))
+                            .font(WarrenTypography.bodyEmphasis)
                             .foregroundStyle(tokens.foreground)
                             .lineLimit(1)
                         if dirty {
@@ -315,7 +315,7 @@ struct WarrenFileEditor: View {
                     let directory = (relativePath as NSString).deletingLastPathComponent
                     if !directory.isEmpty {
                         Text(directory)
-                            .font(.system(size: 11))
+                            .font(WarrenTypography.footnote)
                             .foregroundStyle(tokens.mutedForeground)
                             .lineLimit(1)
                             .truncationMode(.head)
@@ -324,14 +324,14 @@ struct WarrenFileEditor: View {
                 Spacer(minLength: 0)
                 Button("Revert") { text = saved }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.caption)
                     .foregroundStyle(dirty ? tokens.mutedForeground : .clear)
                     .disabled(!dirty)
                 Button {
                     save()
                 } label: {
                     Text("Save")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(WarrenTypography.captionEmphasis)
                         .foregroundStyle(dirty ? tokens.background : tokens.mutedForeground)
                         .padding(.horizontal, 10)
                         .frame(height: 22)
@@ -349,7 +349,7 @@ struct WarrenFileEditor: View {
             }
             if let saveError {
                 Text(saveError)
-                    .font(.system(size: 11.5))
+                    .font(WarrenTypography.caption)
                     .foregroundStyle(tokens.destructive)
                     .padding(.horizontal, WarrenSpacing.medium)
                     .padding(.bottom, WarrenSpacing.xs)
@@ -387,13 +387,13 @@ struct WarrenFileEditor: View {
     private func unsavedChangesBar(tokens: WarrenColorTokens) -> some View {
         HStack(spacing: WarrenSpacing.small) {
             Text("Save changes before leaving?")
-                .font(.system(size: 11.5))
+                .font(WarrenTypography.caption)
                 .foregroundStyle(tokens.foreground)
                 .lineLimit(1)
             Spacer(minLength: 0)
             Button("Cancel") { confirmingClose = false }
                 .buttonStyle(.plain)
-                .font(.system(size: 11.5))
+                .font(WarrenTypography.caption)
                 .foregroundStyle(tokens.mutedForeground)
                 .keyboardShortcut(.cancelAction)
             Button("Discard") {
@@ -401,14 +401,14 @@ struct WarrenFileEditor: View {
                 onClose()
             }
                 .buttonStyle(.plain)
-                .font(.system(size: 11.5))
+                .font(WarrenTypography.caption)
                 .foregroundStyle(tokens.destructive)
             Button("Save") {
                 confirmingClose = false
                 if save() { onClose() }
             }
                 .buttonStyle(.plain)
-                .font(.system(size: 11.5, weight: .medium))
+                .font(WarrenTypography.captionEmphasis)
                 .foregroundStyle(tokens.foreground)
         }
         .padding(.horizontal, WarrenSpacing.medium)

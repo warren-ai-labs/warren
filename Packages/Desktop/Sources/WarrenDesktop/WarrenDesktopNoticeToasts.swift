@@ -180,7 +180,7 @@ private struct WarrenDesktopNoticeToast: View {
                     WarrenNoticeToneIcon(kind: notice.kind, size: 18)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(notice.title)
-                            .font(WarrenTypography.captionEmphasis)
+                            .font(WarrenTypography.toastTitle)
                             .foregroundStyle(tokens.foreground)
                         Text(notice.message)
                             .font(WarrenTypography.footnote)
