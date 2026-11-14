@@ -13,7 +13,7 @@ const messages = {
     "hero.titleA": "Quit the app.",
     "hero.titleB": "Your agents keep working.",
     "hero.lede":
-      "Warren runs your terminals and coding agents on your own Mac or server. The desktop app, a browser and your phone are all windows onto the same running sessions, so closing one never stops the work.",
+      "The Host runs on your own Mac or server and holds the terminals and agents. The desktop app, a browser and your phone connect to it.",
     "hero.download": "Download for Mac",
     "hero.source": "View source",
     "hero.requirements": "macOS 13+ · Apple silicon · Host also runs on Linux",
@@ -21,7 +21,7 @@ const messages = {
       "Warren on macOS: a running Agent session in a workspace, with the project sidebar on the left and the Inspector listing four uncommitted files on the right",
     "anywhere.title": "Same session on every screen.",
     "anywhere.lede":
-      "The Host owns the session. Open it from the desktop, a browser or your phone and you land on the same conversation, scrolled to the same answer.",
+      "The Host owns the session. Open it from the desktop, a browser or your phone and you see the same conversation at the same position.",
     "anywhere.browser": "Browser",
     "anywhere.soon": "Coming soon",
     "anywhere.browserAlt":
@@ -30,7 +30,8 @@ const messages = {
     "anywhere.note":
       "Both screenshots show one Agent session on one Mac: the same three bullets and the same edited test file.",
     "lifecycle.title": "Only closing the tab ends a session.",
-    "lifecycle.lede": "Everything else is just walking away. The whole product is built on this rule.",
+    "lifecycle.lede":
+      "With no client attached, output still goes to the Host. A client that reconnects gets what it missed.",
     "lifecycle.label": "What happens to a running session",
     "lifecycle.running": "keeps running",
     "lifecycle.ends": "ends",
@@ -49,7 +50,7 @@ const messages = {
       },
       {
         action: "Restart the Host",
-        why: "Agents run in a detached holder. The next Host reattaches and picks up a prompt still in progress.",
+        why: "The Agent keeps running in its own process, and the restarted Host attaches to it again.",
       },
       {
         action: "Close the tab",
@@ -64,7 +65,7 @@ const messages = {
     "terminal.loading": "Loading Ghostty…",
     "terminal.error": "The terminal engine could not load in this browser.",
     "terminal.captionA": "Click in and type ",
-    "terminal.captionB": ". It talks to a fake Host, but the terminal is the real one.",
+    "terminal.captionB": ". The Host behind it is simulated. The terminal itself is Ghostty compiled to WebAssembly.",
     "details.title": "What's in it.",
     "details.items": [
       {
@@ -73,33 +74,33 @@ const messages = {
       },
       {
         title: "Worktrees and cross-repo tasks",
-        body: "Main checkouts and Git worktrees are first class. A task can group workspaces from several repositories.",
+        body: "Main checkouts and Git worktrees both work as workspaces. A task can group workspaces from several repositories.",
       },
       {
         title: "Your Mac or your server",
         body: "Run the Host locally or on a VPS, and switch between Hosts from one sidebar.",
       },
       {
-        title: "Faithful terminal output",
-        body: "Ghostty on the desktop, xterm.js on the web. Colors, Unicode and full-screen TUIs render as they should.",
+        title: "Terminal output as the program wrote it",
+        body: "Ghostty on the desktop, xterm.js on the web. Colors, Unicode and full-screen TUIs draw correctly.",
       },
       {
-        title: "One model on every client",
-        body: "Projects, workspaces and sessions are the same objects on desktop, web and CLI.",
+        title: "The same data on every client",
+        body: "Projects, workspaces and sessions are the same records on desktop, web and CLI.",
       },
       {
-        title: "Reachable when you choose",
-        body: "Nothing is exposed by default. Turn on Public Access through your own Relay when you want the web client from outside.",
+        title: "Reachable when you turn it on",
+        body: "The Host listens on your own network. To use the web client from outside, turn on Public Access through your own Relay.",
       },
     ],
     "how.title": "How it connects.",
-    "how.lede": "Every client speaks the same WebSocket protocol to one daemon, and the daemon owns the sessions.",
+    "how.lede": "Every client connects to one daemon over the same WebSocket protocol, and the daemon owns the sessions.",
     "how.clients": ["macOS app", "Browser", "CLI"],
     "how.host": "your Mac or server",
     "how.session": "session",
     "how.store": "durable store",
     "how.note": "SSH and the Relay only make the Host reachable. They never store terminal output or input.",
-    "close.title": "Start something long. Then close the laptop.",
+    "close.title": "Start a long task. Then close the laptop.",
     "close.changelog": "Read the changelog",
     "close.license": "Source available under FSL-1.1-ALv2",
     "footer.label": "Footer",
@@ -1990,21 +1991,21 @@ const messages = {
     "hero.titleA": "退出应用，",
     "hero.titleB": "Agent 还在干活。",
     "hero.lede":
-      "Warren 把你的终端和编程 Agent 跑在你自己的 Mac 或服务器上。桌面端、浏览器和手机都只是同一批运行中会话的窗口，关掉哪一个，活儿都不会停。",
+      "Host 跑在你自己的 Mac 或服务器上，终端和 Agent 都存在它里面。桌面端、浏览器和手机连的都是它。",
     "hero.download": "下载 Mac 版",
     "hero.source": "查看源码",
-    "hero.requirements": "macOS 13+ · Apple 芯片 · Host 也能跑在 Linux 上",
+    "hero.requirements": "macOS 13+，Apple 芯片，Host 也能跑在 Linux 上",
     "hero.shotAlt": "macOS 上的 Warren：Workspace 里正在运行的 Agent 会话，左侧是项目侧栏，右侧 Inspector 列出四个未提交的文件",
     "anywhere.title": "每块屏幕，同一个会话。",
     "anywhere.lede":
-      "会话属于 Host。从桌面端、浏览器或手机打开，看到的都是同一段对话，停在同一条回答上。",
+      "会话属于 Host。从桌面端、浏览器或手机打开，看到的是同一段对话，停在同一处。",
     "anywhere.browser": "浏览器",
     "anywhere.soon": "即将推出",
     "anywhere.browserAlt": "浏览器里的 Warren，显示同一个 Agent 会话，以及它给出的 registry API 三条要点",
     "anywhere.phoneAlt": "Warren iPhone 应用里的同一个 Agent 会话",
     "anywhere.note": "两张截图是同一台 Mac 上的同一个 Agent 会话：同样三条要点、同一个改动过的测试文件。",
     "lifecycle.title": "只有关掉 Tab 才会结束会话。",
-    "lifecycle.lede": "其他操作都只是暂时离开。整个产品都建立在这条规则上。",
+    "lifecycle.lede": "没有客户端连着的时候，输出照样写进 Host，重连时补齐落下的部分。",
     "lifecycle.label": "运行中的会话会怎样",
     "lifecycle.running": "继续运行",
     "lifecycle.ends": "结束",
@@ -2023,7 +2024,7 @@ const messages = {
       },
       {
         action: "重启 Host",
-        why: "Agent 跑在独立的托管进程里，新的 Host 会重新接上，进行中的回答也能接着收。",
+        why: "Agent 在单独的进程里继续跑，重启后的 Host 再连回它。",
       },
       {
         action: "关掉 Tab",
@@ -2037,32 +2038,32 @@ const messages = {
     "terminal.loading": "正在加载 Ghostty…",
     "terminal.error": "终端引擎无法在这个浏览器里加载。",
     "terminal.captionA": "点进去输入 ",
-    "terminal.captionB": "。它连的是假的 Host，但终端是真的。",
+    "terminal.captionB": "。Host 是模拟的，终端本身是编译成 WebAssembly 的 Ghostty。",
     "details.title": "里面有什么。",
     "details.items": [
       {
         title: "终端、Agent 和编辑器在同一个 Workspace",
-        body: "真正的终端，Claude、Codex 和 OpenCode 的结构化视图，旁边还有兼容 VS Code 的编辑器。",
+        body: "一个终端，Claude、Codex 和 OpenCode 的结构化视图，旁边是兼容 VS Code 的编辑器。",
       },
       {
         title: "Worktree 和跨仓库任务",
-        body: "主检出和 Git worktree 都是一等公民。一个任务可以把多个仓库的 Workspace 组在一起。",
+        body: "主仓库和 Git worktree 都能直接当 Workspace。一个任务可以把多个仓库的 Workspace 归到一起。",
       },
       {
         title: "你的 Mac，或你的服务器",
         body: "Host 可以跑在本机，也可以跑在 VPS 上，在同一个侧栏里切换。",
       },
       {
-        title: "终端输出原样呈现",
+        title: "终端输出按程序本来的样子显示",
         body: "桌面端用 Ghostty，Web 用 xterm.js。颜色、Unicode 和全屏 TUI 都正常显示。",
       },
       {
-        title: "每个客户端同一套模型",
-        body: "项目、Workspace 和会话在桌面端、Web 和 CLI 上是同一批对象。",
+        title: "每个客户端同一套数据",
+        body: "项目、Workspace 和会话在桌面端、Web 和 CLI 上是同一份数据。",
       },
       {
         title: "由你决定何时可访问",
-        body: "默认不对外开放任何入口。需要从外面用 Web 客户端时，再通过你自己的 Relay 打开 Public Access。",
+        body: "Host 只在你自己的网络里监听。想从外面用 Web 客户端时，通过你自己的 Relay 打开 Public Access。",
       },
     ],
     "how.title": "怎么连起来。",

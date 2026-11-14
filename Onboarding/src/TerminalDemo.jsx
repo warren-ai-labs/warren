@@ -44,14 +44,14 @@ const helpText = [
   `  ${green}detach${reset}     leave a session running`,
   `  ${green}codex${reset}      open an agent session`,
   `  ${green}claude${reset}     open another agent session`,
-  `  ${green}import${reset}     import projects from Superset`,
+  `  ${green}tasks${reset}      tasks and their workspaces`,
   `  ${green}neofetch${reset}   host info`,
   `  ${green}clear${reset}      clear the screen`,
 ].join("\r\n");
 
 function printPrompt(term) {
   term.write(
-    `\r\n${bold}${green}warren@mac-studio${reset} ${dim}~/workspace/warren${reset} ${green}main${reset}\r\n${bold}${green}❯${reset} `,
+    `\r\n${bold}${green}warren@mac-studio${reset} ${dim}~/Workspace/warren${reset} ${green}main${reset}\r\n${bold}${green}❯${reset} `,
   );
 }
 
@@ -86,7 +86,7 @@ export default function TerminalDemo() {
 
     async function boot() {
       const lines = [
-        `${dim}warren-headless${reset} v0.12.0 ${dim}(ghostline v1.1.3 runtime)${reset}`,
+        `${dim}warren-headless${reset} v0.39.0 ${dim}(ghostline v1.6.1 runtime)${reset}`,
         `${dim}host${reset} ${cyan}mac-studio${reset} ${dim}· ws://127.0.0.1:8789${reset}`,
         `${green}✓${reset} ${dim}restored${reset} ${cyan}warren/dev${reset} ${dim}· survived 2 detaches${reset}`,
         `${dim}terminal${reset} ${cyan}ghostty-wasm${reset} ${dim}· same VT parser as desktop${reset}`,
@@ -137,20 +137,20 @@ export default function TerminalDemo() {
         const target = args[0] || "warren/dev";
         term.write(`${dim}attaching to${reset} ${cyan}${target}${reset} ...\r\n`);
         await sleep(280);
-        term.write(`${green}✓${reset} attached — scrollback restored, cursor at line 1184\r\n`);
+        term.write(`${green}✓${reset} attached, scrollback restored, cursor at line 1184\r\n`);
         term.write(`${dim}warren/dev${reset} $ git status\r\n`);
         term.write(`${dim}On branch main${reset}\r\n${green}nothing to commit, working tree clean${reset}\r\n`);
       } else if (cmd === "detach") {
         const target = args[0] || "warren/dev";
         term.write(`${dim}detaching${reset} ${cyan}${target}${reset} ...\r\n`);
         await sleep(360);
-        term.write(`${green}✓${reset} detached — session retained by host\r\n`);
+        term.write(`${green}✓${reset} detached, session retained by host\r\n`);
         await sleep(360);
         term.write(`${dim}reattaching${reset} ...\r\n`);
         await sleep(280);
         term.write(
-          `${green}✓${reset} resumed in 1.2s — work kept running while you were away:\r\n` +
-            `${dim}  [00:00:04] npm test — 24 passed, 0 failed${reset}\r\n` +
+          `${green}✓${reset} resumed in 1.2s. Work kept running while you were away:\r\n` +
+            `${dim}  [00:00:04] npm test, 24 passed, 0 failed${reset}\r\n` +
             `${dim}  [00:00:11] git worktree add docs/cleanup${reset}\r\n`,
         );
       } else if (cmd === "codex") {
@@ -172,18 +172,22 @@ export default function TerminalDemo() {
             `${green}✔${reset} PR #128 ready for review`,
           ].join("\r\n") + "\r\n",
         );
-      } else if (cmd === "import") {
-        term.write(`${dim}importing Superset metadata${reset} ...\r\n`);
-        await sleep(360);
-        term.write(`${green}✓${reset} 3 projects, 12 workspaces imported\r\n`);
-        term.write(`${dim}receipt: import-2026-08-18 · runs once, no re-import${reset}\r\n`);
+      } else if (cmd === "tasks") {
+        term.write(
+          [
+            `${dim}NAME                 SOURCE   EXTERNAL ID   WORKSPACES${reset}`,
+            `Host registry v2     linear   ENG-412       1`,
+            `Stream multiplexing  linear   ENG-419       1`,
+            `Reconnect backoff    -        -             1`,
+          ].join("\r\n") + "\r\n",
+        );
       } else if (cmd === "neofetch") {
         term.write(
           [
             `${cyan}warren@mac-studio${reset}`,
             `${dim}--------------------------${reset}`,
-            `${green}OS${reset}:        macOS 26.0`,
-            `${green}Runtime${reset}:   ghostline v1.1.3`,
+            `${green}OS${reset}:        macOS 26.4`,
+            `${green}Runtime${reset}:   ghostline v1.6.1`,
             `${green}Terminal${reset}:  Ghostty VT parser (wasm)`,
             `${green}Uptime${reset}:    4 days, 2 hours`,
             `${green}Sessions${reset}:  3 durable`,
@@ -193,7 +197,7 @@ export default function TerminalDemo() {
         term.clear();
       } else if (cmd === "exit") {
         term.write(
-          `\r\nThis demo is a session. Close the tab — the host keeps it.\r\n` +
+          `\r\nClosing this tab leaves the session running on the host.\r\n` +
             `${bold}${green}Sessions belong to the host${reset}.\r\n`,
         );
       } else if (cmd === "whoami") {
@@ -304,7 +308,7 @@ export default function TerminalDemo() {
       <div className="pane terminal" onClick={() => termRef.current?.focus()}>
         <div className="pane-head">
           <span className="pane-title">{t("terminal.title")}</span>
-          <span className="pane-path">~/workspace/warren</span>
+          <span className="pane-path">~/Workspace/warren</span>
           <span className="pane-tag">Ghostty WASM</span>
         </div>
         <div className="terminal-screen" ref={hostRef}>

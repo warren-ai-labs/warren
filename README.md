@@ -4,7 +4,7 @@
 
 <h1 align="center">Warren</h1>
 
-Warren is a **headless-first workbench that stays running on your machine**. Terminals, Agent views, and an embedded editor sit on one Host — your own Mac or VPS, not a vendor cloud — and that Host, not the client window, stays in charge of Tasks, Projects, Workspaces, Sessions, and Runtimes. Run Codex, Claude Code, OpenCode, a shell, or another interactive program, then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, network change, or closed laptop. Every client talks to the same Host through one versioned protocol.
+Warren is a **headless-first workbench that stays running on your machine**. Terminals, Agent views, and an embedded editor sit on one Host, your own Mac or VPS, and that Host keeps the Tasks, Projects, Workspaces, Sessions, and Runtimes. Run Codex, Claude Code, OpenCode, a shell, or another interactive program, then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, a network change, or a closed laptop. Every client talks to the same Host through one versioned protocol.
 
 ## Screenshots
 
@@ -40,7 +40,7 @@ them.
 - **Structured agent views** — Codex, Claude, and OpenCode activity is projected as normalized events on the Web, so agent sessions can render as a conversation without losing the terminal fallback.
 - **An Inspector beside the terminal** — ⌥⌘B opens a native column with the Workspace's changes and inline diffs, its commit history, and its files, so you can see what an Agent changed without leaving the Session.
 - **An editor beside the terminal** — The macOS client can mount a workspace-scoped, VS Code-compatible editor as a region next to the Terminal rather than a page that replaces it, so reading code does not cost you the session you were watching.
-- **Workspace-first Git support** — Projects, main checkouts, and Git worktrees are first-class resources; one-time onboarding can import your existing Superset metadata.
+- **Workspace-first Git support** — Projects, main checkouts, and Git worktrees are all resources; one-time onboarding can import your existing Superset metadata.
 - **Cross-repository tasks** — A Host-owned Task can group Workspaces from several Git repositories and optionally retain a provider-neutral external work-item identity such as TAPD or GitHub.
 - **Optional central control plane** — The Relay Service provides Host registration, pairing, revocation, and outbound WSS forwarding without storing terminal output or user input.
 - **Observability-first acceptance** — Tests use semantic UI snapshots and typed intents: no screenshots, no mouse movement, no focus stealing.
@@ -107,9 +107,8 @@ the Host continues to run the work.
 Local and remote execution use the same resource semantics. SSH bootstraps a
 remote daemon and forwards a loopback port; the Relay provides optional pairing,
 revocation, and outbound WSS forwarding. Neither transport becomes a second
-resource model, and the Relay never stores terminal output or user input. This is
-why Warren remains usable in a terminal-only or otherwise headless environment:
-the UI is helpful, but it is not the authority.
+resource model, and the Relay never stores terminal output or user input. The UI
+is optional: the Host runs the same way whether or not a client is attached.
 
 ```text
 macOS Desktop / Web/PWA / CLI
@@ -150,19 +149,19 @@ explicit:
   incompatible sockets fail closed instead of silently attaching a session to a
   different runtime.
 
-The result is more than a tmux replacement: it is a runtime boundary designed
-for reconnects, upgrades, multiple clients, and inspectable failure recovery.
-The implementation decisions and failure cases are documented in
+Ghostline keeps the PTY outside the Host process, so the Host can restart,
+upgrade and serve several clients without losing the running program. The
+implementation decisions and failure cases are documented in
 [the runtime notes](docs/runtime.md), [the headless architecture](docs/headless-architecture.md),
 and [the terminal rendering runbook](docs/terminal-rendering-runbook.md).
 
 ### Agent-native, PTY-first
 
-Warren supports structured Agent views without pretending that a TUI is a normal
-request/response API. The PTY remains the source of truth for interactive
-terminal behavior. In parallel, provider adapters and hooks observe Codex,
-Claude, and OpenCode transcripts and project them into one canonical Agent event
-stream for Desktop, Web, and CLI.
+Warren renders structured Agent views from the same PTY that already runs the
+program. The PTY stays the source of truth for interactive terminal behavior.
+In parallel, provider adapters and hooks observe Codex, Claude, and OpenCode
+transcripts and project them into one canonical Agent event stream for Desktop,
+Web, and CLI.
 
 The Agent layer provides:
 
