@@ -430,11 +430,12 @@ figure {
   color: var(--muted);
 }
 
-/* Film and terminal */
+/* Terminal */
 
 .duo {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 880px);
+  justify-content: center;
   gap: var(--gap);
   margin-top: 40px;
 }
@@ -449,60 +450,6 @@ figure {
   font-family: var(--mono);
   font-size: 13px;
   color: var(--text);
-}
-
-.film {
-  position: relative;
-  overflow: hidden;
-  aspect-ratio: 16 / 9;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  background: #000;
-}
-
-.film video,
-.film-poster,
-.film-poster img {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-.film-poster {
-  position: relative;
-  padding: 0;
-  border: 0;
-  background: none;
-  cursor: pointer;
-}
-
-.film-poster img {
-  object-fit: cover;
-  opacity: 0.85;
-  transition: opacity 200ms var(--ease);
-}
-
-.film-poster:hover img {
-  opacity: 1;
-}
-
-.film-play {
-  position: absolute;
-  left: 16px;
-  bottom: 16px;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  height: 40px;
-  padding: 0 16px 0 12px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
-  background: rgba(11, 11, 11, 0.78);
-  color: #ededed;
-  font-size: 14px;
-  font-weight: 500;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .terminal {

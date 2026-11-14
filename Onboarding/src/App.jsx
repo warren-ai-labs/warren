@@ -219,32 +219,6 @@ function Lifecycle() {
   );
 }
 
-function Film() {
-  const { t } = useI18n();
-  const [playing, setPlaying] = useState(false);
-  return (
-    <figure>
-      <div className="film">
-        {playing ? (
-          <video src="/warren-promo.mp4" poster="/warren-promo-poster.jpg" controls autoPlay playsInline />
-        ) : (
-          // The film has sound, so it waits for a click rather than autoplaying.
-          <button type="button" className="film-poster" onClick={() => setPlaying(true)}>
-            <img src="/warren-promo-poster.jpg" alt="" loading="lazy" />
-            <span className="film-play">
-              <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
-                <path d="M4.5 2.8v10.4a.6.6 0 0 0 .9.52l8.6-5.2a.6.6 0 0 0 0-1.04l-8.6-5.2a.6.6 0 0 0-.9.52Z" />
-              </svg>
-              {t("film.play")}
-            </span>
-          </button>
-        )}
-      </div>
-      <figcaption>{t("film.caption")}</figcaption>
-    </figure>
-  );
-}
-
 function Demo() {
   const { t } = useI18n();
   return (
@@ -255,7 +229,6 @@ function Demo() {
           <p>{t("demo.lede")}</p>
         </div>
         <div className="duo">
-          <Film />
           <TerminalDemo />
         </div>
       </div>

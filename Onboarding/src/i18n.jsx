@@ -59,10 +59,7 @@ const messages = {
     ],
     "demo.title": "See it, then try it.",
     "demo.lede":
-      "A film recorded in the real apps, and the desktop's terminal engine running here in your browser.",
-    "film.play": "Play film",
-    "film.caption":
-      "Four agents messaging each other, a quit and a return, a reply from the phone, two Hosts in one sidebar.",
+      "The desktop's terminal engine, running right here in your browser.",
     "terminal.title": "Terminal",
     "terminal.loading": "Loading Ghostty…",
     "terminal.error": "The terminal engine could not load in this browser.",
@@ -2035,9 +2032,7 @@ const messages = {
       },
     ],
     "demo.title": "先看，再试。",
-    "demo.lede": "一段在真实 App 里录制的影片，还有桌面端的终端引擎，直接在浏览器里跑。",
-    "film.play": "播放影片",
-    "film.caption": "四个 Agent 互相发消息，退出再回来，从手机上回复，两台 Host 在同一个侧栏里。",
+    "demo.lede": "桌面端的终端引擎，直接在浏览器里跑。",
     "terminal.title": "终端",
     "terminal.loading": "正在加载 Ghostty…",
     "terminal.error": "终端引擎无法在这个浏览器里加载。",

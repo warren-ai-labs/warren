@@ -6,16 +6,6 @@
 
 Warren is a **headless-first workbench that stays running on your machine**. Terminals, Agent views, and an embedded editor sit on one Host — your own Mac or VPS, not a vendor cloud — and that Host, not the client window, stays in charge of Tasks, Projects, Workspaces, Sessions, and Runtimes. Run Codex, Claude Code, OpenCode, a shell, or another interactive program, then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, network change, or closed laptop. Every client talks to the same Host through one versioned protocol.
 
-## Watch
-
-[<img src="docs/warren-promo-poster.jpg" width="800" alt="Play the Warren film">](https://warrenai.xyz/warren-promo.mp4)
-
-A tour, recorded in the real apps: hovering the tree and switching Tabs,
-splitting the stage from the top bar, agents working while the sidebar says
-what they are doing, folding the sidebar away, switching Host, the Inspector's
-changes, a browser an agent drives, and the same session in the browser and on
-the phone.
-
 ## Screenshots
 
 <img src="docs/warren-desktop.png" width="800" alt="Warren desktop: Projects, Tasks and one Agent session with the Inspector showing changed files">
