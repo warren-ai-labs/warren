@@ -28,7 +28,7 @@ const messages = {
       "The same Agent session in a web browser, showing the agent's three-bullet summary of the registry API",
     "anywhere.phoneAlt": "The same Agent session in the Warren iPhone app",
     "anywhere.note":
-      "Both screenshots show one Agent session on one Mac. The three bullets and the 14:57 timestamp belong to the same turn.",
+      "Both screenshots show one Agent session on one Mac: the same three bullets and the same edited test file.",
     "lifecycle.title": "Only closing the tab ends a session.",
     "lifecycle.lede": "Everything else is just walking away. The whole product is built on this rule.",
     "lifecycle.label": "What happens to a running session",
@@ -2005,7 +2005,7 @@ const messages = {
     "anywhere.soon": "即将推出",
     "anywhere.browserAlt": "浏览器里的 Warren，显示同一个 Agent 会话，以及它给出的 registry API 三条要点",
     "anywhere.phoneAlt": "Warren iPhone 应用里的同一个 Agent 会话",
-    "anywhere.note": "两张截图是同一台 Mac 上的同一个 Agent 会话。那段要点和 14:57 的时间戳来自同一个回合。",
+    "anywhere.note": "两张截图是同一台 Mac 上的同一个 Agent 会话：同样三条要点、同一个改动过的测试文件。",
     "lifecycle.title": "只有关掉 Tab 才会结束会话。",
     "lifecycle.lede": "其他操作都只是暂时离开。整个产品都建立在这条规则上。",
     "lifecycle.label": "运行中的会话会怎样",
