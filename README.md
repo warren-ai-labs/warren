@@ -18,17 +18,17 @@ the phone.
 
 ## Screenshots
 
-<img src="docs/warren-desktop.png" width="800" alt="Warren desktop">
+<img src="docs/warren-desktop.png" width="800" alt="Warren desktop: Projects, Tasks and one Agent session with the Inspector showing changed files">
 
 ### Web
 
-<img src="docs/warren-web-agent.png" width="800" alt="Warren in the browser">
+<img src="docs/warren-web-agent.png" width="800" alt="The same Agent session in a web browser">
 
 ### Mobile *(Coming Soon)*
 
 *The native iOS companion client is in active development and coming soon.*
 
-<img src="docs/warren-mobile-agent.png" width="320" alt="Warren on the phone">
+<img src="docs/warren-mobile-agent.png" width="320" alt="The same Agent session in the Warren iPhone app">
 
 ## Why Warren
 

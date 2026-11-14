@@ -158,7 +158,7 @@ function Anywhere() {
           <figure className="pane">
             <div className="pane-head">
               <span className="pane-title">{t("anywhere.browser")}</span>
-              <span className="pane-path">warren / fix/resume-after-restart</span>
+              <span className="pane-path">orbit-service / feat/host-registry</span>
             </div>
             <img
               src="/screenshot-web-agent.png"
@@ -176,8 +176,8 @@ function Anywhere() {
             <img
               src="/screenshot-mobile-agent.png"
               alt={t("anywhere.phoneAlt")}
-              width="776"
-              height="1688"
+              width="1206"
+              height="2622"
               loading="lazy"
             />
           </figure>
