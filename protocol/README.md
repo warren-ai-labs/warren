@@ -1,18 +1,18 @@
 # Warren Protocol
 
 This directory is the single source of truth for the Warren wire protocol. It
-exists because the same constants — DENB magic bytes, direction/kind codes,
-capability strings, method names, event discriminators — are implemented
+exists because the same constants (DENB magic bytes, direction/kind codes,
+capability strings, method names, event discriminators) are implemented
 identically in three languages. A drift here used to mean a silent client
 that just doesn't connect. Now there's a JSON Schema and a bindings map, so a
 tooling pass can catch divergence before it ships.
 
 ## Canonical documents
 
-- [`warren.schema.json`](./warren.schema.json) — machine-readable spec. Every
+- [`warren.schema.json`](./warren.schema.json): machine-readable spec. Every
   constant that moves on the wire has a `const` so JSON-Schema validators can
   pin it.
-- `README.md` (this file) — human-readable index, bindings map, and rules
+- `README.md` (this file): human-readable index, bindings map, and rules
   for changing the spec.
 
 When a section of code disagrees with this spec, fix the spec first if the
@@ -65,7 +65,7 @@ you change a constant here, all four rows must move together.
   `agentEvents.payloads` declares the fields clients read and the JSON type each
   one carries; a payload stays an open map, so providers may add keys and a
   client must ignore what it does not read.
-- **Bumping `wireVersion` is a hard break.** No fallback — old clients must
+- **Bumping `wireVersion` is a hard break.** No fallback: old clients must
   reject new frames and vice versa. The DENB wire version stays at 1 by
   design; the control protocol's logical version is independent.
 - **New `capabilities` go through the negotiation round-trip.** A client
@@ -90,7 +90,7 @@ you change a constant here, all four rows must move together.
   in lock-step. Do not change an existing identifier.
 - **HTTP routes may move or be added.** Removing a route is a hard break;
   adding a route is non-breaking. The Host's route table is the
-  authoritative list — `Headless/internal/server/http.go` is what every
+  authoritative list: `Headless/internal/server/http.go` is what every
   client links against.
 
 ## Drift checks

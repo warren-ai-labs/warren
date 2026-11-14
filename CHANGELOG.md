@@ -418,7 +418,7 @@ migrates no state.
 
 - Draw the update card around what the wait means: the app's own icon, the
   version under the title, a 3pt segment sweeping a track instead of a percentage
-  the updater never reports — the segment settles still under Reduce Motion — and
+  the updater never reports (the segment still settles under Reduce Motion), and
   a footnote saying Sessions keep running. The card takes the popover rung of the
   elevation ladder at a 340-point width instead of carrying a shadow radius of
   its own.
@@ -471,7 +471,7 @@ A minor release: a Host can be reached from anywhere through a stateless,
 end-to-end encrypted relay that needs no account, port or certificate, a share
 link opens that same Host in a browser or on a phone, Settings answers "how does
 a device reach this Mac?" on one Access page, and the Desktop app draws one
-chrome everywhere — one palette derived from three authored colours, one spacing
+chrome everywhere: one palette derived from three authored colours, one spacing
 grid, one row anatomy, one overlay language, and a Settings window on Warren's
 own surface. The JSON control protocol remains at 4.0 with no new or changed
 method, and this release migrates no state.
@@ -479,9 +479,9 @@ method, and this release migrates no state.
 ### Added
 
 - Reach a Host from anywhere without an account, a port or a certificate.
-  `warren remote status|enable|disable|share|rotate` dials a stateless relay —
-  the official `bolthole.warrenai.xyz` by default, or your own through
-  `--remote-relay-url` — that sees only ciphertext; device authorization stays
+  `warren remote status|enable|disable|share|rotate` dials a stateless relay
+  (the official `bolthole.warrenai.xyz` by default, or your own through
+  `--remote-relay-url`) that sees only ciphertext; device authorization stays
   on the Host through the paired-client tokens it already keeps. A share link
   carries a ten-minute invite, the connect code is written `0600`, rotating the
   code revokes every remotely paired device and cuts its live Sessions, and
@@ -500,36 +500,36 @@ method, and this release migrates no state.
   relay is the official one or your own, the paired-device count, the switch, a
   ten-minute Create Link QR, and Rotate Code.
 - Reach one answer from one Access page. Relay, LAN Pairing, Public Access and
-  Remote Access each repeated the same skeleton — a way in, a short-lived
-  credential, and what gets in — so they are four blocks of one page ordered
+  Remote Access each repeated the same skeleton (a way in, a short-lived
+  credential, and what gets in), so they are four blocks of one page ordered
   from anywhere to this network, and the old section links still land there with
   their setup values.
 
 ### Changed
 
-- Draw one chrome. A theme now authors three colours — ground, ink and recess —
+- Draw one chrome. A theme now authors three colours (ground, ink and recess)
   plus its status and identity hues, and `WarrenPalette` derives every surface
   and ink by mixing them; text tiers are solid steps instead of fractions of one
   ink, because a fraction names no ground to land on.
 - Hold chrome to one grid: padding lands on even points except a 1pt hairline,
   radii sit one step apart, and a test scans the Desktop sources so an off-grid
   value fails instead of slipping through review.
-- Name a row's parts once — padding, icon column, label inset and a trailing rail
-  of fixed-width slots — so a hover-only "+" keeps its slot and cannot
+- Name a row's parts once (padding, icon column, label inset and a trailing rail
+  of fixed-width slots), so a hover-only "+" keeps its slot and cannot
   re-measure and re-truncate a name under the pointer, and a worktree's chevron
   shares its column with its group's.
 - Draw every floating surface as one family. Menus, popovers, toasts, hover
   cards and the folded rail take one tone and one elevation from the tokens;
   right-click menus are drawn in-window like menu buttons; a key is drawn as a
-  key; and every dialog ends on one footer — a dim key hint on the left, Cancel
-  and the confirm action at the height of the field above them — so no confirm
+  key; and every dialog ends on one footer (a dim key hint on the left, Cancel,
+  and the confirm action at the height of the field above them), so no confirm
   label wraps and a confirmation without a body no longer pays a body inset.
 - Tune Settings to a working density. It opens on Appearance and shows the app
   version; rows sit on a 56-point floor with a 16/14 label over a hint, forms
   grow to 1040 and Usage to 1240 so a wide window gets one gutter rather than
   two, and a paragraph stops at a 560-point reading measure. The Settings window
-  paints one surface from its top edge — transparent titlebar, hidden title,
-  full-size content — and is clipped at the main window's corner, so it no
+  paints one surface from its top edge (transparent titlebar, hidden title,
+  full-size content) and is clipped at the main window's corner, so it no
   longer wears the system's grey above Warren's backdrop.
 - Give the app's own dialogs and menus the overlay language: shortcuts are one
   run of dim text instead of a box per key, dividers stop at the row margin, the
@@ -864,11 +864,11 @@ current Desktop.
 
 ## [0.31.0] - 2026-10-19
 
-> Minor release: removes fixed waits from the Agent path — the transcript
+> Minor release: removes fixed waits from the Agent path. The transcript
 > watcher reads at 50ms after input and while a turn works, PTY submission
 > continues as soon as the TUI echoes and goes quiet, and the opt-in
 > `output-ack-v1` capability bounds terminal output in flight to about one
-> round trip — and counts waiting Agents on the Dock icon with a macOS
+> round trip. It also counts waiting Agents on the Dock icon with a macOS
 > notification while Warren is in the background. The JSON control protocol
 > remains at 4.0 and this release migrates no state.
 
@@ -935,8 +935,8 @@ current Desktop.
 
 ## [0.30.0] - 2026-10-19
 
-> Major release: rebuilds the Desktop workbench — its sidebar, top bar, menus,
-> conversation pane, and a separate Settings window — around what a Session is
+> Major release: rebuilds the Desktop workbench (its sidebar, top bar, menus,
+> conversation pane, and a separate Settings window) around what a Session is
 > really doing, and removes Terminal Groups so every Session belongs to a
 > Workspace. The JSON control protocol remains at 4.0 and this release migrates
 > no state.
@@ -945,8 +945,8 @@ current Desktop.
 
 - Let a Host record per-provider ACP server commands in `~/.warren/settings.json`
   (`acpCommands`). A Chat Session created without an explicit command now uses
-  that entry, so every client — Desktop's Chat preset, Web, iOS, and
-  `warren agent create --agent-handler acp` — can route chat through an ACP
+  that entry, so every client (Desktop's Chat preset, Web, iOS, and
+  `warren agent create --agent-handler acp`) can route chat through an ACP
   server that carries the provider's credentials (for example a wrapper that
   injects them) instead of the built-in adapter resolved from `PATH`. An
   explicit request `command` still wins, and an empty entry keeps the built-in.
@@ -954,14 +954,14 @@ current Desktop.
   on whether its Agent had anything to report, so a worktree's rows changed
   height as turns started and ended. Every row now draws two: what the Session
   is doing, what it last did and how long ago, or that it has not done anything
-  yet — with the resting line one colour tier below a working one, a slow
+  yet, with the resting line one colour tier below a working one, a slow
   highlight on a working Agent's line that Reduce Motion removes, a fade at the
   tail instead of a truncation glyph, and a chip in the title row that counts the
   subagents a Session is running and opens their rows in place.
 - Read a shell's prompt state from the shell itself. With OSC 133 marks in the
-  shell integration (zsh and fish), a shell row's title says where it is — the
+  shell integration (zsh and fish), a shell row's title says where it is (the
   shell's name at the worktree root, a relative path inside it, a `~` path
-  outside — instead of repeating its command, and its second line says what it
+  outside) instead of repeating its command, and its second line says what it
   is running, what it last ran, and, when that command exited non-zero without
   being interrupted, its exit code. The state comes from ghostline v1.5.0's
   `SessionMetadata.Shell`; a shell that reports no marks keeps the
@@ -1010,8 +1010,8 @@ current Desktop.
   command's paths, and the Host's own generated titles are all cut for the
   sidebar now: a path keeps its last segment, a `--flag value` pair either
   becomes the object it names or goes away, a compound command keeps its first
-  command, and a generated title is bounded by display width — about 30 latin or
-  16 CJK characters — with the verb first. A title the user set, and a name an
+  command, and a generated title is bounded by display width (about 30 latin or
+  16 CJK characters) with the verb first. A title the user set, and a name an
   agent generated for its own conversation, are never rewritten.
 - Unify the sidebar's time format and count vocabulary. Ages read
   `now / 5m / 2h / 3d / 2w` and then a date; durations read `18s / 3m / 1h`; a
@@ -1045,7 +1045,7 @@ current Desktop.
   (`npm run dev`, not `sudo npm run dev --package-path …`) by the same
   `CommandSummary` the top bar uses.
 - Let a resting shell's row collapse to one line. Ten minutes after its last
-  command ends — or right away if it never ran — a shell row drops to a 30pt
+  command ends, or right away if it never ran, a shell row drops to a 30pt
   line with its location and the time since it last did anything, and running a
   command brings the second line straight back. A failed command stays two
   lines until the Session has been looked at once, the collapse waits while the
@@ -1060,8 +1060,8 @@ current Desktop.
   newly selected Tab on the shared `WarrenMotion.selection` spring (a 120ms
   crossfade under Reduce Motion) instead of fading in place. The settings
   navigation and segmented controls reuse the same motion as they land. The
-  tab track no longer sits in an outer capsule — the selected plate is the
-  anchor — and its overflow is only the two edge fades, with no arrow buttons;
+  tab track no longer sits in an outer capsule: the selected plate is the
+  anchor, and its overflow is only the two edge fades, with no arrow buttons;
   a Tab's own title fades at its tail instead of ending in an ellipsis.
 - Put the blocking dialogs on one container. `WarrenDialog` now owns the ground,
   the 20pt padding, the top-anchored position, the title block and the S/M/L
@@ -1152,8 +1152,8 @@ current Desktop.
   as hundreds of frames, and the 64-frame queue filled long before the window
   did. Filling it discarded a body frame and tore the route down, so a browser
   loaded a truncated bundle while the response still looked successful. A
-  route's buffer is now bounded in bytes by the sender's whole window — the
-  amount it is already allowed to have unacknowledged — and a per-route
+  route's buffer is now bounded in bytes by the sender's whole window (the
+  amount it is already allowed to have unacknowledged), and a per-route
   delivery goroutine hands frames to the consumer in order, so a full handoff
   buffer never stalls the tunnel or loses a frame.
 - Install the managed agent hooks even when the agent CLI has never run, so its
@@ -1213,8 +1213,8 @@ current Desktop.
   (sidebar, top bar, tabs, preset bar, panes, inspector, conversation timeline,
   settings) stop painting their own ground, raised surfaces (composer, cards,
   inputs) take the same Ember tone made denser, and floating surfaces add an
-  in-window blur. Terminals paint no default background, so the coat — the
-  terminal's own background color — shows through and OSC 11 still reports what
+  in-window blur. Terminals paint no default background, so the coat (the
+  terminal's own background color) shows through and OSC 11 still reports what
   is on screen.
 - Stack a Conversation's pending work on the composer while the preference is
   on: a dismissible problem banner, the decision dock, and one raised panel
@@ -1356,8 +1356,8 @@ current Desktop.
   a halted Session stops; color says what a state asks of a person, so the
   actionable tier (`approval`, `input`, `unnamed`, `failed`) takes the attention
   hue; an attention payload outranks the lifecycle it arrives with, and `failed`
-  outranks attention. Four near-copies of the priority ladder — the Desktop
-  projection, the Desktop command palette, the iOS search index, and the Web —
+  outranks attention. Four near-copies of the priority ladder (the Desktop
+  projection, the Desktop command palette, the iOS search index, and the Web)
   collapse into one table, and `DESIGN.md` §8.2 states the rules.
 - Treat a finished turn as a completion notice rather than a steady state:
   `ready` means "this just finished" and stops being drawn once you have looked
@@ -1374,8 +1374,8 @@ current Desktop.
 - Quiet the Conversation: 13 pt type at about 1.6 leading, semibold only where
   Markdown asks, inline code on a visible wash, tighter headings, wrapping
   tables, and copy plus time as one small footer. The controls move into the
-  composer, and a message written while the Agent works is queued — and can be
-  taken back — instead of refused.
+  composer, and a message written while the Agent works is queued, and can be
+  taken back, instead of refused.
 - Send a queued Agent message once the Agent is ready even after leaving its
   Session, read from the roster for Sessions that are not open, instead of
   holding it until the Session is opened again.
@@ -1399,8 +1399,8 @@ current Desktop.
 - Reach the local daemon at the address it is launched with instead of always
   `127.0.0.1:8789`.
 - Fail a half-open socket on a probe deadline, let `probeConnection` and
-  `reconnectNow` end a backoff wait, and probe every Host connection — Desktop
-  included — on wake and after a network path change. A resume probe sends a
+  `reconnectNow` end a backoff wait, and probe every Host connection (Desktop
+  included) on wake and after a network path change. A resume probe sends a
   fresh app ping and waits for its own pong, so buffered frames cannot call a
   dead socket healthy.
 - Fall back from a dead direct route to Relay once it stays down past the settle
@@ -1676,8 +1676,8 @@ current Desktop.
 ### Added
 
 - Prune retired Agent streams from the Host's canonical journal. The journal grew
-  without bound — `agent-journal.db` reached hundreds of megabytes of history no
-  client could read — so a background sweep removes streams no Session refers to,
+  without bound (`agent-journal.db` reached hundreds of megabytes of history no
+  client could read), so a background sweep removes streams no Session refers to,
   retaining one exactly while its Session is in the roster plus a 24-hour grace,
   deleting at most 2000 rows per step, and releasing freed pages with bounded
   incremental auto-vacuum. Pending and unknown command admissions are never
@@ -1718,9 +1718,9 @@ current Desktop.
   printing `Launch requested`.
 
 - The Usage panel shows where the money went, not only where the tokens went.
-  The two shapes disagree by an order of magnitude — over local history cache
+  The two shapes disagree by an order of magnitude: over local history cache
   reads are 94.4% of tokens but 44.2% of spend, while fresh input is 5.1% of
-  tokens and 41.6% of spend — so each class now carries its share of cost beside
+  tokens and 41.6% of spend; so each class now carries its share of cost beside
   its share of tokens, and the range overview gained the composition it never had.
 - The intraday curve can be filtered to one Agent or model. The Host sends its
   5-minute buckets split by Agent and model, so the existing filters narrow the
@@ -1738,12 +1738,12 @@ current Desktop.
   like current ones; a projection that has never been rebuilt now says that too.
 - The intraday curve draws only the hours that carried work. A day's activity
   rarely spans midnight to midnight, so a fixed 24-hour axis spent most of its
-  width on a flat zero line — over half of it on a typical local day.
+  width on a flat zero line, over half of it on a typical local day.
 - The Usage panel reads tokens and cost as the two things it measures, and says
   less about both. Token totals now sit at the same rank as spend rather than
   below it, each token class shows its amount beside its count, and the captions
   that explained how cost is derived, that a calendar shows daily activity, or
-  that a click opens a day are gone — none of them told anyone anything the
+  that a click opens a day are gone: none of them told anyone anything the
   numbers beside them did not. The breakdown cards also stop absorbing spare
   height, which had grown ~600pt of empty background under three short lists.
 - The day range control is gone from the single-day Usage view, where every
@@ -1811,7 +1811,7 @@ current Desktop.
 - The Usage panel's day totals and its intraday curve can no longer disagree.
   They were two stored projections of the same fact and only one of them had a
   recovery path, so the same day answered differently depending on which surface
-  read it — by 12x on one local day. Days are now summed from the 5-minute
+  read it, by 12x on one local day. Days are now summed from the 5-minute
   buckets.
 - Costs are derived from tokens and the current price table on every read
   instead of being cached in the database. The cached column was refreshed only
@@ -2285,14 +2285,14 @@ conversation can no longer name the current one.
 
 ### RFCs
 
-- [RFC 0012: Antigravity CLI Agent support](docs/rfc/0012-antigravity-cli-agent-support.md) — proposed, with provider implementation included.
-- [RFC 0013: Agent interaction architecture and PTY guarding](docs/rfc/0013-agent-interaction-architecture-and-pty-guarding.md) — proposed.
-- [RFC 0014: Autonomous engineering pipeline](docs/rfc/0014-autonomous-engineering-pipeline.md) — proposed.
-- [RFC 0015: Cloud Agent daemon and scheduled bots](docs/rfc/0015-cloud-agent-daemon-and-scheduled-bots.md) — baseline draft.
-- [RFC 0016: Canonical Agent execution protocol](docs/rfc/0016-canonical-agent-execution-protocol.md) — accepted and implemented.
-- [RFC 0017: Agent task handoff](docs/rfc/0017-agent-task-handoff.md) — accepted and implemented.
-- [RFC 0018: Multi-Host sidebar and projects](docs/rfc/0018-multi-host-sidebar-projects.md) — draft.
-- [RFC 0019: LAN Host discovery and pairing](docs/rfc/0019-lan-host-discovery-and-pairing.md) — draft.
+- [RFC 0012: Antigravity CLI Agent support](docs/rfc/0012-antigravity-cli-agent-support.md): proposed, with provider implementation included.
+- [RFC 0013: Agent interaction architecture and PTY guarding](docs/rfc/0013-agent-interaction-architecture-and-pty-guarding.md): proposed.
+- [RFC 0014: Autonomous engineering pipeline](docs/rfc/0014-autonomous-engineering-pipeline.md): proposed.
+- [RFC 0015: Cloud Agent daemon and scheduled bots](docs/rfc/0015-cloud-agent-daemon-and-scheduled-bots.md): baseline draft.
+- [RFC 0016: Canonical Agent execution protocol](docs/rfc/0016-canonical-agent-execution-protocol.md): accepted and implemented.
+- [RFC 0017: Agent task handoff](docs/rfc/0017-agent-task-handoff.md): accepted and implemented.
+- [RFC 0018: Multi-Host sidebar and projects](docs/rfc/0018-multi-host-sidebar-projects.md): draft.
+- [RFC 0019: LAN Host discovery and pairing](docs/rfc/0019-lan-host-discovery-and-pairing.md): draft.
 
 ## [0.11.3] - 2026-08-30
 

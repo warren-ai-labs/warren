@@ -4,7 +4,7 @@
 
 <h1 align="center">Warren</h1>
 
-Warren is a **headless-first workbench that stays running on your machine**. Terminals, Agent views, and an embedded editor sit on one Host, your own Mac or VPS, and that Host keeps the Tasks, Projects, Workspaces, Sessions, and Runtimes. Run Codex, Claude Code, OpenCode, a shell, or another interactive program, then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, a network change, or a closed laptop. Every client talks to the same Host through one versioned protocol.
+Warren is a **headless-first workbench that stays running on your machine**. Terminals, Agent views, and an embedded editor sit on one Host (your own Mac or VPS), and that Host keeps the Tasks, Projects, Workspaces, Sessions, and Runtimes. Run Codex, Claude Code, OpenCode, a shell, or another interactive program, then reconnect from the macOS desktop, Web/PWA, or CLI after an app quit, a network change, or a closed laptop. Every client talks to the same Host through one versioned protocol.
 
 ## Screenshots
 
@@ -22,28 +22,28 @@ Warren is a **headless-first workbench that stays running on your machine**. Ter
 
 ## Why Warren
 
-Real work is rarely finished in one sitting or on one screen. Warren keeps the
-Task, Project, Workspace, Session, and Runtime together on a durable Host, so a piece
-of work can move from a Mac to the Web without losing its terminal state or agent
-conversation. The client is a replaceable control surface: the Host owns execution,
-durability, recovery, and the canonical resource graph. Use the Terminal view when you
-need raw control, the Agent view when you want a structured conversation around the
-same Session, and the embedded editor when you want to read or change the files beside
-them.
+A piece of work usually outlasts one sitting and one screen. Warren keeps the
+Task, Project, Workspace, Session, and Runtime together on a durable Host, so the
+work can move from a Mac to the Web without losing its terminal state or agent
+conversation. The Host owns execution, durability, recovery and the canonical
+resource graph; a client draws what it reports. Use the Terminal view when you
+need raw control, the Agent view when you want a structured conversation around
+the same Session, and the embedded editor when you want to read or change the
+files beside them.
 
 ## Highlights
 
-- **Durable sessions** — Sessions belong to the Host, not the client. Detaching, switching workspaces, or quitting the app never ends a running session; closing a Tab is the explicit command to end one.
-- **One resource model** — Tasks aggregate related Workspaces across Projects, while Project → Workspace → Terminal Session → Runtime remains the ownership path shared by every client surface.
-- **Local and remote** — The desktop connects to the local `warren-headless` daemon by default, or to a VPS through an embedded SSH client. Choose an alias from `~/.ssh/config` in the execution-server menu; Warren bootstraps the remote daemon and forwards a loopback port while using the same versioned WebSocket API everywhere.
-- **Real terminal fidelity** — Ghostty on macOS and xterm.js on the Web preserve ANSI, OSC, Unicode, and colors from shells, Codex, Claude, and TUIs.
-- **Structured agent views** — Codex, Claude, and OpenCode activity is projected as normalized events on the Web, so agent sessions can render as a conversation without losing the terminal fallback.
-- **An Inspector beside the terminal** — ⌥⌘B opens a native column with the Workspace's changes and inline diffs, its commit history, and its files, so you can see what an Agent changed without leaving the Session.
-- **An editor beside the terminal** — The macOS client can mount a workspace-scoped, VS Code-compatible editor as a region next to the Terminal rather than a page that replaces it, so reading code does not cost you the session you were watching.
-- **Workspace-first Git support** — Projects, main checkouts, and Git worktrees are all resources; one-time onboarding can import your existing Superset metadata.
-- **Cross-repository tasks** — A Host-owned Task can group Workspaces from several Git repositories and optionally retain a provider-neutral external work-item identity such as TAPD or GitHub.
-- **Optional central control plane** — The Relay Service provides Host registration, pairing, revocation, and outbound WSS forwarding without storing terminal output or user input.
-- **Observability-first acceptance** — Tests use semantic UI snapshots and typed intents: no screenshots, no mouse movement, no focus stealing.
+- **Durable sessions**: Sessions belong to the Host, not the client. Detaching, switching workspaces, or quitting the app never ends a running session; closing a Tab is the explicit command to end one.
+- **One resource model**: Tasks aggregate related Workspaces across Projects, while Project → Workspace → Terminal Session → Runtime remains the ownership path shared by every client surface.
+- **Local and remote**: The desktop connects to the local `warren-headless` daemon by default, or to a VPS through an embedded SSH client. Choose an alias from `~/.ssh/config` in the execution-server menu; Warren bootstraps the remote daemon and forwards a loopback port while using the same versioned WebSocket API everywhere.
+- **Real terminal fidelity**: Ghostty on macOS and xterm.js on the Web preserve ANSI, OSC, Unicode, and colors from shells, Codex, Claude, and TUIs.
+- **Structured agent views**: Codex, Claude, and OpenCode activity is projected as normalized events on the Web, so agent sessions can render as a conversation without losing the terminal fallback.
+- **An Inspector beside the terminal**: ⌥⌘B opens a native column with the Workspace's changes and inline diffs, its commit history, and its files, so you can see what an Agent changed without leaving the Session.
+- **An editor beside the terminal**: The macOS client can mount a workspace-scoped, VS Code-compatible editor as a region next to the Terminal rather than a page that replaces it, so reading code does not cost you the session you were watching.
+- **Workspace-first Git support**: Projects, main checkouts, and Git worktrees are all resources; one-time onboarding can import your existing Superset metadata.
+- **Cross-repository tasks**: A Host-owned Task can group Workspaces from several Git repositories and optionally retain a provider-neutral external work-item identity such as TAPD or GitHub.
+- **Optional central control plane**: The Relay Service provides Host registration, pairing, revocation, and outbound WSS forwarding without storing terminal output or user input.
+- **Observability-first acceptance**: Tests use semantic UI snapshots and typed intents, with no screenshots, no mouse movement and no focus stealing.
 
 ## How Warren works
 
@@ -56,13 +56,13 @@ navigation keeps just the contexts with a running or attached Session, and
 expands the relevant paths so work in progress is immediately visible. A
 Workspace whose embedded editor is open stays visible too, because an
 editor-only Workspace is still work in progress (RFC 0021 §7). Agent sessions
-contribute provider-neutral activity — `ready`, `working`, `blocked`, `failed`,
-`exited` — and attention, which is `input` or `approval` and only ever comes from
+contribute provider-neutral activity (`ready`, `working`, `blocked`, `failed`,
+`exited`) and attention, which is `input` or `approval` and only ever comes from
 an explicit provider observation. When nothing is running, the sidebar says
 `No active workspaces` and offers one control back to **Show all workspaces**.
 
-The filter is a presentation filter only; it never moves, stops, or mutates a
-Session. Its state is device-local and scoped per endpoint, so a Local Host and a
+The filter only changes what the sidebar shows; it never moves, stops, or mutates
+a Session. Its state is device-local and scoped per endpoint, so a Local Host and a
 remote Server remember their own view. The sidebar tree is the only Session
 switcher: renaming, pinning, and opening a Session all happen on its row, in the
 Workspace context it belongs to.
@@ -149,11 +149,11 @@ explicit:
   incompatible sockets fail closed instead of silently attaching a session to a
   different runtime.
 
-Ghostline keeps the PTY outside the Host process, so the Host can restart,
-upgrade and serve several clients without losing the running program. The
-implementation decisions and failure cases are documented in
-[the runtime notes](docs/runtime.md), [the headless architecture](docs/headless-architecture.md),
-and [the terminal rendering runbook](docs/terminal-rendering-runbook.md).
+Because the PTY lives in a separate process, an upgrade or a Host restart does
+not end the programs running in it. The implementation decisions and failure
+cases are documented in [the runtime notes](docs/runtime.md),
+[the headless architecture](docs/headless-architecture.md), and
+[the terminal rendering runbook](docs/terminal-rendering-runbook.md).
 
 ### Agent-native, PTY-first
 
@@ -183,35 +183,35 @@ captured in [the Agent/PTY interaction note](docs/herdr-agent-pty-interaction.md
 
 ## Engineering principles
 
-Warren's implementation is organized around a few deliberately strict boundaries:
+Warren's implementation is organized around a few strict boundaries:
 
-- **Host authority** — durable state, runtime bindings, Git operations, Agent
+- **Host authority**: durable state, runtime bindings, Git operations, Agent
   projections, and recovery cursors live behind `warren-headless`.
-- **Client parity** — Desktop, Web/PWA, and CLI consume the same versioned
+- **Client parity**: Desktop, Web/PWA, and CLI consume the same versioned
   protocol and typed resource operations; clients own local layout and selection,
   not execution state.
-- **Explicit lifecycle** — detach, client quit, daemon restart, runtime exit, and
+- **Explicit lifecycle**: detach, client quit, daemon restart, runtime exit, and
   Close Tab have different meanings. Closing a Tab is the explicit user command
   that ends its running Session.
-- **Fail closed** — protocol, schema, runtime, and cursor mismatches surface as
+- **Fail closed**: protocol, schema, runtime, and cursor mismatches surface as
   upgrade or recovery boundaries rather than silently guessing or deleting state.
-- **Bounded recovery** — output rings, transcript reads, event history, Git data,
+- **Bounded recovery**: output rings, transcript reads, event history, Git data,
   and client queues are bounded so long-lived work remains inspectable and
   automation remains safe.
-- **Human-steerable automation** — Agent commands are typed and observable;
+- **Human-steerable automation**: Agent commands are typed and observable;
   acceptance means Host admission, while completion is confirmed by a later
   canonical event.
 
 ## Current scope
 
-Warren is an early, source-available phase-one project. The desktop client targets macOS 13+ on arm64 Apple Silicon Macs, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. First-class Agent transcript views currently cover Codex, Claude, and OpenCode; other interactive programs remain available through the generic terminal Session interface.
+Warren is an early, source-available phase-one project. The desktop client targets macOS 13+ on arm64 Apple Silicon Macs, while the Web/PWA and CLI connect to a local or remote `warren-headless` Host. Agent transcript views currently cover Codex, Claude, and OpenCode; other interactive programs remain available through the generic terminal Session interface.
 
 ### Client surface priority
 
-Warren's product design and interactive capabilities follow a clear surface hierarchy:
-- **macOS Desktop (Primary First-Class Surface)**: Primary design, native AppKit/SwiftUI components, keyboard-driven navigation, Ghostty terminal rendering, and native agent interaction reside here. All interaction paradigms, session controls, and structured views are designed and verified for Desktop first.
-- **Web / PWA (Remote & Fallback Surface)**: Lightweight remote viewer and execution control under Public Access or Relay pairing.
-- **iOS Mobile (Native Companion — Coming Soon)**: Companion mobile client in active development. Its sources live in `Packages/WarrenIOS/` and are built and tested with the rest of the repository; there is no installable release yet.
+Each surface is built for a different job:
+- **macOS Desktop (the main surface)**: native AppKit/SwiftUI components, keyboard-driven navigation, Ghostty terminal rendering, and native agent interaction. Session controls and structured views are designed and verified here first.
+- **Web / PWA (remote and fallback)**: a lightweight remote viewer and execution control under Public Access or Relay pairing.
+- **iOS Mobile (native companion, coming soon)**: the companion client in active development. Its sources live in `Packages/WarrenIOS/` and are built and tested with the rest of the repository; there is no installable release yet.
 
 Public Access is an explicit way for the Host owner to reach an existing Web interface from outside the local network. It is not a multi-user Workspace sharing or collaboration feature. Read [SECURITY.md](SECURITY.md) before exposing any Host or Relay to a network.
 
@@ -363,48 +363,48 @@ charcoal rounded tile. Source files, colors, and regeneration steps live in
 
 **Start here**
 
-- [DESIGN.md](DESIGN.md) — product and system design, domain model, architecture, and acceptance criteria
-- [GLOSSARY.md](GLOSSARY.md) — shared terminology
-- [docs/project-architecture-and-customization-guide.md](docs/project-architecture-and-customization-guide.md) — source-audited architecture tutorial and customization guide
+- [DESIGN.md](DESIGN.md): product and system design, domain model, architecture, and acceptance criteria
+- [GLOSSARY.md](GLOSSARY.md): shared terminology
+- [docs/project-architecture-and-customization-guide.md](docs/project-architecture-and-customization-guide.md): source-audited architecture tutorial and customization guide
 
 **Architecture and design records**
 
-- [docs/headless-architecture.md](docs/headless-architecture.md) — headless and remote connection architecture
-- [docs/runtime.md](docs/runtime.md) — Ghostline runtime boundary, environment isolation, and recovery
-- [docs/herdr-agent-pty-interaction.md](docs/herdr-agent-pty-interaction.md) — provider-safe PTY Agent interaction contract
-- [docs/rfc/](docs/rfc/) — RFC index: every design proposal with its current status
-- [docs/adr/](docs/adr/) and [docs/decisions/](docs/decisions/) — architecture and narrower decision records
-- [docs/backlog.md](docs/backlog.md) — deferred work: what we deliberately left, why it can wait, and what would force it
+- [docs/headless-architecture.md](docs/headless-architecture.md): headless and remote connection architecture
+- [docs/runtime.md](docs/runtime.md): Ghostline runtime boundary, environment isolation, and recovery
+- [docs/herdr-agent-pty-interaction.md](docs/herdr-agent-pty-interaction.md): provider-safe PTY Agent interaction contract
+- [docs/rfc/](docs/rfc/): the index of design proposals and their current status
+- [docs/adr/](docs/adr/) and [docs/decisions/](docs/decisions/): architecture and narrower decision records
+- [docs/backlog.md](docs/backlog.md): the deferred work, why it can wait, and what would force it
 
 **Operating a Host**
 
-- [docs/remote.md](docs/remote.md) — serverless remote access: the connect code, sharing a Host with a phone, and the relay API
-- [docs/relay.md](docs/relay.md) — enrolling a Host, pairing a phone or browser, and revoking access through Relay
-- [docs/relay-http.md](docs/relay-http.md) — Relay control-plane HTTP API, trusted-network setup, and iOS transport constraints
-- [docs/update-service.md](docs/update-service.md) — Cloudflare release proxy, caching, and updater endpoint contract
-- [docs/onboarding-download-analytics.md](docs/onboarding-download-analytics.md) — Workers Analytics Engine download events and private metrics queries
+- [docs/remote.md](docs/remote.md): serverless remote access, the connect code, sharing a Host with a phone, and the relay API
+- [docs/relay.md](docs/relay.md): enrolling a Host, pairing a phone or browser, and revoking access through Relay
+- [docs/relay-http.md](docs/relay-http.md): Relay control-plane HTTP API, trusted-network setup, and iOS transport constraints
+- [docs/update-service.md](docs/update-service.md): Cloudflare release proxy, caching, and updater endpoint contract
+- [docs/onboarding-download-analytics.md](docs/onboarding-download-analytics.md): Workers Analytics Engine download events and private metrics queries
 
 **Troubleshooting and engineering practice**
 
-- [docs/terminal-rendering-runbook.md](docs/terminal-rendering-runbook.md) — terminal black screen and missing text troubleshooting
-- [docs/desktop-freeze-runbook.md](docs/desktop-freeze-runbook.md) — capturing and diagnosing a frozen desktop client
-- [docs/lessons.md](docs/lessons.md) — engineering lessons from runtime and lifecycle incidents
-- [docs/startup-performance-governance.md](docs/startup-performance-governance.md) — cold-start critical path, deferral rules, and review checklist
+- [docs/terminal-rendering-runbook.md](docs/terminal-rendering-runbook.md): terminal black screen and missing text troubleshooting
+- [docs/desktop-freeze-runbook.md](docs/desktop-freeze-runbook.md): capturing and diagnosing a frozen desktop client
+- [docs/lessons.md](docs/lessons.md): engineering lessons from runtime and lifecycle incidents
+- [docs/startup-performance-governance.md](docs/startup-performance-governance.md): cold-start critical path, deferral rules, and review checklist
 
 **Per-component**
 
-- [Headless/README.md](Headless/README.md) — headless daemon and CLI
-- [RelayService/README.md](RelayService/README.md) — Relay control plane
-- [Web/README.md](Web/README.md) — Web/PWA client
-- [Assets/Brand/README.md](Assets/Brand/README.md) — brand and icon assets
+- [Headless/README.md](Headless/README.md): headless daemon and CLI
+- [RelayService/README.md](RelayService/README.md): Relay control plane
+- [Web/README.md](Web/README.md): Web/PWA client
+- [Assets/Brand/README.md](Assets/Brand/README.md): brand and icon assets
 
 **Contributing**
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) — development setup and contribution expectations
-- [REVIEW.md](REVIEW.md) — the five review dimensions a change is checked against
-- [RELEASE.md](RELEASE.md) — release process
-- [SECURITY.md](SECURITY.md) — vulnerability reporting and deployment boundaries
-- [LICENSE](LICENSE) — FSL-1.1-ALv2 license terms (Apache-2.0 after two years)
+- [CONTRIBUTING.md](CONTRIBUTING.md): development setup and contribution expectations
+- [REVIEW.md](REVIEW.md): the five review dimensions a change is checked against
+- [RELEASE.md](RELEASE.md): release process
+- [SECURITY.md](SECURITY.md): vulnerability reporting and deployment boundaries
+- [LICENSE](LICENSE): FSL-1.1-ALv2 license terms (Apache-2.0 after two years)
 
 ## Contributors
 

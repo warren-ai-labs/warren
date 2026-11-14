@@ -34,15 +34,15 @@ SSH, the WebSocket protocol, and the Host resource model do not belong to the Vi
 The web client renders three layout tiers instead of compressing one desktop
 layout onto phones:
 
-- **Desktop (≥1024px)** — the Desktop app's Workbench: a black window with
+- **Desktop (≥1024px)**: the Desktop app's Workbench: a black window with
   rounded cards on it. The sidebar card lists Projects, their worktrees and the
   Sessions in each on the Desktop's grid; beside it a header names the one
   Session this window holds, with its Terminal/Agent switch and one capsule of
   panels and "+", over the terminal's card. Colours and metrics come from
   `WarrenColorTokens.dark` and `WarrenDesktopSidebarMetrics`.
-- **Compact (768–1023px)** — same desktop chrome, with the sidebar as an
+- **Compact (768–1023px)**: same desktop chrome, with the sidebar as an
   overlay drawer so the terminal keeps the width.
-- **Mobile (<768px)** — an inbox of every Session (by status or by Project)
+- **Mobile (<768px)**: an inbox of every Session (by status or by Project)
   that pushes a single-column Session view: a header naming the Session over
   its Project and branch, the agent Term/Chat toggle, a swipeable session pill
   strip, and a collapsible Ctrl key row. New sessions open from a bottom sheet, context

@@ -156,7 +156,7 @@ const messages = {
           {
             title: "Changed",
             items: [
-              "Ask the disk image install question in Warren's own dialog. A mounted Warren disk image used to raise a system alert in the system's type; it now draws the one dialog every other confirmation uses, with the same footer, so the release that installs Warren asks its one question in Warren's own voice. Installing an older build still reads as destructive - the confirm button says Install Older Version - and the question waits in the app until the window can show it, so a prompt raised while the window is still mounting is not lost. A newer mount replaces an unanswered question and declines the older one, which keeps the image usable after it was dismissed.",
+              "Ask the disk image install question in Warren's own dialog. A mounted Warren disk image used to raise a system alert in the system's type; it now draws the one dialog every other confirmation uses, with the same footer, so the release that installs Warren asks its one question in Warren's own voice. Installing an older build still reads as destructive (the confirm button says Install Older Version), and the question waits in the app until the window can show it, so a prompt raised while the window is still mounting is not lost. A newer mount replaces an unanswered question and declines the older one, which keeps the image usable after it was dismissed.",
               "Open a Conversation answer's More menu as Warren's own menu. The ellipsis beside an answer was the one list in the window drawn as a system menu; it now uses the same context menu as every other menu, with the same Copy Markdown and Retry Turn actions, and keeps its More tip and its button role for assistive technology.",
             ],
           },
@@ -169,7 +169,7 @@ const messages = {
           {
             title: "Release notes",
             items: [
-              "scripts/verify.sh now also runs the app target's own tests - swift test at the repository root - and the onboarding Worker's tests, beside the package tests, the Relay and Headless race tests and the non-visual UI probes. 0.38.0 shipped with one stale app test because verify never ran them; that test is fixed here.",
+              "scripts/verify.sh now also runs the app target's own tests (swift test at the repository root) and the onboarding Worker's tests, beside the package tests, the Relay and Headless race tests and the non-visual UI probes. 0.38.0 shipped with one stale app test because verify never ran them; that test is fixed here.",
               "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. No Host, CLI, Web or iOS behaviour changed; the work is confined to the Desktop app and the release script.",
               "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
             ],
@@ -182,16 +182,16 @@ const messages = {
         date: "November 13, 2026",
         title: "One type system across three apps, and one bubble for what floats.",
         summary:
-          "A release that carries one type system across Desktop, iOS and the Web and draws every floating surface with one bubble of Warren's own. Text a person reads once - a title, a name, a dialog, a popover row, a settings page, an empty state, a tooltip - takes Avenir Next, a branch ref takes its condensed cut, and the dense rows beside them keep the system face. Tooltips and hover cards are drawn by Warren now rather than by the system; every confirmation goes through one dialog; the right sidebar's tabs share one external-editor button; a Shell Session's Tab says whether it is running and what, and its second line says where. The JSON control protocol remains at 4.0 and this release migrates no state.",
+          "A release that carries one type system across Desktop, iOS and the Web and draws every floating surface with one bubble of Warren's own. Text a person reads once (a title, a name, a dialog, a popover row, a settings page, an empty state, a tooltip) takes Avenir Next, a branch ref takes its condensed cut, and the dense rows beside them keep the system face. Tooltips and hover cards are drawn by Warren now rather than by the system; every confirmation goes through one dialog; the right sidebar's tabs share one external-editor button; a Shell Session's Tab says whether it is running and what, and its second line says where. The JSON control protocol remains at 4.0 and this release migrates no state.",
         sections: [
           {
             title: "Changed",
             items: [
-              "Set the text a person reads once in Avenir Next across all three apps: page and screen titles, project names, dialog titles, popover rows, settings page and group headings, the settings navigation, empty states and tooltips. Each size sits a half point over the SF size it replaces, because Avenir's lowercase sits lower. Only Latin runs change - Avenir Next has no CJK glyphs, so a Chinese name keeps the system face and its fallback - and every iOS size is set relativeTo: its text style so Dynamic Type still scales it.",
+              "Set the text a person reads once in Avenir Next across all three apps: page and screen titles, project names, dialog titles, popover rows, settings page and group headings, the settings navigation, empty states and tooltips. Each size sits a half point over the SF size it replaces, because Avenir's lowercase sits lower. Only Latin runs change (Avenir Next has no CJK glyphs, so a Chinese name keeps the system face and its fallback), and every iOS size is set relativeTo: its text style so Dynamic Type still scales it.",
               "Set a branch ref in Avenir Next Condensed Medium wherever a ref is named: the sidebar, the Inspector's branch strip and branch card, the iOS Changes page and the Web's Git panel. The face moved into WarrenTypography so app-target views set branches the way the sidebar always did.",
-              "Name the remaining roles instead of restating a size at each call site. A dense row keeps the system face, but its cells now take named tokens, including a new count for a number drawn on its own - the Inspector's section counts and the sidebar's tab count were three sizes of one role, and count sets it in tabular digits so a changing number does not shift the text beside it. A +12 -3 sum stays monospaced, because those digits form a column down the rows.",
+              "Name the remaining roles instead of restating a size at each call site. A dense row keeps the system face, but its cells now take named tokens, including a new count for a number drawn on its own: the Inspector's section counts and the sidebar's tab count were three sizes of one role, and count sets it in tabular digits so a changing number does not shift the text beside it. A +12 -3 sum stays monospaced, because those digits form a column down the rows.",
               "Draw tooltips with one shared bubble. The remaining AppKit .help tips on Desktop moved onto warrenTooltip, so every tooltip takes the same Avenir Next bubble, the same dwell and the same wrapping, which breaks a long tip at 320 points instead of running off the window. On the Web the native title tips became one delegated bubble per page: the first waits 450ms, the next shows at once while one is up or within 300ms of it hiding, a 60ms grace lets it glide between neighbours, and click, key or scroll dismisses it. It flips above a control with no room below, stays 8 points inside the viewport, shows nothing on touch input, and drops the glide under reduced motion. Since the drawn bubble is hidden from assistive technology, a control whose tip also describes it now carries that text as its description.",
-              "Give every Session hover one shared detail card: shell rows, Agent rows and the pane title rest on one card with one dwell and one placement, with each value in its own face. A list row's tip also stopped trailing the pointer - it waits a full second every time and never glides between rows.",
+              "Give every Session hover one shared detail card: shell rows, Agent rows and the pane title rest on one card with one dwell and one placement, with each value in its own face. A list row's tip also stopped trailing the pointer: it waits a full second every time and never glides between rows.",
               "Ask every confirmation through one dialog. Task, Workspace, project and Host deletion and the usage reset now use the same confirmation dialog and the same footer, a field's label is Avenir Next Medium at 12, and input fields default to the proportional face the names in them want, with code-like fields opting into monospaced.",
               "Draw the update card from the popover tokens and say one thing per line: the footnote says Sessions keep running, and a slow restart says it is still restarting rather than repeating the progress above it. The update chip takes Avenir Next, with letter spacing kept for the BUILD capitals only.",
               "Give the Settings rail an icon per page, so the navigation names what it leads to instead of asking the label to carry it alone.",
@@ -227,17 +227,17 @@ const messages = {
         date: "November 13, 2026",
         title: "One window, more than one face, and a rule for each.",
         summary:
-          "A Desktop-only release that gives the window a type system instead of one face: what a person reads once - a project name, a settings page, an empty state, a menu caption, a tooltip - takes Avenir Next, a branch ref takes its condensed cut, the Projects / Tasks tabs take Seravek, and everything scanned in a dense row keeps the system face. The tree's four levels, its row kinds and its 300-point width are unchanged; the JSON control protocol remains at 4.0 and this release migrates no state.",
+          "A Desktop-only release that gives the window a type system instead of one face: what a person reads once (a project name, a settings page, an empty state, a menu caption, a tooltip) takes Avenir Next, a branch ref takes its condensed cut, the Projects / Tasks tabs take Seravek, and everything scanned in a dense row keeps the system face. The tree's four levels, its row kinds and its 300-point width are unchanged; the JSON control protocol remains at 4.0 and this release migrates no state.",
         sections: [
           {
             title: "Changed",
             items: [
-              "Give the tree a second family where it earns one: Projects and Tasks are the rows a person reads first, so their names are Avenir Next Medium at 14. Only Latin runs change - Avenir Next has no CJK glyphs, so a Chinese name keeps the system face and its fallback rather than losing its shape.",
-              "Set a branch name in Avenir Next Condensed Medium at 12.5: it belongs to the project name's family, so the two read as one block, and the narrower cut leaves a long ref more of its letters than the proportional system face did at 11.5 - half a point larger and still narrower.",
+              "Give the tree a second family where it earns one: Projects and Tasks are the rows a person reads first, so their names are Avenir Next Medium at 14. Only Latin runs change: Avenir Next has no CJK glyphs, so a Chinese name keeps the system face and its fallback rather than losing its shape.",
+              "Set a branch name in Avenir Next Condensed Medium at 12.5: it belongs to the project name's family, so the two read as one block, and the narrower cut leaves a long ref more of its letters than the proportional system face did at 11.5; it is half a point larger and still narrower.",
               "Set a Session title in regular weight: it was 13.5 medium, and a column of medium titles read heavier than the project names above them, so the titles now defer to the names a person reads first. The 13.5 / 11 step still separates a title from its second line.",
               "Set the Projects / Tasks tabs in Seravek at 14, selected medium. Avenir's geometric capitals stood apart from the lowercase in a mixed-case word like \"Projects\" and Seravek's do not. Regular and medium, not medium and bold: the tabs sit above every row, and a bold heading there took the eye before the list did, while ink and the underline already mark the selection. The count keeps the family with tabular digits, and each tab reserves its selected width so switching one does not nudge the tab after it.",
               "Set a folded-count row in Avenir Next italic: \"N idle worktrees\" and \"N inactive projects\" are notes about the rows they fold, not one more name, and the slant says so without another shade of grey. The count stays upright, medium and tabular so a changing number does not shift the words beside it.",
-              "Move the headings that are read once onto Avenir Next, half a point over the SF sizes they replace because its lowercase sits lower: an empty state's title and body, a settings page title, a settings group heading, and the uppercase tracked labels in the settings navigation. Menu group captions and submenu titles follow, at 12 medium and 13.5 demi-bold, while the rows under them stay in the system face - a native menu sets its controls in the system face and its labels apart from them.",
+              "Move the headings that are read once onto Avenir Next, half a point over the SF sizes they replace because its lowercase sits lower: an empty state's title and body, a settings page title, a settings group heading, and the uppercase tracked labels in the settings navigation. Menu group captions and submenu titles follow, at 12 medium and 13.5 demi-bold, while the rows under them stay in the system face: a native menu sets its controls in the system face and its labels apart from them.",
               "Set a tooltip's text and a hover card's labels in Avenir Next medium, at 12.5 and 11.5: they are read once and pass, at a size where the floating surface makes the regular cut look thin, so they take the family's medium weight rather than a heavier system face.",
             ],
           },
@@ -270,7 +270,7 @@ const messages = {
             items: [
               "Keep the tree's names in the window's own face: the project name is SF Pro medium at 14 and the Session title medium at 13.5. A rounded SF, Optima and a slab were each tried and each read as an import in a column of system text, worst of all beside a Chinese name that falls back to PingFang anyway.",
               "Set a branch name in proportional text at 11.5 medium, one ink step louder: a ref is not code anyone reads glyph by glyph, and a cell of fixed-width glyphs among proportional labels cost about a seventh of the row's width.",
-              "Give up a branch name's width a segment at a time - `release/web/interaction-report-fields-long` becomes `r/web/…`, then `r/w/…` - and only a ref too wide even at that elides its head, which keeps the leaf. The leaf is never touched and nothing is invented.",
+              "Give up a branch name's width a segment at a time (`release/web/interaction-report-fields-long` becomes `r/web/…`, then `r/w/…`) and only a ref too wide even at that elides its head, which keeps the leaf. The leaf is never touched and nothing is invented.",
               "Derive the gaps from ink: 14 from a worktree's label to the first Session's title, 17.5 to 19.5 between two Sessions, 27 to 29.5 from a block up to the next label, about 36 from a project to the next one and 30 from a summary row. Session rows are 46, projects 32, worktrees and folded rows 22.",
               "Sink a group's name four points in its row and a worktree's label three, with no gap to its first Session, and space the inactive-projects row as the boundary it is: it takes the group gap plus nine, because its avatar stack starts higher in its row than a project tile does.",
             ],
@@ -295,7 +295,7 @@ const messages = {
           {
             title: "Changed",
             items: [
-              "Set the sidebar's type on four sizes instead of six: a Session title at 13.5, its second line at 12, the meta tier at 11.5 and numerals at 11. Six sizes used to span three points, so 12 and 11.5 - or 11 and 10.5 - were indistinguishable in one row.",
+              "Set the sidebar's type on four sizes instead of six: a Session title at 13.5, its second line at 12, the meta tier at 11.5 and numerals at 11. Six sizes used to span three points, so 12 and 11.5 (or 11 and 10.5) were indistinguishable in one row.",
               "Give the ink ladder four steps instead of five. Times, counts, glyphs and the second line sat at 32% of the ink, 2.4:1 on the card, under the floor for text that small; they moved up one step, the remaining steps spread to 82 / 64 / 52, and the fractions now resolve per appearance so paper clears the same floor.",
               "Rework the rhythm: a Session row 46 high, a project 32, a worktree 22, folded and idle rows carrying the height of the rows they fold; gaps of 0, 2, 8, 16 and 28, with 10 between projects when the one above ends in a one-line row.",
               "End both Session lines on one column: the age is right-aligned in a fixed 30-point column that the second line also reserves, and the icon column shrank from 18 to 16, so the title gained six points of width.",
@@ -329,7 +329,7 @@ const messages = {
           {
             title: "Changed",
             items: [
-              "Draw the update card around what the wait means: the app's own icon, the version under the title, a 3pt segment sweeping a track instead of a percentage the updater never reports - still under Reduce Motion - and a footnote saying Sessions keep running. The card takes the popover rung of the elevation ladder at a 340-point width instead of a shadow radius of its own.",
+              "Draw the update card around what the wait means: the app's own icon, the version under the title, a 3pt segment sweeping a track instead of a percentage the updater never reports (still under Reduce Motion), and a footnote saying Sessions keep running. The card takes the popover rung of the elevation ladder at a 340-point width instead of a shadow radius of its own.",
               "Give the update markers one vocabulary: a failed update is an exclamation in the header chip and in the sidebar footer, which no longer draws a circular retry arrow, and the chip keeps one 11pt medium label and one glyph slot in every state instead of dropping to 12pt light with no glyph for a failure. The label says \"Update failed\".",
               "Set a menu's group header as a 12pt sentence-case caption instead of 11pt tracked capitals, and say it the same way in the preset bar, the approval tray, the notices popover, the Hosts panel and the SSH host list.",
               "Take the shared type tokens where the window still carried literals of its own: the notice toast's 12.5/11.5 title and message, and the approval tray's 13/11.5/12 title, header meta and action. `WarrenTypography` gains `footnote` for a card's closing line and `statusChip` for a state that is still a control.",
@@ -374,7 +374,7 @@ const messages = {
             title: "Changed",
             items: [
               "Derive the palette: a theme authors ground, ink and recess plus its status and identity hues, and every surface and ink is mixed from them, with text tiers as solid steps instead of fades of one ink.",
-              "Hold chrome to one grid - even points except a 1pt hairline, radii one step apart - and fail a test when a Desktop value leaves it.",
+              "Hold chrome to one grid (even points except a 1pt hairline, radii one step apart) and fail a test when a Desktop value leaves it.",
               "Name a row's parts once, so a hover-only \"+\" keeps its slot and cannot re-truncate a name, and a worktree's chevron shares its group's column.",
               "Draw every floating surface as one family: menus, popovers, toasts, hover cards and the folded rail share one tone and one elevation, right-click menus are drawn in-window, keys are drawn as keys, and every dialog ends on one footer, so no confirm label wraps and a confirmation without a body pays no body inset.",
               "Tune Settings: it opens on Appearance and shows the app version, rows sit on a 56-point floor at 16/14, forms grow to 1040 and Usage to 1240, a paragraph stops at a 560-point reading measure, and the Settings window paints one surface from its top edge instead of wearing the system's grey.",
@@ -402,7 +402,7 @@ const messages = {
             title: "Release notes",
             items: [
               "The JSON control protocol remains at 4.0: no method was added or changed, no state schema moves, and this release migrates no state.",
-              "Remote access is end-to-end encrypted - the relay sees only ciphertext, and connect codes and paired-client tokens stay on the Host and in the client's Keychain. Bolthole 0.2.0 raises the per-stream window to 4 MiB with a 64 MiB per-session window, so both ends should run this release.",
+              "Remote access is end-to-end encrypted: the relay sees only ciphertext, and connect codes and paired-client tokens stay on the Host and in the client's Keychain. Bolthole 0.2.0 raises the per-stream window to 4 MiB with a 64 MiB per-session window, so both ends should run this release.",
               "The Public Web link only works with the enrolled Server relay, not with serverless remote access.",
               "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
             ],
@@ -422,7 +422,7 @@ const messages = {
             items: [
               "Lead a plain shell's sidebar row with the command it runs or last ran, and its directory before anything runs. The second line says where it runs relative to the worktree and whether it is running, done, stopped, or failed with an exit code; the Tab and pane header keep naming where the shell is, and a name the user gave still wins.",
               "End every Session's second line at the age column so rows share one right edge, draw project names a half step larger, and keep the bright title ink for Sessions that are working, waiting, or failed.",
-              "Space the tree in four steps - 0 inside a block, 2 between one-line summaries, 10 between blocks, and 20 between projects and Tasks - and order worktrees with Sessions first.",
+              "Space the tree in four steps (0 inside a block, 2 between one-line summaries, 10 between blocks, and 20 between projects and Tasks) and order worktrees with Sessions first.",
               "Seat branch rows closer to their Sessions in a quieter 11pt face, fade a long branch instead of cutting its prefix, give every chevron one column, and drop a lone default branch from its project row.",
               "Show the pin and Task link on hover only, keep an inactive row's avatars as plain swatches, and let a Task lead with a drawn flag. A project whose worktrees all belong to Tasks now says so and leads to the Tasks tab.",
             ],
@@ -624,7 +624,7 @@ const messages = {
         date: "October 19, 2026",
         title: "Warren rebuilds the Desktop workbench.",
         summary:
-          "A major release that rebuilds the Desktop workbench — sidebar, top bar, menus, the conversation pane, and a separate Settings window — around what a Session is really doing: a shell's own prompt state, an agent's own conversation name, and one row per running subagent. Terminal Groups are removed, so every Session now belongs to a Workspace. The JSON control protocol remains at 4.0 and this release migrates no state.",
+          "A major release that rebuilds the Desktop workbench (sidebar, top bar, menus, the conversation pane, and a separate Settings window) around what a Session is really doing: a shell's own prompt state, an agent's own conversation name, and one row per running subagent. Terminal Groups are removed, so every Session now belongs to a Workspace. The JSON control protocol remains at 4.0 and this release migrates no state.",
         sections: [
           {
             title: "Added",
@@ -646,7 +646,7 @@ const messages = {
               "Keep the Host's own title request as a fallback for every agent. An agent that names its own conversation gets a 30-second grace period first, a name that arrives later still replaces the Host's title for another minute, and an agent that never names the conversation falls back to the configured LLM request as before. The Settings switch now reads as the fallback it is.",
               "Give every Session one name. The top bar, the sidebar row, a split pane's header, a tab, and the window title now resolve the same `SessionTitle`: the user's name wins, then an Agent's own or generated name, then a kind name, then a custom command's summary, then a shell's location. A shell's running command travels beside the title rather than inside it.",
               "Drop the verb from a shell row's second line. It says only the command now, in the monospaced face, shortened by the same `CommandSummary` the top bar uses.",
-              "Let a resting shell's row collapse to one line. Ten minutes after its last command ends — or right away if it never ran — a shell row drops to a 30pt line, and running a command brings the second line back. A failed command stays two lines until the Session has been looked at once.",
+              "Let a resting shell's row collapse to one line. Ten minutes after its last command ends, or right away if it never ran, a shell row drops to a 30pt line, and running a command brings the second line back. A failed command stays two lines until the Session has been looked at once.",
               "Make a section's add control a permanent part of its heading. Projects and Tasks always show the small grey `+` left of the fold arrow instead of revealing it on hover.",
               "Slide the selected plate between top-bar tabs. A Tab's selection is the sidebar's fill with a hairline border, and the plate travels on the shared `WarrenMotion.selection` spring instead of fading in place. The tab track no longer sits in an outer capsule.",
               "Put the blocking dialogs on one container. `WarrenDialog` owns the ground, the padding, the title block and the S/M/L widths (400 / 480 / 720), so the rename prompt, the message dialog, and the task, workspace and project delete confirmations draw inside it.",
@@ -773,7 +773,7 @@ const messages = {
             title: "Added",
             items: [
               "Drive Agents over the Agent Client Protocol (RFC 0023). An ACP Session has no PTY: the Host launches the provider's ACP server through the login shell, translates `session/update`, permissions, and prompt results into canonical Agent events, and survives an agent crash or Host restart through `session/resume` or `session/load`. A detached holder keeps the agent alive across a Host restart, and the CLI creates one with `--agent-handler acp`.",
-              "Open an ACP Session in one Conversation surface on all three clients — a trailing prompt bubble, one collapsed work trail, reasoning on demand, an edited-files card, and a decision dock above the composer — shared with terminal Agents. The new-session sheet offers Chat or Terminal for Claude, Codex, and OpenCode.",
+              "Open an ACP Session in one Conversation surface on all three clients (a trailing prompt bubble, one collapsed work trail, reasoning on demand, an edited-files card, and a decision dock above the composer), shared with terminal Agents. The new-session sheet offers Chat or Terminal for Claude, Codex, and OpenCode.",
               "Publish the agent's model, mode, and effort selectors under `agent-config-v1` and accept `agent.config.set`; back ACP `terminal/create` with a visible terminal Session; and hand a conversation off to a resuming terminal Session with `session.handoff`.",
               "Keep every running Agent Session current in the background: iOS and Desktop negotiate `agent-streams-v1` for one stream per subscribed Session, with `agent.events.unsubscribe`.",
               "Draw plan proposals as their own card (Codex `<proposed_plan>` and Claude `ExitPlanMode`), answer Claude's `AskUserQuestion` from the Agent view, and answer Codex's “Implement this plan?” picker.",
@@ -830,7 +830,7 @@ const messages = {
           {
             title: "Changed",
             items: [
-              "Report connection state through one presentation layer both clients share — live, settling, and interrupted with a 1.2s grace — so sub-second flaps no longer paint a red banner while an absent Host is still reported at once.",
+              "Report connection state through one presentation layer both clients share (live, settling, and interrupted with a 1.2s grace), so sub-second flaps no longer paint a red banner while an absent Host is still reported at once.",
               "Prove liveness to the Host: iOS advertises and sends `app-heartbeat-v1` pings, and all three Relay hops count any inbound frame as liveness, not only pongs.",
               "Run Agent turns through a per-session ordered dispatcher on the Headless reader, so a slow turn no longer delays the heartbeat while two turns for one session keep the CLI's arrival order.",
             ],
@@ -950,7 +950,7 @@ const messages = {
             title: "Release notes",
             items: [
               "The protocol remains at 4.0 and the state schema stays at 4 with no migration; an editor opened in the retired content mode is migrated into a marker and opens as a region.",
-              "The editor region is not a Host pane leaf — it has no PTY, lifecycle, input lease, or Host ownership — so it follows the Desktop's layout rather than a Host-owned arrangement.",
+              "The editor region has no PTY, lifecycle, input lease, or Host ownership, so it is not a Host pane leaf and follows the Desktop's layout instead of a Host-owned arrangement.",
               "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is for internal or temporary testing.",
             ],
           },
@@ -2150,16 +2150,16 @@ const messages = {
         date: "2026 年 11 月 13 日",
         title: "三端一套字体，浮起来的东西共用一个气泡。",
         summary:
-          "Desktop、iOS 与 Web 共用一套字体，浮在窗口上的东西也统一由 Warren 自己画成一个气泡。只读一次的字——标题、名字、对话框、浮层行、设置页、空状态、浮层提示——改用 Avenir Next，分支名改用其窄体，旁边的密集行仍用系统字体。浮层提示与悬停卡片不再交给系统，而由 Warren 绘制；确认操作走同一个对话框；右侧栏的标签共用一个外部编辑器按钮；Shell Session 的标签标出是否在运行、在跑什么，第二行标出位置。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+          "Desktop、iOS 与 Web 共用一套字体，浮在窗口上的东西也统一由 Warren 自己画成一个气泡。只读一次的字（标题、名字、对话框、浮层行、设置页、空状态、浮层提示）改用 Avenir Next，分支名改用其窄体，旁边的密集行仍用系统字体。浮层提示与悬停卡片不再交给系统，而由 Warren 绘制；确认操作走同一个对话框；右侧栏的标签共用一个外部编辑器按钮；Shell Session 的标签标出是否在运行、在跑什么，第二行标出位置。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
         sections: [
           {
             title: "调整",
             items: [
-              "三端都把只读一次的字改用 Avenir Next：页面与屏幕标题、项目名、对话框标题、浮层行、设置页与分组标题、设置导航、空状态与浮层提示。字号比它替换的 SF 大半点，因为 Avenir 的下半部分更低。只有拉丁文字变化——Avenir Next 没有中日韩字形，中文名仍用系统字体与其回退；iOS 上的每个字号都用 relativeTo: 设置，动态字体仍可缩放。",
+              "三端都把只读一次的字改用 Avenir Next：页面与屏幕标题、项目名、对话框标题、浮层行、设置页与分组标题、设置导航、空状态与浮层提示。字号比它替换的 SF 大半点，因为 Avenir 的下半部分更低。只有拉丁文字变化：Avenir Next 没有中日韩字形，中文名仍用系统字体与其回退；iOS 上的每个字号都用 relativeTo: 设置，动态字体仍可缩放。",
               "凡是要写出分支名的地方都改用 Avenir Next Condensed Medium：侧边栏、Inspector 的分支条与分支卡、iOS 的 Changes 页、Web 的 Git 面板。字形移进了 WarrenTypography，app target 的视图也能像侧边栏一样设置分支名。",
               "其余角色也改成命名 token，不再在每个调用点重写字号。密集行仍用系统字体，但其中各项改用具名 token，并新增 count 表示单独画出的数字：Inspector 的分节计数与侧边栏的标签计数原本是同一角色的三种字号，count 用等宽数字设置它，数字变化时旁边的字不会跟着动。+12 -3 这类和仍用等宽，因为它们的数字要在行间排成一列。",
               "浮层提示统一用一个气泡绘制。Desktop 上剩余的 AppKit .help 提示都改用 warrenTooltip，于是所有提示共用同一个 Avenir Next 气泡、同样的悬停时长与换行，长提示在 320 点处折行，不会跑出窗口。Web 上原先的原生 title 提示换成一页一个代理气泡：第一个等 450ms，有气泡在显示或刚隐去 300ms 内则立即显示，60ms 的宽限让它能在相邻控件间滑过去，点击、按键或滚动即关闭；下方没位置时翻到控件上方，始终距视口边缘 8 点，触控输入不显示提示，开启减少动态效果时取消滑动。由于画出的气泡对辅助技术隐藏，提示同时补充控件名称的，该文本现在也作为控件的描述。",
-              "Session 的悬停统一成一张详情卡：Shell 行、Agent 行与窗格标题都用同一张卡、同样的无从时长与位置，每个值用各自该用的字体。列表行的提示也不再尾随指针——每次都要等满一秒，且不在行间滑动。",
+              "Session 的悬停统一成一张详情卡：Shell 行、Agent 行与窗格标题都用同一张卡、同样的无从时长与位置，每个值用各自该用的字体。列表行的提示也不再尾随指针：每次都要等满一秒，且不在行间滑动。",
               "所有确认都走同一个对话框：Task、Workspace、项目与 Host 的删除以及用量重置现在共用同一个确认对话框和同一个页脚；字段标签用 Avenir Next Medium 12，输入框默认用比例字体（里面多半是名字），类代码的字段显式改成等宽。",
               "更新卡片改用浮层 token 绘制，并且每行只说一件事：脚注说 Session 会继续运行，重启较慢时说明仍在重启，不再重复上面的进度。更新小标签改用 Avenir Next，字距只留给 BUILD 大写。",
               "设置导航每一项都有自己的图标，导航本身就能说明会去哪里，不必全靠文字。",
@@ -2195,17 +2195,17 @@ const messages = {
         date: "2026 年 11 月 13 日",
         title: "窗口不止一种字体，每种字体各管一类字。",
         summary:
-          "仅涉及 Desktop 的版本：窗口不再只有一种字体。只读一次的字——项目名、设置页、空状态、菜单分组标题、浮层提示——改用 Avenir Next；分支名改用其窄体；Projects / Tasks 标签改用 Seravek；密集行里需要扫读的文字仍用系统字体。四层结构、行种类与 300 点宽度未变；JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+          "仅涉及 Desktop 的版本：窗口不再只有一种字体。只读一次的字（项目名、设置页、空状态、菜单分组标题、浮层提示）改用 Avenir Next；分支名改用其窄体；Projects / Tasks 标签改用 Seravek；密集行里需要扫读的文字仍用系统字体。四层结构、行种类与 300 点宽度未变；JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
         sections: [
           {
             title: "调整",
             items: [
-              "树在有理由的地方引入第二种字体：Projects 与 Tasks 是人最先读的行，所以名字改用 Avenir Next Medium 14。只有拉丁文字变化——Avenir Next 没有中日韩字形，中文名仍用系统字体与其回退，不会走形。",
+              "树在有理由的地方引入第二种字体：Projects 与 Tasks 是人最先读的行，所以名字改用 Avenir Next Medium 14。只有拉丁文字变化：Avenir Next 没有中日韩字形，中文名仍用系统字体与其回退，不会走形。",
               "分支名改用 Avenir Next Condensed Medium 12.5：它属于项目名的同一家族，两者读起来是一块而不是一个标签加一条注脚；窄体比原先 11.5 的比例系统字体更大半点却更窄，长 ref 因此能多留几个字母。",
               "Session 标题改用 regular：原为 13.5 medium，一列 medium 标题比上方的项目名还重，而项目名才是人先读的一层，标题现在让位给它。13.5 与 11 的字号差依旧把标题与副行分开。",
               "Projects / Tasks 标签改用 Seravek 14，选中态 medium。Avenir 的几何大写在与小写混排的 \"Projects\" 里显得分开，Seravek 不会。用 regular 与 medium 而非 medium 与 bold：标签位于所有行之上，加粗会先于列表抢眼睛，而墨色与下划线已经标出选中项。计数沿用同一家族并用等宽数字，每个标签预留选中时的宽度，切换时不会顶动后一个。",
               "折叠计数行改用 Avenir Next 斜体：\"N idle worktrees\" 与 \"N inactive projects\" 是对被折叠行的说明，不是又一个名字，斜体就说明了这点，不必再换一档灰色。计数本身保持直立 medium 等宽数字，数字变化时旁边的字不会跟着晃。",
-              "只读一次的标题改用 Avenir Next，字号比原来的 SF 大半点，因为它的下半部分更低：空状态的标题与正文、设置页标题、设置分组标题，以及设置导航里那些大写加字距的标签。菜单分组标题与二级页标题同样处理（12 medium 与 13.5 demi-bold），其下的行仍用系统字体——原生菜单的控制项用系统字体，标签则要与它们区分开。",
+              "只读一次的标题改用 Avenir Next，字号比原来的 SF 大半点，因为它的下半部分更低：空状态的标题与正文、设置页标题、设置分组标题，以及设置导航里那些大写加字距的标签。菜单分组标题与二级页标题同样处理（12 medium 与 13.5 demi-bold），其下的行仍用系统字体：原生菜单的控制项用系统字体，标签则要与它们区分开。",
               "浮层提示的文字与悬停卡片的标签改用 Avenir Next medium（12.5 与 11.5）：它们只读一次就过，在这个字号下浮在窗口上的表面会让 regular 显得纤细，所以取同族的 medium，而不是更重的系统字体。",
             ],
           },
@@ -2231,7 +2231,7 @@ const messages = {
         date: "2026 年 11 月 12 日",
         title: "侧边栏的名字、分支名与间距，都按实测来。",
         summary:
-          "仅涉及 Desktop 的补丁：侧边栏收尾——名字改用参考实现的做法，分支名保留能认出它的那一段，行与行之间的间距按实测墨迹推导而不是靠眼睛挑。四层结构、行种类与 300 点宽度未变；JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+          "仅涉及 Desktop 的补丁：侧边栏收尾，名字改用参考实现的做法，分支名保留能认出它的那一段，行与行之间的间距按实测墨迹推导而不是靠眼睛挑。四层结构、行种类与 300 点宽度未变；JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
         sections: [
           {
             title: "调整",
@@ -2240,7 +2240,7 @@ const messages = {
               "分支名改为比例字 11.5 medium，并提亮一级：ref 不是逐字阅读的代码，而固定字宽的方块混在比例标签里，既像外来物，又吃掉约七分之一的行宽。",
               "宽度不够时按路径层级逐级缩写：`release/web/interaction-report-fields-long` 先变成 `r/web/…`，再变成 `r/w/…`；只有连最简形式都放不下时才从头部省略，叶子始终保留，也不自造字符。",
               "间距按墨迹推导：分支名到首个 Session 标题 14，Session 之间 17.5–19.5，块到下一个分支名 27–29.5，项目之间约 36，摘要行之后约 30。Session 行 46、项目行 32、工作树与折叠行 22。",
-              "项目名在行内下移 4 点、分支名下移 3 点且与首个 Session 之间不留缝；inactive projects 行按组边界处理——因为它行内的头像堆比项目方块更靠上，所以取组间距再加 9 点。",
+              "项目名在行内下移 4 点、分支名下移 3 点且与首个 Session 之间不留缝；inactive projects 行按组边界处理，因为它行内的头像堆比项目方块更靠上，所以取组间距再加 9 点。",
             ],
           },
           {
@@ -2383,7 +2383,7 @@ const messages = {
         date: "2026 年 10 月 27 日",
         title: "Warren 让 shell 行以命令为主，并给侧栏一条右缘。",
         summary:
-          "补丁版本：完善新版 Desktop 侧栏——普通 shell 行以正在或最后运行的命令为主，第二行说明运行位置与结果，所有行共用一条右缘，含 Session 的工作树排在前面，深色 Ember 侧栏中的分支名也有可读的墨色。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+          "补丁版本：完善新版 Desktop 侧栏，普通 shell 行以正在或最后运行的命令为主，第二行说明运行位置与结果，所有行共用一条右缘，含 Session 的工作树排在前面，深色 Ember 侧栏中的分支名也有可读的墨色。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
         sections: [
           {
             title: "调整",
@@ -2549,7 +2549,7 @@ const messages = {
         date: "2026 年 10 月 19 日",
         title: "Warren 在慢链路上更快回应 Agent。",
         summary:
-          "次版本：去掉 Agent 路径上的固定等待——收到输入后以及回合进行中，transcript watcher 以 50ms 读取，PTY 提交在 TUI 回显且输出安静后立即继续，新增可选的 `output-ack-v1` 能力把在途终端输出限制在约一个往返。同时把等待中的 Agent 计数到 Dock 图标，并在 Warren 处于后台时发一条 macOS 通知。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+          "次版本：去掉 Agent 路径上的固定等待，收到输入后以及回合进行中，transcript watcher 以 50ms 读取，PTY 提交在 TUI 回显且输出安静后立即继续，新增可选的 `output-ack-v1` 能力把在途终端输出限制在约一个往返。同时把等待中的 Agent 计数到 Dock 图标，并在 Warren 处于后台时发一条 macOS 通知。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
         sections: [
           {
             title: "新增",
@@ -2592,7 +2592,7 @@ const messages = {
         date: "2026 年 10 月 19 日",
         title: "Warren 重建 Desktop 工作台。",
         summary:
-          "大版本：围绕 Session 的真实状态重建 Desktop 工作台——侧边栏、顶栏、菜单、对话面板，以及独立的 Settings 窗口——并展示 shell 自身的提示符状态、agent 自己生成的对话名，以及每个运行中子 agent 的独立行。Terminal Group 被移除，每个 Session 都归属一个 Workspace。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
+          "大版本：围绕 Session 的真实状态重建 Desktop 工作台（侧边栏、顶栏、菜单、对话面板，以及独立的 Settings 窗口），并展示 shell 自身的提示符状态、agent 自己生成的对话名，以及每个运行中子 agent 的独立行。Terminal Group 被移除，每个 Session 都归属一个 Workspace。JSON 控制协议仍为 4.0，本版本不迁移任何状态。",
         sections: [
           {
             title: "新增",
@@ -2614,7 +2614,7 @@ const messages = {
               "把 Host 自己的标题请求保留为所有 agent 的后备。会为自己对话命名的 agent 先获得 30 秒宽限期，之后到达的名字在接下来一分钟内仍会替换 Host 的标题；从不为自己对话命名的 agent 则照常走配置的 LLM 请求。Settings 中的开关现在如其名，是一个后备开关。",
               "让每个 Session 只有一个名字。顶栏、侧边栏行、分屏面板标题栏、标签和窗口标题现在都解析同一个 `SessionTitle`：用户的名字优先，其次是 Agent 自己或生成的名字，再次是 kind 名字，再次是自定义命令的摘要，最后是 shell 的位置。shell 正在运行的命令与标题并排显示，而不是嵌在标题里。",
               "去掉 shell 行第二行的动词。现在只显示命令，使用等宽字体，并由顶栏使用的同一个 `CommandSummary` 缩短。",
-              "让休息中的 shell 行折叠为一行。最后一条命令结束十分钟后——或从未运行则立即——shell 行降为 30pt 高的一行，运行命令会让第二行立即恢复。失败的命令保持两行，直到该 Session 被查看过一次。",
+              "让休息中的 shell 行折叠为一行。最后一条命令结束十分钟后（或从未运行则立即）shell 行降为 30pt 高的一行，运行命令会让第二行立即恢复。失败的命令保持两行，直到该 Session 被查看过一次。",
               "让分组的添加控件常驻在它的标题中。Projects 和 Tasks 始终在折叠箭头左侧显示小的灰色 `+`，不再悬停才显示。",
               "让选中底板在顶栏标签之间滑动。标签的选中态是侧边栏的填充色加一像素描边，底板在共享的 `WarrenMotion.selection` 弹簧上滑动到新选中的标签，而不是原地淡入。标签轨道不再包在外层胶囊里。",
               "把阻塞式对话框统一到同一个容器。`WarrenDialog` 现在负责底色、内边距、标题区和 S/M/L 宽度（400 / 480 / 720），重命名提示、消息对话框，以及 Task、Workspace、Project 的删除确认都画在它内部。",
@@ -2783,7 +2783,7 @@ const messages = {
         date: "2026 年 9 月 23 日",
         title: "Warren 新增可由 Agent 驱动的浏览器。",
         summary:
-          "次版本：新增 Warren Browser——由 Host 持有、可被 Agent 驱动的 Chromium Session；浏览器成为普通的 Desktop pane；两个客户端共用一套连接展示状态。JSON 控制协议仍为 4.0。",
+          "次版本：新增 Warren Browser，一个由 Host 持有、可被 Agent 驱动的 Chromium Session；浏览器成为普通的 Desktop pane；两个客户端共用一套连接展示状态。JSON 控制协议仍为 4.0。",
         sections: [
           {
             title: "新增",

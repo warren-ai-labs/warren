@@ -163,8 +163,8 @@ envelope under its own kind. It is a distinct kind for the same reason
 browser Session has no PTY at all.
 
 **Browser Action**:
-A normalized instruction in a closed vocabulary — `navigate`, `click`, `type`,
-`wait`, `snapshot`, `screenshot`, `evaluate` — sent to one Warren Browser
+A normalized instruction in a closed vocabulary (`navigate`, `click`, `type`,
+`wait`, `snapshot`, `screenshot`, `evaluate`) sent to one Warren Browser
 Session. An unknown action is a protocol error, not a passthrough.
 
 **Schedule**:
