@@ -234,6 +234,7 @@ function sessionToTab(session = {}) {
     transcriptPath: session.transcriptPath || "",
     agentModel: session.agentModel || "",
     agentStatus: session.agentStatus || null,
+    programStatus: session.programStatus || null,
     agentTurn: session.agentTurn || null,
     // The Host's one-line account of what the last completed turn did. It is
     // what a resting Agent row reads as its second line, as on the Desktop.
@@ -333,6 +334,9 @@ function applySessionMetadata(tabs, changes) {
       process: change.process || "",
       commandLine: change.commandLine || "",
       directory: change.directory || "",
+      // The OSC 7501 projection rides the metadata channel because a program
+      // may report on every progress tick. Omitted means cleared.
+      programStatus: change.programStatus || null,
     };
   });
 }

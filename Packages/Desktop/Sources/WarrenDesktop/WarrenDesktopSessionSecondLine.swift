@@ -395,6 +395,9 @@ extension WarrenDesktopWorkspaceSessionRow {
         now: Date = Date(),
         worktreeRoot: String = ""
     ) -> WarrenDesktopSessionSecondLine {
+        if let program = programSecondLine(for: session, now: now) {
+            return program
+        }
         if let shell = shellSecondLine(for: session, now: now, worktreeRoot: worktreeRoot) {
             return shell
         }
@@ -500,6 +503,33 @@ extension WarrenDesktopWorkspaceSessionRow {
         default:
             return line
         }
+    }
+
+    /// The second line of a Session whose program reported over OSC 7501 with
+    /// a message. The program's own words lead, because they say what it is on
+    /// ("Waiting for plan approval") better than its command line can. Nil when
+    /// the program sent no message, when its state draws no mark, or when an
+    /// Agent describes the Session; the row then keeps its usual rule.
+    static func programSecondLine(
+        for session: WarrenDesktopSession,
+        now: Date
+    ) -> WarrenDesktopSessionSecondLine? {
+        guard !session.isAgentSession,
+              session.state.isActive,
+              let mark = session.programStatusMark,
+              let message = session.programStatusMessage.flatMap(trimmed) else {
+            return nil
+        }
+        let shell = session.shellState
+        let meta: WarrenDesktopSessionSecondLine.Meta = shell?.isRunningCommand == true
+            ? shellDuration(from: shell?.commandStartedAt ?? shell?.lastExitAt, now: now)
+            : .none
+        return WarrenDesktopSessionSecondLine(
+            tone: mark == .working ? .running : .idle,
+            primary: message,
+            extras: [],
+            meta: meta
+        )
     }
 
     /// The second line of a plain shell, from the OSC 133 prompt state the Host

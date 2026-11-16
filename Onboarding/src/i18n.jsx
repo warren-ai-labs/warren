@@ -114,6 +114,51 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.40.0",
+        dateISO: "2026-11-16",
+        date: "November 16, 2026",
+        title: "A program says what it is doing, and an Agent names itself.",
+        summary:
+          "A release that lets the program inside a terminal say what it is doing, and lets an Agent name itself. Any program can report its state over OSC 7501, and the Host now parses that protocol on every Session's output path and answers its feature query, so the Desktop, iOS and the Web all draw a program's state through the one activity mark beside a Session's name. A program that reports a title names the Session it runs in, and a Host with no title model configured names a Session from the person's first message instead of leaving it at its directory. The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Read program status from terminal output on the Host. Any program can say what it is doing (idle, working, done, blocked, error) over OSC 7501, and the Host now implements the spec's pair grammar, base64 free text, id tree and hard limits, keeps one record set per terminal, and answers the feature query a program waits for before it reports. It runs on the output path for every Session, attached or not, so a program's state is already known when a client attaches later, and no client parses the escape sequence. A malformed report is discarded whole: an unknown state never degrades into idle, and decoded free text is refused when it carries a control character, so a record can never act as markup or as a terminal command.",
+              "Draw a program's state through the one activity mark. A program status rides the roster snapshot and the dedicated metadata delta beside the OSC 133 state, so a program that reports on every progress tick does not re-send the Session entity, and an omitted status means the records were cleared. The Desktop, iOS and the Web resolve it against the same mark table an Agent's status uses instead of a second mark type, so there is one ladder, one palette and one trailing dot per row: working animates, blocked takes the attention hue split by kind (permission reads as approval, question as input, anything else as unnamed), error reads as failed, and idle draws nothing. An Agent status still outranks a program status, because it is the richer fact about the same process, and a program that never binds an Agent still gets a mark. done draws the finished mark and keeps drawing until a new report replaces it, since a report carries no record of having been read; the program's own message leads the row's second line.",
+              "Name an Agent by its own program title. The protocol makes the root record's label the window title, so a program that names itself now ranks above the name Warren generated for the Session and below the user's own rename: the custom title first, then the program's title, then the Host's title. Only an Agent takes it (a shell is named by where it is, so a program reporting plan does not rename the Session it runs in), and only the root record counts, because a child record's label names one thing the program is doing rather than the program. The Host carries the title beside the summary, which stays the most urgent record, and Transport, the Desktop, iOS and the Web all read it from there.",
+              "Name a Session from the person's first message when no title model is configured. A Host with no title model left every Agent Session named by its directory for the whole conversation; it now keeps the first thing the person wrote, stripped of the scaffolding around it (provider context blocks, front matter, a pasted code block or JSON body, a leading slash command, a list marker, inline markup), and writes no name when nothing readable is left. The fallback runs on the lifecycle tick, after the provider's own name has had its chance and only while no title model is configured, so nothing above it in the chain is displaced. It writes one name per conversation and records it as the Host's own, so a provider name that lands later still replaces it while a manual rename never does. A provider that names its own conversations but stays silent now falls back to the same label instead of issuing a request it has no endpoint for.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Make the sidebar's Host foot one line at rest. The foot kept a 34pt tile row open beside its count, so a rest-state foot was a label after a row of empty squares. At rest it is the count alone, on the rows' own inset; under the pointer the tiles fan in ahead of it, each with its letter and its reachability, and the label follows them so the pointer never sits on the name it is reading out. At rest the tiles overlap to 7pt, so they stay plain swatches until the pointer fans them, and the label reads 2 more hosts instead of Other hosts beside the same count. The label names what the foot can switch to, so the window's own Host is visibly uncounted: a window on one of two saved Hosts reads 1 more host, where naming the whole set read 2 hosts beside a single tile.",
+              "Drop the initial tile from the sidebar's header. The lettered tile sat in front of the Host name while the row under it already spelled out the connection, so the header read twice; the name and its subtitle now take the full width, and the tile stays on the collapsed rail and the foot's stack.",
+              "Retire the onboarding film and refresh the screenshots. The film was recorded against the two-Host sidebar and no longer matched the Desktop, so the page and the README keep the terminal demo as the only demo in that section; the screenshots now show a real single-Host session, and their alt text describes what each one shows.",
+              "Remove the em dashes from the English prose across the documentation.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Answer the program status query before the batch's other replies. A program that asks for its device attributes in the same write stops listening for the feature answer once they arrive, and pi does exactly that, so an answer that followed the device report was dropped and pi never enabled OSC 7501. Answering first makes an unattached Session, where the Host's own responder answers the device report, behave like an attached one, where the client's emulator does. The scanner also stops copying every output batch: an ordinary 32 KiB batch went from 10.9µs and a 41 KiB allocation to 1.1µs and none.",
+              "Advance the roster revision when a program's status changes, so a client reads the change as a new snapshot instead of a repeat of the last one.",
+              "Keep the shell's own inference beside the program's report in a Desktop row. The row takes the louder of the program report and the shell's OSC 133 inference, and the Tab keeps following the row.",
+              "Centre the Host tiles that carry no letter. A Text with nothing in it still took the line box, so the rest-state swatch in the foot's stack sat off centre inside its square.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. A program status is a roster-only projection and is never persisted with the Session record, so a Host restart begins with an empty record set, which matches the protocol's rule that a full reset clears every record.",
+              "The Web bundle is rebuilt for the new mark. A client older than this release shows no program status and no program title, and continues to work.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.39.0",
         dateISO: "2026-11-13",
         date: "November 13, 2026",
@@ -2086,6 +2131,51 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.40.0",
+        dateISO: "2026-11-16",
+        date: "2026 年 11 月 16 日",
+        title: "程序自己说在做什么，Agent 自己命名。",
+        summary:
+          "这个版本让终端里的程序自己说在做什么，也让 Agent 自己命名。任何程序都可以用 OSC 7501 报告状态；Host 现在在每条 Session 的输出路径上解析这套协议并回答它的能力查询，于是 Desktop、iOS 与 Web 都把程序状态画在 Session 名称旁的那一个活动标记上。程序报告标题时，它所在的 Session 就用这个名字；没有配置标题模型的 Host，则用这个人的第一句话给 Session 命名，而不是一直用目录名。JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "在 Host 上从终端输出里读取程序状态。任何程序都可以用 OSC 7501 说自己正在做什么（idle、working、done、blocked、error），Host 现在实现规范里的成对语法、base64 自由文本、id 树与硬性上限，每个终端保留一套记录，并回答程序在报告前会等待的能力查询。它跑在每条 Session 的输出路径上，不论客户端是否附着，所以客户端之后附着时程序状态已经知道，且没有任何客户端需要解析这段转义序列。格式错误的报告整份丢弃：未知的 state 不会降级成 idle，解码出的自由文本里带控制字符就拒收，于是一条记录永远不会变成标记或终端命令。",
+              "用同一个活动标记画出程序状态。程序状态跟随 roster 快照，以及 OSC 133 状态旁边那条专门的元数据增量，所以每次进度刷新都报告的程序不会重发整个 Session 实体；增量里省略该项即表示记录已清空。Desktop、iOS 与 Web 都按 Agent 状态用的同一张标记表解析它，而不是另立一种标记，于是一套层级、一套配色、每行一个尾随圆点：working 会动，blocked 取警示色并按 kind 区分（permission 读作 approval，question 读作 input，其余读作 unnamed），error 读作 failed，idle 什么都不画。Agent 状态仍高于程序状态，因为它是同一个进程更具体的事实；从未绑定 Agent 的程序也照样有标记。done 画完成标记并一直留着，直到新的报告替换它，因为报告本身不记录是否已读；程序自己的消息排在行内第二行最前。",
+              "用程序自己的标题给 Agent 命名。协议把根记录的 label 定为窗口标题，所以自己命名的程序现在高于 Warren 为 Session 生成的名字、低于用户自己的重命名：先是 customTitle，再是程序的 title，最后是 Host 的标题。只有 Agent 采用它（shell 由所在位置命名，所以报告 plan 的程序不会重命名它所在的 Session），且只算根记录，因为子记录的 label 说的是程序正在进行的一件事，而不是程序本身。Host 把这个标题放在摘要旁边一并带出，摘要仍是最紧急的那条记录，Transport、Desktop、iOS 与 Web 都从那里读。",
+              "没有配置标题模型时，用这个人的第一句话给 Session 命名。没有标题模型的 Host 原先把每条 Agent Session 整场对话都按目录命名；现在它保留这个人写下的第一句话，剥掉周围的脚手架（provider 上下文块、front matter、粘进来的代码块或 JSON 正文、开头的斜杠命令、列表标记、行内标记），读不出东西就不写名字。这个替换在 lifecycle tick 上执行，排在 provider 自己的名字之后，且只在没有配置标题模型时生效，所以命名链上面任何一级都不会被顶掉。每次对话只写一个名字，并记作 Host 自己起的，于是之后到的 provider 名字仍能替换它，而手动重命名永远不会被替换。自己会给对话命名的 provider 若一直不开口，现在也回落到同一个标签，而不是发一个它没有端点可用的请求。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "侧边栏底部的 Host 区域静止时只占一行。底部原本在计数旁一直留着一排 34pt 的方块，于是静止状态是标签后面跟一排空方块。静止时只有计数本身，与行的内缩对齐；指针移上去时方块才在它前面展开，每个带自己的首字母与可达状态，标签跟在它们之后，指针不会压在自己正读的名字上。静止时方块重叠到 7pt，所以它们先只是色块，指针来了才展开；旁边的标签写“2 more hosts”，而不再是“Other hosts”后面跟同一个数字。标签写的是底部能切换过去的那几台，于是窗口自己那台明显不计在内：两台 Host 时读作“1 more host”，而原来的写法会在单个方块旁读作“2 hosts”。",
+              "侧边栏头部去掉首字母方块。带字母的方块坐在 Host 名字前面，而下面那一行已经把连接情况写清楚了，于是头部把同一件事说了两遍；现在名字与副标题占满整行，方块只留在折叠栏与底部的方块堆里。",
+              "下线 onboarding 的视频，并更新截图。那段视频是对着双 Host 侧边栏录的，已经和现在的 Desktop 不符，于是页面与 README 在这一节只保留终端演示；截图换成真实的单 Host 会话，替代文本按每张图实际展示的内容重写。",
+              "去掉文档英文正文里的所有破折号。",
+            ],
+          },
+          {
+            title: "修正",
+            items: [
+              "把程序状态查询排在的其它回复之前。程序如果在同一次写入里请求设备属性，属性一到位就不再监听能力答复，而 pi 正是这样做的，于是跟在设备报告之后的答复被丢弃，pi 永远打不开 OSC 7501。先答复让未附着的 Session（设备报告由 Host 自己的应答者回）表现得和已附着的 Session（回的是客户端的模拟器）一致。扫描器也不再复制每个输出批次：普通的 32 KiB 批次从 10.9µs 与 41 KiB 分配降到 1.1µs 且不分配。",
+              "程序状态变化时推进 roster 版本号，于是客户端把这次变化读成新的快照，而不是上一份的重复。",
+              "Desktop 行里把 shell 自己的推断与程序的报告并列保留。这一行取程序报告与 shell 的 OSC 133 推断中更响的那个，Tab 继续跟随这一行。",
+              "把没有字母的 Host 方块居中。内容为空的 Text 仍占着行高，于是底部方块堆里的静止色块在方框内偏了中心。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。程序状态只存在于 roster 投影里，从不与 Session 记录一起持久化，所以 Host 重启后记录集是空的，这也符合协议里“完全重置会清空所有记录”的规则。",
+              "Web 的构建产物为新标记重新生成。比本版本旧的客户端不显示程序状态与程序标题，其余行为不变。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.39.0",
         dateISO: "2026-11-13",

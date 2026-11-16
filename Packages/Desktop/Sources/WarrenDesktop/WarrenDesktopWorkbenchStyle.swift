@@ -189,7 +189,6 @@ enum WarrenDesktopSidebarMetrics {
 
     static let headerTrafficRowHeight: CGFloat = 30
     static let headerHostRowHeight: CGFloat = 44
-    static let hostTileSize: CGFloat = 26
     static let footerHeight: CGFloat = 40
 }
 
@@ -692,10 +691,10 @@ enum WarrenDesktopHostReachability: Equatable, Sendable {
 /// A Host's lettered tile: the name's lowercase initial in the monospaced
 /// face on a neutral square, with its reachability on the corner.
 ///
-/// The sidebar's Host row and the collapsed rail's Host button draw this one
-/// view, so the Host reads the same whether the sidebar is open or not. A
-/// project wears a filled colour square with a bold capital, so the two
-/// never read as one another.
+/// Only the collapsed rail's Host button draws it: with the rail open the
+/// Host's name stands alone in the header, and the connection is spelled out
+/// on the line under it. A project wears a filled colour square with a bold
+/// capital, so the two never read as one another.
 struct WarrenDesktopHostInitialTile: View {
     let name: String
     let size: CGFloat

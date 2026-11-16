@@ -11,6 +11,7 @@ import (
 	"github.com/abcdlsj/ghostline"
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/output"
+	"github.com/abcdlsj/warren/Headless/internal/programstatus"
 )
 
 const branchAtomicReanchor = "atomic_reanchor"
@@ -89,6 +90,29 @@ func (s *Service) recordOutputWithCursorMode(
 	for _, chunk := range output.SplitPayload(data) {
 		outputSession.mu.Lock()
 		frame, err := outputSession.ring.Append(sessionID, chunk)
+		// The Host owns OSC 7501 for every session, attached or not. It records
+		// what each program reports so a later attach already knows the status,
+		// and it answers the feature query so a program that waits for support
+		// (pi does) starts reporting. No client emulator in the tree speaks
+		// 7501 yet, so the Host's reply cannot race another terminal's.
+		//
+		// The answer goes ahead of every other reply in the batch. A program
+		// that asks for its device attributes at the same time stops listening
+		// for the feature answer once they arrive — pi does exactly that — so an
+		// answer that followed the device report would be dropped unread.
+		if broadcast {
+			query, changed := outputSession.observeProgramStatus(chunk)
+			if query {
+				replies = append(replies, []byte(programstatus.QueryReply))
+			}
+			if changed {
+				// A program status is live projection data with no durable Store
+				// write, so the observer-facing roster revision has to advance
+				// explicitly or roster-delta clients would reject the update as a
+				// revision that did not move.
+				s.bumpProgramRosterRevision()
+			}
+		}
 		if !attached {
 			replies = append(replies, outputSession.responder.Feed(chunk)...)
 		}

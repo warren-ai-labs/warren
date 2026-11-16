@@ -90,54 +90,51 @@ struct WarrenDesktopSidebarHeader: View {
             Button {
                 onToggleHostPicker?()
             } label: {
-                HStack(spacing: 10) {
-                    hostTile(tokens: tokens)
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 4) {
-                            // 13 rather than the design's 13.5, like a
-                            // Session title: a Chinese name sets larger.
-                            WarrenDesktopTreeTypography.scriptText(
-                                host?.name ?? "This Mac",
-                                latin: WarrenTypography.hostHeaderName,
-                                wide: WarrenTypography.hostHeaderNameWide
-                            )
-                                // The column's own title, so it takes the
-                                // solid ink rather than a fade of it: a fade
-                                // here had to be re-tuned whenever the ground
-                                // moved.
-                                .foregroundStyle(tokens.foreground)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            if isPublicAccessOn {
-                                publicAccessGlobe(tokens: tokens)
-                            }
-                            if onToggleHostPicker != nil {
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.system(size: 8, weight: .semibold))
-                                    .foregroundStyle(tokens.treeQuietText)
-                                    .opacity(isHostRowHovered || isHostPickerPresented ? 1 : 0)
-                                    .animation(
-                                        WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
-                                        value: isHostRowHovered || isHostPickerPresented
-                                    )
-                                    .accessibilityHidden(true)
-                            }
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        // 13 rather than the design's 13.5, like a
+                        // Session title: a Chinese name sets larger.
+                        WarrenDesktopTreeTypography.scriptText(
+                            host?.name ?? "This Mac",
+                            latin: WarrenTypography.hostHeaderName,
+                            wide: WarrenTypography.hostHeaderNameWide
+                        )
+                            // The column's own title, so it takes the
+                            // solid ink rather than a fade of it: a fade
+                            // here had to be re-tuned whenever the ground
+                            // moved.
+                            .foregroundStyle(tokens.foreground)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if isPublicAccessOn {
+                            publicAccessGlobe(tokens: tokens)
                         }
-                        if let host, !host.subtitle.isEmpty {
-                            // "This Mac", "Remote · Studio", or how the
-                            // connection is doing. The address is a detail for
-                            // the hover card, not the header.
-                            HostSubtitleLine(
-                                subtitle: host.subtitle,
-                                color: tokens.treeQuietText,
-                                stateColor: host.connectionState.isConnected
-                                    ? nil
-                                    : Self.toneColor(host.connectionTone, tokens: tokens)
-                            )
+                        if onToggleHostPicker != nil {
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(tokens.treeQuietText)
+                                .opacity(isHostRowHovered || isHostPickerPresented ? 1 : 0)
+                                .animation(
+                                    WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
+                                    value: isHostRowHovered || isHostPickerPresented
+                                )
+                                .accessibilityHidden(true)
                         }
                     }
-                    Spacer(minLength: 0)
+                    if let host, !host.subtitle.isEmpty {
+                        // "This Mac", "Remote · Studio", or how the
+                        // connection is doing. The address is a detail for
+                        // the hover card, not the header.
+                        HostSubtitleLine(
+                            subtitle: host.subtitle,
+                            color: tokens.treeQuietText,
+                            stateColor: host.connectionState.isConnected
+                                ? nil
+                                : Self.toneColor(host.connectionTone, tokens: tokens)
+                        )
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 8)
                 .frame(height: 40)
                 .background(
@@ -177,7 +174,7 @@ struct WarrenDesktopSidebarHeader: View {
                 shortcut: "⌘K"
             )
         }
-        // The button's own 8pt inset keeps the tile on the rows' 16pt line.
+        // The button's own 8pt inset keeps the Host name on the rows' 16pt line.
         .padding(.leading, 8)
         .padding(.trailing, 10)
         .frame(height: WarrenDesktopSidebarMetrics.headerHostRowHeight)
@@ -201,17 +198,6 @@ struct WarrenDesktopSidebarHeader: View {
             .warrenTooltip("Public Access is on")
             .accessibilityLabel("Public Access on")
             .accessibilityHidden(true)
-    }
-
-    /// The Host's tile, the same lettered square the collapsed rail's Host
-    /// button and the foot's Host stack draw, with its reachability on the
-    /// corner.
-    private func hostTile(tokens: WarrenColorTokens) -> some View {
-        WarrenDesktopHostInitialTile(
-            name: host?.name ?? "This Mac",
-            size: WarrenDesktopSidebarMetrics.hostTileSize,
-            reachability: host.map { WarrenDesktopHostReachability($0.connectionState) }
-        )
     }
 
     static func toneColor(_ tone: WarrenDesktopConnectionTone, tokens: WarrenColorTokens) -> Color {

@@ -933,6 +933,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
         public let agentExecutionID: String?
         public let transcriptPath: String?
         public let agentStatus: WarrenRemoteAgentStatus?
+        public let programStatus: WarrenRemoteProgramStatus?
         public let agentTurn: WarrenRemoteAgentTurn?
         /// Effective optional capabilities for this Session. `nil` means an
         /// older Host omitted the field; an empty array is an explicit
@@ -972,6 +973,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             agentExecutionID: String? = nil,
             transcriptPath: String? = nil,
             agentStatus: WarrenRemoteAgentStatus? = nil,
+            programStatus: WarrenRemoteProgramStatus? = nil,
             agentTurn: WarrenRemoteAgentTurn? = nil,
             agentCapabilities: [String]? = nil,
             createdAt: String? = nil,
@@ -1003,6 +1005,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             self.agentExecutionID = agentExecutionID
             self.transcriptPath = transcriptPath
             self.agentStatus = agentStatus
+            self.programStatus = programStatus
             self.agentTurn = agentTurn
             self.agentCapabilities = agentCapabilities
             self.createdAt = createdAt
@@ -1085,7 +1088,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             case lifecycle, epoch, sequence, pinned
             case agentSessionID = "agentSessionId"
             case agentExecutionID = "agentExecutionId"
-            case transcriptPath, agentStatus, agentTurn, agentCapabilities, createdAt, endedAt
+            case transcriptPath, agentStatus, programStatus, agentTurn, agentCapabilities, createdAt, endedAt
             case endReason, resumedFrom
         }
 
@@ -1115,6 +1118,7 @@ public struct WarrenRemoteRoster: Codable, Equatable, Hashable, Sendable {
             agentExecutionID = try values.decodeIfPresent(String.self, forKey: .agentExecutionID)
             transcriptPath = try values.decodeIfPresent(String.self, forKey: .transcriptPath)
             agentStatus = try values.decodeIfPresent(WarrenRemoteAgentStatus.self, forKey: .agentStatus)
+            programStatus = try values.decodeIfPresent(WarrenRemoteProgramStatus.self, forKey: .programStatus)
             agentTurn = try values.decodeIfPresent(WarrenRemoteAgentTurn.self, forKey: .agentTurn)
             agentCapabilities = try values.decodeIfPresent([String].self, forKey: .agentCapabilities)
             createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
@@ -1635,6 +1639,97 @@ public struct WarrenRemoteAgentStatus: Codable, Equatable, Hashable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey { case activity, attention }
+}
+
+/// State a program self-reports under the Program Status Protocol (OSC 7501).
+/// This describes the program in the terminal, not the Warren Session.
+public enum WarrenRemoteProgramStatusState: String, Codable, CaseIterable, Sendable {
+    case idle, working, done, blocked, error
+    case unknown
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "idle": self = .idle
+        case "working": self = .working
+        case "done": self = .done
+        case "blocked": self = .blocked
+        case "error": self = .error
+        default: self = .unknown
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self.init(rawValue: value)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue == "unknown" ? "unknown" : rawValue)
+    }
+}
+
+/// One OSC 7501 record. Records form a tree by id; the root record has an
+/// empty id.
+public struct WarrenRemoteProgramStatusRecord: Codable, Equatable, Hashable, Sendable {
+    public let id: String?
+    public let state: WarrenRemoteProgramStatusState
+    public let kind: String?
+    public let app: String?
+    public let title: String?
+    public let message: String?
+    public let progress: Int?
+
+    public init(
+        id: String? = nil,
+        state: WarrenRemoteProgramStatusState,
+        kind: String? = nil,
+        app: String? = nil,
+        title: String? = nil,
+        message: String? = nil,
+        progress: Int? = nil
+    ) {
+        self.id = id
+        self.state = state
+        self.kind = kind
+        self.app = app
+        self.title = title
+        self.message = message
+        self.progress = progress
+    }
+}
+
+/// The live OSC 7501 projection of a Session's terminal. The top-level fields
+/// summarize the record a client should surface first; `records` carries every
+/// record for a client that renders the full set. It is never persisted.
+public struct WarrenRemoteProgramStatus: Codable, Equatable, Hashable, Sendable {
+    public let state: WarrenRemoteProgramStatusState
+    public let kind: String?
+    public let app: String?
+    /// The root record's own label, which the protocol says is normally the
+    /// window title. Separate from the summary, which may be a child record.
+    public let title: String?
+    public let message: String?
+    public let progress: Int?
+    public let records: [WarrenRemoteProgramStatusRecord]?
+
+    public init(
+        state: WarrenRemoteProgramStatusState,
+        kind: String? = nil,
+        app: String? = nil,
+        title: String? = nil,
+        message: String? = nil,
+        progress: Int? = nil,
+        records: [WarrenRemoteProgramStatusRecord]? = nil
+    ) {
+        self.state = state
+        self.kind = kind
+        self.app = app
+        self.title = title
+        self.message = message
+        self.progress = progress
+        self.records = records
+    }
 }
 
 public enum WarrenRemoteAgentTurnStatus: String, Codable, Sendable {

@@ -119,6 +119,9 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         /// The shell's OSC 133 semantic prompt state. Nil when the shell
         /// never emitted a marker, so no part of the state is known.
         var shell: ShellMetadata? = nil
+        /// The terminal program's OSC 7501 self-report, when it sent one. It
+        /// travels in the metadata delta, so the field is mutable here.
+        var programStatus: ProgramStatus? = nil
         var agentExecutionId: String? = nil
         /// `"acp"` marks a Session with no terminal: an Agent driven over the
         /// Agent Client Protocol, rendered by the Conversation surface.
@@ -177,6 +180,20 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
         }
     }
 
+    /// The summary fields of an OSC 7501 program status. The per-record list is
+    /// deliberately dropped: a sidebar row needs the record to surface first,
+    /// and the Host already chose it.
+    struct ProgramStatus: Decodable, Sendable, Equatable {
+        let state: String
+        let kind: String?
+        let app: String?
+        /// The root record's own label, which the protocol calls the window
+        /// title. Separate from the summary state above, which may be a child.
+        let title: String?
+        let message: String?
+        let progress: Int?
+    }
+
     struct Delta: Decodable, Sendable {
         struct SessionMetadata: Decodable, Sendable, Equatable {
             let id: String
@@ -184,6 +201,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
             let commandLine: String?
             let directory: String?
             let shell: ShellMetadata?
+            let programStatus: ProgramStatus?
         }
 
         struct SessionMetadataChanges: Decodable, Sendable {
@@ -333,6 +351,7 @@ struct RemoteRoster: Decodable, Sendable, Equatable {
             updated.commandLine = change.commandLine
             updated.directory = change.directory
             updated.shell = change.shell
+            updated.programStatus = change.programStatus
             return updated
         }
     }

@@ -59,6 +59,9 @@ public struct SessionTitle: Equatable, Sendable {
     ///     prompt. Falls back to `commandLine` when the shell reported no
     ///     prompt state.
     ///   - reportsPromptState: whether `runningCommand` is authoritative.
+    ///   - programTitle: the root record's label from a program's OSC 7501
+    ///     report. The protocol calls it the window title, so an Agent that
+    ///     names itself outranks the name Warren generated for it.
     public static func resolve(
         customTitle: String?,
         title: String,
@@ -69,7 +72,8 @@ public struct SessionTitle: Equatable, Sendable {
         runningCommand: String = "",
         reportsPromptState: Bool = false,
         directory: String,
-        worktreeRoot: String
+        worktreeRoot: String,
+        programTitle: String = ""
     ) -> SessionTitle {
         let name = TerminalSessionPresentation.sessionName(
             customTitle: customTitle,
@@ -83,6 +87,15 @@ public struct SessionTitle: Equatable, Sendable {
             reportsPromptState: reportsPromptState
         )
         if agentKinds.contains(kind) {
+            // The user's own name outranks every generated one; below it, the
+            // program's own label outranks the name Warren generated, because
+            // the protocol makes the root record's label the window title. A
+            // shell keeps its location title either way: a program reporting
+            // "plan" does not get to rename the Session it runs in.
+            let custom = customTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !custom.isEmpty { return SessionTitle(title: custom) }
+            let program = programTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !program.isEmpty { return SessionTitle(title: program) }
             return SessionTitle(title: name.isEmpty ? kind.displayName : name)
         }
         switch kind {

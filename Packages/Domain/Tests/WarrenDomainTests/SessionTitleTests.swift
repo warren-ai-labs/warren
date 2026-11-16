@@ -9,6 +9,7 @@ import XCTest
 /// rule, and the command the top bar appends.
 final class SessionTitleTests: XCTestCase {
     private func resolve(
+        programTitle: String = "",
         customTitle: String? = nil,
         title: String = "Shell",
         kind: TerminalSessionKind = .shell,
@@ -30,7 +31,8 @@ final class SessionTitleTests: XCTestCase {
             runningCommand: runningCommand,
             reportsPromptState: reportsPromptState,
             directory: directory,
-            worktreeRoot: worktreeRoot
+            worktreeRoot: worktreeRoot,
+            programTitle: programTitle
         )
     }
 
@@ -121,6 +123,39 @@ final class SessionTitleTests: XCTestCase {
         )
         XCTAssertEqual(resolved.title, "npm run dev")
         XCTAssertEqual(resolved.runningCommand, "")
+    }
+
+    /// The protocol makes the root record's label the window title, so an Agent
+    /// that names itself outranks the name Warren generated for it.
+    func testAnAgentsOwnProgramTitleOutranksTheGeneratedName() {
+        let resolved = resolve(
+            programTitle: "Audit the resize race",
+            title: "Fix the resize race",
+            kind: .claude
+        )
+        XCTAssertEqual(resolved.title, "Audit the resize race")
+    }
+
+    func testAUserSetNameOutranksTheProgramsTitle() {
+        let resolved = resolve(
+            programTitle: "Audit the resize race",
+            customTitle: "My Agent",
+            title: "Fix the resize race",
+            kind: .codex
+        )
+        XCTAssertEqual(resolved.title, "My Agent")
+    }
+
+    func testAShellKeepsItsLocationTitleWhateverTheProgramReports() {
+        let withProgram = resolve(
+            programTitle: "plan",
+            title: "",
+            kind: .shell,
+            shellName: "zsh"
+        )
+        let withoutProgram = resolve(title: "", kind: .shell, shellName: "zsh")
+        XCTAssertEqual(withProgram.title, withoutProgram.title)
+        XCTAssertNotEqual(withProgram.title, "plan")
     }
 
     func testABrowserNamesItsKind() {

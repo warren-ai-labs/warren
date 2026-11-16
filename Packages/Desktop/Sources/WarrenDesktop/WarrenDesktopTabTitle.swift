@@ -33,7 +33,8 @@ enum WarrenDesktopTabTitle {
             runningCommand: session.shellState.map { $0.atPrompt ? "" : $0.runningCommand } ?? "",
             reportsPromptState: session.shellState != nil,
             directory: session.workingDirectory,
-            worktreeRoot: worktreeRoot
+            worktreeRoot: worktreeRoot,
+            programTitle: session.programStatusTitle ?? ""
         )
         guard resolved.title.isEmpty else { return resolved }
         return SessionTitle(

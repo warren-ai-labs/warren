@@ -89,8 +89,19 @@ extension WarrenDesktopSession {
     /// a plain shell reports its OSC 133 state instead: green while a command is
     /// running, red after a command failed. A shell that never emitted a marker
     /// reports nothing, so no state is invented for it.
+    ///
+    /// A program that reported over OSC 7501 joins the shell's inference, and
+    /// the louder of the two wins: both describe the same foreground command,
+    /// so a blocked program inside a running command reads as blocked. An Agent
+    /// status outranks both, because it is the richer, provider-specific report.
     public var rowStatusMark: WarrenActivityMark? {
         if isAgentSession { return activityMark }
+        return [programStatusMark, shellInferredMark].compactMap { $0 }.max()
+    }
+
+    /// What the shell's own OSC 133 marker says: a command is running, or the
+    /// last one failed.
+    private var shellInferredMark: WarrenActivityMark? {
         guard let shell = shellState else { return activityMark }
         if shell.isRunningCommand { return .working }
         if shell.didFail { return .failed }

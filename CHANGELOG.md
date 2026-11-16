@@ -4,6 +4,127 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-11-16
+
+A release that lets the program inside a terminal say what it is doing, and
+lets an Agent name itself. Any program can report its state over OSC 7501, and
+the Host now parses that protocol on every Session's output path and answers
+its feature query, so the Desktop, iOS and the Web all draw a program's state
+through the one activity mark beside a Session's name. A program that reports
+a title names the Session it runs in, and a Host with no title model
+configured names a Session from the person's first message instead of leaving
+it at its directory. The sidebar's Host foot becomes one line at rest, and the
+onboarding page drops the film that no longer matches the app. The JSON
+control protocol remains at 4.0, no method was added or changed, and this
+release migrates no state.
+
+### Added
+
+- Read program status from terminal output on the Host. Any program can say
+  what it is doing (idle, working, done, blocked, error) over OSC 7501, and the
+  Host now implements the spec's pair grammar, base64 free text, id tree and
+  hard limits, keeps one record set per terminal, and answers the feature
+  query a program waits for before it reports. It runs on the output path for
+  every Session, attached or not, so a program's state is already known when a
+  client attaches later, and no client parses the escape sequence. A
+  malformed report is discarded whole: an unknown state never degrades into
+  idle, and decoded free text is refused when it carries a control character,
+  so a record can never act as markup or as a terminal command.
+- Draw a program's state through the one activity mark. A program status rides
+  the roster snapshot and the dedicated metadata delta beside the OSC 133
+  state, so a program that reports on every progress tick does not re-send the
+  Session entity, and an omitted status means the records were cleared. The
+  Desktop, iOS and the Web resolve it against the same mark table an Agent's
+  status uses instead of a second mark type, so there is one ladder, one
+  palette and one trailing dot per row: working animates, blocked takes the
+  attention hue split by kind (permission reads as approval, question as
+  input, anything else as unnamed), error reads as failed, and idle draws
+  nothing. An Agent status still outranks a program status, because it is the
+  richer fact about the same process, and a program that never binds an Agent
+  still gets a mark. done draws the finished mark and keeps drawing until a
+  new report replaces it, since a report carries no record of having been
+  read; the program's own message leads the row's second line.
+- Name an Agent by its own program title. The protocol makes the root record's
+  label the window title, so a program that names itself now ranks above the
+  name Warren generated for the Session and below the user's own rename: the
+  custom title first, then the program's title, then the Host's title. Only an
+  Agent takes it (a shell is named by where it is, so a program reporting plan
+  does not rename the Session it runs in), and only the root record counts,
+  because a child record's label names one thing the program is doing rather
+  than the program. The Host carries the title beside the summary, which stays
+  the most urgent record, and Transport, the Desktop, iOS and the Web all read
+  it from there.
+- Name a Session from the person's first message when no title model is
+  configured. A Host with no title model left every Agent Session named by its
+  directory for the whole conversation; it now keeps the first thing the
+  person wrote, stripped of the scaffolding around it (provider context
+  blocks, front matter, a pasted code block or JSON body, a leading slash
+  command, a list marker, inline markup), and writes no name when nothing
+  readable is left. The fallback runs on the lifecycle tick, after the
+  provider's own name has had its chance and only while no title model is
+  configured, so nothing above it in the chain is displaced. It writes one
+  name per conversation and records it as the Host's own, so a provider name
+  that lands later still replaces it while a manual rename never does. A
+  provider that names its own conversations but stays silent now falls back to
+  the same label instead of issuing a request it has no endpoint for.
+
+### Changed
+
+- Make the sidebar's Host foot one line at rest. The foot kept a 34pt tile row
+  open beside its count, so a rest-state foot was a label after a row of empty
+  squares. At rest it is the count alone, on the rows' own inset; under the
+  pointer the tiles fan in ahead of it, each with its letter and its
+  reachability, and the label follows them so the pointer never sits on the
+  name it is reading out. At rest the tiles overlap to 7pt, so they stay plain
+  swatches until the pointer fans them, and the label reads "2 more hosts"
+  instead of "Other hosts" beside the same count. The label names what the foot
+  can switch to, so the window's own Host is visibly uncounted: a window on one
+  of two saved Hosts reads "1 more host", where naming the whole set read "2
+  hosts" beside a single tile.
+- Drop the initial tile from the sidebar's header. The lettered tile sat in
+  front of the Host name while the row under it already spelled out the
+  connection, so the header read twice; the name and its subtitle now take the
+  full width, and the tile stays on the collapsed rail and the foot's stack.
+- Retire the onboarding film and refresh the screenshots. The film was
+  recorded against the two-Host sidebar and no longer matched the Desktop, so
+  the page and the README keep the terminal demo as the only demo in that
+  section; the screenshots now show a real single-Host session, and their alt
+  text describes what each one shows.
+- Remove the em dashes from the English prose across the documentation.
+
+### Fixed
+
+- Answer the program status query before the batch's other replies. A program
+  that asks for its device attributes in the same write stops listening for
+  the feature answer once they arrive, and `pi` does exactly that, so an
+  answer that followed the device report was dropped and `pi` never enabled
+  OSC 7501. Answering first makes an unattached Session, where the Host's own
+  responder answers the device report, behave like an attached one, where the
+  client's emulator does. The scanner also stops copying every output batch:
+  an ordinary 32 KiB batch went from 10.9µs and a 41 KiB allocation to 1.1µs
+  and none.
+- Advance the roster revision when a program's status changes, so a client
+  reads the change as a new snapshot instead of a repeat of the last one.
+- Keep the shell's own inference beside the program's report in a Desktop row.
+  The row takes the louder of the program report and the shell's OSC 133
+  inference, and the Tab keeps following the row.
+- Centre the Host tiles that carry no letter. A Text with nothing in it still
+  took the line box, so the rest-state swatch in the foot's stack sat off
+  centre inside its square.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0, no method was added or changed,
+  and this release migrates no state. A program status is a roster-only
+  projection and is never persisted with the Session record, so a Host restart
+  begins with an empty record set, which matches the protocol's rule that a
+  full reset clears every record.
+- The Web bundle is rebuilt for the new mark. A client older than this release
+  shows no program status and no program title, and continues to work.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing,
+  not general public distribution.
+
 ## [0.39.0] - 2026-11-13
 
 A Desktop release that closes the multi-Host sidebar's last two gaps. The

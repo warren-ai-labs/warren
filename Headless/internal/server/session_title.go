@@ -205,6 +205,108 @@ func (s *Service) pollAgentTitles() {
 			s.finishAgentTitleFallback(wait.sessionID)
 		}
 	}
+	s.applyLocalSessionTitles()
+}
+
+// applyLocalSessionTitles names a conversation from the person's own first
+// message when the Host has no title model configured.
+//
+// Nothing above it in the chain applies: a manual rename is never touched, a
+// provider name outranks it and is captured before this runs, and when the
+// model is configured its request is the better name. What is left is the
+// common case of no endpoint at all — a Session that would otherwise read as
+// its directory for the whole conversation.
+func (s *Service) applyLocalSessionTitles() {
+	if s.Store == nil || s.titleGenerationConfigured() {
+		return
+	}
+	type localRequest struct {
+		sessionID  string
+		generation string
+		label      string
+	}
+	now := time.Now()
+	var requests []localRequest
+	s.agentsMu.Lock()
+	for sessionID, entry := range s.agents {
+		if entry == nil {
+			continue
+		}
+		entry.mu.Lock()
+		// While the CLI still has its grace period, its own name may be on the
+		// way; the tick after it expires is this fallback's turn.
+		waiting := !entry.cliTitleDeadline.IsZero() && !entry.titleFallbackFired && now.Before(entry.cliTitleDeadline)
+		eligible := !entry.localTitleApplied && !entry.cliTitleCaptured && !waiting &&
+			strings.TrimSpace(entry.titleUser) != ""
+		user := entry.titleUser
+		generation := strings.TrimSpace(entry.executionID)
+		if eligible {
+			entry.localTitleApplied = true
+		}
+		entry.mu.Unlock()
+		if !eligible {
+			continue
+		}
+		label := sessiontitle.LocalLabel(user)
+		if label == "" {
+			continue
+		}
+		requests = append(requests, localRequest{sessionID: sessionID, generation: generation, label: label})
+	}
+	s.agentsMu.Unlock()
+	for _, request := range requests {
+		s.applyLocalSessionTitle(request.sessionID, request.generation, request.label)
+	}
+}
+
+// applyLocalSessionTitle persists one fallback label under the same guards the
+// model request runs under: a running Session, the same provider conversation,
+// and no name the person set themselves.
+func (s *Service) applyLocalSessionTitle(sessionID, generation, label string) {
+	var previous string
+	s.agentsMu.Lock()
+	entry := s.agents[sessionID]
+	s.agentsMu.Unlock()
+	if entry != nil {
+		entry.mu.Lock()
+		previous = entry.aiTitleValue
+		entry.mu.Unlock()
+	}
+	applied := false
+	err := s.Store.Update(func(state *api.State) error {
+		for index := range state.Sessions {
+			session := &state.Sessions[index]
+			if session.ID != sessionID {
+				continue
+			}
+			current := strings.TrimSpace(session.CustomTitle)
+			if (current != "" && current != previous) || session.Lifecycle != "running" {
+				return nil
+			}
+			if generation != "" && strings.TrimSpace(session.AgentExecutionID) != generation {
+				return nil
+			}
+			session.CustomTitle = label
+			applied = true
+			return nil
+		}
+		return fmt.Errorf("session not found: %s", sessionID)
+	})
+	if err != nil {
+		s.logWarn("persist local session title", "session", sessionID, "error", err)
+		return
+	}
+	if !applied {
+		return
+	}
+	// Recorded as the Host's own title so a provider name that lands later can
+	// still replace it, while a title the person set can not.
+	if entry != nil {
+		entry.mu.Lock()
+		entry.aiTitleValue = label
+		entry.mu.Unlock()
+	}
+	s.wakeLiveActivity()
 }
 
 // captureAgentCLITitle applies a name the agent CLI generated for its own
@@ -298,8 +400,15 @@ func (s *Service) finishAgentTitleFallback(sessionID string) {
 	input := sessiontitle.Input{User: entry.titleUser, Assistant: entry.titleAssistant}
 	entry.cliTitleDeadline = time.Now().Add(cliTitleUpgradeWindow)
 	entry.mu.Unlock()
-	if !s.titleGenerationConfigured() ||
-		strings.TrimSpace(input.User) == "" || strings.TrimSpace(input.Assistant) == "" {
+	if !s.titleGenerationConfigured() {
+		// No title model to fall back to. The person's own words are still a
+		// better name than the directory, and a late CLI name replaces it.
+		if label := sessiontitle.LocalLabel(input.User); label != "" {
+			s.applyLocalSessionTitle(sessionID, generation, label)
+		}
+		return
+	}
+	if strings.TrimSpace(input.User) == "" || strings.TrimSpace(input.Assistant) == "" {
 		// Nothing to fall back to; the upgrade window stays open so a late CLI
 		// name is still applied.
 		return

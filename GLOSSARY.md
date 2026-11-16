@@ -68,6 +68,13 @@ _Avoid_: Codex Session, Claude Session
 The currently observed work state of an external Agent Conversation. It is
 optional and does not represent terminal lifecycle or client connectivity.
 
+**Program Status**:
+A state a program reports about itself over the Program Status Protocol
+(OSC 7501), independent of whether it is an Agent. The Host records it per
+Terminal Session and projects it onto roster snapshots; like Agent Activity it
+is live projection data and never a durable Host resource.
+_Avoid_: Agent Status, when the reporting program is not one.
+
 **ACP Session**:
 A Warren Session whose Agent is driven over the Agent Client Protocol instead of
 a terminal. It belongs to a Workspace, has a Tab, and an Agent Execution like any Agent

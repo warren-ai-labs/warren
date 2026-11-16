@@ -139,6 +139,8 @@ export function sessionDisplayTitle(session = {}) {
 export function terminalTabTitle(session = {}, workspace = {}) {
   const customTitle = String(session.customTitle || "").trim();
   if (customTitle) return customTitle;
+  const programTitle = agentProgramTitle(session);
+  if (programTitle) return programTitle;
   const dirName = directoryName(session.directory || workspace.path || "");
   const command = tabPurpose(session);
   if (!dirName) return command || sessionDisplayTitle(session) || "Shell";
@@ -147,6 +149,23 @@ export function terminalTabTitle(session = {}, workspace = {}) {
 
 function tabPurpose(session = {}) {
   return resolvedCommand(session);
+}
+
+/**
+ * The label an Agent's own program reported over OSC 7501, or empty.
+ *
+ * The protocol makes the root record's label the window title, so an Agent that
+ * names itself outranks the name Warren built from its command and directory. A
+ * plain shell keeps its location title: a program reporting "plan" does not get
+ * to rename the Session it runs in. The user's own rename is checked first, at
+ * the call site.
+ */
+function agentProgramTitle(session = {}) {
+  const kind = String(session.kind || "").trim().toLowerCase();
+  const provider = String(session.agentProvider || "").trim().toLowerCase();
+  if (!managedPurposes.has(kind) && !managedPurposes.has(provider)) return "";
+  const title = session.programStatus?.title;
+  return typeof title === "string" ? title.trim() : "";
 }
 
 /**

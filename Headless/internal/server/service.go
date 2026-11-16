@@ -248,6 +248,11 @@ type Service struct {
 	// roster-delta clients receive capability/rebind updates immediately while
 	// ChangesSince continues to track only durable mutations.
 	agentRosterRevision atomic.Uint64
+	// programRosterRevision advances the same observer-facing token for OSC 7501
+	// program status changes. Like agent handle state, a program report is live
+	// projection data with no durable Store write, so without this a roster-delta
+	// client would reject the update as a revision that never moved.
+	programRosterRevision atomic.Uint64
 	// Agent View upload and idempotency state is device-local to this Host. It
 	// contains no authentication material and is discarded on daemon restart.
 	agentViewMu             sync.Mutex

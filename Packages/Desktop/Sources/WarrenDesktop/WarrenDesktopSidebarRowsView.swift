@@ -1666,7 +1666,8 @@ struct WarrenDesktopWorkspaceSessionRow: View {
     ///
     /// A shell that never bound an Agent reports no activity, so it has no state
     /// to name. Treating that as "Running" claimed knowledge of a process Warren
-    /// does not track.
+    /// does not track. A program that reported over OSC 7501 supplies the word
+    /// when no Agent status does.
     ///
     /// The word comes from the mark the row already draws, so the marker and the
     /// text can never disagree about which half of the status won.

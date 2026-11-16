@@ -67,6 +67,36 @@ test("catalog keeps agent binding fields on sessions", () => {
   assert.deepEqual(session.agentTurn, { id: 2, status: "started" });
 });
 
+test("catalog keeps the OSC 7501 program status on sessions", () => {
+  const catalog = buildCatalog(rosterFromMessage({
+    state: {
+      projects: [{ id: "project" }],
+      workspaces: [{ id: "workspace", project: "project" }],
+      sessions: [{
+        id: "session",
+        workspace: "workspace",
+        title: "Shell",
+        kind: "shell",
+        lifecycle: "running",
+        programStatus: { state: "blocked", kind: "permission", app: "terraform" },
+      }],
+    },
+  }));
+  const session = catalog.sessions.get("session");
+  assert.deepEqual(session.programStatus, { state: "blocked", kind: "permission", app: "terraform" });
+});
+
+test("catalog leaves the program status null when the Host omits it", () => {
+  const catalog = buildCatalog(rosterFromMessage({
+    state: {
+      projects: [{ id: "project" }],
+      workspaces: [{ id: "workspace", project: "project" }],
+      sessions: [{ id: "session", workspace: "workspace", kind: "shell", lifecycle: "running" }],
+    },
+  }));
+  assert.equal(catalog.sessions.get("session").programStatus, null);
+});
+
 test("roster normalizes revision and running sessions", () => {
   const roster = rosterFromMessage({
     state: {
@@ -186,6 +216,31 @@ test("roster delta clears omitted session metadata fields", () => {
   assert.equal(tab.directory, "");
 });
 
+test("roster delta applies and clears a program status from session metadata", () => {
+  const baseline = rosterFromMessage({
+    state: {
+      revision: 5,
+      sessions: [{ id: "session-a", workspace: "workspace-a", lifecycle: "running", kind: "shell" }],
+    },
+  });
+
+  const working = applyRosterDelta(baseline, {
+    t: "roster.delta",
+    baseRevision: 5,
+    revision: 6,
+    sessionMetadata: { upsert: [{ id: "session-a", programStatus: { state: "working", progress: 40 } }] },
+  });
+  assert.deepEqual(working.tabs[0].programStatus, { state: "working", progress: 40 });
+
+  const cleared = applyRosterDelta(working, {
+    t: "roster.delta",
+    baseRevision: 6,
+    revision: 7,
+    sessionMetadata: { upsert: [{ id: "session-a" }] },
+  });
+  assert.equal(cleared.tabs[0].programStatus, null);
+});
+
 test("roster delta rejects malformed session metadata", () => {
   const baseline = rosterFromMessage({ state: { revision: 3 } });
   assert.equal(applyRosterDelta(baseline, {
@@ -249,6 +304,46 @@ test("roster carries live process and directory over launch command", () => {
     terminalTabTitle(session, { path: "/work/start" }),
     "codex · live",
   );
+});
+
+test("an Agent row is named by its own program title", () => {
+  const catalog = buildCatalog(rosterFromMessage({
+    state: {
+      workspaces: [{ id: "workspace", project: "project", path: "/work/start" }],
+      sessions: [{
+        id: "session",
+        workspace: "workspace",
+        title: "Fix the resize race",
+        kind: "claude",
+        lifecycle: "running",
+        directory: "/work/live",
+        programStatus: { state: "working", app: "claude-code", title: "Audit the resize race" },
+      }],
+    },
+  }));
+  const session = catalog.sessions.get("session");
+  assert.equal(terminalTabTitle(session, { path: "/work/start" }), "Audit the resize race");
+
+  const custom = { ...session, customTitle: "My Agent" };
+  assert.equal(terminalTabTitle(custom, { path: "/work/start" }), "My Agent");
+});
+
+test("a shell row keeps its location title whatever its program reports", () => {
+  const catalog = buildCatalog(rosterFromMessage({
+    state: {
+      workspaces: [{ id: "workspace", project: "project", path: "/work/start" }],
+      sessions: [{
+        id: "session",
+        workspace: "workspace",
+        kind: "shell",
+        lifecycle: "running",
+        directory: "/work/live",
+        programStatus: { state: "working", app: "terraform", title: "plan" },
+      }],
+    },
+  }));
+  const session = catalog.sessions.get("session");
+  assert.equal(terminalTabTitle(session, { path: "/work/start" }), "live");
 });
 
 test("roster falls back to launch command when process is absent", () => {

@@ -2,9 +2,9 @@ import XCTest
 @testable import WarrenDesktop
 import WarrenDesignSystem
 
-/// Every Host tile — the sidebar's Host row, the collapsed rail's button, the
-/// foot's stack and the multi-Host headers — reads reachability through one
-/// rule, so an unreachable Host is red wherever it is drawn.
+/// Every Host tile — the collapsed rail's button, the foot's stack and the
+/// multi-Host headers — reads reachability through one rule, so an unreachable
+/// Host is red wherever it is drawn.
 final class WarrenDesktopHostTileTests: XCTestCase {
     func testConnectionStatesFoldIntoOneReachability() {
         XCTAssertEqual(WarrenDesktopHostReachability(.attached), .reachable)

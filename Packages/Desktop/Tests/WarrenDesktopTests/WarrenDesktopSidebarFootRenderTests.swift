@@ -275,6 +275,33 @@ final class WarrenDesktopSidebarFootRenderTests: XCTestCase {
         XCTAssertTrue(added)
     }
 
+    /// The foot lists the Hosts other than the window's own, and its label
+    /// says so: one other Host reads "1 more host", not "1 host", which would
+    /// be taken for the whole set.
+    @MainActor
+    func testFootCountNamesTheOtherHosts() async throws {
+        let recorder = WarrenSemanticRecorder()
+        // A quiet other Host, so the value is the count alone.
+        let view = WarrenDesktopSidebarHostStack(
+            hosts: [WarrenDesktopSidebarOtherHost(id: "beelink", name: "beelink")],
+            currentHost: current,
+            onSelectHost: { _ in },
+            onAddHost: {}
+        )
+        .frame(width: Self.width)
+        .environment(\.colorScheme, .dark)
+        .environment(\.warrenSemanticRecorder, recorder)
+        .warrenSemanticObservationRoot(recorder: recorder)
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(x: 0, y: 0, width: Self.width, height: 60)
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        hosting.layoutSubtreeIfNeeded()
+
+        let foot = recorder.snapshot().node(id: "sidebar.other-hosts")
+        XCTAssertEqual(foot?.value, "1 more host")
+    }
+
     func testOnlyThisMacCannotBeDeleted() {
         XCTAssertFalse(current.canDelete)
         XCTAssertTrue(others[0].canDelete)

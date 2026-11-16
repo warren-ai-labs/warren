@@ -203,6 +203,17 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
     /// know about it; the client raises the row's mark to the attention tier.
     public let leadNeedsAttention: Bool
 
+    /// The OSC 7501 mark for a program that reported its own state, when no
+    /// Agent status already describes this Session. Nil for a plain shell whose
+    /// programs never reported, and for a program that is merely idle.
+    public let programStatusMark: WarrenActivityMark?
+    /// The program's own one-line message, when it sent one. Used as the mark's
+    /// hover tooltip instead of the generic state word.
+    public let programStatusMessage: String?
+    /// The root record's own label from the same report, which the protocol
+    /// calls the window title. Nil when the program sent none.
+    public let programStatusTitle: String?
+
     public var activity: AgentActivityState? { agentStatus?.activity }
 
     /// Whether this Session's runtime is gone and the pane shows what it left.
@@ -259,6 +270,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         workingDirectory: String = "",
         shellState: WarrenDesktopShellState? = nil,
         acknowledgedActivity: AgentActivityState? = nil,
+        programStatusMark: WarrenActivityMark? = nil,
+        programStatusMessage: String? = nil,
+        programStatusTitle: String? = nil,
         currentStep: String? = nil,
         resultSentence: String? = nil,
         titleRegeneratable: Bool = false,
@@ -291,6 +305,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
         self.workingDirectory = workingDirectory
         self.shellState = shellState
         self.acknowledgedActivity = acknowledgedActivity
+        self.programStatusMark = programStatusMark
+        self.programStatusMessage = programStatusMessage
+        self.programStatusTitle = programStatusTitle
         self.currentStep = currentStep
         self.primaryLine = primaryLine
         self.lastActivity = lastActivity
@@ -333,6 +350,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             workingDirectory: workingDirectory,
             shellState: shellState,
             acknowledgedActivity: acknowledgedActivity,
+            programStatusMark: programStatusMark,
+            programStatusMessage: programStatusMessage,
+            programStatusTitle: programStatusTitle,
             currentStep: currentStep,
             resultSentence: resultSentence,
             titleRegeneratable: titleRegeneratable,
@@ -369,6 +389,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             workingDirectory: workingDirectory,
             shellState: shellState,
             acknowledgedActivity: activity,
+            programStatusMark: programStatusMark,
+            programStatusMessage: programStatusMessage,
+            programStatusTitle: programStatusTitle,
             currentStep: currentStep,
             resultSentence: resultSentence,
             titleRegeneratable: titleRegeneratable,
@@ -405,6 +428,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             workingDirectory: workingDirectory,
             shellState: shellState,
             acknowledgedActivity: acknowledgedActivity,
+            programStatusMark: programStatusMark,
+            programStatusMessage: programStatusMessage,
+            programStatusTitle: programStatusTitle,
             currentStep: step,
             resultSentence: resultSentence,
             titleRegeneratable: titleRegeneratable,
@@ -441,6 +467,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             workingDirectory: workingDirectory,
             shellState: shellState,
             acknowledgedActivity: acknowledgedActivity,
+            programStatusMark: programStatusMark,
+            programStatusMessage: programStatusMessage,
+            programStatusTitle: programStatusTitle,
             currentStep: currentStep,
             resultSentence: resultSentence,
             titleRegeneratable: titleRegeneratable,
@@ -477,6 +506,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             workingDirectory: workingDirectory,
             shellState: shellState,
             acknowledgedActivity: acknowledgedActivity,
+            programStatusMark: programStatusMark,
+            programStatusMessage: programStatusMessage,
+            programStatusTitle: programStatusTitle,
             currentStep: currentStep,
             primaryLine: primaryLine,
             lastActivity: activity,
@@ -514,6 +546,9 @@ public struct WarrenDesktopSession: Identifiable, Hashable, Sendable {
             workingDirectory: workingDirectory,
             shellState: shellState,
             acknowledgedActivity: acknowledgedActivity,
+            programStatusMark: programStatusMark,
+            programStatusMessage: programStatusMessage,
+            programStatusTitle: programStatusTitle,
             currentStep: currentStep,
             primaryLine: primaryLine,
             lastActivity: lastActivity,
@@ -1071,6 +1106,9 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
                 workingDirectory: existing.workingDirectory,
                 shellState: existing.shellState,
                 acknowledgedActivity: existing.acknowledgedActivity,
+                programStatusMark: existing.programStatusMark,
+                programStatusMessage: existing.programStatusMessage,
+                programStatusTitle: existing.programStatusTitle,
                 currentStep: existing.currentStep,
                 resultSentence: existing.resultSentence,
                 titleRegeneratable: existing.titleRegeneratable,

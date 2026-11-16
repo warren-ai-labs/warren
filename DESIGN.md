@@ -229,6 +229,20 @@ Warren bifurcates terminal execution into two first-class tracks:
 5. **One Activity Encoding**: Every client resolves an Agent status into one mark through the shared table in `WarrenActivityMark` (`Packages/DesignSystem`), mirrored for the Web in `Web/src/activity.js`. Every mark is a dot, and two rules hold on every surface: **motion** says whether work is progressing, so `working` is the only state that animates, at a deliberately quiet cadence; **color** says what a state asks of a person, so the actionable tier (`approval`, `input`, `unnamed`, `failed`) takes the attention hue and the rest stay quiet. Shape was tried as a third channel (a glyph badge for the actionable tier) and read worse at the size a row actually uses, so the kind of a request is carried by the row's status word and by the accessibility label, not by a drawn symbol. An attention payload outranks the lifecycle value it arrives with, so a stale `ready` or `working` snapshot still reads as actionable; `failed` outranks attention, because a turn that already ended badly is the more specific fact. Each client keeps its own palette and its own drawing; only the semantics are shared.
 6. **A Completion Is a Notice, Not a State**: `ready` reports an event (a turn just finished) rather than a property, and is drawn only while that news is unread. Selecting or opening the Session acknowledges it, which is device-local state in the same tier as Tab order; another client cannot know what this screen has shown, and reading it on the Mac does not read it on the phone. The acknowledgment records the lifecycle it saw, so it retires by itself the moment the Agent does something new and `ready → (seen) → working → ready` lights up again. It expires only when read: no time-based decay, so a weekend's finished work is still waiting on Monday. Only `ready` is acknowledgeable: glancing at a row does not answer an approval, and a failure does not un-fail because it was visited. `exited` is the opposite kind of fact: a Session that ended stays ended, so it is never news and draws nothing at all.
 
+### 8.3 Program Status (OSC 7501)
+
+The [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status) lets any program tell the terminal what it is doing — `idle`, `working`, `done`, `blocked`, `error` — over one OSC escape sequence. It carries state and leaves presentation to the terminal, and its records are bounded, id-addressable, and replaced whole on every report.
+
+Warren's Host *is* the terminal in this architecture, so the Host owns the protocol:
+
+- **The Host parses and records; clients render.** `Headless/internal/programstatus` implements the spec (pair grammar, base64 free text, the id tree, the hard limits) and `Headless/internal/server/program_status.go` keeps one record set per terminal. It runs on the output path for every Session, attached or not, so a program's state is already known when a client attaches later. No client parses the escape sequence.
+- **The Host answers the feature query.** A program may send `OSC 7501 ; ?` and report only after a supporting terminal replies; `pi` does exactly that. The Host replies for the Session even while a client is attached, because no emulator in the tree implements the protocol yet. That stops being true the day libghostty-vt or xterm.js answers, and the reply must then belong to one side only — the seam is recorded here so that change is deliberate.
+- **The projection is roster-only.** `Session.ProgramStatus` is overlaid on roster snapshots like `AgentStatus` and is never persisted with the Session record. Records are not durable Host resources; a Host restart begins with an empty set, which matches the spec's rule that a full reset clears every record.
+- **An Agent status outranks a program status.** Both describe the same process, and the Agent status is the richer, provider-specific fact. A program that reports over OSC 7501 without ever binding an Agent still gets a mark.
+- **One encoding.** A program state resolves to a `WarrenActivityMark` (`WarrenActivityMark+ProgramStatus.swift`, mirrored for the Web in `Web/src/program-status.js`), so it is drawn with the same marks, palette, and motion as an Agent's: `working` animates, `blocked` takes the attention hue split by `kind` (`permission` → approval, `question` → input, anything else → unnamed), and `error` is `failed`. Only the accessibility words name the program instead of an Agent. `idle` draws nothing. `done` draws the finished mark and, like `error`, keeps drawing until a new report replaces it, so a finished build or a failed deploy can be found later. This is a deliberate exception to §8.2's rule that a completion is a notice: a program report carries no record of having been read, so looking at the Session does not retire it.
+- **The root record's title names an Agent.** The protocol makes the root record's label the window title, so it ranks above the name Warren generated for the Session and below the user's own rename: `customTitle` first, then the program's `title`, then the Host's title. Only an Agent takes it — a plain shell is named by where it is, and a program reporting `plan` does not rename the Session it runs in. Only the root record counts: a child record's label names one thing the program is doing, not the program.
+- **A malformed report is discarded whole.** An unknown `state` never degrades into `idle`, and decoded free text is refused when it contains a control character, so a record can never act as markup or as a terminal command.
+
 ## 9. Session and Runtime Design
 
 A Session names a long-running Host resource. Most Sessions own a Ghostline PTY;
@@ -276,7 +290,9 @@ The information architecture organizes resources hierarchically:
 ```text
 Window (a dark backdrop; the sidebar, the tab row's capsules, and every pane are cards on it)
 ├── Sidebar
-│   ├── Host row (the Host this window works on, its connection dot, search)
+│   ├── Host row (the Host this window works on, named under the traffic
+│   │               lights with search beside it; the connection dot and the
+│   │               lettered tile belong to the foot's stack and the collapsed rail)
 │   ├── Tasks (aggregating Workspaces across Projects)
 │   ├── Projects (Git repositories; a Task's Workspaces are listed only under the Task;
 │   │   │         a hairline between projects; one worktree draws no row of its own;
@@ -292,7 +308,10 @@ Window (a dark backdrop; the sidebar, the tab row's capsules, and every pane are
 │   │       │          "N idle worktrees" row with their last activity; in both lists
 │   │       │          a main or master worktree comes first)
 │   │       └── Sessions (title, plus an activity line while there is one)
-│   ├── Other Hosts (one row each, a dot while a Session there needs someone)
+│   ├── Other Hosts (the foot: "N more hosts" on the rows' inset at rest, the
+│   │                 window's own Host not counted; under the pointer the tiles
+│   │                 fan out ahead of it, each with its letter and reachability,
+│   │                 and a dot at rest while a Session there needs someone)
 │   └── Bottom row (the notification bell in the corner: unread dot, struck
 │       through while muted, opening the notice center upward; the update
 │       badge beside it)

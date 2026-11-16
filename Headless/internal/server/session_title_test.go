@@ -369,8 +369,98 @@ func TestSessionTitleIsNotGeneratedForProvidersWithoutOne(t *testing.T) {
 	if !deadline.IsZero() {
 		t.Fatalf("provider pi waits for an agent title; deadline = %v", deadline)
 	}
+	// No title model is configured, so the person's own words name the Session
+	// instead of leaving the row on its directory.
+	service.pollAgentTitles()
+	if got := state.Snapshot().Sessions[0].CustomTitle; got != "Fix the reconnect flow" {
+		t.Fatalf("session title = %q, want the first message", got)
+	}
+}
+
+// The fallback runs only when nothing above it can name the conversation, and
+// only once: a name the person sets is never replaced by it.
+func TestLocalSessionTitleYieldsToTheChainAboveIt(t *testing.T) {
+	state, sessionID := newSessionTitleStoreForKind(t, "pi")
+	service := &Service{Store: state}
+	service.lazyInit()
+	service.agents[sessionID] = &agentSession{}
+
+	service.recordAgentEvents(sessionID, []api.AgentEvent{
+		// Scaffolding the Host already refuses as a title can still lead a real
+		// message; the fallback strips it rather than naming the row after it.
+		{Provider: "pi", Type: "user", Content: "---\ntags: [tui]\n---\nRename the Host picker"},
+	}, api.AgentStatus{Activity: api.AgentActivityWorking})
+
+	service.pollAgentTitles()
+	if got := state.Snapshot().Sessions[0].CustomTitle; got != "Rename the Host picker" {
+		t.Fatalf("session title = %q, want the words after the context block", got)
+	}
+
+	// A manual rename arrives later; the fallback must not write over it.
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions[0].CustomTitle = "My own name"
+		return nil
+	}); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	service.agentsMu.Lock()
+	entry := service.agents[sessionID]
+	entry.mu.Lock()
+	entry.localTitleApplied = false
+	entry.mu.Unlock()
+	service.agentsMu.Unlock()
+	service.pollAgentTitles()
+	if got := state.Snapshot().Sessions[0].CustomTitle; got != "My own name" {
+		t.Fatalf("session title = %q, want the manual rename kept", got)
+	}
+}
+
+// With a title model configured the request is the better name, so the
+// fallback stays out of the way.
+func TestLocalSessionTitleStaysOutOfTheModelsWay(t *testing.T) {
+	state, sessionID := newSessionTitleStoreForKind(t, "pi")
+	service := &Service{Store: state, Settings: settings.Settings{
+		OpenAIBaseURL:      "http://127.0.0.1:1/v1",
+		OpenAIModel:        "title-model",
+		OpenAIKey:          "test-key",
+		OpenAITitleEnabled: true,
+	}}
+	service.lazyInit()
+	service.agents[sessionID] = &agentSession{}
+
+	service.recordAgentEvents(sessionID, []api.AgentEvent{
+		{Provider: "pi", Type: "user", Content: "Fix the reconnect flow"},
+	}, api.AgentStatus{Activity: api.AgentActivityWorking})
+
+	service.agentsMu.Lock()
+	entry := service.agents[sessionID]
+	service.agentsMu.Unlock()
+	service.applyLocalSessionTitles()
+	entry.mu.Lock()
+	applied := entry.localTitleApplied
+	entry.mu.Unlock()
+	if applied {
+		t.Fatalf("local fallback ran while a title model is configured")
+	}
 	if got := state.Snapshot().Sessions[0].CustomTitle; got != "" {
-		t.Fatalf("session title = %q, want the kind-derived default", got)
+		t.Fatalf("session title = %q, want the model to name it", got)
+	}
+}
+
+// A message with nothing readable in it leaves the Session's own rule alone.
+func TestLocalSessionTitleIgnoresAnUnreadableMessage(t *testing.T) {
+	state, sessionID := newSessionTitleStoreForKind(t, "pi")
+	service := &Service{Store: state}
+	service.lazyInit()
+	service.agents[sessionID] = &agentSession{}
+
+	service.recordAgentEvents(sessionID, []api.AgentEvent{
+		{Provider: "pi", Type: "user", Content: "/compact"},
+	}, api.AgentStatus{Activity: api.AgentActivityWorking})
+
+	service.pollAgentTitles()
+	if got := state.Snapshot().Sessions[0].CustomTitle; got != "" {
+		t.Fatalf("session title = %q, want no title", got)
 	}
 }
 

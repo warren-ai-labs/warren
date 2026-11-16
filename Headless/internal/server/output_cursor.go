@@ -25,6 +25,7 @@ type outputSession struct {
 	outputCursor      ghostline.Cursor
 	hasOutputCursor   bool
 	responder         *ghostline.QueryResponder
+	programStatus     *programStatus
 	prepareLock       *sessionLock
 	persistedSequence uint64
 }
@@ -68,6 +69,7 @@ func (s *Service) ensureOutput(ctx context.Context, session api.Session) (*outpu
 			runtimeKind:       s.runtimeKindFor(session),
 			ring:              output.NewRing(session.Epoch, s.ringCapacity(), s.ringMaxBytes(), session.Sequence),
 			responder:         s.newQueryResponder(),
+			programStatus:     newProgramStatus(),
 			prepareLock:       newSessionLock(),
 			persistedSequence: session.Sequence,
 		}
@@ -86,6 +88,7 @@ func (s *Service) ensureOutput(ctx context.Context, session api.Session) (*outpu
 		runtimeKind:       s.runtimeKindFor(session),
 		ring:              output.NewRing(session.Epoch, s.ringCapacity(), s.ringMaxBytes(), session.Sequence),
 		responder:         s.newQueryResponder(),
+		programStatus:     newProgramStatus(),
 		prepareLock:       newSessionLock(),
 		persistedSequence: session.Sequence,
 		// A Host restart has no retained browser ring. The next attach must

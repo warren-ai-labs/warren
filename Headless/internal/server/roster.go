@@ -86,6 +86,9 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 	if agentRevision := s.agentRosterRevision.Load(); agentRevision > state.Revision {
 		state.Revision = agentRevision
 	}
+	if programRevision := s.programRosterRevision.Load(); programRevision > state.Revision {
+		state.Revision = programRevision
+	}
 	sortTasks(state.Tasks)
 	sortProjects(state.Projects)
 	sortWorkspaces(state.Workspaces)
@@ -160,6 +163,9 @@ func (s *Service) RosterVersion(_ context.Context) (api.State, uint64) {
 			session.AgentStatus = &status
 		} else if session.Kind == "codex" || session.Kind == "claude" || session.Kind == "opencode" || session.Kind == "pi" || session.Kind == "qoder" || session.Kind == "antigravity" {
 			session.AgentStatus = &api.AgentStatus{Activity: api.AgentActivityReady}
+		}
+		if status, ok := s.programStatusForSession(session.ID); ok {
+			session.ProgramStatus = status
 		}
 		if turn := s.agentTurn(session.ID); turn.ID > 0 {
 			session.AgentTurn = &turn

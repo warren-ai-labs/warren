@@ -58,7 +58,7 @@ type agentSession struct {
 	turnAssistant string
 	// resultGenerationStarted bounds the one result request per turn.
 	resultGenerationStarted bool
-	titleGenerationStarted bool
+	titleGenerationStarted  bool
 	// cliTitleDeadline is when the Host stops waiting for the agent CLI to name
 	// its own conversation. Zero means no wait is pending.
 	cliTitleDeadline time.Time
@@ -70,6 +70,10 @@ type agentSession struct {
 	// The remaining deadline is then only the window in which a late CLI name
 	// may still replace that title.
 	titleFallbackFired bool
+	// localTitleApplied records that the Host named this conversation from the
+	// person's first message, because it has no title model to ask. One write
+	// per conversation, like the model request it stands in for.
+	localTitleApplied bool
 	// aiTitleValue is the title the Host generated for this conversation. It is
 	// retained so a name the agent CLI reports afterwards can replace it, while
 	// a title the user set can not.

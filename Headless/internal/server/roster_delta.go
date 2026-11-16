@@ -47,6 +47,9 @@ type rosterSessionMetadata struct {
 	CommandLine string            `json:"commandLine,omitempty"`
 	Directory   string            `json:"directory,omitempty"`
 	Shell       *api.SessionShell `json:"shell,omitempty"`
+	// ProgramStatus is the OSC 7501 projection. A program may report on every
+	// progress tick, so it travels here rather than re-sending the Session.
+	ProgramStatus *api.ProgramStatus `json:"programStatus,omitempty"`
 }
 
 func makeRosterDelta(before, after api.State, baseRevision, revision uint64) rosterDeltaMessage {
@@ -87,11 +90,11 @@ func makeRosterDelta(before, after api.State, baseRevision, revision uint64) ros
 }
 
 // sessionsEqualIgnoringMetadata compares everything a client needs to
-// re-render the Session entity. The foreground metadata is excluded because it
-// travels in the dedicated metadata delta.
+// re-render the Session entity. The foreground metadata and the program status
+// are excluded because they travel in the dedicated metadata delta.
 func sessionsEqualIgnoringMetadata(a, b api.Session) bool {
-	a.Process, a.CommandLine, a.Directory, a.Shell = "", "", "", nil
-	b.Process, b.CommandLine, b.Directory, b.Shell = "", "", "", nil
+	a.Process, a.CommandLine, a.Directory, a.Shell, a.ProgramStatus = "", "", "", nil, nil
+	b.Process, b.CommandLine, b.Directory, b.Shell, b.ProgramStatus = "", "", "", nil, nil
 	return reflect.DeepEqual(a, b)
 }
 
@@ -119,15 +122,17 @@ func rosterSessionMetadataChanges(before, after []api.Session, entityUpsert []ap
 		if previous.Process == session.Process &&
 			previous.CommandLine == session.CommandLine &&
 			previous.Directory == session.Directory &&
-			reflect.DeepEqual(previous.Shell, session.Shell) {
+			reflect.DeepEqual(previous.Shell, session.Shell) &&
+			reflect.DeepEqual(previous.ProgramStatus, session.ProgramStatus) {
 			continue
 		}
 		result.Upsert = append(result.Upsert, rosterSessionMetadata{
-			ID:          session.ID,
-			Process:     session.Process,
-			CommandLine: session.CommandLine,
-			Directory:   session.Directory,
-			Shell:       session.Shell,
+			ID:            session.ID,
+			Process:       session.Process,
+			CommandLine:   session.CommandLine,
+			Directory:     session.Directory,
+			Shell:         session.Shell,
+			ProgramStatus: session.ProgramStatus,
 		})
 	}
 	return result

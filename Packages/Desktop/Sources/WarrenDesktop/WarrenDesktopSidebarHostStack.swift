@@ -123,7 +123,8 @@ enum WarrenDesktopSidebarHostStackMetrics {
     static let spacing: CGFloat = 10
     static let tileSize: CGFloat = 20
     static let tileRadius: CGFloat = 6
-    /// The stack's own width at rest: three tiles overlapping.
+    /// The stack's own width: three tiles overlapping at rest, fanned 24pt
+    /// apart under the pointer.
     static let stackWidth: CGFloat = 34
     static let maximumStackedTiles = 3
     static let restPitch: CGFloat = 7
@@ -131,7 +132,15 @@ enum WarrenDesktopSidebarHostStackMetrics {
     static let liftedRise: CGFloat = 3
     static let hotRise: CGFloat = 6
     static let hotScale: CGFloat = 1.15
-    static let labelShift: CGFloat = 60
+    /// Where the label starts at rest. The foot is its label alone there, so
+    /// no empty tile row sits beside it and the label takes the rows' own
+    /// inset.
+    static let labelInset: CGFloat = WarrenDesktopSidebarMetrics.rowHorizontalPadding
+    /// Where the fanned tiles start, on that same inset, and where the label
+    /// follows them: the tiles take their column only while they are fanned,
+    /// which keeps the pointer off the label it is naming.
+    static let liftedTileInset: CGFloat = labelInset
+    static let liftedLabelInset: CGFloat = liftedTileInset + stackWidth + spacing
     static let tileDotSize: CGFloat = 7
     static let attentionDotSize: CGFloat = 6
     /// Between the panel's bottom edge and the foot.
@@ -172,15 +181,15 @@ enum WarrenDesktopSidebarHostStackMetrics {
 }
 
 /// The sidebar's foot, where Hosts are switched and managed: the other
-/// Hosts' tiles stacked, "Other hosts" and the count, and a dot while a
-/// Session on one of them needs someone.
+/// Hosts' tiles stacked, how many there are, and a dot while a Session on one
+/// of them needs someone.
 ///
 /// The same gesture as the top bar's split group. Hovering lifts and fans the
-/// tiles, and the label names the Host under the pointer. Clicking, resting
-/// a moment, or moving the pointer up raises a panel with one row per Host,
-/// and only a row there switches: the window's own first and selected. A row's "+" lists that
-/// Host's tree in the sidebar too, and its context menu renames or deletes
-/// it.
+/// tiles, each one takes its letter then, and the label names the Host under
+/// the pointer. Clicking, resting a moment, or moving the pointer up raises a
+/// panel with one row per Host, and only a row there switches: the window's
+/// own first and selected. A row's "+" lists that Host's tree in the sidebar
+/// too, and its context menu renames or deletes it.
 ///
 /// With no other Host the foot is an Add host entry instead, so the corner
 /// is never empty.
@@ -345,32 +354,34 @@ struct WarrenDesktopSidebarHostStack: View {
     }
 
     private func foot(tokens: WarrenColorTokens) -> some View {
-        HStack(spacing: Metrics.spacing) {
-            ZStack(alignment: .topLeading) {
-                ForEach(Array(stackedHosts.enumerated().reversed()), id: \.element.id) { index, host in
-                    WarrenDesktopHostTile(
-                        host: host,
-                        showsStatus: isLifted,
-                        outline: isLifted ? nil : tokens.workbenchCardFill,
-                        isRaised: isLifted
-                    )
-                    .scaleEffect(Metrics.tileScale(index: index, isLifted: isLifted, hotIndex: hotIndex))
-                    .offset(Metrics.tileOffset(index: index, isLifted: isLifted, hotIndex: hotIndex))
+        // Two layouts, not one held open: at rest the label stands alone on
+        // the rows' inset, and the stack arrives with the pointer and takes
+        // its own column ahead of it.
+        HStack(spacing: 0) {
+            if isLifted {
+                ZStack(alignment: .topLeading) {
+                    ForEach(Array(stackedHosts.enumerated().reversed()), id: \.element.id) { index, host in
+                        WarrenDesktopHostTile(
+                            host: host,
+                            showsStatus: true,
+                            outline: nil,
+                            isRaised: true
+                        )
+                        .scaleEffect(Metrics.tileScale(index: index, isLifted: isLifted, hotIndex: hotIndex))
+                        .offset(Metrics.tileOffset(index: index, isLifted: isLifted, hotIndex: hotIndex))
+                    }
                 }
+                .frame(width: Metrics.stackWidth, height: Metrics.tileSize, alignment: .topLeading)
+                .transition(.opacity)
+                .padding(.leading, Metrics.liftedTileInset)
+                .padding(.trailing, Metrics.spacing)
             }
-            .frame(width: Metrics.stackWidth, height: Metrics.tileSize, alignment: .topLeading)
 
             ZStack(alignment: .leading) {
-                HStack(spacing: 6) {
-                    Text("Other hosts")
-                        .font(WarrenTypography.popoverItem)
-                        .foregroundStyle(tokens.treeSecondaryText)
-                    Text("\(hosts.count)")
-                        .font(WarrenTypography.popoverMeta.monospacedDigit())
-                        .foregroundStyle(tokens.treeQuietText)
-                }
-                .opacity(isLifted ? 0 : 1)
-                .offset(x: isLifted ? Metrics.labelShift : 0)
+                Text(hostCountLabel)
+                    .font(WarrenTypography.popoverItem)
+                    .foregroundStyle(tokens.treeSecondaryText)
+                    .opacity(isLifted ? 0 : 1)
 
                 if let host = hotHost {
                     HStack(spacing: 6) {
@@ -384,13 +395,13 @@ struct WarrenDesktopSidebarHostStack: View {
                         }
                     }
                     .opacity(isLifted ? 1 : 0)
-                    .offset(x: isLifted ? Metrics.labelShift : 0)
                 }
             }
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: Metrics.tileSize)
             .clipped()
+            .padding(.leading, isLifted ? Metrics.liftedLabelInset : Metrics.labelInset)
 
             if needsAttention {
                 Circle()
@@ -400,7 +411,6 @@ struct WarrenDesktopSidebarHostStack: View {
                     .accessibilityHidden(true)
             }
         }
-        .padding(.leading, Metrics.leadingInset)
         .padding(.trailing, Metrics.trailingInset)
         .frame(height: Metrics.height)
         .frame(maxWidth: .infinity)
@@ -440,14 +450,21 @@ struct WarrenDesktopSidebarHostStack: View {
         )
     }
 
+    /// The foot's label at rest: how many Hosts it can switch to, in one
+    /// phrase. "Other hosts" beside the count said the same thing twice, but
+    /// a bare "1 host" read as the whole set; "more" says the window's own
+    /// Host is not counted here.
+    private var hostCountLabel: String {
+        hosts.count == 1 ? "1 more host" : "\(hosts.count) more hosts"
+    }
+
     private var hotHost: WarrenDesktopSidebarOtherHost? {
         guard !hosts.isEmpty else { return nil }
         return hosts[min(max(hotIndex ?? 0, 0), hosts.count - 1)]
     }
 
     private var accessibilityValue: String {
-        let count = hosts.count == 1 ? "1 host" : "\(hosts.count) hosts"
-        return needsAttention ? "\(count). A session needs you" : count
+        return needsAttention ? "\(hostCountLabel). A session needs you" : hostCountLabel
     }
 
     private func footHovered(at location: CGPoint) {
@@ -467,7 +484,7 @@ struct WarrenDesktopSidebarHostStack: View {
         if location.y < Metrics.pullBand, !isPulled {
             pull()
         }
-        let x = location.x - Metrics.leadingInset
+        let x = location.x - Metrics.liftedLabelInset
         if let index = Metrics.tileIndex(atX: x, tileCount: stackedHosts.count), index != hotIndex {
             setHot(index)
         }
@@ -771,9 +788,10 @@ struct WarrenDesktopSidebarHostStack: View {
     }
 }
 
-/// A Host's tile: a neutral square ringed in grey with the name's lowercase
-/// initial in the monospaced face. A project's avatar is a filled colour
-/// square with a bold capital, so the two never read as one another.
+/// A Host's tile: a neutral square ringed in grey, with the name's lowercase
+/// initial in the monospaced face where there is room to read it. A project's
+/// avatar is a filled colour square with a bold capital, so the two never read
+/// as one another.
 struct WarrenDesktopHostTile: View {
     let host: WarrenDesktopSidebarOtherHost
     /// Whether the connection dot sits on the tile's corner.
@@ -782,6 +800,9 @@ struct WarrenDesktopHostTile: View {
     let outline: Color?
     /// Whether the tile casts a shadow, lifted off the foot.
     let isRaised: Bool
+    /// Whether the tile carries the name's initial. The foot's stacked tiles
+    /// drop it while they overlap and take it back as they fan out.
+    var showsInitial = true
     /// A wash over the dot's ring, for a tile on a surface that is itself a
     /// wash over the card.
     var statusRingTint: Color? = nil
@@ -794,47 +815,56 @@ struct WarrenDesktopHostTile: View {
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         let shape = RoundedRectangle(cornerRadius: Metrics.tileRadius, style: .continuous)
-        Text(host.initial)
-            .font(WarrenTypography.monoSmall.weight(.medium))
-            .foregroundStyle(host.isOnline ? tokens.treeSessionText : tokens.treeChevron)
-            .frame(width: Metrics.tileSize, height: Metrics.tileSize)
-            .background {
-                ZStack {
-                    shape.fill(tokens.workbenchCardFill)
-                    shape.fill(tokens.treeRowHover)
-                }
-                .shadow(color: .black.opacity(isRaised ? 0.55 : 0), radius: 5, y: 4)
+        // A tile without its letter is the square alone: a `Text` that holds
+        // nothing still takes the line box, which pushed the square off
+        // centre.
+        Group {
+            if showsInitial {
+                Text(host.initial)
+                    .font(WarrenTypography.monoSmall.weight(.medium))
+                    .foregroundStyle(host.isOnline ? tokens.treeSessionText : tokens.treeChevron)
+            } else {
+                Color.clear
             }
-            .overlay {
-                shape.strokeBorder(
-                    host.isOnline ? tokens.cardBorderFocused : tokens.cardBorder,
-                    lineWidth: 1
-                )
+        }
+        .frame(width: Metrics.tileSize, height: Metrics.tileSize)
+        .background {
+            ZStack {
+                shape.fill(tokens.workbenchCardFill)
+                shape.fill(tokens.treeRowHover)
             }
-            .background {
-                if let outline {
-                    RoundedRectangle(cornerRadius: Metrics.tileRadius + 1.5, style: .continuous)
-                        .fill(outline)
-                        .padding(-1.5)
-                }
+            .shadow(color: .black.opacity(isRaised ? 0.55 : 0), radius: 5, y: 4)
+        }
+        .overlay {
+            shape.strokeBorder(
+                host.isOnline ? tokens.cardBorderFocused : tokens.cardBorder,
+                lineWidth: 1
+            )
+        }
+        .background {
+            if let outline {
+                RoundedRectangle(cornerRadius: Metrics.tileRadius + 1.5, style: .continuous)
+                    .fill(outline)
+                    .padding(-1.5)
             }
-            .overlay(alignment: .bottomTrailing) {
-                Circle()
-                    .fill(WarrenDesktopHostReachability(isOnline: host.isOnline).color(tokens))
-                    .frame(width: Metrics.tileDotSize, height: Metrics.tileDotSize)
-                    .padding(1.5)
-                    .background {
-                        ZStack {
-                            Circle().fill(tokens.workbenchCardFill)
-                            if let statusRingTint {
-                                Circle().fill(statusRingTint)
-                            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Circle()
+                .fill(WarrenDesktopHostReachability(isOnline: host.isOnline).color(tokens))
+                .frame(width: Metrics.tileDotSize, height: Metrics.tileDotSize)
+                .padding(1.5)
+                .background {
+                    ZStack {
+                        Circle().fill(tokens.workbenchCardFill)
+                        if let statusRingTint {
+                            Circle().fill(statusRingTint)
                         }
                     }
-                    .offset(x: 3 + 1.5, y: 3 + 1.5)
-                    .opacity(showsStatus ? 1 : 0)
-            }
-            .accessibilityHidden(true)
+                }
+                .offset(x: 3 + 1.5, y: 3 + 1.5)
+                .opacity(showsStatus ? 1 : 0)
+        }
+        .accessibilityHidden(true)
     }
 }
 

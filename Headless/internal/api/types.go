@@ -190,6 +190,10 @@ type Session struct {
 	// agent session. It is overlaid on roster snapshots only and is never
 	// persisted with the session record.
 	AgentStatus *AgentStatus `json:"agentStatus,omitempty"`
+	// ProgramStatus is the terminal program's OSC 7501 self-report, if the
+	// program sent one. Like AgentStatus, it is overlaid on roster snapshots
+	// only and is never persisted with the session record.
+	ProgramStatus *ProgramStatus `json:"programStatus,omitempty"`
 	// AgentTurn is the latest explicit lifecycle boundary for an agent. Like
 	// AgentStatus, it is overlaid on roster snapshots only so clients can
 	// distinguish a completed turn from an initially-ready agent.
@@ -358,6 +362,47 @@ type ScreenLayout struct {
 type ScreenPanesResult struct {
 	SessionID string         `json:"sessionId"`
 	Screens   []ScreenLayout `json:"screens,omitempty"`
+}
+
+// ProgramStatusState is one program's self-reported state, as defined by the
+// Program Status Protocol (OSC 7501). It describes the program, not the Warren
+// Session lifecycle, and it is never persisted.
+type ProgramStatusState string
+
+const (
+	ProgramStatusIdle    ProgramStatusState = "idle"
+	ProgramStatusWorking ProgramStatusState = "working"
+	ProgramStatusDone    ProgramStatusState = "done"
+	ProgramStatusBlocked ProgramStatusState = "blocked"
+	ProgramStatusError   ProgramStatusState = "error"
+)
+
+// ProgramStatusRecord is one OSC 7501 record. Records form a tree by id; the
+// root record has an empty ID.
+type ProgramStatusRecord struct {
+	ID       string             `json:"id,omitempty"`
+	State    ProgramStatusState `json:"state"`
+	Kind     string             `json:"kind,omitempty"`
+	App      string             `json:"app,omitempty"`
+	Title    string             `json:"title,omitempty"`
+	Message  string             `json:"message,omitempty"`
+	Progress *int               `json:"progress,omitempty"`
+}
+
+// ProgramStatus is the live OSC 7501 projection of a Session's terminal. The
+// top-level fields summarize the record a client should surface first; Records
+// carries every record for a client that renders the full set.
+type ProgramStatus struct {
+	State ProgramStatusState `json:"state"`
+	Kind  string             `json:"kind,omitempty"`
+	App   string             `json:"app,omitempty"`
+	// Title is the root record's own label, which the protocol says is normally
+	// the window title. It is separate from the summary above, which is the most
+	// urgent record and may be a child.
+	Title    string                `json:"title,omitempty"`
+	Message  string                `json:"message,omitempty"`
+	Progress *int                  `json:"progress,omitempty"`
+	Records  []ProgramStatusRecord `json:"records,omitempty"`
 }
 
 // AgentActivity is the lifecycle state of an agent conversation. Human

@@ -3886,6 +3886,9 @@ extension WarrenRemoteApplicationModel {
                     now: rosterObservationDate
                 ),
                 acknowledgedActivity: nextAcknowledgments[id],
+                programStatusMark: value.programStatus?.mark,
+                programStatusMessage: value.programStatus?.message,
+                programStatusTitle: value.programStatus?.title,
                 currentStep: stepLine,
                 resultSentence: value.resultSentence,
                 titleRegeneratable: value.titleRegeneratable ?? false,

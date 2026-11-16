@@ -24,6 +24,7 @@ import {
   formatAgentModel,
   getAvailableAgentModels,
 } from "./agent.js";
+import { programStatusDetail, programStatusMarkLabel, resolveProgramStatusMark } from "./program-status.js";
 
 // `settling` keeps the online styling and only breathes the dot: the transport
 // is retrying, and until that is confirmed lost it is not news.
@@ -350,6 +351,37 @@ export function ActivityDot({ session, mark: resolvedMark }) {
   return <span className={className} data-tooltip={label} aria-label={label} role="img" />;
 }
 
+/// One OSC 7501 program status as a dot.
+///
+/// A program that reports its own state is not necessarily an Agent, so the
+/// words name the program rather than a provider. It shares the lifecycle
+/// classes with `ActivityDot` and therefore the same hue rule: color says what
+/// a state asks of a person and motion says whether work is progressing.
+export function ProgramStatusDot({ programStatus }) {
+  const mark = resolveProgramStatusMark(programStatus);
+  if (!mark) return null;
+  const className = [
+    "activity",
+    activityMarkLifecycle(mark),
+    activityMarkIsAnimated(mark) ? "pulse" : "",
+  ].filter(Boolean).join(" ");
+  // The tooltip carries the program's own message when it sent one; the label
+  // stays stable for assistive technology and names the subject.
+  const title = programStatusDetail(programStatus, mark);
+  return <span className={className} title={title} aria-label={programStatusMarkLabel(mark)} role="img" />;
+}
+
+/// The single status dot a row draws.
+///
+/// An Agent status outranks a program status: both describe the same process,
+/// and the Agent status is the richer, provider-specific fact. The program dot
+/// is what remains for a Session the Host never bound to an Agent.
+export function SessionStatusDot({ session }) {
+  const acknowledgments = useContext(ActivityAcknowledgmentsContext);
+  if (sessionMark(session, acknowledgments)) return <ActivityDot session={session} />;
+  return <ProgramStatusDot programStatus={session?.programStatus} />;
+}
+
 function mergedBadgeTitle(tabs, acknowledgments) {
   const count = tabs.length;
   const parts = ["Merged to default branch"];
@@ -444,7 +476,7 @@ function SidebarSessionRow({ session, workspace, active, acknowledgedLifecycle, 
     >
       <span className="tree-icon session-row-icon">
         <SessionPresetIcon kind={sessionProvider(session)} />
-        <ActivityDot session={session} />
+        <SessionStatusDot session={session} />
       </span>
       <span className="session-row-text">
         <span className="session-row-title">{terminalTabTitle(session, workspace)}</span>
@@ -1046,7 +1078,7 @@ export function MobileInbox({
                     >
                       <span className="inbox-row-icon">
                         <SessionPresetIcon kind={sessionProvider(session)} />
-                        <ActivityDot session={session} />
+                        <SessionStatusDot session={session} />
                       </span>
                       <span className="inbox-row-text">
                         <span className="inbox-row-title">{terminalTabTitle(session, workspace || {})}</span>
@@ -1196,7 +1228,7 @@ export function MobileShell({
               onClick={() => onAttachSession(session.id)}
               onContextMenu={event => onSessionContextMenu?.(event, session)}
             >
-              <ActivityDot session={session} />
+              <SessionStatusDot session={session} />
               <span className="mobile-tab-title">{terminalTabTitle(session, workspace)}</span>
             </button>
           );

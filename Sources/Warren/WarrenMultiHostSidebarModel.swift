@@ -810,7 +810,10 @@ final class WarrenMultiHostSidebarModel: ObservableObject {
                         lastExitAt: WarrenRemoteApplicationModel.parseISO8601Date(shell.lastExitAt),
                         shellName: TerminalSessionPresentation.shellName(process: value.process ?? "") ?? ""
                     )
-                }
+                },
+                programStatusMark: value.programStatus?.mark,
+                programStatusMessage: value.programStatus?.message,
+                programStatusTitle: value.programStatus?.title
             )
         }
         let tabs = sessions.compactMap { session -> ClientTab? in
