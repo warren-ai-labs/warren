@@ -576,6 +576,17 @@ so several agents in the same workspace never mix transcripts:
   returns to a plain shell after `SessionEnd`. Sessions created before this
   feature need to be reopened so the shell picks up the new environment.
 
+A launcher that gives each provider a directory of its own — a `config_dir`, a
+`CODEX_HOME`, an agy `--gemini_dir` — states it in the session's environment as
+`WARREN_AGENT_HOME`. The hook records it in the binding, and the daemon installs
+its hook there, so that directory binds exactly from then on: the installation
+at startup covers only the engine's shared home. Warren reads the same name,
+then the engine's own variable, so a session started by hand binds the same way.
+Before the first hook fires the daemon also learns a directory from the running
+engine: agy names it on its command line, which every platform exposes, while a
+variable is only readable another way on Linux. Nothing here knows which
+launcher created the session.
+
 OpenCode has no Warren hook binding. The daemon discovers a newly created
 OpenCode session by workspace and creation time, then persists both the Warren
 session ID and the OpenCode session ID. Subsequent polls use that exact ID, so

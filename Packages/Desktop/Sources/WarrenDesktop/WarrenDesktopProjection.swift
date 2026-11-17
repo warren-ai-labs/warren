@@ -653,10 +653,14 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     private let workspaceActivitySummariesByID: [WorkspaceID: WarrenDesktopWorkspaceActivitySummary]
     private let activeSessionsByWorkspaceIDStorage: [WorkspaceID: [WarrenDesktopSession]]
     /// Every Session the sidebar tree lists, which is the active ones plus the
-    /// stopped ones whose runtime is gone but whose record and last output the
-    /// Host kept. A stopped Session is not active, so it has no mark and no
-    /// running count; it still needs a row, because that row is the only way to
-    /// come back to it once its Tab is no longer the selected one.
+    /// stopped ones the Host kept a Tab for. A stopped Session is not active, so
+    /// it has no mark and no running count; it still needs a row, because that
+    /// row is the only way to come back to it once its Tab is no longer the
+    /// selected one.
+    ///
+    /// A stopped Session without a Tab is history only: a running Session
+    /// continues it, or the user closed it. Listing it anyway would draw a row
+    /// that `canOpenSession` refuses, so clicking it could only do nothing.
     private let listedSessionsByWorkspaceIDStorage: [WorkspaceID: [WarrenDesktopSession]]
     public let connectionState: WarrenDesktopConnectionState
 
@@ -707,9 +711,23 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
     }
 
     /// The Sessions a sidebar tree shows under their Workspace: every active
-    /// Session, and every stopped Session the Host kept for inspection.
+    /// Session, and every stopped Session the Host kept a Tab for.
     public var listedSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] {
         listedSessionsByWorkspaceIDStorage
+    }
+
+    /// Whether a sidebar tree lists this Session under its Workspace.
+    ///
+    /// This is the same answer as `canOpenSession`, computed against the Tab set
+    /// a projection is being built with: a row that cannot open anything is not
+    /// a row. A stopped Session leaves the tree in the same breath it leaves the
+    /// Tab list, which is what a resume does.
+    nonisolated static func listsInSidebar(
+        _ session: WarrenDesktopSession,
+        tabSessionIDs: Set<TerminalSessionID>
+    ) -> Bool {
+        if session.state.isActive { return true }
+        return session.isStopped && tabSessionIDs.contains(session.id)
     }
 
     /// Workspace IDs that have at least one active or attached terminal session.
@@ -853,12 +871,13 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
         var markByWorkspaceID: [WorkspaceID: WarrenActivityMark] = [:]
         var activeSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] = [:]
         var listedSessionsByWorkspaceID: [WorkspaceID: [WarrenDesktopSession]] = [:]
+        let tabSessionIDs = Set(tabsByWorkspaceID.values.flatMap { $0.compactMap(\.sessionID) })
         for session in sessions {
             if session.state.isActive,
                let workspaceID = resolvedSessionWorkspaceIDs[session.id] ?? session.workspaceID {
                 activeSessionsByWorkspaceID[workspaceID, default: []].append(session)
             }
-            if session.state.isActive || session.isStopped,
+            if Self.listsInSidebar(session, tabSessionIDs: tabSessionIDs),
                let workspaceID = resolvedSessionWorkspaceIDs[session.id] ?? session.workspaceID {
                 listedSessionsByWorkspaceID[workspaceID, default: []].append(session)
             }

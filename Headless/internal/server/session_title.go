@@ -484,6 +484,14 @@ func (s *Service) generateSessionTitle(sessionID, generation string, config sess
 	titleValue, err := (sessiontitle.Generator{Config: config}).Generate(ctx, input)
 	if err != nil {
 		s.logWarn("generate session title", "session", sessionID, "error", err)
+		// A failed request — an unreachable host, a handshake that timed out, a
+		// response the validator rejected — must not leave the Session named by
+		// the directory default. The person's own words are the same fallback a
+		// Host with no title model writes, and a provider name that lands later
+		// still replaces it.
+		if label := sessiontitle.LocalLabel(input.User); label != "" {
+			s.applyLocalSessionTitle(sessionID, generation, label)
+		}
 		return
 	}
 	s.agentsMu.Lock()

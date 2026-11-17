@@ -377,6 +377,47 @@ func TestSessionTitleIsNotGeneratedForProvidersWithoutOne(t *testing.T) {
 	}
 }
 
+// A title endpoint that fails must not leave the Session reading as the name
+// the Host gave its kind: the person's own words name it instead, exactly as
+// they do on a Host with no title model at all, and a provider name that lands
+// afterwards still replaces them.
+func TestSessionTitleFallsBackToTheFirstMessageWhenTheRequestFails(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	state, sessionID := newSessionTitleStoreForKind(t, "pi")
+	service := &Service{Store: state, Settings: settings.Settings{
+		OpenAIBaseURL:      server.URL + "/v1",
+		OpenAIModel:        "title-model",
+		OpenAIKey:          "test-key",
+		OpenAITitleEnabled: true,
+	}}
+	service.lazyInit()
+	service.agents[sessionID] = &agentSession{}
+
+	service.recordAgentEvents(sessionID, []api.AgentEvent{
+		{Provider: "pi", Type: "user", Content: "---\ntags: [tui]\n---\nRename the Host picker"},
+		{Provider: "pi", Type: "assistant", Content: "I will inspect the picker"},
+	}, api.AgentStatus{Activity: api.AgentActivityReady})
+
+	if got := waitForSessionTitle(t, state, sessionID); got != "Rename the Host picker" {
+		t.Fatalf("session title = %q, want the first message's words", got)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("title requests = %d, want one", got)
+	}
+
+	// The fallback stands in for the request, not for the provider's own name.
+	service.applyAgentCLITitle(sessionID, "Agent title")
+	if got := state.Snapshot().Sessions[0].CustomTitle; got != "Agent title" {
+		t.Fatalf("session title = %q, want the agent's own name", got)
+	}
+}
+
 // The fallback runs only when nothing above it can name the conversation, and
 // only once: a name the person sets is never replaced by it.
 func TestLocalSessionTitleYieldsToTheChainAboveIt(t *testing.T) {

@@ -184,14 +184,13 @@ struct WarrenDesktopProjectRow: View {
                 action: { if !isInteractionDisabled { onToggleExpansion() } }
             )
 
-            if !isExpanded {
-                WarrenDesktopFoldSummary(marks: foldMarks, count: foldMarks.count)
-            }
-
             // The row's controls end in one rail of fixed slots. The "+" keeps
             // its slot when it is not drawn: giving the width back to the name
             // made a long project name re-truncate the moment the pointer
             // arrived, which is the row moving under the hand that selected it.
+            // The fold's dots sit inside the rail so they stay beside the
+            // chevron that stands for the fold, and the "+" arrives on their
+            // left rather than in a gap between them.
             WarrenDesktopRowRail {
                 Button(action: onAddWorkspace) {
                     Image(systemName: "plus")
@@ -226,6 +225,10 @@ struct WarrenDesktopProjectRow: View {
                         }
                     }
                 )
+
+                if !isExpanded {
+                    WarrenDesktopFoldSummary(marks: foldMarks)
+                }
 
                 Button(action: onToggleExpansion) {
                     WarrenDesktopTreeChevron(isExpanded: isExpanded)

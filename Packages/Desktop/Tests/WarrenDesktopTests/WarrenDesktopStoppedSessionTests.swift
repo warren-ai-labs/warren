@@ -173,6 +173,71 @@ final class WarrenDesktopStoppedSessionTests: XCTestCase {
         XCTAssertFalse(projection.canOpenSession(TerminalSessionID(rawValue: UUID())))
     }
 
+    /// The sidebar lists exactly the Sessions it can open: a stopped Session
+    /// leaves the tree in the same breath a resume takes its Tab away, so the
+    /// row cannot linger beside the Session that continued it.
+    func testTheSidebarListsOnlyStoppedSessionsThatKeepATab() {
+        let hostID = HostID(rawValue: UUID())
+        let projectID = ProjectID(rawValue: UUID())
+        let workspaceID = WorkspaceID(rawValue: UUID())
+        let live = TerminalSessionID(rawValue: UUID())
+        let stopped = TerminalSessionID(rawValue: UUID())
+        let resumedAway = TerminalSessionID(rawValue: UUID())
+        let closed = TerminalSessionID(rawValue: UUID())
+        let resumed = TerminalSessionID(rawValue: UUID())
+        func session(
+            _ id: TerminalSessionID,
+            state: WarrenDesktopSessionState,
+            endReason: WarrenDesktopEndReason? = nil
+        ) -> WarrenDesktopSession {
+            WarrenDesktopSession(
+                id: id,
+                workspaceID: workspaceID,
+                tabID: "tab-\(id)",
+                title: "Session",
+                kind: .claude,
+                state: state,
+                endReason: endReason
+            )
+        }
+        let projection = WarrenDesktopProjection(
+            host: WarrenDomain.Host(id: hostID, name: "Local"),
+            projects: [Project(id: projectID, hostID: hostID, name: "P", rootPath: "/p")],
+            workspaces: [Workspace(id: workspaceID, projectID: projectID, name: "main", path: "/p", branch: "main")],
+            sessions: [
+                session(live, state: .attached),
+                session(stopped, state: .exited, endReason: .runtimeMissing),
+                session(resumedAway, state: .exited, endReason: .runtimeMissing),
+                session(closed, state: .exited, endReason: .userClosed),
+                session(resumed, state: .attached),
+            ],
+            // `resumed` continues `resumedAway`, so that record keeps no Tab;
+            // the Host kept one for `stopped` and lost the closed Session's.
+            tabs: [
+                ClientTab(id: "tab-\(live)", title: "Live", sessionID: live, kind: .claude),
+                ClientTab(id: "tab-\(stopped)", title: "Stopped", sessionID: stopped, kind: .claude),
+                ClientTab(id: "tab-\(resumed)", title: "Resumed", sessionID: resumed, kind: .claude),
+            ],
+            sessionWorkspaceIDs: [
+                live: workspaceID,
+                stopped: workspaceID,
+                resumedAway: workspaceID,
+                closed: workspaceID,
+                resumed: workspaceID,
+            ]
+        )
+
+        XCTAssertEqual(
+            projection.listedSessionsByWorkspaceID[workspaceID]?.map(\.id),
+            [live, stopped, resumed]
+        )
+        for listed in projection.listedSessionsByWorkspaceID[workspaceID] ?? [] {
+            XCTAssertTrue(projection.canOpenSession(listed.id))
+        }
+        XCTAssertFalse(projection.canOpenSession(resumedAway))
+        XCTAssertFalse(projection.canOpenSession(closed))
+    }
+
     /// Resume All continues one stopped record per conversation, the newest,
     /// and leaves out the conversation the current banner's Resume covers.
     func testResumeAllTakesTheNewestRecordOfEachOtherConversation() {

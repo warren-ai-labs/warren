@@ -34,7 +34,8 @@ var (
 )
 
 // LocalLabel derives a name for a Session from the first thing the person wrote
-// in it, for a Host whose own title model is not configured.
+// in it, for a Host whose own title model is not configured or whose request
+// failed.
 //
 // It is a fallback, not a title: it keeps the person's own words and drops the
 // scaffolding around them — provider context blocks, front matter, a pasted

@@ -192,6 +192,18 @@ func AntigravityHome() string {
 	return filepath.Join(home, ".gemini", "antigravity-cli")
 }
 
+// AntigravityGeminiDir returns the directory a session keeps its agy
+// environment in: the gemini_dir a launcher passes as --gemini_dir, which holds
+// the product directory and the config beside it. The daemon's own is the
+// parent of the product directory its home points at.
+func AntigravityGeminiDir() string {
+	home := AntigravityHome()
+	if base := filepath.Base(home); base == "antigravity-cli" || base == "antigravity" {
+		return filepath.Dir(home)
+	}
+	return home
+}
+
 // AntigravityConfigDir returns the configuration directory where hooks.json resides.
 func AntigravityConfigDir() string {
 	if value := os.Getenv("ANTIGRAVITY_CONFIG_DIR"); value != "" {
@@ -739,4 +751,69 @@ func antigravityFiles(toolName string, args any) []string {
 		}
 	}
 	return nil
+}
+
+// AntigravityTranscriptRoots lists the directories the CLI keeps conversations
+// in for one gemini_dir: its own product directory under it, or the directory
+// itself when it already is one.
+//
+// The desktop build writes under another product name in the same gemini_dir,
+// and a conversation there belongs to that product, not to a CLI session that
+// happens to run in the same workspace. Adopting one would put another
+// product's conversation behind a terminal tab, so it is not a candidate.
+func AntigravityTranscriptRoots(geminiDir string) []string {
+	geminiDir = strings.TrimSpace(geminiDir)
+	if geminiDir == "" {
+		return nil
+	}
+	if filepath.Base(geminiDir) == "antigravity-cli" {
+		return []string{geminiDir}
+	}
+	product := filepath.Join(geminiDir, "antigravity-cli")
+	if regularFileExists(filepath.Join(product, "brain")) {
+		return []string{product}
+	}
+	// A directory someone pointed at directly may be the product directory
+	// under another name; its own brain/ is then what to read.
+	if regularFileExists(filepath.Join(geminiDir, "brain")) {
+		return []string{geminiDir}
+	}
+	return []string{product}
+}
+
+// FindAntigravityTranscriptIn is FindAntigravityTranscript against one
+// gemini_dir instead of the daemon's own: a session that runs in a directory of
+// its own keeps its conversations there, and the binding says which.
+func FindAntigravityTranscriptIn(geminiDir, sessionID, workspacePath string) string {
+	geminiDir = strings.TrimSpace(geminiDir)
+	if geminiDir == "" {
+		return FindAntigravityTranscript(sessionID, workspacePath)
+	}
+	for _, home := range AntigravityTranscriptRoots(geminiDir) {
+		if found := findAntigravityTranscriptAt(home, sessionID, workspacePath); found != "" {
+			return found
+		}
+	}
+	return ""
+}
+
+// findAntigravityTranscriptAt looks for a conversation inside one product
+// directory, which is what holds brain/ and the summaries database.
+func findAntigravityTranscriptAt(home, sessionID, workspacePath string) string {
+	if strings.TrimSpace(sessionID) != "" {
+		path := filepath.Join(home, "brain", sessionID, ".system_generated", "logs", "transcript.jsonl")
+		if regularFileExists(path) {
+			return path
+		}
+		return ""
+	}
+	if strings.TrimSpace(workspacePath) != "" {
+		dbPath := filepath.Join(home, "conversation_summaries.db")
+		if regularFileExists(dbPath) {
+			if found := findAntigravityFromDB(dbPath, workspacePath); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
 }

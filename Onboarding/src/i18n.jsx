@@ -114,6 +114,46 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.41.0",
+        dateISO: "2026-11-17",
+        date: "November 17, 2026",
+        title: "Warren finds the Agent a Session is actually running.",
+        summary:
+          "A release that finds the Agent a Session is actually running. A launcher may give every provider a directory of its own and state it in the session's environment as WARREN_AGENT_HOME, and the Host could not see it: a session in its own claude config_dir, codex_home or agy gemini_dir bound nothing, so its Agent view stayed empty. The hook now carries that directory into the binding, the Host installs its hook there, and the directory lookups try the homes the Host has learned in the order it learned them. A title request that fails now falls back to the person's first message, a stopped Session without a Tab leaves the sidebar with it, and a folded sidebar row keeps only the dots it was already drawing. The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Learn an engine home a launcher states, and bind there. The Host covers the engine's shared home when it installs its hooks at startup, but a launcher that gives every provider a directory of its own states that in the session's environment, and the Host could not see it, so such a session bound nothing and its Agent view stayed empty. The hook now records the directory in the binding and the Host installs its hook there, which makes the next session in that directory bind exactly. Before the first hook fires the running engine is asked instead: agy names its directory on the command line, which both platforms expose. macOS does not hand another process's environment to a reader, so a launcher's variable is learnable there only through the hook the engine runs. Nothing in this path knows which launcher created the session: one variable, one hook, and the engine's own layout.",
+              "Try the directories the Host knows, in the order it learned them. A session with no binding yet was matched only against the engine's default home, or the running engine was inspected, so a directory another session had already reported stayed invisible until something re-read it and a new session in a known directory stayed unbound for a poll. The Host now keeps the homes it knows per provider, its own first and then each one a session reported, and tries them in that order before looking at processes. Learning appends to the order, so it happens once per directory. It also fixes what a reported directory holds for agy: it is the gemini_dir, and the conversations live in the product directory under it, whose name differs between the CLI and the desktop build.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Find the engine by name instead of walking the workspace. Learning a home ran the workspace-wide process scan, which on macOS walks the whole tree with lsof every time; once the binding was missing, that was every few seconds in a large checkout. One pass of the process table now names the engines, and only those processes have their cwd resolved.",
+              "Keep only the dots on a folded sidebar row. A folded Project, Task or Workspace row drew one dot per Session with a state and then the number of Sessions; the number was a second thing to read on a row whose job is only to say something is hidden here, and it sat between the dots and the fold chevron. The dots stay, drawn inside the row's trailing rail beside the chevron, with the plus slot arriving on their left on hover, which is where a folded Workspace row already put them.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Name a Session from its first message when the title request fails. A configured title endpoint that could not answer (an unreachable host, a handshake that timed out, a response the validator rejected) left the Session reading as the name the Host gave its kind for the life of the conversation, because the first-message fallback only ran when no endpoint was configured at all. The failure path now writes the same label the unconfigured Host writes, through the same guards: a manual rename is never replaced, a provider name that lands afterwards still wins, and a conversation that was rebound or cleared is not labelled from the old one.",
+              "Never let a guess take a conversation another Session holds. Looking a directory up by workspace and time is a guess, and the Host already refused such a guess when another running session held the file, but that rule only guarded the fallback finder, so the new directory lookups could bind two sessions to one conversation and then persist it. Every workspace-time result now answers to the same rule through one helper, and a session without a hook waits for its own hook instead of sharing another's conversation. The lookups also tighten what they may touch: the CLI reads its own product directory even when it shares a gemini_dir with the desktop build, a hook is installed only in a directory the engine already made, a path that cannot go into the binding's JSON is left out rather than escaped into a different path, the learned list is bounded, and the directory search runs on its own cadence instead of every reconcile tick.",
+              "Drop a stopped Session's sidebar row with its Tab. The sidebar listed every ended Session while the Tab list and the click path kept only the ones the Host still has a Tab for. After a Resume the old record lost its Tab but kept its row: quiet, and inert, because the row's open was refused. The same dead row appeared for any Session closed in a Workspace that still had a live one. The tree now lists exactly what can be opened: every active Session, and the stopped ones whose Tab the projection was built with.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. The engine home is an added field in the Host's own binding file, which the Host rewrites; no persisted Session shape changed.",
+              "A session in a directory the Host has learned binds from its next hook. A session that never bound needs no migration, and no Agent conversation is rewritten.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.40.0",
         dateISO: "2026-11-16",
         date: "November 16, 2026",
@@ -2131,6 +2171,46 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.41.0",
+        dateISO: "2026-11-17",
+        date: "2026 年 11 月 17 日",
+        title: "Warren 能找到 Session 真正在跑的那个 Agent。",
+        summary:
+          "这个版本让 Warren 找到 Session 真正在跑的那个 Agent。启动器可以给每个 provider 一个自己的目录，并在 session 的环境里用 WARREN_AGENT_HOME 声明，而 Host 看不到它：跑在自己的 claude config_dir、codex_home 或 agy gemini_dir 里的 Session 绑不上任何对话，Agent 视图因此一直是空的。现在 hook 把这个目录带进 binding，Host 在那里装自己的 hook，目录查找按学到它们的顺序依次尝试。标题请求失败时会回落到这个人的第一句话，没有 Tab 的已停止 Session 跟着 Tab 一起离开侧边栏，折叠的侧边栏行只留下原本就在画的圆点。JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "学到启动器声明的引擎目录，并在那里绑定。Host 在启动时装 hook 只覆盖引擎共用的 home，而给每个 provider 各自目录的启动器会把这个目录写在 session 的环境里，Host 看不到，于是这种 Session 什么也绑不上，Agent 视图一直是空的。现在 hook 把目录记进 binding，Host 在那里装自己的 hook，于是一个在该目录里的新 Session 会准确绑定。在第一个 hook 触发之前，改为去问正在跑的引擎：agy 会把目录写在命令行上，两个平台都能读到。macOS 不把别的进程的环境交给读取方，所以在那里启动器的变量只能靠引擎自己跑的 hook 学到。这条路径里没有任何一处需要知道是哪个启动器创建了这个 Session：一个变量，一个 hook，加上引擎自己的目录结构。",
+              "按学到的顺序尝试 Host 已知的目录。还没有 binding 的 Session 原先只对引擎默认的 home 匹配，或者去查正在跑的引擎，于是别的 Session 已经报告过的目录在有人重新读它之前是隐形的，已如目录里的新 Session 要空等一轮轮询才绑上。现在 Host 按 provider 记住它知道的 home，先自己的，再是每个 Session 报告过的，并在看进程之前按这个顺序依次尝试。学到的东西追加到顺序末尾，所以每个目录只发生一次。它同时修正了 agy 报告目录的内容：那是 gemini_dir，对话放在它下面的产品目录里，而这个目录名在 CLI 与 desktop 构建下并不相同。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "按名字找引擎，不再扫整个 workspace。学一个 home 原先要跑 workspace 级的进程扫描，在 macOS 上那是每次都把整棵树用 lsof 走一遍；binding 一旦缺失，大仓库里就是每隔几秒一次。现在一趟进程表就能把引擎挑出来，只对这几个进程解析 cwd。",
+              "折叠的侧边栏行只保留圆点。折叠的 Project、Task 或 Workspace 行原先每个有状态的 Session 画一个圆点，后面再跟一个 Session 数量；在一个只负责说“这里有东西藏着”的行上，数字是第二样要读的东西，还夹在圆点与折叠箭头之间。圆点留下，改画在行尾的导轨里、紧靠箭头，悬停时“+”槽位出现在它们左边，这也是折叠 Workspace 行原本的摆法。",
+            ],
+          },
+          {
+            title: "修正",
+            items: [
+              "标题请求失败时用第一句话给 Session 命名。配置了标题端点但它没能回答时（host 连不上、握手超时、校验拒了响应），Session 整场对话都停在 Host 按类型起的名字上，因为第一句话的回落只在完全没配端点时才跑。失败路径现在也写未配置时写的那同一个标签，门禁也一样：手动重命名永远不会被替换，之后到的 provider 名字仍然优先，被重新绑定或已清空的对话不会被旧对话的名字命名。",
+              "永远不让一个猜测抢走另一个 Session 占着的对话。按 workspace 与时间查目录是猜测，另一个在跑的 session 占着那个文件时 Host 本来就会拒绝这种猜测，但那条规则只挡住了回落的查找器，于是新的目录查找可以把两个 session 绑到同一个对话上并写进状态。现在每个按 workspace 与时间得到的结果都走同一个辅助函数、遵守同一条规则，没有 hook 的 session 会等自己的 hook，而不是共用别人的对话。查找能碰的东西也收紧了：CLI 只读自己的产品目录，即使它与 desktop 构建共用 gemini_dir；hook 只装在引擎自己已经建好的目录里；进不了 binding JSON 的路径直接略去，而不是转义成另一个路径；学到的列表有上限；目录搜索也改成自己的节奏，不再每个 reconcile tick 都跑。",
+              "已停止 Session 的侧边栏行跟着它的 Tab 一起消失。侧边栏原先列出每一个结束的 Session，而 Tab 列表与点击路径只留 Host 还有 Tab 的那些。Resume 之后旧记录失去了 Tab 却留着行：不声不响，也点不动，因为这一行的打开请求会被拒。任何在一个仍有活着的 Session 的 Workspace 里被关掉的 Session 都会出现同样的死行。现在树里只列能打开的东西：所有活着的 Session，以及构建这份投影时还有 Tab 的已停止 Session。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，未新增或改动方法，本版本不迁移任何状态。引擎目录是 Host 自己的 binding 文件里新增的一个字段，该文件由 Host 自己重写；没有任何持久化的 Session 形状改变。",
+              "Host 已经学到目录的 Session 从下一次 hook 起就能绑定。从未绑上过的 Session 不需要迁移，也不会重写任何 Agent 对话。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.40.0",
         dateISO: "2026-11-16",

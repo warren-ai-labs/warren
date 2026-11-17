@@ -4,6 +4,105 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-11-17
+
+A release that finds the Agent a Session is actually running. A launcher may
+give every provider a directory of its own and state it in the session's
+environment as `WARREN_AGENT_HOME`, and the Host could not see it: a session in
+its own claude `config_dir`, `codex_home` or agy `gemini_dir` bound nothing, so
+its Agent view stayed empty. The hook now carries that directory into the
+binding, the Host installs its hook there, and the directory lookups try the
+homes the Host has learned in the order it learned them. A title request that
+fails now falls back to the person's first message, a stopped Session without a
+Tab leaves the sidebar with it, and a folded sidebar row keeps only the dots it
+was already drawing. The JSON control protocol remains at 4.0, no method was
+added or changed, and this release migrates no state.
+
+### Added
+
+- Learn an engine home a launcher states, and bind there. The Host covers the
+  engine's shared home when it installs its hooks at startup, but a launcher
+  that gives every provider a directory of its own states that in the session's
+  environment, and the Host could not see it, so such a session bound nothing
+  and its Agent view stayed empty. The hook now records the directory in the
+  binding and the Host installs its hook there, which makes the next session in
+  that directory bind exactly. Before the first hook fires the running engine is
+  asked instead: agy names its directory on the command line, which both
+  platforms expose. macOS does not hand another process's environment to a
+  reader, so a launcher's variable is learnable there only through the hook the
+  engine runs. Nothing in this path knows which launcher created the session:
+  one variable, one hook, and the engine's own layout.
+- Try the directories the Host knows, in the order it learned them. A session
+  with no binding yet was matched only against the engine's default home, or the
+  running engine was inspected, so a directory another session had already
+  reported stayed invisible until something re-read it and a new session in a
+  known directory stayed unbound for a poll. The Host now keeps the homes it
+  knows per provider, its own first and then each one a session reported, and
+  tries them in that order before looking at processes. Learning appends to the
+  order, so it happens once per directory. It also fixes what a reported
+  directory holds for agy: it is the `gemini_dir`, and the conversations live in
+  the product directory under it, whose name differs between the CLI and the
+  desktop build.
+
+### Changed
+
+- Find the engine by name instead of walking the workspace. Learning a home ran
+  the workspace-wide process scan, which on macOS walks the whole tree with
+  `lsof` every time; once the binding was missing, that was every few seconds in
+  a large checkout. One pass of the process table now names the engines, and
+  only those processes have their cwd resolved.
+- Keep only the dots on a folded sidebar row. A folded Project, Task or
+  Workspace row drew one dot per Session with a state and then the number of
+  Sessions; the number was a second thing to read on a row whose job is only to
+  say something is hidden here, and it sat between the dots and the fold
+  chevron. The dots stay, drawn inside the row's trailing rail beside the
+  chevron, with the "+" slot arriving on their left on hover, which is where a
+  folded Workspace row already put them.
+
+### Fixed
+
+- Name a Session from its first message when the title request fails. A
+  configured title endpoint that could not answer (an unreachable host, a
+  handshake that timed out, a response the validator rejected) left the Session
+  reading as the name the Host gave its kind for the life of the conversation,
+  because the first-message fallback only ran when no endpoint was configured at
+  all. The failure path now writes the same label the unconfigured Host writes,
+  through the same guards: a manual rename is never replaced, a provider name
+  that lands afterwards still wins, and a conversation that was rebound or
+  cleared is not labelled from the old one.
+- Never let a guess take a conversation another Session holds. Looking a
+  directory up by workspace and time is a guess, and the Host already refused
+  such a guess when another running session held the file, but that rule only
+  guarded the fallback finder, so the new directory lookups could bind two
+  sessions to one conversation and then persist it. Every workspace-time result
+  now answers to the same rule through one helper, and a session without a hook
+  waits for its own hook instead of sharing another's conversation. The lookups
+  also tighten what they may touch: the CLI reads its own product directory even
+  when it shares a `gemini_dir` with the desktop build, a hook is installed only
+  in a directory the engine already made, a path that cannot go into the
+  binding's JSON is left out rather than escaped into a different path, the
+  learned list is bounded, and the directory search runs on its own cadence
+  instead of every reconcile tick.
+- Drop a stopped Session's sidebar row with its Tab. The sidebar listed every
+  ended Session while the Tab list and the click path kept only the ones the
+  Host still has a Tab for. After a Resume the old record lost its Tab but kept
+  its row: quiet, and inert, because the row's open was refused. The same dead
+  row appeared for any Session closed in a Workspace that still had a live one.
+  The tree now lists exactly what can be opened: every active Session, and the
+  stopped ones whose Tab the projection was built with.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0, no method was added or changed, and
+  this release migrates no state. The engine home is an added field in the Host's
+  own binding file, which the Host rewrites; no persisted Session shape changed.
+- A session in a directory the Host has learned binds from its next hook. A
+  session that never bound needs no migration, and no Agent conversation is
+  rewritten.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.40.0] - 2026-11-16
 
 A release that lets the program inside a terminal say what it is doing, and

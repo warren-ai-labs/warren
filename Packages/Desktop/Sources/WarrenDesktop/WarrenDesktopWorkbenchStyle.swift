@@ -299,7 +299,6 @@ enum WarrenDesktopTreeTypography {
     /// Times and counts: SF Mono, so a column of them lines up. One step under
     /// the second line, and large enough to stay legible on `t4`.
     static let age = Font.system(size: 11, weight: .regular, design: .monospaced)
-    static let count = Font.system(size: 11, weight: .medium, design: .monospaced)
     /// The Projects / Tasks tabs, and the count after each.
     ///
     /// Seravek, a humanist sans: Avenir's geometric capitals stood apart from
@@ -512,46 +511,29 @@ struct WarrenDesktopTreeChevron: View {
 /// One dot per Session with a state, drawn by a folded row so those states
 /// stay in sight. Status lives in the dot's colour and nothing else; an idle
 /// Session draws nothing and holds no room.
-/// What a folded row keeps of the rows it hides: one dot per Session with a
-/// state (at most six), then how many Sessions there are.
+///
+/// What a folded row keeps of the rows it hides is those dots, at most six,
+/// and nothing else. A Session count used to follow them: a second number on a
+/// row whose whole job is to say that something is in here, and one that pushed
+/// the dots away from the chevron that stands for the fold.
 struct WarrenDesktopFoldSummary: View {
     let marks: [WarrenActivityMark?]
-    let count: Int
 
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.warrenWindowMaterial) private var windowMaterial
-
+    /// The gap between the summary and the fold chevron.
     static let spacing: CGFloat = 6
 
     var body: some View {
-        let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        HStack(spacing: Self.spacing) {
-            if WarrenDesktopTreeFoldDots.drawsAny(marks) {
-                WarrenDesktopTreeFoldDots(marks: marks)
-            }
-            if count > 0 {
-                Text("\(count)")
-                    .font(WarrenDesktopTreeTypography.count)
-                    .foregroundStyle(tokens.treeFaintText)
-                    .frame(minWidth: 10, alignment: .trailing)
-            }
-        }
-        .fixedSize()
-        .accessibilityHidden(true)
+        WarrenDesktopTreeFoldDots(marks: marks)
+            .fixedSize()
+            .accessibilityHidden(true)
     }
 
     /// The summary's drawn width, so a row can leave room for it.
-    static func width(marks: [WarrenActivityMark?], count: Int) -> CGFloat {
+    static func width(marks: [WarrenActivityMark?]) -> CGFloat {
         let dots = CGFloat(WarrenDesktopTreeFoldDots.visibleMarks(of: marks).count)
-        let dotsWidth = dots > 0
-            ? dots * WarrenDesktopSidebarMetrics.foldDotSize
-                + (dots - 1) * WarrenDesktopSidebarMetrics.foldDotSpacing
-            : 0
-        let countWidth = count > 0
-            ? max(10, WarrenDesktopSessionSecondLineLayout.textWidth("\(count)", fontSize: 10.5, monospaced: true))
-            : 0
-        let gap = dotsWidth > 0 && countWidth > 0 ? spacing : 0
-        return dotsWidth + gap + countWidth
+        guard dots > 0 else { return 0 }
+        return dots * WarrenDesktopSidebarMetrics.foldDotSize
+            + (dots - 1) * WarrenDesktopSidebarMetrics.foldDotSpacing
     }
 }
 

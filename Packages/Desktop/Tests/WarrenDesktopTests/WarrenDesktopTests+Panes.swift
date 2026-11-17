@@ -38,7 +38,8 @@ extension WarrenDesktopTests {
     }
     /// A folded row keeps one dot per Session that has a state, capped so the
     /// dots still read as individual Sessions, and reserves exactly the room
-    /// it draws in. An idle Session draws nothing and holds no room.
+    /// it draws in. An idle Session draws nothing and holds no room, and the
+    /// fold keeps no count of the rows it hides.
     func testLeafDisclosureShowsDotsOnlyWhileFolded() {
         let marks: [WarrenActivityMark?] = [
             .working, .exited, .ready, nil, .failed, .working, .ready, .inputNeeded, .working,
@@ -57,10 +58,10 @@ extension WarrenDesktopTests {
 
         let quiet = WarrenDesktopLeafDisclosure(isExpanded: false, marks: [nil, .exited, nil], toggle: {})
         XCTAssertEqual(quiet.visibleMarks, [])
-        XCTAssertGreaterThan(
+        XCTAssertEqual(
             quiet.accessoryWidth,
             WarrenDesktopLeafDisclosure.chevronWidth,
-            "A folded row of idle Sessions still counts its Sessions"
+            "A folded row of idle Sessions keeps only its chevron: no dot, and no count beside it"
         )
         XCTAssertFalse(WarrenDesktopTreeFoldDots.drawsAny([nil, .exited]))
         XCTAssertTrue(WarrenDesktopTreeFoldDots.drawsAny([nil, .ready]))

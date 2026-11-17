@@ -395,7 +395,7 @@ func TestBoundTranscriptKeepsPersistedPathAfterContextMove(t *testing.T) {
 	// The session now lives in another Workspace whose path is a different
 	// directory. The persisted transcript is the only path that still points
 	// at the CLI's original rollout, so it must win over cwd-based discovery.
-	if got := service.boundTranscript(session, filepath.Join(directory, "other-workspace")); got != transcriptPath {
+	if got := service.boundTranscript(session, filepath.Join(directory, "other-workspace"), api.State{}); got != transcriptPath {
 		t.Fatalf("bound transcript = %q, want %q", got, transcriptPath)
 	}
 }

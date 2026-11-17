@@ -122,7 +122,7 @@ struct WarrenDesktopLeafDisclosure {
     /// truncates before it instead of running underneath.
     var accessoryWidth: CGFloat {
         guard !isExpanded else { return Self.chevronWidth }
-        let summary = WarrenDesktopFoldSummary.width(marks: marks, count: marks.count)
+        let summary = WarrenDesktopFoldSummary.width(marks: marks)
         return Self.chevronWidth + (summary > 0 ? WarrenDesktopFoldSummary.spacing + summary : 0)
     }
 }
@@ -141,7 +141,7 @@ struct WarrenDesktopLeafDisclosureAccessory: View {
     var body: some View {
         HStack(spacing: WarrenDesktopFoldSummary.spacing) {
             if !disclosure.isExpanded {
-                WarrenDesktopFoldSummary(marks: disclosure.marks, count: disclosure.marks.count)
+                WarrenDesktopFoldSummary(marks: disclosure.marks)
             }
             Button(action: disclosure.toggle) {
                 WarrenDesktopTreeChevron(isExpanded: disclosure.isExpanded, color: chevronColor)

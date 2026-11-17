@@ -18,11 +18,17 @@ import (
 // the daemon so transcript discovery is keyed by the CLI's own session ID
 // instead of guessing by cwd and mtime.
 type Binding struct {
-	Provider       string    `json:"provider"`
-	SessionID      string    `json:"sessionId"`
-	TranscriptPath string    `json:"transcriptPath"`
-	Cwd            string    `json:"cwd,omitempty"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	Provider       string `json:"provider"`
+	SessionID      string `json:"sessionId"`
+	TranscriptPath string `json:"transcriptPath"`
+	Cwd            string `json:"cwd,omitempty"`
+	// Home is the engine's own directory for this session when the launcher
+	// relocated it, as the launcher states it in EnvAgentHome. It is how a
+	// session that runs in its own claude config_dir, codex_home or agy
+	// gemini_dir is told apart from one on the shared home, without warren
+	// knowing what put it there.
+	Home      string    `json:"home,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 const (
@@ -37,6 +43,13 @@ const (
 	// BindEnvState points the managed hook at the file it must update when the
 	// CLI session changes lifecycle, so the daemon can update the status overlay.
 	BindEnvState = "WARREN_STATE_FILE"
+	// BindEnvHome names the engine's own directory when the launcher relocated
+	// it: a claude config_dir, a codex_home, an agy gemini_dir. It is the one
+	// variable every launcher states the same way, so a session that keeps a
+	// directory of its own can be told from one on the shared home without
+	// warren knowing who launched it. Engines that state it natively, through
+	// CLAUDE_CONFIG_DIR or CODEX_HOME, are read as a fallback.
+	BindEnvHome = "WARREN_AGENT_HOME"
 	// CodexSessionID and CodexThreadID are launcher-provided identity hints.
 	// An interactive shell can inherit them from its parent Codex process; an
 	// independently-created Warren session must not reuse that conversation.
@@ -650,6 +663,22 @@ transcript_path=$(printf '%s' "$input" | sed -nE 's/.*"transcript_path"[[:space:
 [ -n "$transcript_path" ] || transcript_path=$(printf '%s' "$input" | sed -nE 's/.*"transcriptPath"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 cwd=$(printf '%s' "$input" | sed -nE 's/.*"cwd"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p')
 [ -n "$cwd" ] || cwd=$(printf '%s' "$input" | sed -nE 's/.*"workspacePaths"[[:space:]]*:[[:space:]]*\["([^"]*)".*/\1/p')
+# The engine's own directory, when the launcher relocated it. The launcher
+# states it in one variable; an engine that states it natively is read as a
+# fallback, so a session started by hand binds the same way.
+agent_home=${WARREN_AGENT_HOME:-}
+[ -n "$agent_home" ] || agent_home=${CLAUDE_CONFIG_DIR:-}
+[ -n "$agent_home" ] || agent_home=${CODEX_HOME:-}
+[ -n "$agent_home" ] || agent_home=${PI_CODING_AGENT_DIR:-}
+[ -n "$agent_home" ] || agent_home=${QODER_CONFIG_DIR:-}
+# The binding is one JSON line built by printf, so a path that cannot be
+# written into it safely is left out rather than allowed to corrupt the whole
+# binding: a session with no directory binds as it did before, a session whose
+# binding is unreadable binds not at all.
+case "$agent_home" in
+  *'"'*|*\\*) agent_home="" ;;
+esac
+[ "$(printf '%s' "$agent_home" | LC_ALL=C tr -d '[:cntrl:]')" = "$agent_home" ] || agent_home=""
 
 exit_hook() {
   if [ "$provider" = "antigravity" ]; then
@@ -699,9 +728,11 @@ bind_session() {
   dir=$(dirname "$WARREN_BIND_FILE")
   mkdir -p "$dir" 2>/dev/null || return 0
   temporary="$WARREN_BIND_FILE.tmp.$$"
+  home_field=""
+  [ -n "$agent_home" ] && home_field=$(printf '"home":"%s",' "$agent_home")
   {
-    printf '{"provider":"%s","sessionId":"%s","transcriptPath":"%s","cwd":"%s","updatedAt":"%s"}\n' \
-      "$provider" "$session_id" "$transcript_path" "$cwd" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '{%s"provider":"%s","sessionId":"%s","transcriptPath":"%s","cwd":"%s","updatedAt":"%s"}\n' \
+      "$home_field" "$provider" "$session_id" "$transcript_path" "$cwd" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "$temporary" 2>/dev/null || return 0
   mv -f "$temporary" "$WARREN_BIND_FILE" 2>/dev/null || return 0
 }

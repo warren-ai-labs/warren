@@ -76,6 +76,24 @@ type Service struct {
 	// (RFC 0023 §6.12); no agent process may start for them meanwhile.
 	acpHandoffs sync.Map
 
+	// armedHomes remembers which engine home Warren already installed its hook
+	// into, keyed by provider and path: a session may report the same home on
+	// every turn, and the hook is a file write with a parse of what is there.
+	armedHomes sync.Map
+
+	// learnedHomes records when a workspace's processes were last inspected for
+	// an engine home they report: a launcher states it in the session's
+	// environment, which only the running engine can show Warren.
+	learnedHomes sync.Map
+
+	// agentHomes is every engine home Warren knows of, per provider, in the
+	// order it learned them: the daemon's own, then what sessions reported.
+	agentHomes homesInOrder
+
+	// homeScans records when a session's known directories were last searched;
+	// each search reads every candidate's conversation summaries.
+	homeScans sync.Map
+
 	Store          *store.Store
 	AgentStore     *store.AgentEventStore
 	AgentStorePath string

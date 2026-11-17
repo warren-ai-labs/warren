@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -264,14 +265,17 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 				agentSessionID = binding.SessionID
 				transcriptPath = binding.TranscriptPath
 				if transcriptPath == "" || !regularFileExists(transcriptPath) {
-					transcriptPath = agent.FindAntigravityTranscript(binding.SessionID, workspacePath)
+					transcriptPath = agent.FindAntigravityTranscriptIn(binding.Home, binding.SessionID, workspacePath)
 				}
+				s.armBindingHome(binding)
 			} else if session.AgentSessionID != "" {
 				agentSessionID = session.AgentSessionID
-				transcriptPath = agent.FindAntigravityTranscript(session.AgentSessionID, workspacePath)
+				transcriptPath = s.antigravityTranscript(session, *state, session.AgentSessionID, workspacePath)
+			} else {
+				transcriptPath = s.antigravityTranscript(session, *state, "", workspacePath)
 			}
 		} else {
-			transcriptPath = s.boundTranscript(session, workspacePath)
+			transcriptPath = s.boundTranscript(session, workspacePath, *state)
 			if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil {
 				agentSessionID = binding.SessionID
 			}
@@ -700,18 +704,19 @@ func (s *Service) transcriptTakenByOtherInState(state api.State, transcriptPath,
 
 // boundTranscript prefers the deterministic per-session binding (Claude's
 // injected session ID and the Codex hook's report) over cwd+mtime scanning.
-func (s *Service) boundTranscript(session api.Session, workspacePath string) string {
+func (s *Service) boundTranscript(session api.Session, workspacePath string, state api.State) string {
 	binding, err := agent.ReadBinding(agent.BindPath(session.ID))
 	if err == nil && binding != nil && binding.Provider == session.Kind {
 		if info, statErr := os.Stat(binding.TranscriptPath); statErr == nil && !info.IsDir() {
 			return binding.TranscriptPath
 		}
 		if session.Kind == "claude" && binding.SessionID != "" {
-			path := agent.ClaudeTranscriptPath(agent.ClaudeProjectsRoot(), workspacePath, binding.SessionID)
+			path := agent.ClaudeTranscriptPath(claudeProjectsRootAt(binding.Home), workspacePath, binding.SessionID)
 			if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() {
 				return path
 			}
 		}
+		s.armBindingHome(binding)
 	}
 	// A Session moved to another Workspace keeps its old
 	// transcript: the persisted path outlives cwd-based discovery and is the
@@ -725,6 +730,21 @@ func (s *Service) boundTranscript(session api.Session, workspacePath string) str
 		path := agent.ClaudeTranscriptPath(agent.ClaudeProjectsRoot(), workspacePath, session.AgentSessionID)
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
 			return path
+		}
+	}
+	// An engine may run in a directory of its own. Every directory Warren knows
+	// of is tried in the order it learned them, and only then is the running
+	// engine asked, which arms the next turn to bind exactly.
+	if session.Kind == "claude" && session.AgentSessionID != "" && s.homeScanDue(session.ID) {
+		homes := s.homesFor("claude")
+		if found := claudeTranscriptIn(homes, workspacePath, session.AgentSessionID); found != "" && s.claimable(state, session.ID, found) {
+			return found
+		}
+		for _, home := range s.learnAgentHomes(workspacePath) {
+			path := agent.ClaudeTranscriptPath(filepath.Join(home, "projects"), workspacePath, session.AgentSessionID)
+			if s.claimable(state, session.ID, path) && regularFileExists(path) {
+				return path
+			}
 		}
 	}
 	return ""
@@ -882,4 +902,70 @@ func (s *Service) canonicalExecutionID(sessionID string) string {
 	entry.mu.Unlock()
 	s.agentsMu.Unlock()
 	return executionID
+}
+
+// armBindingHome installs Warren's hook into the engine home a session reported,
+// so the next session that runs there binds exactly instead of falling back to
+// cwd and mtime. The daemon's own installation at startup covers the shared
+// home; a launcher may give every provider a directory of its own, and this is
+// how warren learns about one without knowing who created it.
+func (s *Service) armBindingHome(binding *agent.Binding) {
+	if binding == nil || binding.Home == "" || binding.Provider == "" {
+		return
+	}
+	s.rememberHome(binding.Provider, binding.Home)
+	key := binding.Provider + "\x00" + binding.Home
+	if _, seen := s.armedHomes.LoadOrStore(key, struct{}{}); seen {
+		return
+	}
+	if _, err := agent.EnsureBindHookForHome(binding.Provider, binding.Home); err != nil {
+		s.logInfo("agent home hook install failed", "provider", binding.Provider, "home", binding.Home, "error", err.Error())
+	}
+}
+
+// claudeProjectsRootAt is where Claude keeps transcripts for a session, given
+// the config dir the binding reported; empty keeps the daemon's own.
+func claudeProjectsRootAt(home string) string {
+	if home == "" {
+		return agent.ClaudeProjectsRoot()
+	}
+	return filepath.Join(home, "projects")
+}
+
+// antigravityTranscript finds this session's conversation across the gemini
+// directories Warren knows of, in the order it learned them, and asks the
+// running engine only about a directory it has never seen.
+//
+// A conversation is picked by workspace and time until a hook names it, so the
+// result answers to the same rule as any other guess: a conversation another
+// running session already holds is skipped rather than shared.
+func (s *Service) antigravityTranscript(session api.Session, state api.State, agentSessionID, workspacePath string) string {
+	if !s.homeScanDue(session.ID) {
+		return ""
+	}
+	for _, home := range s.homesFor("antigravity") {
+		found := agent.FindAntigravityTranscriptIn(home, agentSessionID, workspacePath)
+		if s.claimable(state, session.ID, found) {
+			return found
+		}
+	}
+	for _, home := range s.learnAgentHomes(workspacePath) {
+		found := agent.FindAntigravityTranscriptIn(home, agentSessionID, workspacePath)
+		if s.claimable(state, session.ID, found) {
+			return found
+		}
+	}
+	return ""
+}
+
+// claudeTranscriptIn is the deterministic transcript of a session inside the
+// first directory that holds it.
+func claudeTranscriptIn(homes []string, workspacePath, agentSessionID string) string {
+	for _, home := range homes {
+		path := agent.ClaudeTranscriptPath(filepath.Join(home, "projects"), workspacePath, agentSessionID)
+		if regularFileExists(path) {
+			return path
+		}
+	}
+	return ""
 }

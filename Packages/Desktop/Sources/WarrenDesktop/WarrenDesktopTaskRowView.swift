@@ -74,15 +74,15 @@ struct WarrenDesktopTaskRow: View {
                 action: { if !isInteractionDisabled { onToggleExpansion() } }
             )
 
-            if !isExpanded {
-                WarrenDesktopFoldSummary(marks: foldMarks, count: foldMarks.count)
-            }
-
             // One rail of fixed slots, as a project row draws it: the add menu
             // keeps its slot when hidden so the name never re-truncates under
-            // the pointer.
+            // the pointer, and the fold's dots sit between it and the chevron.
             WarrenDesktopRowRail {
                 taskAddMenu(tokens: tokens)
+
+                if !isExpanded {
+                    WarrenDesktopFoldSummary(marks: foldMarks)
+                }
 
                 Button(action: onToggleExpansion) {
                     WarrenDesktopTreeChevron(isExpanded: isExpanded)
