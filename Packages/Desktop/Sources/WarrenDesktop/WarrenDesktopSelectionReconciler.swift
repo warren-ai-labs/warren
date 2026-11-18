@@ -228,7 +228,7 @@ public enum WarrenDesktopNavigationReducer {
              .setTaskPinned, .setProjectPinned, .setWorkspacePinned, .setSessionPinned,
              .dismissActivity,
              .moveTab, .moveSession, .moveProject, .moveWorkspace,
-             .requestNewSession, .launchSession,
+             .requestNewSession, .launchSession, .handoff,
              .toggleSidebar, .openNotifications:
             return state
         }

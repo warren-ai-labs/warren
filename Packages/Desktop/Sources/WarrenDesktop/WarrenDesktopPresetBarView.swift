@@ -38,6 +38,13 @@ struct WarrenDesktopPresetBar: View {
     var onDismiss: () -> Void = {}
     /// Opens Settings at the launch commands. Nil leaves the footer out.
     var onCustomize: (() -> Void)? = nil
+    /// The Agent Session a handoff would start from. Nil leaves the Handoff
+    /// row out.
+    var handoffSource: TerminalSessionID? = nil
+    /// The source Agent's name, for "Written by Claude".
+    var handoffSourceName = "the agent"
+    var loadHandoffStatus: @MainActor (TerminalSessionID) async -> WarrenDesktopHandoffStatus? = { _ in nil }
+    var onHandoff: (TerminalSessionLaunchRequest, WarrenDesktopHandoffMode) -> Void = { _, _ in }
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
@@ -48,6 +55,10 @@ struct WarrenDesktopPresetBar: View {
     @State private var choosingPresetID: String?
     /// The row under the pointer, which shows its quick Terminal/Chat pair.
     @State private var hoveredPresetID: String?
+    @State private var choosingHandoff = false
+    @State private var handoffStatus: WarrenDesktopHandoffStatus?
+    /// The brief the person picked; nil follows the cache.
+    @State private var handoffModeChoice: WarrenDesktopHandoffMode?
     @AppStorage(WarrenPreferenceKey.presetCommandShell)
     private var shellCommand = ""
     @AppStorage(WarrenPreferenceKey.presetCommandClaude)
@@ -79,7 +90,12 @@ struct WarrenDesktopPresetBar: View {
             embeddedBrowser: canUseEmbeddedBrowser
         )
         ZStack(alignment: .topLeading) {
-            if let choosingPresetID,
+            if choosingHandoff, let handoffSource {
+                handoffPage(presets.filter(\.isAI), source: handoffSource, palette: palette)
+                    .transition(
+                        WarrenDesktopPopMotion.pageTransition(isForward: true, reduceMotion: reduceMotion)
+                    )
+            } else if let choosingPresetID,
                let preset = presets.first(where: { $0.id == choosingPresetID }) {
                 interfaceChoice(for: preset, palette: palette)
                     .transition(
@@ -99,6 +115,13 @@ struct WarrenDesktopPresetBar: View {
         .onChange(of: workspace?.id) { _ in
             pendingPresetID = nil
             choosingPresetID = nil
+            choosingHandoff = false
+        }
+        .task(id: handoffSource) {
+            handoffStatus = nil
+            handoffModeChoice = nil
+            guard let handoffSource else { return }
+            handoffStatus = await loadHandoffStatus(handoffSource)
         }
         .onChange(of: agentInterfaceRawValue) { _ in
             choosingPresetID = nil
@@ -125,6 +148,11 @@ struct WarrenDesktopPresetBar: View {
         VStack(alignment: .leading, spacing: 0) {
             WarrenDesktopMenuGroupHeader(title: "New session") {
                 scopeAccessory(palette: palette)
+            }
+
+            if handoffSource != nil {
+                handoffRow(palette: palette)
+                WarrenDesktopMenuDivider()
             }
 
             ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
@@ -328,7 +356,11 @@ struct WarrenDesktopPresetBar: View {
     /// Terminal and Chat side by side on an ACP-capable row's hover, so
     /// either interface is one click away whatever Settings says the row
     /// itself does.
-    private func quickChoice(for preset: WarrenDesktopSessionPreset) -> some View {
+    private func quickChoice(
+        for preset: WarrenDesktopSessionPreset,
+        semanticPrefix: String = "preset",
+        start launchAs: ((Bool) -> Void)? = nil
+    ) -> some View {
         HStack(spacing: 2) {
             ForEach([false, true], id: \.self) { conversation in
                 let label = conversation
@@ -336,7 +368,11 @@ struct WarrenDesktopPresetBar: View {
                     : "Start \(preset.presetBarTitle) in Terminal"
                 let start = {
                     guard pendingPresetID == nil, !isBusy else { return }
-                    launch(preset, conversation: conversation)
+                    if let launchAs {
+                        launchAs(conversation)
+                    } else {
+                        launch(preset, conversation: conversation)
+                    }
                 }
                 WarrenDesktopMenuInlineButton(
                     systemImage: conversation ? "bubble.left" : "terminal",
@@ -344,7 +380,7 @@ struct WarrenDesktopPresetBar: View {
                     action: start
                 )
                 .warrenSemanticElement(
-                    id: "preset.\(preset.id).quick.\(conversation ? "chat" : "terminal")",
+                    id: "\(semanticPrefix).\(preset.id).quick.\(conversation ? "chat" : "terminal")",
                     role: .button,
                     label: label,
                     isEnabled: !isLaunchDisabled,
@@ -437,6 +473,231 @@ struct WarrenDesktopPresetBar: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(preset.presetBarTitle) interface")
+    }
+
+    // MARK: Handoff
+
+    private var handoffMode: WarrenDesktopHandoffMode {
+        if let handoffModeChoice { return handoffModeChoice }
+        return handoffStatus?.recommendedMode(at: Date()) ?? .extract
+    }
+
+    /// The first page's way into a handoff: a fresh Agent Session that starts
+    /// from a brief of this one, with how warm this one's cache is beside it.
+    private func handoffRow(palette: WarrenDesktopMenuPalette) -> some View {
+        let open = {
+            guard !isLaunchDisabled else { return }
+            choosingHandoff = true
+        }
+        return Button(action: open) {
+            HStack(spacing: WarrenDesktopMenuMetrics.iconSpacing) {
+                Image(systemName: "arrowshape.turn.up.right")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(palette.icon)
+                    .frame(width: WarrenDesktopMenuMetrics.iconSize, height: WarrenDesktopMenuMetrics.iconSize)
+                Text("Handoff")
+                    .font(WarrenTypography.popoverItem)
+                    .foregroundStyle(palette.rowText)
+                Spacer(minLength: 4)
+                handoffCacheText(palette: palette, compact: true)
+                WarrenDesktopMenuChevron()
+            }
+            .lineLimit(1)
+            .padding(.horizontal, Self.rowHorizontalInset)
+            .frame(maxWidth: .infinity, minHeight: Self.rowHeight, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(WarrenDesktopMenuRowStyle())
+        .disabled(isLaunchDisabled)
+        .accessibilityLabel("Handoff to a new session")
+        .accessibilityHint("Start a fresh agent session from a brief of this one")
+        .warrenSemanticElement(
+            id: "preset.handoff",
+            role: .button,
+            label: "Handoff to a new session",
+            isEnabled: !isLaunchDisabled,
+            action: open
+        )
+    }
+
+    /// The cache countdown, redrawn each second while the menu is open.
+    private func handoffCacheText(palette: WarrenDesktopMenuPalette, compact: Bool = false) -> some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            if let label = compact
+                ? handoffStatus?.compactCacheLabel(at: context.date)
+                : handoffStatus?.cacheLabel(at: context.date) {
+                Text(label)
+                    .font(WarrenTypography.popoverMeta)
+                    .foregroundStyle(palette.meta)
+                    .monospacedDigit()
+            }
+        }
+    }
+
+    /// The handoff page: who writes the brief, then the Agent to continue in.
+    private func handoffPage(
+        _ agents: [WarrenDesktopSessionPreset],
+        source: TerminalSessionID,
+        palette: WarrenDesktopMenuPalette
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            WarrenDesktopMenuBackRow(
+                title: "Handoff",
+                backLabel: "Back to presets",
+                onBack: { choosingHandoff = false }
+            ) {
+                EmptyView()
+            }
+
+            WarrenDesktopMenuDivider()
+            WarrenDesktopMenuGroupHeader(title: "Brief") {
+                handoffCacheText(palette: palette)
+                    .padding(.trailing, WarrenDesktopMenuMetrics.rowHorizontalPadding - 2)
+            }
+            handoffModeRow(
+                .agent,
+                title: "Written by \(handoffSourceName)",
+                hint: agentBriefHint,
+                isEnabled: handoffStatus?.canAsk == true,
+                palette: palette
+            )
+            handoffModeRow(
+                .extract,
+                title: "Extracted by Warren",
+                hint: "No model call",
+                isEnabled: true,
+                palette: palette
+            )
+
+            WarrenDesktopMenuDivider()
+            WarrenDesktopMenuGroupHeader(title: "Continue in")
+            ForEach(agents) { preset in
+                handoffAgentButton(preset, palette: palette)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Handoff")
+    }
+
+    private var agentBriefHint: String {
+        guard let handoffStatus else { return "Asks the agent in its own session" }
+        guard handoffStatus.canAsk else { return "The agent is busy or not running" }
+        switch handoffStatus.cache(at: Date()) {
+        case .warm:
+            return "Cheap while the cache is warm"
+        case .cold:
+            return "Reads " + (handoffStatus.contextLabel ?? "the whole context") + " again"
+        case .unknown:
+            return "Asks the agent in its own session"
+        }
+    }
+
+    private func handoffModeRow(
+        _ mode: WarrenDesktopHandoffMode,
+        title: String,
+        hint: String,
+        isEnabled: Bool,
+        palette: WarrenDesktopMenuPalette
+    ) -> some View {
+        let choose = { handoffModeChoice = mode }
+        let isChecked = handoffMode == mode
+        return Button(action: choose) {
+            HStack(spacing: WarrenDesktopMenuMetrics.iconSpacing) {
+                WarrenDesktopMenuCheckColumn(isChecked: isChecked)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(WarrenTypography.popoverItem)
+                        .foregroundStyle(palette.rowText)
+                    Text(hint)
+                        .font(WarrenTypography.popoverMeta)
+                        .foregroundStyle(palette.meta)
+                }
+                Spacer(minLength: 0)
+            }
+            .lineLimit(1)
+            .padding(.horizontal, WarrenDesktopMenuMetrics.rowHorizontalPadding)
+            .frame(maxWidth: .infinity, minHeight: WarrenDesktopMenuMetrics.twoLineRowHeight, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(WarrenDesktopMenuRowStyle())
+        .disabled(!isEnabled)
+        .accessibilityLabel(title)
+        .accessibilityValue(isChecked ? "Selected" : "")
+        .warrenSemanticElement(
+            id: "handoff.mode.\(mode.rawValue)",
+            role: .button,
+            label: title,
+            isEnabled: isEnabled,
+            isSelected: isChecked,
+            action: choose
+        )
+    }
+
+    private func handoffAgentButton(
+        _ preset: WarrenDesktopSessionPreset,
+        palette: WarrenDesktopMenuPalette
+    ) -> some View {
+        let isHot = hoveredPresetID == "handoff.\(preset.id)" && !isLaunchDisabled
+        let showsQuickChoice = preset.supportsConversation && isHot
+        let start = { launchHandoff(preset, conversation: interface == .acp) }
+        return Button(action: start) {
+            HStack(spacing: WarrenDesktopMenuMetrics.iconSpacing) {
+                WarrenDesktopSessionKindBadge(kind: preset.request.kind, size: WarrenDesktopMenuMetrics.iconSize)
+                Text(preset.presetBarTitle)
+                    .font(WarrenTypography.popoverItem)
+                    .foregroundStyle(isHot ? palette.rowHoverText : palette.rowText)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if showsQuickChoice {
+                    Color.clear.frame(width: WarrenDesktopMenuMetrics.actionSize * 2 + 2, height: 1)
+                }
+            }
+            .padding(.horizontal, Self.rowHorizontalInset)
+            .frame(maxWidth: .infinity, minHeight: Self.rowHeight, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(WarrenDesktopMenuRowStyle())
+        .disabled(isLaunchDisabled)
+        .overlay(alignment: .trailing) {
+            if showsQuickChoice {
+                quickChoice(for: preset, semanticPrefix: "handoff") { conversation in
+                    launchHandoff(preset, conversation: conversation)
+                }
+                .padding(.trailing, Self.rowHorizontalInset - 4)
+                .transition(.opacity)
+            }
+        }
+        .onHover { inside in
+            let id = "handoff.\(preset.id)"
+            if inside {
+                hoveredPresetID = id
+            } else if hoveredPresetID == id {
+                hoveredPresetID = nil
+            }
+        }
+        .accessibilityLabel("Hand off to \(preset.title)")
+        .warrenSemanticElement(
+            id: "handoff.\(preset.id)",
+            role: .button,
+            label: "Hand off to \(preset.title)",
+            isEnabled: !isLaunchDisabled,
+            action: start
+        )
+    }
+
+    private func launchHandoff(_ preset: WarrenDesktopSessionPreset, conversation: Bool) {
+        guard pendingPresetID == nil, !isBusy else { return }
+        let mode = handoffMode
+        choosingHandoff = false
+        defer { onDismiss() }
+        pendingPresetID = preset.id
+        onHandoff(
+            preset.resolvedRequest(
+                commandOverride: command(for: preset.id),
+                conversation: conversation && preset.supportsConversation
+            ),
+            mode
+        )
     }
 
     private func launch(_ preset: WarrenDesktopSessionPreset, conversation: Bool) {

@@ -598,7 +598,11 @@ func isBackgroundRequest(method string) bool {
 		// Usage stats can refresh unit prices over the network and rescan the
 		// whole rollup; rebuild can scan every retained transcript. Both belong
 		// off the reader so terminal input stays responsive meanwhile.
-		"usage.stats", "usage.rebuild":
+		"usage.stats", "usage.rebuild",
+		// A handoff reads a whole Agent journal, may wait minutes for the
+		// source Agent to write its brief, and waits for a new terminal Agent
+		// to draw its prompt.
+		"session.handoff.status", "session.handoff.brief", "session.draft":
 		return true
 	default:
 		return false

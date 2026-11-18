@@ -371,6 +371,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     /// published because the token, not the mount, is what makes the pane
     /// claim the keyboard.
     @Published var conversationFocusTokens: [TerminalSessionID: UInt] = [:]
+    /// Text waiting to be placed in a Chat Session's composer, such as a
+    /// handoff brief for a Session that is still mounting.
+    @Published var conversationDraftSeeds: [TerminalSessionID: String] = [:]
     var nextConversationFocusToken: UInt = 0
     var agentSubscriptionTasks: [String: Task<Void, Never>] = [:]
     /// ACP Sessions own no terminal (RFC 0023): no surface, no subscribe, no

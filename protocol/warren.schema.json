@@ -568,6 +568,21 @@
           "resultRef": "api.SessionHistoryResult"
         },
         {
+          "method": "session.handoff.status",
+          "paramsRef": "api.HandoffStatusRequest",
+          "resultRef": "api.HandoffStatus"
+        },
+        {
+          "method": "session.handoff.brief",
+          "paramsRef": "api.HandoffBriefRequest",
+          "resultRef": "api.HandoffBriefResult"
+        },
+        {
+          "method": "session.draft",
+          "paramsRef": "api.SessionDraftRequest",
+          "resultRef": "{typed: boolean}"
+        },
+        {
           "method": "session.resume",
           "paramsRef": "api.SessionResumeRequest",
           "resultRef": "api.Session"

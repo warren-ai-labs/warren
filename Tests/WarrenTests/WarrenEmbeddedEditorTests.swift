@@ -1552,6 +1552,220 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         XCTAssertEqual(behavior["historyClickCount"] as? Int, 0)
         XCTAssertEqual(behavior["openFileClickCount"] as? Int, 1)
     }
+
+    // MARK: - Abandoned editor servers
+
+    private static let abandonedSweepSessions = URL(
+        fileURLWithPath: "/data/EmbeddedEditor/sessions"
+    )
+
+    func testAbandonedSweepEndsOnlyServersWhoseOwnerIsGone() {
+        let liveServer = Self.sessionSocket("AAAA")
+        let abandonedServer = Self.sessionSocket("BBBB")
+        let plan = WarrenEmbeddedEditorServerReaper.plan(
+            sessionsDirectory: Self.abandonedSweepSessions,
+            socketNames: ["AAAA.sock", "BBBB.sock"],
+            processes: [
+                // A server a running Warren still owns: not ours to end.
+                .init(processID: 410, parentProcessID: 400, command: "node code-server \(liveServer)"),
+                // Reparented to launchd, so the Warren that started it is gone.
+                .init(processID: 420, parentProcessID: 1, command: "node code-server \(abandonedServer)"),
+                // An extension host of the abandoned server.
+                .init(processID: 421, parentProcessID: 420, command: "node bootstrap-fork"),
+                .init(processID: 1, parentProcessID: 0, command: "/sbin/launchd"),
+            ]
+        )
+
+        XCTAssertEqual(plan.orphanedProcessIDs, [420])
+        XCTAssertEqual(
+            plan.removableSessionSockets,
+            ["BBBB.sock"],
+            "The socket a live server answers on must survive the sweep"
+        )
+    }
+
+    func testAbandonedSweepLeavesASocketAnotherLiveServerNames() {
+        // The session name is unique per launch, so a socket no surviving
+        // command mentions is the only kind the sweep can drop.
+        let plan = WarrenEmbeddedEditorServerReaper.plan(
+            sessionsDirectory: Self.abandonedSweepSessions,
+            socketNames: ["CCCC.sock", "DDDD.sock"],
+            processes: [
+                .init(
+                    processID: 430,
+                    parentProcessID: 1,
+                    command: "node code-server \(Self.sessionSocket("CCCC"))"
+                ),
+                .init(processID: 440, parentProcessID: 400, command: "node unrelated"),
+            ]
+        )
+
+        XCTAssertEqual(plan.orphanedProcessIDs, [430])
+        XCTAssertEqual(plan.removableSessionSockets, ["CCCC.sock", "DDDD.sock"])
+    }
+
+    func testAbandonedSweepIgnoresProcessesOutsideTheEditorSupportDirectory() {
+        let plan = WarrenEmbeddedEditorServerReaper.plan(
+            sessionsDirectory: Self.abandonedSweepSessions,
+            socketNames: ["EEEE.sock"],
+            processes: [
+                // Another user's server, reparented to launchd too.
+                .init(processID: 450, parentProcessID: 1, command: "node /opt/code-server"),
+                .init(
+                    processID: 451,
+                    parentProcessID: 1,
+                    command: "node /tmp/EmbeddedEditor/other/sessions/EEEE.sock"
+                ),
+            ]
+        )
+
+        XCTAssertEqual(plan.orphanedProcessIDs, [])
+    }
+
+    func testAbandonedSweepRefusesADirectoryThatIsNotTheEditorsOwn() {
+        let plan = WarrenEmbeddedEditorServerReaper.plan(
+            sessionsDirectory: URL(fileURLWithPath: "/tmp/sessions"),
+            socketNames: ["FFFF.sock"],
+            processes: [
+                .init(processID: 460, parentProcessID: 1, command: "node /tmp/sessions/FFFF.sock"),
+            ]
+        )
+
+        XCTAssertTrue(plan.isEmpty)
+    }
+
+    func testAbandonedSweepReportsNothingWhenNoServerRespondsToTerm() {
+        XCTAssertEqual(
+            WarrenEmbeddedEditorServerReaper.terminateProcessGroups([], graceSeconds: 0),
+            []
+        )
+        // pid 1 is launchd: never signalled, never reported as ended.
+        XCTAssertEqual(
+            WarrenEmbeddedEditorServerReaper.terminateProcessGroups([1], graceSeconds: 0),
+            []
+        )
+    }
+
+    func testSessionSocketNamesUseTheFileTypeNotTheExtension() throws {
+        // The kernel truncates a socket path past the 104 byte `sun_path`
+        // limit, so the file name of an abandoned socket usually ends mid-UUID.
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("reap-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let socket = directory.appendingPathComponent("00F531EF-5226-44B3-A6B8-877")
+        try Self.bindUnixSocket(at: socket)
+        try Data().write(to: directory.appendingPathComponent("not-a-socket.sock"))
+
+        XCTAssertEqual(
+            WarrenEmbeddedEditorServerReaper.sessionSocketNames(in: directory),
+            [socket.lastPathComponent]
+        )
+    }
+
+    func testEndingOwnedServersTerminatesOneThisProcessLaunched() throws {
+        // A real child, so the sweep is exercised against the process table
+        // rather than a hand-written listing.
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let support = root.appendingPathComponent("EmbeddedEditor", isDirectory: true)
+        let sessions = support.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: sessions,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let socketPath = sessions.appendingPathComponent("1111.sock").path
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sh")
+        // The trailing path becomes `$0` and stays in the command line the
+        // sweep matches on. The no-op keeps the shell from exec'ing `sleep`,
+        // which would replace its arguments with just the sleep duration.
+        child.arguments = ["-c", "sleep 5; :", socketPath]
+        child.standardOutput = FileHandle.nullDevice
+        child.standardError = FileHandle.nullDevice
+        try child.run()
+        defer { if child.isRunning { child.terminate() } }
+        Thread.sleep(forTimeInterval: 0.2)
+
+        let ended = WarrenEmbeddedEditorServerReaper.endServersOwnedByCurrentProcess(
+            supportDirectory: support,
+            graceSeconds: 2
+        )
+
+        XCTAssertEqual(ended, [child.processIdentifier])
+        child.waitUntilExit()
+        XCTAssertFalse(child.isRunning)
+    }
+
+    func testEndingOwnedServersIsANoOpWithoutASupportDirectory() {
+        // Nothing to read, so nothing is signalled and no process listing is
+        // paid for on the way out of the app.
+        XCTAssertEqual(
+            WarrenEmbeddedEditorServerReaper.endServersOwnedByCurrentProcess(
+                supportDirectory: URL(fileURLWithPath: "/nonexistent/EmbeddedEditor")
+            ),
+            []
+        )
+    }
+
+    func testSessionDirectorySitsBesideTheEditorSupportDirectory() {
+        let support = URL(fileURLWithPath: "/data/Warren/EmbeddedEditor")
+        XCTAssertEqual(
+            WarrenEmbeddedEditorLocations.sessionsDirectory(in: support).path,
+            "/data/Warren/EmbeddedEditor/sessions"
+        )
+    }
+
+    func testProcessListParsingKeepsTheCommandLineIntact() {
+        let entries = WarrenEmbeddedEditorServerReaper.parseProcessList("""
+          400     1 /opt/homebrew/bin/node --session-socket /data/EmbeddedEditor/sessions/A.sock
+          401   400 /opt/homebrew/bin/node --flag value with spaces
+
+        """)
+
+        XCTAssertEqual(entries, [
+            .init(
+                processID: 400,
+                parentProcessID: 1,
+                command: "/opt/homebrew/bin/node --session-socket /data/EmbeddedEditor/sessions/A.sock"
+            ),
+            .init(
+                processID: 401,
+                parentProcessID: 400,
+                command: "/opt/homebrew/bin/node --flag value with spaces"
+            ),
+        ])
+    }
+
+    private static func bindUnixSocket(at url: URL) throws {
+        let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(descriptor, 0)
+        defer { Darwin.close(descriptor) }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let path = Array(url.path.utf8)
+        XCTAssertLessThan(path.count, MemoryLayout.size(ofValue: address.sun_path))
+        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
+            buffer.copyBytes(from: path)
+        }
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        XCTAssertEqual(bound, 0)
+    }
+
+    private static func sessionSocket(_ name: String) -> String {
+        abandonedSweepSessions.appendingPathComponent("\(name).sock").path
+    }
 }
 
 @MainActor

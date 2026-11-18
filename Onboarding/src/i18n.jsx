@@ -114,6 +114,47 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.42.0",
+        dateISO: "2026-11-18",
+        date: "November 18, 2026",
+        title: "Warren hands a long Session to a fresh one from a brief.",
+        summary:
+          "A release that lets a long Agent Session start a fresh one from a brief. The + menu gains a Handoff row for an Agent Session, with a countdown of the prompt cache that Session still has. Its page chooses who writes the brief (the source Agent, cheap while its cache is warm and a full read once it is cold, or Warren extracting it from the recorded conversation with no model call) and the Agent to continue in. The new Session opens at once, and the brief lands in its input for the person to send. The Host answers three methods for it: session.handoff.status, session.handoff.brief and session.draft. A quit now ends the embedded editor's server instead of leaving it to launchd, and the next launch sweeps what an earlier run left behind. The JSON control protocol remains at 4.0, since the three methods are additions and no existing method changed, and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Hand off an Agent Session from the + menu. A long Session carries decisions and context that a new one cannot see, and retyping them is what people skip. The menu now offers Handoff for an Agent Session with how much of its prompt cache is left beside it, redrawn each second while the menu is open. The page picks the brief and the Agent to continue in; a target that supports both interfaces offers Terminal and Chat on hover, as the preset rows do. The new Session is created at once rather than after the brief, so the Tab appears immediately, and the brief arrives in its input without being sent, which leaves the person the last look before it goes.",
+              "Report what a handoff would start from. session.handoff.status answers the source Session's provider and model, when it last took a model response, the cache lifetime to count that against, the input tokens of that last call, and whether the Agent can take a turn now. The Host does not see the provider's cache, so the lifetime is the documented one (Claude five minutes, OpenAI the lower end of its range) and is flagged as an estimate where no value is documented, such as Gemini's implicit cache. An Agent that is working, blocked, exited or waiting on an approval is reported as unable to answer.",
+              "Write the brief from either side. session.handoff.brief takes a mode. In extract mode the Host assembles it from the recorded conversation with no model call: the person's messages verbatim within a character budget that keeps the newest, the files edit and write tools changed named relative to the Workspace, and the Agent's last reply. In agent mode the source Agent answers a fixed section prompt in a turn of its own, bounded at five minutes, and its reply becomes the brief. Both are appended with what Git can report about the Workspace (path, branch, ahead and behind, uncommitted changes) and a pointer to the earlier conversation, so the new Agent does not take those facts from recollection or read the whole transcript to find them.",
+              "Type the brief into a new terminal Agent. session.draft writes text into a terminal Agent's input without submitting it. A Session that has just started has not drawn its prompt yet, so the Host waits for output that has stopped changing, no earlier than two seconds and no later than forty-five, and types only then; a Session with no terminal, such as a Chat, is refused rather than silently skipped.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Create and select a Session through one path. Creating a Session ran inside one long block, so nothing else could start one alongside it. It is now split into a guard the caller holds and a create-and-select step, which lets a handoff start the new Session and ask for the brief at the same time, and keeps the existing rule that one Workspace never runs two creations at once.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Name the files pi edits in a brief. pi reports an edited file only in its tool input, so a brief extracted from a pi Session named no changed files at all. The path is now read from the tool input when a provider reports no file list, and files inside the Workspace are named relative to it the way Git status names them.",
+              "Fit the cache label on the + menu row. The row carries a short label, so a warm cache reads without being clipped by the row's trailing chevron.",
+              "End the editor server instead of leaving it to launchd. Closing the last window terminates the app before SwiftUI reaches the editor model's stop(), so the code-server the model launched was reparented to launchd and outlived Warren; nothing collected those, and they had accumulated one per quit, each holding a loopback port and a process group. A quit now ends the servers this process launched from applicationWillTerminate, matched on parent pid, and forwards SIGTERM and SIGINT to NSApp.terminate with a two second backstop, which is the path the install and run scripts fall back to. A launch still sweeps what earlier runs left: the sweep starts in the model's init and settles before any server is launched, only servers reparented to launchd are signalled, and session sockets are recognised by their file type rather than their name (a path past the kernel's 104 byte limit loses its .sock suffix) and removed when no surviving command names them.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0: three methods were added and none changed, and this release migrates no state. A Host that predates them answers them as unknown, so the Handoff row shows no cache and a handoff reports the error instead of a brief; the Session itself is unaffected.",
+              "Nothing persisted changes shape. A handoff reads the journal and types into a live terminal; no Session record, binding or projection gains a field.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.41.0",
         dateISO: "2026-11-17",
         date: "November 17, 2026",
@@ -2171,6 +2212,47 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.42.0",
+        dateISO: "2026-11-18",
+        date: "2026 年 11 月 18 日",
+        title: "Warren 能用一个 brief 把一个长 Session 交给新的 Session。",
+        summary:
+          "这个版本让一个长的 Agent Session 用一个 brief 启动一个新的 Session。+ 菜单多了一个 Handoff 行，旁边是该 Session 还剩多少 prompt cache 的倒计时。它的页面选择由谁写这份 brief（缓存在热的时候让源 Agent 自己写，冷了就要把上下文整读一遍；或者由 Warren 从已经记录的对话里提取，不调用模型），以及接着在哪个 Agent 里继续。新 Session 立刻打开，brief 落在它的输入框里等人发送。为此 Host 提供三个方法：session.handoff.status、session.handoff.brief 与 session.draft。现在退出时会结束内嵌编辑器的服务，而不是把它留给 launchd，下一次启动还会清理早先运行留下的。JSON 控制协议仍是 4.0，因为这三个方法是新增的，没有改动任何已有方法，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "从 + 菜单把一个 Agent Session 交出去。长 Session 里带着新 Session 看不到的决定与上下文，而重新打一遍正是人们会跳过的事。菜单现在给 Agent Session 提供 Handoff，旁边写着它的 prompt cache 还剩多少，菜单开着时每秒重画。页面里选定 brief 与接着使用的 Agent；同时支持两种界面的目标在悬停时给出 Terminal 与 Chat，和 preset 行一样。新 Session 立刻创建，而不是等 brief 写完，于是 Tab 马上出现，brief 不发送地落进它的输入框，把发送前的最后一眼留给这个人。",
+              "报告一次 handoff 的起点。session.handoff.status 回答源 Session 的 provider 与 model、最后一次模型响应的时间、用来计算它的缓存寿命、那次调用的输入 token 数，以及 Agent 现在能不能接一轮。Host 看不到 provider 的缓存，所以寿命取文档里的值（Claude 五分钟，OpenAI 取其区间的下限），没有文档值的（比如 Gemini 的隐式缓存）标成估算。正在工作、被阻塞、已退出或在等审批的 Agent，会报告为无法作答。",
+              "两边都能写这份 brief。session.handoff.brief 接受一个模式。extract 模式下 Host 只从已经记录的对话里拼出来：这个人的消息原文，按字符预算保留最新的那些；edit 与 write 工具改动过的文件，按 Workspace 相对路径列出；以及 Agent 的最后一次回复。agent 模式下源 Agent 在自己的这一轮里按固定的分段提示词作答，上限五分钟，它的回复就是 brief。两种结果后面都接上 Git 能说的 Workspace 事实（路径、分支、领先与落后、未提交的改动）以及指向早先对话的入口，新 Agent 不必凭记忆写这些事实，也不必读完整个 transcript 才能找到它们。",
+              "把 brief 打进新的终端 Agent。session.draft 把文本写进终端 Agent 的输入框而不提交。刚启动的 Session 还没画出提示符，所以 Host 会等输出停止变化，不早于两秒、不迟于四十五秒，然后才输入；没有终端的 Session（比如 Chat）会被明确拒绝，而不是悄悄跳过。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "创建与选中 Session 走同一条路径。创建 Session 原先在一个长块里跑完，别的东西没法同时启动一个。现在拆成调用方持有的门禁和一个创建并选中的步骤，于是一次 handoff 可以同时启动新 Session 并去取 brief，同时保留原来的规则：一个 Workspace 不会同时跑两次创建。",
+            ],
+          },
+          {
+            title: "修正",
+            items: [
+              "brief 里写出 pi 改过的文件名。pi 只在工具输入里报告改动的文件，于是从 pi Session 提取出来的 brief 一个改动文件都没有。现在 provider 没有报告文件列表时从工具输入里读路径，Workspace 里的文件按 Git status 的方式以相对路径命名。",
+              "+ 菜单行上的缓存标签放得下。这一行用短标签，缓存在热的时候也不会被行尾的箭头裁掉。",
+              "退出时结束内嵌编辑器的服务，而不是把它留给 launchd。关闭最后一个窗口会在 SwiftUI 走到编辑器模型的 stop() 之前终止应用，于是一个 code-server 被交给 launchd、活在 Warren 之后；没有人收回这些，于是一次退出就留一个，每个都占着回环端口和一个进程组。现在退出时 applicationWillTerminate 会结束本进程启动的服务，按父 pid 匹配，SIGTERM 与 SIGINT 也被转发给 NSApp.terminate 并带两秒的兜底，安装与运行脚本回退到 pkill -TERM 时走的也是这条路。启动时仍会清理早先运行留下的：清理在模型 init 里开始，并在启动任何服务之前完成，只对交给 launchd 的服务发信号，同一轮里还会把 session socket 按文件类型而不是文件名认出来（超过内核 104 字节上限的路径会失去 .sock 后缀），并在没有存活命令引用时删掉。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0：新增了三个方法，没有改动任何已有方法，本版本不迁移任何状态。早于它们的 Host 会以未知方法作答，于是 Handoff 行不显示缓存，handoff 会报告这个错误而不是给出 brief；Session 本身不受影响。",
+              "没有任何持久化的形状改变。handoff 读 journal，并往活着的终端里输入；没有 Session 记录、binding 或投影多出字段。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.41.0",
         dateISO: "2026-11-17",

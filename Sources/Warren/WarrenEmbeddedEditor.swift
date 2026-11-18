@@ -146,6 +146,290 @@ enum WarrenEmbeddedEditorExecutableResolver {
     }
 }
 
+/// Where the embedded editor keeps its state.
+///
+/// One place names these paths because two very different callers need them:
+/// the editor model builds the server's arguments, and the app delegate has to
+/// find the servers at exit, when no model may still exist.
+enum WarrenEmbeddedEditorLocations {
+    /// Shared by an installed release and a debug build on purpose, so signing
+    /// in and installing extensions happens once.
+    static var supportDirectory: URL {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Warren/EmbeddedEditor", isDirectory: true)
+    }
+
+    static func sessionsDirectory(in supportDirectory: URL) -> URL {
+        supportDirectory.appendingPathComponent("sessions", isDirectory: true)
+    }
+}
+
+/// Ends the editor servers an earlier run of Warren left behind.
+///
+/// Closing the last window terminates the app before SwiftUI reaches the
+/// editor model's `stop()`, so the server that model launched is reparented to
+/// launchd and outlives the app. Nothing collects those, so every relaunch
+/// would leave one more behind: 74 session sockets had piled up on one
+/// machine before this existed.
+///
+/// Only a server reparented to launchd is ended. One still parented to a live
+/// Warren belongs to that instance, and taking it down would break the editor
+/// pane of the other instance (a debug build and an installed release share
+/// this support directory).
+enum WarrenEmbeddedEditorServerReaper {
+    struct ProcessEntry: Equatable, Sendable {
+        let processID: pid_t
+        let parentProcessID: pid_t
+        let command: String
+    }
+
+    /// What one pass would do, before anything is signalled or removed.
+    struct Plan: Equatable, Sendable {
+        var orphanedProcessIDs: [pid_t] = []
+        var removableSessionSockets: [String] = []
+
+        var isEmpty: Bool {
+            orphanedProcessIDs.isEmpty && removableSessionSockets.isEmpty
+        }
+    }
+
+    struct Outcome: Equatable, Sendable {
+        var endedProcessIDs: [pid_t] = []
+        var removedSessionSockets: [String] = []
+    }
+
+    /// The longest `reap` waits between SIGTERM and SIGKILL. A server that has
+    /// ignored SIGTERM this long is not going to act on it.
+    static let graceSeconds: TimeInterval = 2
+
+    static func reap(
+        sessionsDirectory: URL,
+        fileManager: FileManager = .default
+    ) -> Outcome {
+        // Reading the directory first keeps a model built against a temporary
+        // support directory from paying for a process listing it cannot use.
+        let socketNames = sessionSocketNames(
+            in: sessionsDirectory,
+            fileManager: fileManager
+        )
+        guard !socketNames.isEmpty else { return Outcome() }
+
+        let plan = plan(
+            sessionsDirectory: sessionsDirectory,
+            socketNames: socketNames,
+            processes: listProcesses()
+        )
+        guard !plan.isEmpty else { return Outcome() }
+
+        let ended = terminateProcessGroups(
+            plan.orphanedProcessIDs,
+            graceSeconds: graceSeconds
+        )
+        var outcome = Outcome(endedProcessIDs: ended)
+        for name in plan.removableSessionSockets {
+            try? fileManager.removeItem(
+                at: sessionsDirectory.appendingPathComponent(name)
+            )
+            outcome.removedSessionSockets.append(name)
+        }
+        return outcome
+    }
+
+    /// The names of the sockets a server may have bound in `sessionsDirectory`.
+    ///
+    /// The file type decides, not the extension: a socket path longer than the
+    /// 104 byte `sun_path` limit is truncated by the kernel, so most of these
+    /// files end mid-UUID with no `.sock` left to match on.
+    static func sessionSocketNames(
+        in sessionsDirectory: URL,
+        fileManager: FileManager = .default
+    ) -> [String] {
+        let entries = (try? fileManager.contentsOfDirectory(
+            atPath: sessionsDirectory.path
+        )) ?? []
+        return entries.filter { name in
+            let path = sessionsDirectory.appendingPathComponent(name).path
+            let attributes = try? fileManager.attributesOfItem(atPath: path)
+            return attributes?[.type] as? FileAttributeType == .typeSocket
+        }.sorted()
+    }
+
+    static func plan(
+        sessionsDirectory: URL,
+        socketNames: [String],
+        processes: [ProcessEntry]
+    ) -> Plan {
+        // Refuse a directory that is not the editor's own, so a caller passing
+        // the wrong one cannot end every code-server on the machine.
+        guard isEditorSessionsDirectory(sessionsDirectory) else { return Plan() }
+
+        let owned = processes.filter {
+            $0.command.contains(sessionsDirectory.path)
+        }
+        let orphaned = owned
+            .filter { $0.parentProcessID == 1 }
+            .map(\.processID)
+            .sorted()
+        // A socket is only dropped once nothing that survives this pass names
+        // it: the socket a live server answers on is still in use.
+        let orphanedIDs = Set(orphaned)
+        let survivingCommands = processes
+            .filter { !orphanedIDs.contains($0.processID) }
+            .map(\.command)
+        let removable = socketNames.filter { name in
+            !survivingCommands.contains { $0.contains(name) }
+        }
+        return Plan(
+            orphanedProcessIDs: orphaned,
+            removableSessionSockets: removable.sorted()
+        )
+    }
+
+    static func listProcesses() -> [ProcessEntry] {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-Ao", "pid=,ppid=,command="]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return []
+        }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return [] }
+        return parseProcessList(String(decoding: data, as: UTF8.self))
+    }
+
+    static func parseProcessList(_ listing: String) -> [ProcessEntry] {
+        listing.split(separator: "\n").compactMap { line in
+            let fields = line.split(
+                separator: " ",
+                maxSplits: 2,
+                omittingEmptySubsequences: true
+            )
+            guard fields.count == 3,
+                  let processID = pid_t(fields[0]),
+                  let parentProcessID = pid_t(fields[1]) else { return nil }
+            return ProcessEntry(
+                processID: processID,
+                parentProcessID: parentProcessID,
+                command: String(fields[2])
+            )
+        }
+    }
+
+    /// Ends each process group and reports the pids that are gone afterwards.
+    static func terminateProcessGroups(
+        _ processIDs: [pid_t],
+        graceSeconds: TimeInterval = 2
+    ) -> [pid_t] {
+        var signalled: [Signalled] = []
+        for processID in processIDs {
+            guard processID > 1, isAlive(processID) else { continue }
+            let groupID = Darwin.getpgid(processID)
+            // Foundation launches the server into its own group, so signalling
+            // the group takes the extension hosts with it. A group this process
+            // does not lead is never signalled: `kill(-group)` would reach
+            // whatever else had joined it.
+            let leadsGroup = groupID == processID && groupID != Darwin.getpgrp()
+            deliver(SIGTERM, to: processID, groupID: groupID, leadsGroup: leadsGroup)
+            signalled.append(
+                Signalled(processID: processID, groupID: groupID, leadsGroup: leadsGroup)
+            )
+        }
+        guard !signalled.isEmpty else { return [] }
+
+        let deadline = Date().addingTimeInterval(graceSeconds)
+        while Date() < deadline, signalled.contains(where: { isAlive($0.processID) }) {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        var ended: [pid_t] = []
+        for entry in signalled {
+            guard isAlive(entry.processID) else {
+                ended.append(entry.processID)
+                continue
+            }
+            // Keep the forced signal aimed at the group we signalled: the pid
+            // may have been reused by something that is not ours.
+            guard Darwin.getpgid(entry.processID) == entry.groupID else { continue }
+            deliver(
+                SIGKILL,
+                to: entry.processID,
+                groupID: entry.groupID,
+                leadsGroup: entry.leadsGroup
+            )
+            ended.append(entry.processID)
+        }
+        return ended
+    }
+
+    private struct Signalled {
+        let processID: pid_t
+        let groupID: pid_t
+        let leadsGroup: Bool
+    }
+
+    private static func deliver(
+        _ signal: Int32,
+        to processID: pid_t,
+        groupID: pid_t,
+        leadsGroup: Bool
+    ) {
+        if leadsGroup {
+            _ = Darwin.kill(-groupID, signal)
+        } else {
+            _ = Darwin.kill(processID, signal)
+        }
+    }
+
+    private static func isAlive(_ processID: pid_t) -> Bool {
+        guard processID > 1 else { return false }
+        if Darwin.kill(processID, 0) == 0 { return true }
+        return errno == EPERM
+    }
+
+    private static func isEditorSessionsDirectory(_ url: URL) -> Bool {
+        let standardized = url.standardizedFileURL
+        return standardized.lastPathComponent == "sessions"
+            && standardized.deletingLastPathComponent().lastPathComponent == "EmbeddedEditor"
+    }
+}
+
+extension WarrenEmbeddedEditorServerReaper {
+    /// Ends every server this process launched, synchronously.
+    ///
+    /// `applicationWillTerminate` is the one cleanup point every way of ending
+    /// the app reaches, but the editor model's `stop()` is a SwiftUI callback
+    /// that closing the last window skips. Matching on parent pid needs no
+    /// handle on the model, so the app delegate can call this directly.
+    @discardableResult
+    static func endServersOwnedByCurrentProcess(
+        supportDirectory: URL = WarrenEmbeddedEditorLocations.supportDirectory,
+        graceSeconds: TimeInterval = 1
+    ) -> [pid_t] {
+        let sessionsDirectory = WarrenEmbeddedEditorLocations
+            .sessionsDirectory(in: supportDirectory)
+        guard isEditorSessionsDirectory(sessionsDirectory),
+              FileManager.default.fileExists(atPath: sessionsDirectory.path) else {
+            return []
+        }
+        let ownProcessID = Darwin.getpid()
+        let owned = listProcesses().filter {
+            $0.parentProcessID == ownProcessID
+                && $0.command.contains(sessionsDirectory.path)
+        }
+        return terminateProcessGroups(
+            owned.map(\.processID),
+            graceSeconds: graceSeconds
+        )
+    }
+}
+
 /// The embedded editor's palette, per appearance.
 ///
 /// VS Code accepts CSS color strings at its settings boundary, so the hex
@@ -1858,6 +2142,13 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
     private var extensionTask: Task<Void, Never>?
     private var mouseEventMonitor: Any?
     private var generation = UUID()
+    /// Runs the abandoned-server sweep once, off the main actor, from `init`.
+    ///
+    /// It starts here rather than in `stop()`'s counterpart because the leaks
+    /// this collects were left by a process that never reached `stop()` at all.
+    /// It is not started lazily from `launch` so the sweep has the whole gap
+    /// between app launch and the first editor open to finish in.
+    private var abandonedServerReaping: Task<Void, Never>?
     private let environment: [String: String]
     private let supportDirectory: URL
     private let executableResolver: ExecutableResolver
@@ -1877,10 +2168,15 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         executableResolver: @escaping ExecutableResolver = WarrenEmbeddedEditorExecutableResolver.resolve
     ) {
         self.environment = environment
-        self.supportDirectory = supportDirectory ?? FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Warren/EmbeddedEditor", isDirectory: true)
+        self.supportDirectory = supportDirectory
+            ?? WarrenEmbeddedEditorLocations.supportDirectory
         self.executableResolver = executableResolver
+
+        let sessionsDirectory = WarrenEmbeddedEditorLocations
+            .sessionsDirectory(in: self.supportDirectory)
+        abandonedServerReaping = Task.detached(priority: .utility) {
+            _ = WarrenEmbeddedEditorServerReaper.reap(sessionsDirectory: sessionsDirectory)
+        }
     }
 
     isolated deinit {
@@ -2017,6 +2313,13 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
             return
         }
 
+        // A server this instance is about to start must not be mistaken for an
+        // abandoned one, so the sweep settles before anything is launched. The
+        // task is kept rather than cleared so a launch that follows a forced
+        // one waits for the same sweep instead of running ahead of it.
+        await finishAbandonedServerReaping()
+        guard isCurrent(generation), !Task.isCancelled else { return }
+
         var launchedProcess: Process?
         var launchedProcessGroupID: pid_t?
         var launchedSessionSocketURL: URL?
@@ -2118,6 +2421,11 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
             guard shouldReport else { return }
             phase = .failed(error.localizedDescription)
         }
+    }
+
+    private func finishAbandonedServerReaping() async {
+        guard let reaping = abandonedServerReaping else { return }
+        _ = await reaping.value
     }
 
     private func isCurrent(_ requestGeneration: UUID) -> Bool {

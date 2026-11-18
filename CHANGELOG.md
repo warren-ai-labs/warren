@@ -4,6 +4,101 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-11-18
+
+A release that lets a long Agent Session start a fresh one from a brief. The
+`+` menu gains a Handoff row for an Agent Session, with a countdown of the
+prompt cache that Session still has. Its page chooses who writes the brief (the
+source Agent, cheap while its cache is warm and a full read once it is cold, or
+Warren extracting it from the recorded conversation with no model call) and the
+Agent to continue in. The new Session opens at once, and the brief lands in its
+input for the person to send. The Host answers three methods for it:
+`session.handoff.status`, `session.handoff.brief` and `session.draft`. A quit
+now ends the embedded editor's server instead of leaving it to launchd, and the
+next launch sweeps what an earlier run left behind. The JSON control protocol
+remains at 4.0, since the three methods are additions and no existing method
+changed, and this release migrates no state.
+
+### Added
+
+- Hand off an Agent Session from the `+` menu. A long Session carries decisions
+  and context that a new one cannot see, and retyping them is what people skip.
+  The menu now offers Handoff for an Agent Session with how much of its prompt
+  cache is left beside it, redrawn each second while the menu is open. The page
+  picks the brief and the Agent to continue in; a target that supports both
+  interfaces offers Terminal and Chat on hover, as the preset rows do. The new
+  Session is created at once rather than after the brief, so the Tab appears
+  immediately, and the brief arrives in its input without being sent, which
+  leaves the person the last look before it goes.
+- Report what a handoff would start from.
+  `session.handoff.status` answers the source Session's provider and model, when
+  it last took a model response, the cache lifetime to count that against, the
+  input tokens of that last call, and whether the Agent can take a turn now.
+  The Host does not see the provider's cache, so the lifetime is the documented
+  one (Claude five minutes, OpenAI the lower end of its range) and is flagged as
+  an estimate where no value is documented, such as Gemini's implicit cache. An
+  Agent that is working, blocked, exited or waiting on an approval is reported
+  as unable to answer.
+- Write the brief from either side. `session.handoff.brief` takes a mode. In
+  extract mode the Host assembles it from the recorded conversation with no
+  model call: the person's messages verbatim within a character budget that
+  keeps the newest, the files edit and write tools changed named relative to
+  the Workspace, and the Agent's last reply. In agent mode the source Agent
+  answers a fixed section prompt in a turn of its own, bounded at five minutes,
+  and its reply becomes the brief. Both are appended with what Git can report
+  about the Workspace (path, branch, ahead and behind, uncommitted changes) and
+  a pointer to the earlier conversation, so the new Agent does not take those
+  facts from recollection or read the whole transcript to find them.
+- Type the brief into a new terminal Agent. `session.draft` writes text into a
+  terminal Agent's input without submitting it. A Session that has just started
+  has not drawn its prompt yet, so the Host waits for output that has stopped
+  changing, no earlier than two seconds and no later than forty-five, and types
+  only then; a Session with no terminal, such as a Chat, is refused rather than
+  silently skipped.
+
+### Changed
+
+- Create and select a Session through one path. Creating a Session ran inside
+  one long block, so nothing else could start one alongside it. It is now split
+  into a guard the caller holds and a create-and-select step, which lets a
+  handoff start the new Session and ask for the brief at the same time, and
+  keeps the existing rule that one Workspace never runs two creations at once.
+
+### Fixed
+
+- Name the files pi edits in a brief. pi reports an edited file only in its
+  tool input, so a brief extracted from a pi Session named no changed files at
+  all. The path is now read from the tool input when a provider reports no file
+  list, and files inside the Workspace are named relative to it the way Git
+  status names them.
+- Fit the cache label on the `+` menu row. The row carries a short label, so a
+  warm cache reads without being clipped by the row's trailing chevron.
+- End the editor server instead of leaving it to launchd. Closing the last
+  window terminates the app before SwiftUI reaches the editor model's `stop()`,
+  so the code-server the model launched was reparented to launchd and outlived
+  Warren; nothing collected those, and they had accumulated one per quit, each
+  holding a loopback port and a process group. A quit now ends the servers this
+  process launched from `applicationWillTerminate`, matched on parent pid, and
+  forwards SIGTERM and SIGINT to `NSApp.terminate` with a two second backstop,
+  which is the path the install and run scripts fall back to. A launch still
+  sweeps what earlier runs left: the sweep starts in the model's init and
+  settles before any server is launched, only servers reparented to launchd are
+  signalled, and session sockets are recognised by their file type rather than
+  their name, since a path past the kernel's 104 byte limit loses its `.sock`
+  suffix, then removed when no surviving command names them.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0: three methods were added and none
+  changed, and this release migrates no state. A Host that predates them
+  answers them as unknown, so the Handoff row shows no cache and a handoff
+  reports the error instead of a brief; the Session itself is unaffected.
+- Nothing persisted changes shape. A handoff reads the journal and types into a
+  live terminal; no Session record, binding or projection gains a field.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.41.0] - 2026-11-17
 
 A release that finds the Agent a Session is actually running. A launcher may

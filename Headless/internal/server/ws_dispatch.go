@@ -808,6 +808,37 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			return err
 		}
 		return p.writeResult(command.ID, map[string]bool{"renamed": true})
+	case "session.handoff.status":
+		// The source of a new Session started from this one; unrelated to
+		// session.handoff, which moves an ACP conversation into a terminal.
+		request, err := decodeAgentParams[api.HandoffStatusRequest](params)
+		if err != nil {
+			return err
+		}
+		status, err := p.server.Service.HandoffStatus(ctx, request)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, status)
+	case "session.handoff.brief":
+		request, err := decodeAgentParams[api.HandoffBriefRequest](params)
+		if err != nil {
+			return err
+		}
+		brief, err := p.server.Service.HandoffBrief(ctx, request)
+		if err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, brief)
+	case "session.draft":
+		request, err := decodeAgentParams[api.SessionDraftRequest](params)
+		if err != nil {
+			return err
+		}
+		if err := p.server.Service.TypeSessionDraft(ctx, request); err != nil {
+			return err
+		}
+		return p.writeResult(command.ID, map[string]bool{"typed": true})
 	case "session.title.regenerate":
 		// An explicit rename from the conversation. The new title reaches every
 		// client through the roster, like any other rename; the result carries

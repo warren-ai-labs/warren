@@ -73,6 +73,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
 
     let actions: WarrenDesktopActions
     let onCreateTask: @MainActor (WarrenDesktopTaskCreationRequest) async throws -> TaskID
+    /// Reads what a handoff from an Agent Session needs to show; nil when the
+    /// Host cannot say.
+    let loadHandoffStatus: @MainActor (TerminalSessionID) async -> WarrenDesktopHandoffStatus?
     /// The decisions other Sessions are waiting on, for the approval tray.
     let pendingDecisions: WarrenDesktopPendingDecisions
     let terminalSurface: @MainActor (WarrenDesktopTerminalContext) -> TerminalSurface
@@ -326,6 +329,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         onCreateTask: @escaping @MainActor (WarrenDesktopTaskCreationRequest) async throws -> TaskID = { _ in
             throw URLError(.unsupportedURL)
         },
+        loadHandoffStatus: @escaping @MainActor (TerminalSessionID) async -> WarrenDesktopHandoffStatus? = { _ in nil },
         pendingDecisions: WarrenDesktopPendingDecisions = WarrenDesktopPendingDecisions(),
         webStatus: WarrenDesktopWebStatus = .init(),
         isMigratingRuntimeSessions: Bool = false,
@@ -458,6 +462,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.onStopConnection = onStopConnection
         self.actions = actions
         self.onCreateTask = onCreateTask
+        self.loadHandoffStatus = loadHandoffStatus
         self.pendingDecisions = pendingDecisions
         self.terminalSurface = terminalSurface
         self.onWebStart = onWebStart
@@ -1494,6 +1499,19 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     onDismiss: { setChromePopover(nil) },
                     onCustomize: {
                         openSettings(WarrenDesktopSettingsDeepLink(section: .presets))
+                    },
+                    handoffSource: handoffSource(in: presentation)?.id,
+                    handoffSourceName: handoffSource(in: presentation)?.presentedKind.displayName ?? "the agent",
+                    loadHandoffStatus: loadHandoffStatus,
+                    onHandoff: { request, mode in
+                        guard let source = handoffSource(in: presentation),
+                              let workspace = presentation.workspace else { return }
+                        dispatch(.handoff(WarrenDesktopHandoffRequest(
+                            source: source.id,
+                            workspace: workspace.id,
+                            launch: request,
+                            mode: mode
+                        )))
                     }
                 )
             }
@@ -2252,6 +2270,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         if let workspace = presentation.workspace {
             dispatch(.requestNewSession(workspace.id, token: UUID()))
         }
+    }
+
+    /// The selected Session when a handoff can start from it: an Agent in the
+    /// Workspace the new Session would land in.
+    func handoffSource(in presentation: Presentation) -> WarrenDesktopSession? {
+        guard let session = presentation.session,
+              session.isAgentSession,
+              session.workspaceID == presentation.workspace?.id else { return nil }
+        return session
     }
 
     /// Launches a preset Session.

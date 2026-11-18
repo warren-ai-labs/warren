@@ -549,53 +549,141 @@ extension WarrenRemoteApplicationModel {
         request launch: TerminalSessionLaunchRequest,
         token: UUID? = nil
     ) {
-        guard let wire,
+        guard canCreateSession(in: workspaceID) else { return }
+        creatingSessionWorkspaceIDs.insert(workspaceID)
+        Task { @MainActor [weak self] in
+            await self?.createSessionNow(workspaceID: workspaceID, request: launch, token: token)
+        }
+    }
+
+    private func canCreateSession(in workspaceID: WorkspaceID) -> Bool {
+        guard wire != nil,
               let workspace = projection.workspace(id: workspaceID),
               !creatingSessionWorkspaceIDs.contains(workspaceID),
               !deletingWorkspaceIDs.contains(workspaceID),
-              !deletingProjectIDs.contains(workspace.projectID) else { return }
-        creatingSessionWorkspaceIDs.insert(workspaceID)
-        Task { @MainActor [weak self] in
-            defer { self?.finishCreatingSession(in: workspaceID) }
-            do {
-                let call = Self.createSessionCall(
-                    workspaceID: workspaceID.description,
-                    request: launch
-                )
-                let data = try await wire.request(call.method, params: call.params)
-                let created = try JSONDecoder().decode(CreatedSession.self, from: data)
-                guard let sessionID = TerminalSessionID(uuidString: created.id) else {
-                    throw NSError(domain: "WarrenRemote", code: 10, userInfo: [
-                        NSLocalizedDescriptionKey: "The daemon returned an invalid Session ID.",
-                    ])
-                }
-                // Published before the roster refresh so the requester can match
-                // the Session whichever of the two reaches it first.
-                if let token {
-                    self?.createdSessionIDsByToken[token] = sessionID
-                }
+              !deletingProjectIDs.contains(workspace.projectID) else { return false }
+        return true
+    }
 
-                // The create response is authoritative, but the projection is
-                // roster-backed. Refresh it before selecting the new tab so the
-                // terminal surface can be mounted against a real tab instead of
-                // waiting for an arbitrary roster tick.
-                try await self?.refreshRoster(using: wire)
-                guard let self,
-                      self.selectedWorkspaceID == workspaceID else { return }
-                // Creating and attaching are separate waits. End the create
-                // indication before the terminal attach indication begins so
-                // one user action never displays two spinners at once.
-                self.finishCreatingSession(in: workspaceID)
-                self.publishNavigationIfChanged(
-                    WarrenDesktopNavigationReducer.reduce(
-                        self.navigation,
-                        action: .selectTab(Self.tabID(sessionID)),
-                        in: self.projection
-                    )
+    /// Creates the Session and selects it. The caller has already marked the
+    /// Workspace as creating; this clears the mark.
+    @discardableResult
+    private func createSessionNow(
+        workspaceID: WorkspaceID,
+        request launch: TerminalSessionLaunchRequest,
+        token: UUID?
+    ) async -> TerminalSessionID? {
+        defer { finishCreatingSession(in: workspaceID) }
+        guard let wire else { return nil }
+        do {
+            let call = Self.createSessionCall(
+                workspaceID: workspaceID.description,
+                request: launch
+            )
+            let data = try await wire.request(call.method, params: call.params)
+            let created = try JSONDecoder().decode(CreatedSession.self, from: data)
+            guard let sessionID = TerminalSessionID(uuidString: created.id) else {
+                throw NSError(domain: "WarrenRemote", code: 10, userInfo: [
+                    NSLocalizedDescriptionKey: "The daemon returned an invalid Session ID.",
+                ])
+            }
+            // Published before the roster refresh so the requester can match
+            // the Session whichever of the two reaches it first.
+            if let token {
+                createdSessionIDsByToken[token] = sessionID
+            }
+
+            // The create response is authoritative, but the projection is
+            // roster-backed. Refresh it before selecting the new tab so the
+            // terminal surface can be mounted against a real tab instead of
+            // waiting for an arbitrary roster tick.
+            try await refreshRoster(using: wire)
+            guard selectedWorkspaceID == workspaceID else { return sessionID }
+            // Creating and attaching are separate waits. End the create
+            // indication before the terminal attach indication begins so
+            // one user action never displays two spinners at once.
+            finishCreatingSession(in: workspaceID)
+            publishNavigationIfChanged(
+                WarrenDesktopNavigationReducer.reduce(
+                    navigation,
+                    action: .selectTab(Self.tabID(sessionID)),
+                    in: projection
                 )
-                await self.presentSelectedSession(activatingInput: true)
+            )
+            await presentSelectedSession(activatingInput: true)
+            return sessionID
+        } catch {
+            present(error)
+            return nil
+        }
+    }
+
+    func handoffStatus(_ sessionID: TerminalSessionID) async -> WarrenDesktopHandoffStatus? {
+        guard let wire else { return nil }
+        struct Status: Decodable {
+            var provider: String
+            var model: String?
+            var lastResponseAt: Date?
+            var cacheTtlSeconds: Int
+            var estimated: Bool
+            var contextTokens: Int?
+            var canAsk: Bool
+        }
+        do {
+            let data = try await wire.request("session.handoff.status", params: ["session": sessionID.description])
+            let status = try Self.handoffDecoder.decode(Status.self, from: data)
+            return WarrenDesktopHandoffStatus(
+                provider: status.provider,
+                model: status.model,
+                lastResponseAt: status.lastResponseAt,
+                cacheTTL: TimeInterval(status.cacheTtlSeconds),
+                estimated: status.estimated,
+                contextTokens: status.contextTokens ?? 0,
+                canAsk: status.canAsk
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private static let handoffDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let text = try decoder.singleValueContainer().decode(String.self)
+            let fractional = ISO8601DateFormatter()
+            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text) {
+                return date
+            }
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid date \(text)"))
+        }
+        return decoder
+    }()
+
+    /// Starts the new Session and has the brief written at the same time, so
+    /// the new Tab appears at once. The brief then waits in the new Session's
+    /// input for the person to send.
+    func handoff(_ request: WarrenDesktopHandoffRequest) {
+        guard let wire, canCreateSession(in: request.workspace) else { return }
+        creatingSessionWorkspaceIDs.insert(request.workspace)
+        Task { @MainActor [weak self] in
+            struct Brief: Decodable { var text: String }
+            async let brief = wire.request(
+                "session.handoff.brief",
+                params: ["session": request.source.description, "mode": request.mode.rawValue]
+            )
+            guard let self,
+                  let created = await self.createSessionNow(workspaceID: request.workspace, request: request.launch, token: nil)
+            else { return }
+            do {
+                let text = try JSONDecoder().decode(Brief.self, from: try await brief).text
+                if request.launch.agentHandler == "acp" {
+                    self.conversationDraftSeeds[created] = text
+                } else {
+                    _ = try await wire.request("session.draft", params: ["session": created.description, "text": text])
+                }
             } catch {
-                self?.present(error)
+                self.present(error)
             }
         }
     }
@@ -1302,6 +1390,8 @@ extension WarrenRemoteApplicationModel {
             break
         case .launchSession(let workspaceID, let launch):
             createSession(workspaceID: workspaceID, request: launch)
+        case .handoff(let request):
+            handoff(request)
         case .addProject:
             present(NSError(domain: "WarrenRemote", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Remote projects must use remote paths. "

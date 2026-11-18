@@ -197,6 +197,9 @@ struct WarrenCompositionRoot: View {
             onCreateTask: { creation in
                 try await remoteModel.createTask(creation)
             },
+            loadHandoffStatus: { sessionID in
+                await remoteModel.handoffStatus(sessionID)
+            },
             pendingDecisions: WarrenDesktopPendingDecisions(
                 decisions: remoteModel.pendingDecisions,
                 resolve: { sessionID, decisionID, optionID in

@@ -1309,6 +1309,9 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     /// the meantime; the model reports the created Session under it.
     case requestNewSession(WorkspaceID, token: UUID)
     case launchSession(WorkspaceID, TerminalSessionLaunchRequest)
+    /// Starts a new Agent Session from a long one, with a brief of the old
+    /// one waiting in its input.
+    case handoff(WarrenDesktopHandoffRequest)
     case restoreNavigation(WarrenDesktopNavigationState)
     case toggleSidebar
     case openNotifications

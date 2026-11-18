@@ -109,8 +109,10 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     private var offeredDiskImages: Set<String> = []
     private weak var copyLocalWebURLMenuItem: NSMenuItem?
     private weak var copyLocalWebURLSeparator: NSMenuItem?
+    private var terminationSignalSources: [DispatchSourceSignal] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        forwardTerminationSignalsToAppKit()
         // Before the first window is built, so the initial paint is already in
         // the chosen appearance rather than flashing the default one.
         WarrenDesktopAppearance.applyStoredMode()
@@ -196,6 +198,10 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // First, because it is the only cleanup here whose subject outlives the
+        // process: a server left running is reparented to launchd and nothing
+        // afterwards can tell it apart from another instance's.
+        WarrenEmbeddedEditorServerReaper.endServersOwnedByCurrentProcess()
         updateCheckTask?.cancel()
         updateInstallTask?.cancel()
         cliInstallTask?.cancel()
@@ -541,6 +547,35 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         // windowless-but-alive process that the single-instance lock would
         // activate on relaunch instead of showing a fresh window.
         return .terminateNow
+    }
+
+    /// Turns a termination signal into an ordinary quit so the cleanup the app
+    /// does on the way out still runs.
+    ///
+    /// `pkill -TERM` is what `scripts/install-app.sh` and `scripts/run-app.sh`
+    /// fall back to when a graceful quit does not finish within five seconds,
+    /// and an app that is merely signalled runs no cleanup callback at all. The
+    /// signal source is installed with SIG_IGN so the default action cannot end
+    /// the process before the handler gets the chance.
+    private func forwardTerminationSignalsToAppKit() {
+        for signalNumber in [SIGTERM, SIGINT] {
+            signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(
+                signal: signalNumber,
+                queue: .main
+            )
+            source.setEventHandler {
+                NSApp.terminate(nil)
+                // A quit that stalls must not keep a server alive past us.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    WarrenEmbeddedEditorServerReaper
+                        .endServersOwnedByCurrentProcess()
+                    exit(EXIT_SUCCESS)
+                }
+            }
+            source.resume()
+            terminationSignalSources.append(source)
+        }
     }
 
     private func launchDaemonMenuBar() {

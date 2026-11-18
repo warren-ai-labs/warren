@@ -100,7 +100,12 @@ private actor WarrenRemoteSocket {
     /// Host-owned maintenance operations may scan unbounded local history.
     /// They remain correlated with the response but must not be failed by the
     /// short interactive RPC deadline.
-    private static let requestsWithoutTimeout: Set<String> = ["usage.rebuild"]
+    /// A handoff brief may wait minutes for the source Agent to write it, and
+    /// a draft waits for a new terminal Agent to draw its prompt. The Host
+    /// bounds both.
+    private static let requestsWithoutTimeout: Set<String> = [
+        "usage.rebuild", "session.handoff.brief", "session.draft",
+    ]
     static let defaultHeartbeatInterval: Duration = .seconds(20)
     /// Received output acknowledged at once, without waiting for the delay.
     static let outputAckBytes = 32 * 1024

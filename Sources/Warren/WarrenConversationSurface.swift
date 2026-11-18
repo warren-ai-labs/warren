@@ -163,7 +163,9 @@ struct WarrenConversationSurface: View {
             branch: workspaceBranch,
             actions: actions,
             focusRequest: model.conversationFocusTokens[sessionID] ?? 0,
-            wantsInputFocus: wantsInputFocus
+            wantsInputFocus: wantsInputFocus,
+            draftSeed: model.conversationDraftSeeds[sessionID],
+            consumeDraftSeed: { [weak model] in model?.conversationDraftSeeds[sessionID] = nil }
         )
     }
 
@@ -315,6 +317,11 @@ struct WarrenConversationView: View {
     /// still land once it mounts.
     var focusRequest: UInt = 0
     var wantsInputFocus: Bool = false
+    /// Text another part of the app prepared for this composer, such as a
+    /// handoff brief. It is placed in the draft for the person to send, never
+    /// sent, and consumed so it lands once.
+    var draftSeed: String? = nil
+    var consumeDraftSeed: () -> Void = {}
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -436,6 +443,8 @@ struct WarrenConversationView: View {
         .onChange(of: feed.status?.activity) { activity in
             if activity != .working, activity != .blocked { stopping = false }
         }
+        .onAppear(perform: applyDraftSeed)
+        .onChange(of: draftSeed) { _ in applyDraftSeed() }
         .onChange(of: pendingLeadDecision?.id) { _ in
             leadDecisionHighlight = 0
         }
@@ -1006,6 +1015,12 @@ struct WarrenConversationView: View {
                 }
             }
         }
+    }
+
+    private func applyDraftSeed() {
+        guard let seed = draftSeed, !seed.isEmpty else { return }
+        restoreDraft(seed)
+        consumeDraftSeed()
     }
 
     /// Puts failed text back ahead of any draft typed while it was in flight.
