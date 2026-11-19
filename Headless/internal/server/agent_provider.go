@@ -1312,6 +1312,11 @@ func resetAgentProjectionLocked(entry *agentSession) {
 	entry.cliTitleDeadline = time.Time{}
 	entry.cliTitleCaptured = false
 	entry.titleFallbackFired = false
+	// The next conversation is entitled to its own fallback name. The caller
+	// clears the Session's CustomTitle, so leaving this claim in place would
+	// keep a Host with no title model from ever naming it from the prompt it
+	// receives next.
+	entry.localTitleApplied = false
 	entry.aiTitleValue = ""
 	entry.hookStateModTime = time.Time{}
 }

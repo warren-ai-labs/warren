@@ -114,6 +114,37 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.42.1",
+        dateISO: "2026-11-19",
+        date: "November 19, 2026",
+        title: "Warren can copy a handoff brief instead of delivering it.",
+        summary:
+          "A Desktop patch that lets a handoff brief be copied instead of delivered, and keeps a shell-bound Agent named after a rebind. The Handoff page now offers Copy as Markdown beside the two ways of writing the brief, so the text can go into a Session the person starts themselves: it uses the mode the page has selected and creates no Session. The Host releases the first message's one-shot naming claim wherever it clears a Session's name, so a rebind no longer leaves a Host with no title model reading Shell for the rest of the conversation, and a shell-bound Agent no longer takes the launch's own Shell default as its name. The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Copy a handoff brief as Markdown. The Handoff page now offers Copy as Markdown beside the two ways of writing the brief, so a person can paste the text into a Session they start themselves instead of having Warren create and fill one. It uses the mode the page has selected and requests no new Session. Agent mode asks the source Agent for its turn as the delivered brief does, so the row is offered only where that Agent can still take one.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Keep the first-message fallback naming a Session after its Agent rebinds. A provider rebind clears the Session's name, but the fallback's one-shot claim was not released with it, so a Host with no title model left a shell-bound Agent reading as Shell for the rest of its life. The claim is now released wherever the projection and the name are reset.",
+              "Stop a shell-bound Agent from taking the launch's Shell default as its own name. The Host fixed that title when it launched the shell, so it names the launch, not the Agent: the row reads the Agent's name instead, and the name the conversation earned still outranks both.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. session.handoff.brief is the one method the copy uses, so a Host that predates 0.42.0 reports the error instead of returning text; nothing else is affected.",
+              "Nothing persisted changes shape. Copying a brief reads the same method a handoff does and writes nothing; the naming fix only changes when the Host releases a claim it already kept in memory.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.42.0",
         dateISO: "2026-11-18",
         date: "November 18, 2026",
@@ -2212,6 +2243,37 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.42.1",
+        dateISO: "2026-11-19",
+        date: "2026 年 11 月 19 日",
+        title: "Warren 能把 handoff 的 brief 复制出来，而不是直接送出去。",
+        summary:
+          "这是一个 Desktop 补丁：handoff 的 brief 现在可以复制，而不是只交给新 Session；rebind 之后，一个绑定 shell 的 Agent 也不会再丢掉自己的名字。Handoff 页面在两种写 brief 的方式旁边多了一个 Copy as Markdown，于是这段文字可以粘进自己开的 Session：它用页面已经选好的模式，不创建任何 Session。Host 在清掉 Session 名字的地方也一并释放第一条消息的一次性命名主张，于是没有标题模型的 Host 在 rebind 之后不会让一个绑定 shell 的 Agent 一直读作 Shell；绑定 shell 的 Agent 也不会再把启动时的 Shell 当成自己的名字。JSON 控制协议仍是 4.0，没有新增或改动任何方法，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "把 handoff 的 brief 复制成 Markdown。Handoff 页面现在在两种写 brief 的方式旁边提供 Copy as Markdown，于是可以直接把这段文字粘进自己开的 Session，而不是让 Warren 创建一个再填好。它用页面已经选定的模式，不请求任何新 Session。agent 模式和真正交付的 brief 一样要去问源 Agent，所以只有那个 Agent 还能接一轮时这一行才可用。",
+            ],
+          },
+          {
+            title: "修正",
+            items: [
+              "Agent 重新绑定之后，第一条消息的回退命名仍然生效。provider rebind 会清掉 Session 的名字，但那条回退的一次性主张没有跟着释放，于是一个没有标题模型的 Host 会让绑定 shell 的 Agent 一辈子读作 Shell。现在凡是重置投影与名字的地方都会一并释放这条主张。",
+              "绑定 shell 的 Agent 不再把启动时的 Shell 当成自己的名字。Host 在启动 shell 时就定下了那个标题，它命名的是这次启动而不是这个 Agent：现在这一行读的是 Agent 自己的名字，而这段对话挣来的名字仍然压过两者。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，没有新增或改动任何方法，本版本不迁移任何状态。复制只用到 session.handoff.brief 这一个方法，所以早于 0.42.0 的 Host 会报告这个错误而不是返回文本，其余不受影响。",
+              "没有任何持久化的形状改变。复制 brief 走的是 handoff 用的同一个方法，不写任何东西；命名修正只是改变了 Host 何时释放它本来就在内存里持有的主张。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.42.0",
         dateISO: "2026-11-18",

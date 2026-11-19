@@ -667,16 +667,16 @@ extension WarrenRemoteApplicationModel {
         guard let wire, canCreateSession(in: request.workspace) else { return }
         creatingSessionWorkspaceIDs.insert(request.workspace)
         Task { @MainActor [weak self] in
-            struct Brief: Decodable { var text: String }
-            async let brief = wire.request(
-                "session.handoff.brief",
-                params: ["session": request.source.description, "mode": request.mode.rawValue]
+            async let brief = Self.handoffBrief(
+                wire,
+                sessionID: request.source,
+                mode: request.mode
             )
             guard let self,
                   let created = await self.createSessionNow(workspaceID: request.workspace, request: request.launch, token: nil)
             else { return }
             do {
-                let text = try JSONDecoder().decode(Brief.self, from: try await brief).text
+                let text = try await brief
                 if request.launch.agentHandler == "acp" {
                     self.conversationDraftSeeds[created] = text
                 } else {
@@ -686,6 +686,33 @@ extension WarrenRemoteApplicationModel {
                 self.present(error)
             }
         }
+    }
+
+    /// Puts the brief a handoff would write on the pasteboard, so the person
+    /// can start the Session from that text themselves. No Session is created.
+    func copyHandoffBrief(_ sessionID: TerminalSessionID, mode: WarrenDesktopHandoffMode) {
+        guard let wire else { return }
+        Task { @MainActor [weak self] in
+            do {
+                let text = try await Self.handoffBrief(wire, sessionID: sessionID, mode: mode)
+                WarrenCopyFeedback.shared.copy(text, announcing: "Copied handoff brief")
+            } catch {
+                self?.present(error)
+            }
+        }
+    }
+
+    private static func handoffBrief(
+        _ wire: WarrenRemoteClient,
+        sessionID: TerminalSessionID,
+        mode: WarrenDesktopHandoffMode
+    ) async throws -> String {
+        struct Brief: Decodable { var text: String }
+        let data = try await wire.request(
+            "session.handoff.brief",
+            params: ["session": sessionID.description, "mode": mode.rawValue]
+        )
+        return try JSONDecoder().decode(Brief.self, from: data).text
     }
 
     /// Resolves a launcher link and opens its requested resource. The request
@@ -1392,6 +1419,8 @@ extension WarrenRemoteApplicationModel {
             createSession(workspaceID: workspaceID, request: launch)
         case .handoff(let request):
             handoff(request)
+        case .copyHandoffBrief(let sessionID, let mode):
+            copyHandoffBrief(sessionID, mode: mode)
         case .addProject:
             present(NSError(domain: "WarrenRemote", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Remote projects must use remote paths. "

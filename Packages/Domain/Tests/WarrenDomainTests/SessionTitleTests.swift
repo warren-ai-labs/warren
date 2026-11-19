@@ -13,6 +13,7 @@ final class SessionTitleTests: XCTestCase {
         customTitle: String? = nil,
         title: String = "Shell",
         kind: TerminalSessionKind = .shell,
+        launchKind: TerminalSessionKind? = nil,
         process: String = "",
         commandLine: String = "",
         shellName: String = "",
@@ -25,6 +26,7 @@ final class SessionTitleTests: XCTestCase {
             customTitle: customTitle,
             title: title,
             kind: kind,
+            launchKind: launchKind,
             process: process,
             commandLine: commandLine,
             shellName: shellName,
@@ -61,6 +63,25 @@ final class SessionTitleTests: XCTestCase {
     func testAnUnnamedAgentReadsAsItsKindName() {
         XCTAssertEqual(resolve(title: "Claude Code", kind: .claude).title, "Claude Code")
         XCTAssertEqual(resolve(title: "Codex", kind: .codex).title, "Codex")
+    }
+
+    /// A shell that later bound an Agent keeps `Shell` as its durable title,
+    /// because that is what the Host launched. The title says what was
+    /// launched, not what the Session is now, so it is never the Agent's name.
+    func testAShellBoundAgentNeverReadsAsTheShellDefault() {
+        let resolved = resolve(title: "Shell", kind: .claude, launchKind: .shell)
+        XCTAssertEqual(resolved.title, "Claude Code")
+    }
+
+    /// The name the conversation earned still outranks the launch default.
+    func testAShellBoundAgentKeepsTheNameFromItsConversation() {
+        let resolved = resolve(
+            customTitle: "Fix the resize race",
+            title: "Shell",
+            kind: .claude,
+            launchKind: .shell
+        )
+        XCTAssertEqual(resolved.title, "Fix the resize race")
     }
 
     func testAShellRunningACommandKeepsItsLocationAndCarriesTheSummary() {

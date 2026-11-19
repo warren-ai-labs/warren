@@ -59,6 +59,7 @@ final class WarrenDesktopHandoffTests: XCTestCase {
 
     private final class Handoffs {
         var requests: [(TerminalSessionLaunchRequest, WarrenDesktopHandoffMode)] = []
+        var copies: [WarrenDesktopHandoffMode] = []
     }
 
     private func mount(
@@ -76,7 +77,8 @@ final class WarrenDesktopHandoffTests: XCTestCase {
             handoffSource: source,
             handoffSourceName: "Claude",
             loadHandoffStatus: { _ in status },
-            onHandoff: { handoffs.requests.append(($0, $1)) }
+            onHandoff: { handoffs.requests.append(($0, $1)) },
+            onCopyHandoff: { handoffs.copies.append($0) }
         )
         .warrenSemanticObservationRoot(recorder: recorder)
         .environment(\.warrenSemanticRecorder, recorder)
@@ -127,5 +129,28 @@ final class WarrenDesktopHandoffTests: XCTestCase {
         XCTAssertEqual(handoffs.requests.map(\.0.kind), [.codex])
         XCTAssertEqual(handoffs.requests.map(\.1), [.extract])
         XCTAssertNil(handoffs.requests.first?.0.agentHandler, "The CLI interface starts the terminal Agent")
+    }
+
+    /// The brief can be copied instead of typed into a new Session, using the
+    /// mode the page has selected.
+    func testHandoffCopiesTheChosenBriefWithoutStartingASession() throws {
+        let cold = WarrenDesktopHandoffStatus(
+            provider: "claude",
+            lastResponseAt: Date().addingTimeInterval(-600),
+            cacheTTL: 300,
+            estimated: false,
+            canAsk: true
+        )
+        let (host, recorder, handoffs) = mount(source: TerminalSessionID(), status: cold)
+        try recorder.perform(.press, on: "preset.handoff")
+        host.layoutSubtreeIfNeeded()
+        settle()
+
+        XCTAssertNotNil(recorder.snapshot().node(id: "handoff.copy"))
+        try recorder.perform(.press, on: "handoff.copy")
+        settle()
+
+        XCTAssertEqual(handoffs.copies, [.extract])
+        XCTAssertTrue(handoffs.requests.isEmpty, "Copying a brief starts no Session")
     }
 }

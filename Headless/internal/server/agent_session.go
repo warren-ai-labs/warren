@@ -483,6 +483,10 @@ func (s *Service) startAgentWatcher(sessionID, provider, transcriptPath string, 
 		existing.cliTitleDeadline = time.Time{}
 		existing.cliTitleCaptured = false
 		existing.titleFallbackFired = false
+		// A rebind clears the Session's CustomTitle below, so the fallback
+		// must be allowed to name the replacement conversation from its own
+		// first message.
+		existing.localTitleApplied = false
 		existing.aiTitleValue = ""
 		existing.hookStateModTime = time.Time{}
 		existing.mu.Unlock()

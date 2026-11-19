@@ -45,6 +45,9 @@ struct WarrenDesktopPresetBar: View {
     var handoffSourceName = "the agent"
     var loadHandoffStatus: @MainActor (TerminalSessionID) async -> WarrenDesktopHandoffStatus? = { _ in nil }
     var onHandoff: (TerminalSessionLaunchRequest, WarrenDesktopHandoffMode) -> Void = { _, _ in }
+    /// Copies the brief the chosen mode writes instead of starting a Session
+    /// from it, for a person who wants to create one from the text themselves.
+    var onCopyHandoff: (WarrenDesktopHandoffMode) -> Void = { _ in }
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
@@ -568,6 +571,7 @@ struct WarrenDesktopPresetBar: View {
                 isEnabled: true,
                 palette: palette
             )
+            copyHandoffRow(palette: palette)
 
             WarrenDesktopMenuDivider()
             WarrenDesktopMenuGroupHeader(title: "Continue in")
@@ -577,6 +581,53 @@ struct WarrenDesktopPresetBar: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Handoff")
+    }
+
+    /// Copies the brief the page's mode writes, without creating a Session, so
+    /// the person can start one from the text wherever they like.
+    private func copyHandoffRow(palette: WarrenDesktopMenuPalette) -> some View {
+        // The Agent's brief is a turn in the source Session, so it is offered
+        // only where that Session can take one.
+        let isAvailable = handoffMode != .agent || handoffStatus?.canAsk == true
+        let copy = {
+            guard !isLaunchDisabled, isAvailable else { return }
+            let mode = handoffMode
+            choosingHandoff = false
+            defer { onDismiss() }
+            onCopyHandoff(mode)
+        }
+        return Button(action: copy) {
+            HStack(spacing: WarrenDesktopMenuMetrics.iconSpacing) {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(palette.icon)
+                    .frame(width: WarrenDesktopMenuMetrics.iconSize, height: WarrenDesktopMenuMetrics.iconSize)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Copy as Markdown")
+                        .font(WarrenTypography.popoverItem)
+                        .foregroundStyle(palette.rowText)
+                    Text("Paste it into your own session")
+                        .font(WarrenTypography.popoverMeta)
+                        .foregroundStyle(palette.meta)
+                }
+                Spacer(minLength: 0)
+            }
+            .lineLimit(1)
+            .padding(.horizontal, WarrenDesktopMenuMetrics.rowHorizontalPadding)
+            .frame(maxWidth: .infinity, minHeight: WarrenDesktopMenuMetrics.twoLineRowHeight, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(WarrenDesktopMenuRowStyle())
+        .disabled(isLaunchDisabled || !isAvailable)
+        .accessibilityLabel("Copy the brief as Markdown")
+        .accessibilityHint("Copies the brief to the clipboard without starting a session")
+        .warrenSemanticElement(
+            id: "handoff.copy",
+            role: .button,
+            label: "Copy as Markdown",
+            isEnabled: !isLaunchDisabled && isAvailable,
+            action: copy
+        )
     }
 
     private var agentBriefHint: String {

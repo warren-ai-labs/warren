@@ -1312,6 +1312,9 @@ public enum WarrenDesktopAction: Hashable, Sendable {
     /// Starts a new Agent Session from a long one, with a brief of the old
     /// one waiting in its input.
     case handoff(WarrenDesktopHandoffRequest)
+    /// Copies the brief a handoff would write, so the person can start the
+    /// Session themselves instead of having one created.
+    case copyHandoffBrief(TerminalSessionID, WarrenDesktopHandoffMode)
     case restoreNavigation(WarrenDesktopNavigationState)
     case toggleSidebar
     case openNotifications

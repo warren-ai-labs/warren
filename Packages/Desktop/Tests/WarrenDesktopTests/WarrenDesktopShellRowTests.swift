@@ -294,6 +294,34 @@ final class WarrenDesktopShellRowTests: XCTestCase {
         )
     }
 
+    /// A shell that bound an Agent keeps `Shell` as its durable title, because
+    /// that is what the Host launched. The row names the Agent instead, and
+    /// the name the conversation earned outranks both.
+    func testAShellBoundAgentRowIsNeverNamedShell() {
+        let unnamed = shell(
+            state: WarrenDesktopShellState(atPrompt: true, shellName: "zsh"),
+            runtimeProcess: "node",
+            runtimeCommandLine: "node /usr/local/bin/claude",
+            agentProvider: .claude
+        )
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceSessionRow.rowTitle(for: unnamed, worktreeRoot: root),
+            "Claude Code"
+        )
+
+        let named = shell(
+            state: WarrenDesktopShellState(atPrompt: true, shellName: "zsh"),
+            customTitle: "Fix the resize race",
+            runtimeProcess: "node",
+            runtimeCommandLine: "node /usr/local/bin/claude",
+            agentProvider: .claude
+        )
+        XCTAssertEqual(
+            WarrenDesktopWorkspaceSessionRow.rowTitle(for: named, worktreeRoot: root),
+            "Fix the resize race"
+        )
+    }
+
     func testALocationPrimaryIsMarkedAndNotShortenedAsACommand() {
         let session = shell(
             state: WarrenDesktopShellState(atPrompt: true, shellName: "zsh"),

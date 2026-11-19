@@ -54,6 +54,10 @@ public struct SessionTitle: Equatable, Sendable {
 
     /// - Parameters:
     ///   - kind: the kind to present, with any Agent binding already resolved.
+    ///   - launchKind: the durable kind the Host fixed a default `title` from,
+    ///     when it differs from `kind` (an Agent bound to a shell keeps `Shell`
+    ///     as its title). That default names the launch, not the Agent, so it
+    ///     never stands as an Agent's name.
     ///   - shellName: the shell's own name when known (`zsh`).
     ///   - runningCommand: the command a shell reports running, empty at its
     ///     prompt. Falls back to `commandLine` when the shell reported no
@@ -66,6 +70,7 @@ public struct SessionTitle: Equatable, Sendable {
         customTitle: String?,
         title: String,
         kind: TerminalSessionKind,
+        launchKind: TerminalSessionKind? = nil,
         process: String,
         commandLine: String,
         shellName: String,
@@ -78,7 +83,8 @@ public struct SessionTitle: Equatable, Sendable {
         let name = TerminalSessionPresentation.sessionName(
             customTitle: customTitle,
             title: title,
-            kind: kind
+            kind: kind,
+            launchKind: launchKind
         )
         let foreground = foregroundCommand(
             process: process,

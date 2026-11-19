@@ -456,6 +456,46 @@ func TestLocalSessionTitleYieldsToTheChainAboveIt(t *testing.T) {
 	}
 }
 
+// A provider rebind clears the Session's CustomTitle, so the fallback's claim
+// must be released with it. Otherwise a Host with no title model keeps the
+// launch default ("Shell" for an Agent started in a shell) forever, even
+// though the new conversation already has a first message to name it.
+func TestLocalSessionTitleAppliesAfterTheConversationIsRebound(t *testing.T) {
+	state, sessionID := newSessionTitleStoreForKind(t, "pi")
+	service := &Service{Store: state}
+	service.lazyInit()
+	entry := &agentSession{}
+	service.agents[sessionID] = entry
+
+	service.recordAgentEvents(sessionID, []api.AgentEvent{
+		{Provider: "pi", Type: "user", Content: "Fix the reconnect flow"},
+	}, api.AgentStatus{Activity: api.AgentActivityWorking})
+	service.pollAgentTitles()
+	if got := state.Snapshot().Sessions[0].CustomTitle; got != "Fix the reconnect flow" {
+		t.Fatalf("session title = %q, want the first prompt", got)
+	}
+
+	// The rebind path resets the projection and clears the Session's title
+	// together, so the next conversation starts with no name at all.
+	entry.mu.Lock()
+	resetAgentProjectionLocked(entry)
+	entry.mu.Unlock()
+	if err := state.Update(func(value *api.State) error {
+		value.Sessions[0].CustomTitle = ""
+		return nil
+	}); err != nil {
+		t.Fatalf("clear title: %v", err)
+	}
+
+	service.recordAgentEvents(sessionID, []api.AgentEvent{
+		{Provider: "pi", Type: "user", Content: "Add the retry backoff"},
+	}, api.AgentStatus{Activity: api.AgentActivityWorking})
+	service.pollAgentTitles()
+	if got := state.Snapshot().Sessions[0].CustomTitle; got != "Add the retry backoff" {
+		t.Fatalf("session title after rebind = %q, want the new prompt", got)
+	}
+}
+
 // With a title model configured the request is the better name, so the
 // fallback stays out of the way.
 func TestLocalSessionTitleStaysOutOfTheModelsWay(t *testing.T) {

@@ -4,6 +4,53 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.42.1] - 2026-11-19
+
+A Desktop patch that lets a handoff brief be copied instead of delivered, and
+keeps a shell-bound Agent named after a rebind. The Handoff page now offers Copy
+as Markdown beside the two ways of writing the brief, so the text can go into a
+Session the person starts themselves: it uses the mode the page has selected and
+creates no Session. The Host releases the first message's one-shot naming claim
+wherever it clears a Session's name, so a rebind no longer leaves a Host with no
+title model reading `Shell` for the rest of the conversation, and a shell-bound
+Agent no longer takes the launch's own `Shell` default as its name. The JSON
+control protocol remains at 4.0, no method was added or changed, and this
+release migrates no state.
+
+### Added
+
+- Copy a handoff brief as Markdown. The Handoff page now offers Copy as
+  Markdown beside the two ways of writing the brief, so a person can paste
+  the text into a Session they start themselves instead of having Warren
+  create and fill one. It uses the mode the page has selected and requests no
+  new Session. Agent mode asks the source Agent for its turn as the delivered
+  brief does, so the row is offered only where that Agent can still take one.
+
+### Fixed
+
+- Keep the first-message fallback naming a Session after its Agent rebinds. A
+  provider rebind clears the Session's name, but the fallback's one-shot claim
+  was not released with it, so a Host with no title model left a shell-bound
+  Agent reading as `Shell` for the rest of its life. The claim is now released
+  wherever the projection and the name are reset.
+- Stop a shell-bound Agent from taking the launch's `Shell` default as its own
+  name. The Host fixed that title when it launched the shell, so it names the
+  launch, not the Agent: the row reads the Agent's name instead, and the name
+  the conversation earned still outranks both.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0, no method was added or changed, and
+  this release migrates no state. `session.handoff.brief` is the one method the
+  copy uses, so a Host that predates 0.42.0 reports the error instead of
+  returning text; nothing else is affected.
+- Nothing persisted changes shape. Copying a brief reads the same method a
+  handoff does and writes nothing; the naming fix only changes when the Host
+  releases a claim it already kept in memory.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.42.0] - 2026-11-18
 
 A release that lets a long Agent Session start a fresh one from a brief. The

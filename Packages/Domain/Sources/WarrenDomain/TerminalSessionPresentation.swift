@@ -84,17 +84,25 @@ public enum TerminalSessionPresentation {
 
     /// The Session's own name: the user-set title, or the generated title when
     /// it carries more than the kind already shows.
+    ///
+    /// - Parameter launchKind: the durable kind the Host fixed `title` from
+    ///   when presentation resolves a different kind. A default title of that
+    ///   kind (`Shell` for an Agent bound to a shell) says what was launched,
+    ///   not what the Session is now, so it is not a name.
     public static func sessionName(
         customTitle: String?,
         title: String,
-        kind: TerminalSessionKind
+        kind: TerminalSessionKind,
+        launchKind: TerminalSessionKind? = nil
     ) -> String {
         let custom = customTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !custom.isEmpty {
             return custom
         }
         let generated = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !generated.isEmpty, !isGeneratedDefaultTitle(generated, kind: kind) {
+        let isDefault = isGeneratedDefaultTitle(generated, kind: kind)
+            || (launchKind.map { isGeneratedDefaultTitle(generated, kind: $0) } ?? false)
+        if !generated.isEmpty, !isDefault {
             return generated
         }
         return ""

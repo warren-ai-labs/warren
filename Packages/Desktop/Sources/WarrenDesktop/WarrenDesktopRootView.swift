@@ -1512,6 +1512,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                             launch: request,
                             mode: mode
                         )))
+                    },
+                    onCopyHandoff: { mode in
+                        guard let source = handoffSource(in: presentation) else { return }
+                        dispatch(.copyHandoffBrief(source.id, mode))
                     }
                 )
             }

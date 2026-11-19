@@ -27,6 +27,7 @@ enum WarrenDesktopTabTitle {
             customTitle: session.customTitle,
             title: session.title,
             kind: session.presentedKind,
+            launchKind: session.kind,
             process: session.runtimeProcess,
             commandLine: session.runtimeCommandLine,
             shellName: session.shellState?.shellName ?? "",
