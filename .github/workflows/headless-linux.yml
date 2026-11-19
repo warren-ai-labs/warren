@@ -52,8 +52,10 @@ jobs:
         run: |
           tar -C "$RUNNER_TEMP/warren-headless" -czf "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz" \
             warren-headless warren warren-cli warren-ssh-tunnel
-          sha256sum "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz" \
-            > "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz.sha256"
+          # Hash from the directory that holds the tarball so the checksum
+          # file names it the way every other release checksum does.
+          (cd "$RUNNER_TEMP" && sha256sum warren-headless-linux-amd64.tar.gz \
+            > warren-headless-linux-amd64.tar.gz.sha256)
 
   attach:
     name: Attach to release
@@ -86,8 +88,10 @@ jobs:
         run: |
           tar -C "$RUNNER_TEMP/warren-headless" -czf "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz" \
             warren-headless warren warren-cli warren-ssh-tunnel
-          sha256sum "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz" \
-            > "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz.sha256"
+          # Hash from the directory that holds the tarball so the checksum
+          # file names it the way every other release checksum does.
+          (cd "$RUNNER_TEMP" && sha256sum warren-headless-linux-amd64.tar.gz \
+            > warren-headless-linux-amd64.tar.gz.sha256)
 
       - name: Upload Linux headless assets
         env:
