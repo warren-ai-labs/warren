@@ -5,13 +5,31 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# The Linux binaries are a gate, not an archive. They used to be uploaded as a
+# workflow artifact on every branch push, tag push and pull request, and the
+# mirrored copy of this file did the same thing again in the public repository,
+# which put about 50 MB per run into an account-wide 500 MB artifact quota that
+# nothing ever downloaded. The quota filled and every upload, and the gate with
+# it, failed for a reason unrelated to the change under review.
+#
+# The gate now builds and throws the binaries away, and a release gets its
+# tarball attached to the GitHub Release itself, where it costs no artifact
+# storage. Only the private repository runs the gate on a push, because the
+# mirror is a copy of a commit that already passed it; the mirror does run the
+# release job, since the release and its assets live there.
 jobs:
   build:
+    name: Build
+    # Only the private repository gates a change: the mirror is a copy of a
+    # commit that already passed this job.
+    if: github.repository == 'warren-ai-labs/warren-private' && github.event_name != 'release'
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -33,17 +51,42 @@ jobs:
           sha256sum "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz" \
             > "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz.sha256"
 
-      # A pull request only has to prove the Linux build works; the artifact
-      # exists for a release. Uploading one per pull request filled the
-      # account's artifact storage until every upload failed, which turned this
-      # gate red for a reason that had nothing to do with the change under
-      # review.
-      - name: Upload Linux headless artifact
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+  attach:
+    name: Attach to release
+    # A release is published after its tag is pushed, so this runs on the
+    # release event rather than the tag push.
+    if: github.event_name == 'release' && github.repository == 'warren-ai-labs/warren'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
         with:
-          name: warren-headless-linux-amd64
-          path: |
-            ${{ runner.temp }}/warren-headless-linux-amd64.tar.gz
-            ${{ runner.temp }}/warren-headless-linux-amd64.tar.gz.sha256
-          if-no-files-found: error
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build Linux headless binaries
+        run: bash scripts/build-headless.sh "$RUNNER_TEMP/warren-headless"
+
+      - name: Package Linux headless binaries
+        run: |
+          tar -C "$RUNNER_TEMP/warren-headless" -czf "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz" \
+            warren-headless warren warren-cli warren-ssh-tunnel
+          sha256sum "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz" \
+            > "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz.sha256"
+
+      - name: Upload Linux headless assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "$TAG_NAME" \
+            "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz" \
+            "$RUNNER_TEMP/warren-headless-linux-amd64.tar.gz.sha256" \
+            --repo "$GITHUB_REPOSITORY" --clobber

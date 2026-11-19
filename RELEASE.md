@@ -185,7 +185,12 @@ tests, Swift package tests, and the non-visual UI probes covered by
 6. Publish the GitHub Release in `warren-ai-labs/warren` with both
    `Warren-<version>.zip`, `Warren-<version>.dmg`, and both `.sha256` files
    attached, plus the
-   corresponding `CHANGELOG.md` notes and any signing caveat.
+   corresponding `CHANGELOG.md` notes and any signing caveat. Publishing the
+   release also starts the mirror's `Headless Linux` job, which builds the
+   Linux tarball and attaches `warren-headless-linux-amd64.tar.gz` and its
+   `.sha256` to the release. Wait for that job before announcing the release so
+   the Linux download is present, and never re-add the tarball by hand: the
+   workflow uploads it with `--clobber`.
 7. Deploy the onboarding Worker from the same tagged release commit:
 
    ```sh
