@@ -41,7 +41,9 @@ final class WarrenInspectorModel: ObservableObject {
     @Published private(set) var loadError: String?
     @Published private(set) var action: String?
     @Published var actionError: String?
-    @Published var commitMessage = ""
+    /// Stored non-published so typing a commit message does not invalidate the
+    /// entire Inspector (Changes list, branch card, diffs) on every keystroke.
+    var commitMessage = ""
     @Published var expanded: Set<String> = []
     @Published private(set) var diffs: [String: DiffState] = [:]
     @Published var openFile: String?
@@ -145,12 +147,13 @@ final class WarrenInspectorModel: ObservableObject {
 
     // MARK: Commands
 
-    func commit() {
-        let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+    func commit(message rawMessage: String? = nil, onCommitted: (@MainActor () -> Void)? = nil) {
+        let message = (rawMessage ?? commitMessage).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty, action == nil else { return }
         run("commit") { client in
             _ = try await client.gitCommit(workspaceID: self.workspaceID, message: message)
             self.commitMessage = ""
+            onCommitted?()
         }
     }
 
@@ -229,12 +232,22 @@ struct WarrenInspectorSurface: View {
             // answer, so a steady poll costs one small message.
             while !Task.isCancelled {
                 await inspector.refresh()
-                activity.changeCount = inspector.changeCount
+                if activity.changeCount != inspector.changeCount {
+                    activity.changeCount = inspector.changeCount
+                }
                 try? await Task.sleep(for: .seconds(3))
             }
         }
-        .onAppear { activity.changeCount = inspector.changeCount }
-        .onChange(of: inspector.changeCount) { activity.changeCount = $0 }
+        .onAppear {
+            if activity.changeCount != inspector.changeCount {
+                activity.changeCount = inspector.changeCount
+            }
+        }
+        .onChange(of: inspector.changeCount) { next in
+            if activity.changeCount != next {
+                activity.changeCount = next
+            }
+        }
     }
 }
 
@@ -624,12 +637,18 @@ private struct WarrenInspectorCommitBox: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var focused: Bool
+    @State private var draft = ""
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        let canCommit = !inspector.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && inspector.action == nil
+        let canCommit = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && inspector.action == nil
+        let submit = {
+            inspector.commit(message: draft) {
+                draft = ""
+            }
+        }
         VStack(alignment: .leading, spacing: 0) {
-            TextField("Commit message", text: $inspector.commitMessage, axis: .vertical)
+            TextField("Commit message", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(WarrenTypography.dialogInput)
                 .lineLimit(1...5)
@@ -637,14 +656,14 @@ private struct WarrenInspectorCommitBox: View {
                 .padding(.horizontal, WarrenSpacing.medium)
                 .padding(.top, 10)
                 .padding(.bottom, WarrenSpacing.small)
-                .onSubmit { if canCommit { inspector.commit() } }
+                .onSubmit { if canCommit { submit() } }
             HStack {
                 Text(count == 1 ? "Commits 1 file" : "Commits all \(count) files")
                     .font(WarrenTypography.footnote)
                     .foregroundStyle(tokens.mutedForeground)
                 Spacer(minLength: 0)
                 Button {
-                    inspector.commit()
+                    submit()
                 } label: {
                     HStack(spacing: 4) {
                         if inspector.action == "commit" {
@@ -671,6 +690,9 @@ private struct WarrenInspectorCommitBox: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(focused ? tokens.focusRing.opacity(0.6) : tokens.border, lineWidth: WarrenSpacing.hairline)
         )
+        .onAppear { draft = inspector.commitMessage }
+        .onChange(of: inspector.workspaceID) { _ in draft = inspector.commitMessage }
+        .onChange(of: draft) { inspector.commitMessage = $0 }
     }
 }
 

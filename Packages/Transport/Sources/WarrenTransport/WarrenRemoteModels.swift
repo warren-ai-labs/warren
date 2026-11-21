@@ -2112,16 +2112,16 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         streamID = try values.decode(String.self, forKey: .streamID)
         executionID = try values.decode(String.self, forKey: .executionID)
         type = try values.decode(String.self, forKey: .type)
-        _ = try values.decode(String.self, forKey: .occurredAt)
-        _ = try values.decode(String.self, forKey: .recordedAt)
-        _ = try values.decode(WarrenRemoteAgentEventOrigin.self, forKey: .origin)
-        _ = try values.decode([String: WarrenRemoteJSONValue].self, forKey: .payload)
+        let decodedOccurredAt = try values.decode(String.self, forKey: .occurredAt)
+        let decodedRecordedAt = try values.decode(String.self, forKey: .recordedAt)
+        let decodedOrigin = try values.decode(WarrenRemoteAgentEventOrigin.self, forKey: .origin)
+        let decodedPayload = try values.decode([String: WarrenRemoteJSONValue].self, forKey: .payload)
         guard sequence > 0, !eventID.isEmpty, streamID?.isEmpty == false, executionID?.isEmpty == false else {
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid canonical event identity"))
         }
         id = eventID
-        origin = try values.decode(WarrenRemoteAgentEventOrigin.self, forKey: .origin)
-        provider = origin?.provider ?? ""
+        origin = decodedOrigin
+        provider = decodedOrigin.provider ?? ""
         role = nil
         content = nil
         contentDelta = false
@@ -2138,12 +2138,12 @@ public struct WarrenRemoteAgentEvent: Codable, Equatable, Hashable, Sendable, Id
         durationMs = nil
         sidechain = false
         timestamp = nil
-        occurredAt = try values.decode(String.self, forKey: .occurredAt)
-        recordedAt = try values.decode(String.self, forKey: .recordedAt)
+        occurredAt = decodedOccurredAt
+        recordedAt = decodedRecordedAt
         causedBy = try values.decodeIfPresent(String.self, forKey: .causedBy)
         turnID = try values.decodeIfPresent(String.self, forKey: .turnID)
         turn = turnID.flatMap(UInt64.init)
-        payload = try values.decode([String: WarrenRemoteJSONValue].self, forKey: .payload)
+        payload = decodedPayload
     }
 
     public func encode(to encoder: Encoder) throws {

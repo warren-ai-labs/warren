@@ -392,10 +392,14 @@ func TestAuthenticationAndHostOfflineContracts(t *testing.T) {
 		"favicon-16.png",
 		"favicon-32.png",
 		"icon.svg",
+		"preset-antigravity.svg",
 		"preset-claude.svg",
 		"preset-codex-white.svg",
 		"preset-codex.svg",
-		"preset-shell.svg",
+		"preset-opencode.svg",
+		"preset-pi.svg",
+		"preset-qoder.svg",
+		"preset-trae.svg",
 	} {
 		if !strings.Contains(page.String(), `/h/`+hostID+`/`+resource) {
 			t.Fatalf("relay web shell did not scope %s to its host route", resource)

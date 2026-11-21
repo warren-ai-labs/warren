@@ -114,6 +114,52 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.43.0",
+        dateISO: "2026-11-21",
+        date: "November 21, 2026",
+        title: "Warren titles sessions with a free hosted model and stops working the hot paths.",
+        summary:
+          "A release that adds a free hosted model for session titles, lets Antigravity sessions take the name agy gave them, and removes the work that made long sessions and large Workspaces slower than they need to be. Settings → AI titles now offers a Provider choice: Cloudflare Free, the hosted Warren title service, or the custom OpenAI-compatible API that used to be the only option. The free provider needs no key and no configuration beyond switching titles on; it sends the first exchange to title.warrenai.xyz and keeps a per-device daily quota, and a Session keeps the title it already has when the quota or the network says no. The Host also reads the name agy stores for its own conversation and prefers it over its own title request, and a shell that already runs agy in a relocated home now becomes an Agent instead of staying a plain terminal. The desktop app, the Host and the web client stop retaining, blocking and invalidating on their hot paths: the terminal no longer records every byte for a snapshot production never reads, split drags commit once instead of per pixel, the git panel and file diffs run their queries in parallel, and the web client keeps its memo boundaries and its diff worker pool. The JSON control protocol remains at 4.0: no method was added or changed, and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Choose the free hosted title provider. Settings → AI titles gains a Provider choice between Cloudflare Free, the hosted Warren title service, and Custom API, the OpenAI-compatible endpoint that was the only option before. The free provider needs no key: the Host writes one random device ID into its settings and sends it only so the service can count that device's daily quota. It sends the first exchange when a Session starts, and recent text when a title is regenerated; conversations and generated titles are never logged or stored, and the service keeps salted hashes with daily counters. Titles stay best effort: a device's 50 a day, an address's 300 a day or the shared pool's 2,500 a day can refuse a request, and the Session then keeps the title it already had rather than waiting on one. Test Connection checks the service is reachable without saving anything.",
+              "Title Antigravity sessions from agy's own name. agy names its conversations and stores the name in conversation_summaries.title, and the Host now reads that row for the bound conversation and prefers it over its own title request, the way a Codex thread name or a Claude ai-title event is already preferred. The summaries database has a live writer, so it is opened read-only with a one second busy timeout, and a conversation agy has not named yet keeps Warren's own title request as its fallback.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Stop the desktop app retaining and re-deriving on its hot paths. The terminal ANSI text and style recorder is now opt-in for TerminalProbe and tests, so a production surface no longer keeps a growing copy of a Session's lifetime output beside Ghostty, or parses the same bytes twice; the synchronized-output scan reads the payload in place instead of copying it to a heap array per frame. Dragging the editor split or a pane divider now holds the ratio locally and commits it once on release, so the layout tracks at frame rate instead of spamming an @AppStorage write or a pane-group RPC and its conflict reload per pixel. External IDE options and their normalized icons are resolved once per install rather than on every Workspace switch, the desktop event store asks SQLite for count, minimum, maximum and contiguity instead of loading every event to find them, and conversation Lead derivation and inline markdown styling are cached per feed revision, with streaming text taking a bounded path.",
+              "Bound and parallelize the Host's hot paths. The git panel runs its independent reads in parallel and releases the mutation lock as soon as fetch finishes instead of holding it through status, log, branch and pull-request lookups; git status and file diffs run their git reads concurrently and skip numstat for a side that has no changes; the output ring is a fixed circular buffer with append and byte accounting that no longer rescans or shifts frames; the in-memory canonical event cache keeps the newest 2,000 events plus every interaction.* event; usage queries take a read lock and skip the attribution resolver for an event that carries no usage; and on macOS one lsof call resolves every process's working directory instead of walking the worktree and then one subprocess per pid. The program-status scanner reuses its buffer while still refusing to grow on a malformed sequence.",
+              "Keep the web client's memo boundaries and its worker pool. Sidebar, TopBar and the new-session callback are stable, so terminal output and Agent batches stop re-rendering navigation and the Agent toggle; the diff worker pool stays mounted while a diff loads or fails instead of being torn down and rebuilt; momentum scrolling is frame-rate independent and measures the row height once per gesture; and the keyboard inset now adjusts when the keyboard shrinks as well as when it grows.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Turn a shell running agy in a relocated home into an Agent. A Session created as shell can still hold an Agent when the CLI is started inside it, but the Host only learned engine homes it had already seen, so a --gemini_dir it had not met kept the Session a plain terminal. The Host now reads the engine home from the running process, installs its bind hook there, and resolves the transcript from the binding's own home rather than only from ~/.gemini.",
+              "Split a streaming answer that contains code. Streaming markdown stopped splitting at the first < or link definition anywhere in the text, so an answer with an HTML, JSX, XML or C++ snippet inside a fenced block fell back to one block and re-rendered the whole answer on every token. The check now applies only outside a fence.",
+              "Leave browser find alone in Agent and diff views. A ⌘F or Ctrl+F while the Agent conversation or a file diff was showing now opens the browser's own find, instead of swallowing the shortcut for terminal search.",
+              "Precache the Agent markdown module. The service worker's shell list was missing assets/agent-markdown.js, so an offline launch could miss the module the conversation needs.",
+              "Recompute a message's overflow flag when its fold changes. The flag was only recomputed by a resize observer, so a long prompt that was expanded or collapsed could keep its old fade and scroll state.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state. The provider rides on the existing settings read and update and on settings.testOpenAI, as a new titleProvider parameter; a Host that predates this release ignores that parameter, keeps using the custom endpoint, and reports no provider, so a client keeps the previous AI-titles page.",
+              "Two optional keys are new in the Host's settings: titleProvider and titleDeviceID. An existing Host writes neither until the provider is chosen or the free provider is first used, and an empty provider keeps the custom OpenAI endpoint for a Host that already had one. Nothing persisted changes shape.",
+              "A title request never blocks a Session, and the free provider cannot hold one up: a rate limit, an exhausted quota or an unreachable service leaves the existing title in place, exactly as an unreachable custom endpoint did.",
+              "The hosted title service is deployed on its own from TitleService/ (a Cloudflare Worker with a D1 quota database) and is not packaged into Warren.app; the app knows only the endpoint.",
+              "The Linux build no longer uploads a workflow artifact on every push. A published release attaches warren-headless-linux-amd64.tar.gz to the GitHub Release, the job can be re-run for a tag without republishing, and its checksum file names the tarball instead of the runner's absolute path.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.42.1",
         dateISO: "2026-11-19",
         date: "November 19, 2026",
@@ -2243,6 +2289,52 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.43.0",
+        dateISO: "2026-11-21",
+        date: "2026 年 11 月 21 日",
+        title: "Warren 用免费的托管模型给 Session 起名，并让热路径不再白干活。",
+        summary:
+          "这个版本给 Session 标题加了一个免费的托管模型，让 Antigravity 的 Session 用 agy 自己起的名字，并去掉了让长 Session 和大 Workspace 变慢的那些活。设置 → AI titles 现在多了一个 Provider 选择：Cloudflare Free、托管的 Warren 标题服务，或者原先唯一可选的、自定义的 OpenAI 兼容 API。免费的那个不需要 key，除了打开自动标题以外不需要任何配置；它把第一轮对话发给 title.warrenai.xyz，并按设备记每日额度，额度或网络拒绝的时候 Session 保留它已有的标题。Host 还会读 agy 为自己这段对话存下的名字，并优先于它自己的起名请求；一个已经在别的 home 里跑着 agy 的 shell，现在会变成 Agent，而不是一直当普通终端。Desktop 应用、Host 和 Web 客户端都不再在热路径上留存、阻塞和反复失效：终端不再为一份生产环境从不读取的快照记录每一个字节，拖动分隔条只在松手时提交一次而不是每像素一次，git 面板和文件 diff 的查询并行执行，Web 客户端保住它的 memo 边界和 diff worker 池。JSON 控制协议仍为 4.0：没有新增或改动任何方法，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "选择免费的托管标题 provider。设置 → AI titles 现在有 Provider 选择：Cloudflare Free（托管的 Warren 标题服务）与 Custom API（原先唯一可选的 OpenAI 兼容端点）。免费的这个不需要 key：Host 往自己的设置里写一个随机的设备 ID，发出去只为让服务统计这台设备的每日额度。Session 启动时它只发第一轮对话，重新生成标题时只发最近的文本；对话与生成的标题从不被记录或存储，服务只保留加盐哈希与每日计数。标题始终是尽力而为：单设备每天 50 次、单地址每天 300 次或共享池每天 2,500 次都可能拒绝请求，这时 Session 保留它已有的标题，而不是等一个标题。Test Connection 只检查服务可达，不保存任何东西。",
+              "用 agy 自己的名字给 Antigravity Session 起名。agy 会给自己的对话起名，并存进 conversation_summaries.title；Host 现在会为绑定的那段对话读这一行，并优先于它自己的起名请求，就像已经优先使用 Codex 的 thread 名或 Claude 的 ai-title 事件一样。那个 summaries 数据库有活跃写入方，所以以只读打开，并带一秒的 busy timeout；agy 还没起名的对话仍然回退到 Warren 自己的起名请求。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "Desktop 应用不再在热路径上留存和反复推导。终端的 ANSI 文本与样式记录器现在是可选项，只给 TerminalProbe 和测试用，于是生产界面不再在 Ghostty 旁边保留一份整个 Session 生命周期的输出副本，也不会把同样的字节解析两次；同步输出扫描直接在原始数据上读，而不是每帧先拷进一个堆数组。拖动编辑器分栏或 pane 分隔条时比例只保存在本地，松手时提交一次，于是布局按帧率跟随，而不是每像素一次 @AppStorage 写入或一次 pane-group RPC 加它的冲突重载。外部 IDE 的选项与归一化图标每次安装只解析一次，而不是每次切换 Workspace 都重来；Desktop 的事件库向 SQLite 问数量、最小值、最大值与连续性，而不是把所有事件读出来再算；conversation 的 Lead 推导与内联 markdown 样式按 feed revision 缓存，流式文本走一条有上界的路径。",
+              "给 Host 的热路径加上限并并行化。git 面板的各个独立读取并行执行，fetch 一结束就释放 mutation 锁，而不是一直持有到 status、log、branch 与 PR 查询结束；git status 与文件 diff 的 git 读取并发执行，某一侧没有改动时跳过 numstat；输出环改成固定大小的环形缓冲，追加与字节统计都不再重扫或搬移帧；内存里的 canonical 事件缓存只保留最新 2,000 条加上所有 interaction.* 事件；用量查询改用读锁，并在事件不带用量时跳过归因解析；macOS 上一次 lsof 就解析出所有进程的工作目录，而不是先遍历 worktree 再为每个 pid 起一个子进程。程序状态扫描器复用缓冲区，但仍然不会让畸形序列把它撑大。",
+              "保住 Web 客户端的 memo 边界与 worker 池。Sidebar、TopBar 与新建 Session 的回调现在是稳定的，于是终端输出与 Agent 批次不再重渲染导航和 Agent 开关；diff worker 池在 diff 加载或出错期间保持挂载，而不是被拆掉再重建；惯性滚动与帧率无关，每次手势只量一次行高；键盘 inset 在键盘变小的时候也会调整，而不只是变大时。",
+            ],
+          },
+          {
+            title: "修正",
+            items: [
+              "把在别的 home 里跑着 agy 的 shell 变成 Agent。以 shell 创建的 Session 在 CLI 从里面启动后仍然可以持有一个 Agent，但 Host 只认识它已经见过的 engine home，于是没见过的 --gemini_dir 会让这个 Session 一直当普通终端。Host 现在从正在运行的进程读出 engine home，在那里装好自己的 bind hook，并且从 binding 自己的 home 解析 transcript，而不只是从 ~/.gemini。",
+              "内容里带代码的流式回答也能正确分段。流式 markdown 原先一遇到文本里任意位置的 < 或链接定义就停止分段，于是围栏代码块里带 HTML、JSX、XML 或 C++ 片段的回答会退回成一个大块，每个 token 都把整段回答重渲染一遍。这个判断现在只在围栏之外生效。",
+              "在 Agent 视图与 diff 视图里把浏览器的查找留给浏览器。Agent 对话或文件 diff 显示时按下 ⌘F 或 Ctrl+F，现在打开浏览器自己的查找，而不是被终端查找抢走。",
+              "预缓存 Agent markdown 模块。service worker 的 shell 列表里漏了 assets/agent-markdown.js，于是离线启动时可能缺掉对话需要的这个模块。",
+              "折叠状态变化时重新计算消息的溢出标记。这个标记原先只由 resize observer 重算，于是一条展开或收起过的长 prompt 可能保留旧的渐变和滚动状态。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，没有新增或改动任何方法，本版本不迁移任何状态。provider 走的是已有的设置读取与更新，以及 settings.testOpenAI 的一个新参数 titleProvider；早于本版本的 Host 会忽略这个参数，继续用自定义端点，也不上报 provider，于是客户端仍然显示原来的 AI titles 页面。",
+              "Host 设置里多了两个可选键：titleProvider 与 titleDeviceID。已有的 Host 在选择 provider 或第一次使用免费 provider 之前都不会写入它们；空的 provider 对已经有自定义 OpenAI 端点的 Host 保持原来的行为。没有任何持久化的形状改变。",
+              "起名请求从不阻塞 Session，免费的 provider 也不会拖住它：触发限流、额度用尽或服务不可达时，已有的标题原样保留，和自定义端点不可达时完全一样。",
+              "托管的标题服务由 TitleService/ 独立部署（一个带 D1 额度库的 Cloudflare Worker），不会打进 Warren.app；应用只知道它的端点。",
+              "Linux 构建不再在每次 push 时上传 workflow artifact。发布后的 Release 会附上 warren-headless-linux-amd64.tar.gz，这个 job 可以针对某个 tag 重跑而不必重新发布，校验文件里写的是 tarball 的名字，而不是 runner 上的绝对路径。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.42.1",
         dateISO: "2026-11-19",

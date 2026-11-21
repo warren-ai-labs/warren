@@ -37,7 +37,11 @@ func (s *Scanner) Feed(data []byte) ([]Report, int) {
 	for {
 		index := bytes.IndexByte(s.pending, 0x1b)
 		if index < 0 {
-			s.pending = nil
+			if cap(s.pending) <= maxSequenceBytes {
+				s.pending = s.pending[:0]
+			} else {
+				s.pending = nil
+			}
 			return reports, queries
 		}
 		if index > 0 {
@@ -54,6 +58,17 @@ func (s *Scanner) Feed(data []byte) ([]Report, int) {
 		}
 		end, complete := oscEnd(s.pending[2:])
 		if !complete {
+			if end >= 0 {
+				body := s.pending[2:]
+				// An ESC at the final byte may be the first byte of a split ST
+				// (`ESC \`); keep buffering. Any other control byte or non-ST
+				// ESC aborts this OSC so scanning can continue from that byte.
+				if body[end] == 0x1b && end+1 == len(body) {
+					return reports, queries
+				}
+				s.pending = body[end:]
+				continue
+			}
 			if len(s.pending) > maxSequenceBytes {
 				// A malformed or hostile sequence must not grow unbounded.
 				s.pending = nil

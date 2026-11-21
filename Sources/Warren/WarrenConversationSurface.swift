@@ -80,12 +80,34 @@ final class WarrenConversationFeed: ObservableObject {
     /// Folds live batches forward; a batch that reaches back (a page of
     /// history) re-projects from every event held.
     private var projector = WarrenConversation.Projector()
+    /// Unfiltered Lead derivation cached per feed revision so repeated view
+    /// body evaluations and cross-session mark refreshes do not re-parse every
+    /// turn's narration and answer on every streaming token or keystroke.
+    private var cachedRawLead: (revision: Int, value: WarrenLeadConversation)?
 
     init(sessionID: TerminalSessionID) {
         self.sessionID = sessionID
     }
 
     func markLoaded() { loaded = true }
+
+    func lead(isKnown: (String) -> Bool) -> WarrenLeadConversation {
+        let raw: WarrenLeadConversation
+        if let cached = cachedRawLead, cached.revision == revision {
+            raw = cached.value
+        } else {
+            let derived = WarrenLeadConversation.derive(from: conversation)
+            cachedRawLead = (revision: revision, value: derived)
+            raw = derived
+        }
+        let filteredCrew = raw.crew.filter { isKnown($0.sessionID) }
+        return WarrenLeadConversation(
+            isLead: !filteredCrew.isEmpty,
+            crew: filteredCrew,
+            pendingDecision: raw.pendingDecision,
+            pendingChecks: raw.pendingChecks
+        )
+    }
 
     /// Adds a batch from the replica or the live stream. A sequence is an
     /// immutable position, so the first event seen for it wins.
@@ -371,7 +393,7 @@ struct WarrenConversationView: View {
     /// reference the roster does not know, which is the RFC's "shown as
     /// written" rule.
     private var lead: WarrenLeadConversation {
-        WarrenLeadConversation.derive(from: conversation) { actions.leadSession($0) != nil }
+        feed.lead { actions.leadSession($0) != nil }
     }
 
     private var pendingLeadDecision: WarrenLeadConversation.PendingDecision? {
@@ -1459,7 +1481,7 @@ private struct WarrenConversationPromptView: View {
                     ZStack(alignment: .bottomLeading) {
                         WarrenConversationMarkdown(text: prompt, style: .message, streaming: false)
                             .frame(maxHeight: folds && !expanded ? ConversationLayout.foldedMaxHeight : nil, alignment: .top)
-                            .padding(.bottom, folds && !expanded ? 24 : 0)
+                            .padding(.bottom, folds ? 24 : 0)
                             .clipped()
                         if folds && !expanded {
                             LinearGradient(
@@ -2084,7 +2106,9 @@ struct WarrenConversationMarkdown: View {
     private var palette: WarrenConversationPalette { WarrenConversationPalette.resolved(for: colorScheme) }
 
     var body: some View {
-        let blocks = WarrenMarkdownCache.shared.blocks(for: text)
+        let blocks = streaming
+            ? WarrenMarkdownCache.shared.streamingBlocks(for: text)
+            : WarrenMarkdownCache.shared.blocks(for: text)
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 blockView(block, tokens: palette, isLast: index == blocks.count - 1)
@@ -2269,8 +2293,8 @@ struct WarrenConversationMarkdown: View {
     /// appearance the palette resolves from.
     private func styledInline(_ value: String, cacheable: Bool) -> AttributedString? {
         let key = "\(style == .answer ? "a" : "m")\(colorScheme == .light ? "l" : "d")|\(value)"
-        if let cached = WarrenConversationInlineCache.shared.value(for: key) { return cached }
-        let source = WarrenMarkdownCache.shared.preservedLineBreaks(for: value)
+        if cacheable, let cached = WarrenConversationInlineCache.shared.value(for: key) { return cached }
+        let source = WarrenMarkdownCache.shared.preservedLineBreaks(for: value, cacheable: cacheable)
         let codeFont = Font.system(size: 13, design: .monospaced)
         let codeBackground = style == .message ? palette.ink.opacity(0.07) : palette.bubble
         guard var attributed = try? AttributedString(
@@ -2402,10 +2426,11 @@ private struct WarrenConversationTable: View {
     private var palette: WarrenConversationPalette { WarrenConversationPalette.resolved(for: colorScheme) }
 
     var body: some View {
+        let compact = compactColumns
         Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
             GridRow {
                 ForEach(Array(table.headers.enumerated()), id: \.offset) { column, header in
-                    cell(header, column: column)
+                    cell(header, column: column, compact: compact.contains(column))
                         .font(WarrenTypography.captionEmphasis)
                         .foregroundStyle(palette.ink3)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
@@ -2416,7 +2441,7 @@ private struct WarrenConversationTable: View {
                     .gridCellUnsizedAxes(.horizontal)
                 GridRow {
                     ForEach(Array(row.enumerated()), id: \.offset) { column, value in
-                        cell(value, column: column).font(WarrenTypography.body)
+                        cell(value, column: column, compact: compact.contains(column)).font(WarrenTypography.body)
                     }
                 }
             }
@@ -2434,10 +2459,9 @@ private struct WarrenConversationTable: View {
         })
     }
 
-    private func cell(_ value: String, column: Int) -> some View {
+    private func cell(_ value: String, column: Int, compact: Bool) -> some View {
         let alignment = column < table.alignments.count ? table.alignments[column] : .leading
         let frameAlignment: Alignment = alignment == .trailing ? .trailing : alignment == .center ? .center : .leading
-        let compact = compactColumns.contains(column)
         return inline(value)
             .lineSpacing(ConversationLeading.monoSmall)
             .foregroundStyle(palette.ink2)

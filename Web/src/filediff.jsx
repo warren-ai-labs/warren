@@ -29,11 +29,21 @@ const fileOptions = {
   disableFileHeader: true,
 };
 
+const POOL_OPTIONS = {
+  poolSize: 2,
+  workerFactory: () => new PierreDiffWorker(),
+};
+
+const HIGHLIGHTER_OPTIONS = {
+  langs: DIFF_LANGUAGES,
+  theme: DIFF_THEME,
+};
+
 function DiffSurface({ children }) {
   return (
     <WorkerPoolContextProvider
-      poolOptions={{ poolSize: 2, workerFactory: () => new PierreDiffWorker() }}
-      highlighterOptions={{ langs: DIFF_LANGUAGES, theme: DIFF_THEME }}
+      poolOptions={POOL_OPTIONS}
+      highlighterOptions={HIGHLIGHTER_OPTIONS}
     >
       {children}
     </WorkerPoolContextProvider>
@@ -56,6 +66,7 @@ export const FileDiffView = memo(function FileDiffView({
   onDiffStyleChange,
 }) {
   const options = useMemo(() => diffOptions(diffStyle), [diffStyle]);
+  const fileObject = useMemo(() => ({ name: path, contents: content }), [path, content]);
 
   return (
     <section className="file-diff-view" aria-label="File diff">
@@ -71,14 +82,14 @@ export const FileDiffView = memo(function FileDiffView({
           </button>
         </div>
       </header>
-      {loading ? (
-        <p className="git-empty file-diff-empty">Loading diff…</p>
-      ) : error ? (
-        <p className="git-error file-diff-empty">{error}</p>
-      ) : (
-        <>
-          {notice && <p className="git-notice file-diff-notice" role="status">{notice}</p>}
-          <DiffSurface>
+      <DiffSurface>
+        {loading ? (
+          <p className="git-empty file-diff-empty">Loading diff…</p>
+        ) : error ? (
+          <p className="git-error file-diff-empty">{error}</p>
+        ) : (
+          <>
+            {notice && <p className="git-notice file-diff-notice" role="status">{notice}</p>}
             <div className="file-diff-tabs" role="tablist" aria-label="File diff view">
               <button
                 type="button"
@@ -126,13 +137,13 @@ export const FileDiffView = memo(function FileDiffView({
                 </>
               ) : (
                 <Virtualizer className="file-diff-pane-scroll">
-                  <File file={{ name: path, contents: content }} options={fileOptions} />
+                  <File file={fileObject} options={fileOptions} />
                 </Virtualizer>
               )}
             </div>
-          </DiffSurface>
-        </>
-      )}
+          </>
+        )}
+      </DiffSurface>
     </section>
   );
 });

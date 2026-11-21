@@ -960,6 +960,10 @@ func (s *Service) ensureAgentWithRegistry(ctx context.Context, session api.Sessi
 	if registry == nil {
 		return nil, nil
 	}
+	// A shell may already be running an engine in a home the daemon has not
+	// seen. Learn it here, before the binding lookup decides this is still a
+	// plain shell, so the engine's next invocation binds.
+	s.learnShellAgentHome(session, state)
 	if strings.TrimSpace(session.AgentExecutionID) == "" {
 		session.AgentExecutionID = s.ensureAgentExecutionID(state, session.ID, false)
 	}
@@ -1241,8 +1245,7 @@ func (s *Service) bumpAgentRosterRevision() {
 	}
 	base := uint64(1)
 	if s.Store != nil {
-		_, revision := s.Store.SnapshotVersion()
-		base = revision + 1
+		base = s.Store.Revision() + 1
 	}
 	for {
 		current := s.agentRosterRevision.Load()

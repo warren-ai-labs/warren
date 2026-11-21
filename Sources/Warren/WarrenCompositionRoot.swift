@@ -321,6 +321,7 @@ struct WarrenCompositionRoot: View {
             openAIBaseURL: remoteModel.openAIBaseURL,
             openAIModel: remoteModel.openAIModel,
             openAITitleEnabled: remoteModel.openAITitleEnabled,
+            titleProvider: remoteModel.titleProvider,
             onSetOpenAISetting: { key, value in
                 remoteModel.setOpenAISetting(key, value)
             },
@@ -330,6 +331,9 @@ struct WarrenCompositionRoot: View {
                     model: model,
                     apiKey: apiKey
                 )
+            },
+            onTestCloudflareTitle: {
+                try await remoteModel.testCloudflareTitle()
             },
             onSetProjectSetupScript: { projectID, script in
                 remoteModel.setProjectSetupScript(projectID, script: script)

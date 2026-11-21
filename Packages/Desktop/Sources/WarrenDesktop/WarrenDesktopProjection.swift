@@ -1139,7 +1139,9 @@ public struct WarrenDesktopProjection: Sendable, Hashable {
                 turnStartedAt: turnStartedAt,
                 subagents: subagents,
                 endReason: existing.endReason,
-                stoppedAction: existing.stoppedAction
+                stoppedAction: existing.stoppedAction,
+                isLead: existing.isLead,
+                leadNeedsAttention: existing.leadNeedsAttention
             )
         }
     }

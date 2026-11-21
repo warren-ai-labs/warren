@@ -415,11 +415,38 @@ func mergeStructuredSource(primary, nested map[string]any) map[string]any {
 	return merged
 }
 
+type structuredEventProbe struct {
+	Type       string          `json:"type"`
+	EventType  string          `json:"eventType"`
+	CustomType string          `json:"customType"`
+	Kind       string          `json:"kind"`
+	Payload    json.RawMessage `json:"payload"`
+	Data       json.RawMessage `json:"data"`
+	Event      json.RawMessage `json:"event"`
+}
+
 // projectStructuredAgentEventWithLimit turns provider-native structured
 // records into the small, provider-neutral payload understood by Agent View.
 func projectStructuredAgentEventWithLimit(provider string, fallbackType string, raw json.RawMessage, timestamp time.Time, contentLimit int) *api.AgentEvent {
+	if len(raw) == 0 {
+		return nil
+	}
+	// Fast path: probe only top-level discriminator and wrapper keys without
+	// allocating an untyped map[string]any over large ordinary message/tool lines.
+	var probe structuredEventProbe
+	if json.Unmarshal(raw, &probe) != nil {
+		return nil
+	}
+	if len(probe.Payload) == 0 && len(probe.Data) == 0 && len(probe.Event) == 0 &&
+		structuredAgentEventType(probe.Type) == "" &&
+		structuredAgentEventType(probe.EventType) == "" &&
+		structuredAgentEventType(probe.CustomType) == "" &&
+		structuredAgentEventType(probe.Kind) == "" &&
+		structuredAgentEventType(fallbackType) == "" {
+		return nil
+	}
 	var object map[string]any
-	if len(raw) == 0 || json.Unmarshal(raw, &object) != nil {
+	if json.Unmarshal(raw, &object) != nil {
 		return nil
 	}
 	outerType := firstStringValue(object["type"], object["eventType"], object["customType"], fallbackType)

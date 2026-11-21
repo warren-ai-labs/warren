@@ -33,6 +33,9 @@ type Ring struct {
 	MaxBytes     int
 	Epoch        uint64
 	frames       []Frame
+	head         int
+	count        int
+	totalBytes   int
 	nextSequence uint64
 }
 
@@ -50,17 +53,26 @@ func NewRing(epoch uint64, capacity, maxBytes int, nextSequence uint64) *Ring {
 // not an attach position: an anchor inside this interval still cannot be served
 // from the ring.
 func (r *Ring) Lower() uint64 {
-	if len(r.frames) == 0 {
+	if r.count == 0 {
 		return r.nextSequence
 	}
-	return r.frames[0].Sequence
+	return r.frames[r.head].Sequence
 }
 
 // Upper is the sequence an attach pairs with its captured terminal state.
 func (r *Ring) Upper() uint64 { return r.nextSequence }
 
 func (r *Ring) Frames() []Frame {
-	return append([]Frame(nil), r.frames...)
+	if r.count == 0 {
+		return nil
+	}
+	out := make([]Frame, r.count)
+	first := min(r.count, len(r.frames)-r.head)
+	copy(out, r.frames[r.head:r.head+first])
+	if first < r.count {
+		copy(out[first:], r.frames[:r.count-first])
+	}
+	return out
 }
 
 // Append records one frame, evicting the oldest frames to keep both the frame
@@ -79,43 +91,49 @@ func (r *Ring) Append(sessionID string, payload []byte) (Frame, error) {
 		Sequence:  sequence,
 		Payload:   append([]byte(nil), payload...),
 	}
-	// Evict before append so a full ring reuses its backing storage instead of
-	// growing then allocating a replacement slice for every output frame.
-	if len(r.frames) >= r.Capacity {
-		r.discardOldest(len(r.frames) - r.Capacity + 1)
+	if len(r.frames) < r.Capacity {
+		r.frames = make([]Frame, r.Capacity)
 	}
-	r.frames = append(r.frames, frame)
+	if r.count >= r.Capacity {
+		r.discardOldest(r.count - r.Capacity + 1)
+	}
+	tail := (r.head + r.count) % r.Capacity
+	r.frames[tail] = frame
+	r.count++
+	r.totalBytes += len(frame.Payload)
 	r.nextSequence = sequence + uint64(len(payload))
 
-	totalBytes := 0
-	for _, value := range r.frames {
-		totalBytes += len(value.Payload)
+	for r.totalBytes > r.MaxBytes && r.count > 0 {
+		r.discardOldest(1)
 	}
-	discard := 0
-	for totalBytes > r.MaxBytes && discard < len(r.frames) {
-		totalBytes -= len(r.frames[discard].Payload)
-		discard++
-	}
-	r.discardOldest(discard)
 	return frame, nil
 }
 
-func (r *Ring) discardOldest(count int) {
-	if count <= 0 || len(r.frames) == 0 {
+func (r *Ring) discardOldest(n int) {
+	if n <= 0 || r.count == 0 {
 		return
 	}
-	if count >= len(r.frames) {
+	if n >= r.count {
 		clear(r.frames)
-		r.frames = r.frames[:0]
+		r.head = 0
+		r.count = 0
+		r.totalBytes = 0
 		return
 	}
-	remaining := copy(r.frames, r.frames[count:])
-	clear(r.frames[remaining:])
-	r.frames = r.frames[:remaining]
+	for range n {
+		r.totalBytes -= len(r.frames[r.head].Payload)
+		r.frames[r.head] = Frame{}
+		r.head = (r.head + 1) % len(r.frames)
+	}
+	r.count -= n
 }
 
 func (r *Ring) Reset(epoch, nextSequence uint64) {
 	r.Epoch = epoch
+	clear(r.frames)
 	r.frames = nil
+	r.head = 0
+	r.count = 0
+	r.totalBytes = 0
 	r.nextSequence = nextSequence
 }

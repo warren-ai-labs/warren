@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const maxFileViewBytes = 16 * 1024 * 1024
@@ -32,13 +33,30 @@ func Show(ctx context.Context, dir, path string, staged bool, commit string) (Fi
 		if err != nil {
 			return FileView{}, err
 		}
-		content, contentTruncated, err := showContent(ctx, dir, resolved+":"+path)
-		if err != nil {
-			return FileView{}, err
+		var (
+			content          string
+			contentTruncated bool
+			contentErr       error
+			diff             string
+			diffTruncated    bool
+			diffErr          error
+		)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			content, contentTruncated, contentErr = showContent(ctx, dir, resolved+":"+path)
+		}()
+		go func() {
+			defer wg.Done()
+			diff, diffTruncated, diffErr = runTruncated(ctx, dir, maxFileViewBytes, "show", "--format=", "--no-ext-diff", "--end-of-options", resolved, "--", path)
+		}()
+		wg.Wait()
+		if contentErr != nil {
+			return FileView{}, contentErr
 		}
-		diff, diffTruncated, err := runTruncated(ctx, dir, maxFileViewBytes, "show", "--format=", "--no-ext-diff", "--end-of-options", resolved, "--", path)
-		if err != nil {
-			return FileView{}, err
+		if diffErr != nil {
+			return FileView{}, diffErr
 		}
 		return FileView{
 			Content: content, Diff: completeTextPrefix(diff, diffTruncated),
@@ -46,26 +64,60 @@ func Show(ctx context.Context, dir, path string, staged bool, commit string) (Fi
 		}, nil
 	}
 	if staged {
-		content, contentTruncated, err := showContent(ctx, dir, ":"+path)
-		if err != nil {
-			return FileView{}, err
+		var (
+			content          string
+			contentTruncated bool
+			contentErr       error
+			diff             string
+			diffTruncated    bool
+			diffErr          error
+		)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			content, contentTruncated, contentErr = showContent(ctx, dir, ":"+path)
+		}()
+		go func() {
+			defer wg.Done()
+			diff, diffTruncated, diffErr = runTruncated(ctx, dir, maxFileViewBytes, "diff", "--cached", "--no-ext-diff", "--", path)
+		}()
+		wg.Wait()
+		if contentErr != nil {
+			return FileView{}, contentErr
 		}
-		diff, diffTruncated, err := runTruncated(ctx, dir, maxFileViewBytes, "diff", "--cached", "--no-ext-diff", "--", path)
-		if err != nil {
-			return FileView{}, err
+		if diffErr != nil {
+			return FileView{}, diffErr
 		}
 		return FileView{
 			Content: content, Diff: completeTextPrefix(diff, diffTruncated),
 			ContentTruncated: contentTruncated, DiffTruncated: diffTruncated,
 		}, nil
 	}
-	content, contentTruncated, err := worktreeContent(dir, path)
-	if err != nil {
-		return FileView{}, err
+	var (
+		content          string
+		contentTruncated bool
+		contentErr       error
+		diff             string
+		diffTruncated    bool
+		diffErr          error
+	)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		content, contentTruncated, contentErr = worktreeContent(dir, path)
+	}()
+	go func() {
+		defer wg.Done()
+		diff, diffTruncated, diffErr = unstagedDiff(ctx, dir, path)
+	}()
+	wg.Wait()
+	if contentErr != nil {
+		return FileView{}, contentErr
 	}
-	diff, diffTruncated, err := unstagedDiff(ctx, dir, path)
-	if err != nil {
-		return FileView{}, err
+	if diffErr != nil {
+		return FileView{}, diffErr
 	}
 	return FileView{
 		Content: content, Diff: completeTextPrefix(diff, diffTruncated),

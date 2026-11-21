@@ -67,8 +67,8 @@ type UsageRebuildStamp struct {
 // LastUsageRebuild reports the most recent completed rebuild, or false when the
 // projection has only ever been accumulated live.
 func (s *AgentEventStore) LastUsageRebuild(ctx context.Context) (UsageRebuildStamp, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.db == nil {
 		return UsageRebuildStamp{}, false, nil
 	}
@@ -360,6 +360,11 @@ func (s *AgentEventStore) accumulateUsage(
 	if resolver == nil {
 		return nil
 	}
+	// Check whether the event carries usage before calling the attribution
+	// resolver, which snapshots durable state.
+	if usageFromPayload(event.Payload) == nil {
+		return nil
+	}
 	_, err := s.accumulateUsageWithAttribution(ctx, tx, event, resolver(streamID))
 	return err
 }
@@ -553,8 +558,8 @@ func usageDayRangeClause(fromDay, toDay string) (string, []any) {
 // QueryUsageDaily returns per-day rows for the inclusive local-day range,
 // ascending by day.
 func (s *AgentEventStore) QueryUsageDaily(ctx context.Context, fromDay, toDay string) ([]UsageDailyRow, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.db == nil {
 		return nil, nil
 	}
@@ -594,8 +599,8 @@ func (s *AgentEventStore) QueryUsageDaily(ctx context.Context, fromDay, toDay st
 // rows in the inclusive range, or "" when none. It lets the Service choose the
 // default detail day without loading every bucket in the range.
 func (s *AgentEventStore) LatestUsageIntervalDay(ctx context.Context, fromDay, toDay string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.db == nil {
 		return "", nil
 	}
@@ -611,8 +616,8 @@ func (s *AgentEventStore) LatestUsageIntervalDay(ctx context.Context, fromDay, t
 // QueryUsageIntervals returns the canonical 5-minute rows for an inclusive
 // local-day range, ordered by day and bucket.
 func (s *AgentEventStore) QueryUsageIntervals(ctx context.Context, fromDay, toDay string) ([]UsageIntervalRow, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.db == nil {
 		return nil, nil
 	}

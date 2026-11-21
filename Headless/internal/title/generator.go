@@ -103,15 +103,21 @@ func (input ConversationInput) HasExchange() bool {
 	return user && assistant
 }
 
-// Config contains an OpenAI-compatible chat completions endpoint. The key is
-// intentionally kept inside the Host and is never included in API results.
+// Config contains the title backend configuration. For OpenAI-compatible
+// endpoints, the key is intentionally kept inside the Host and never returned
+// in API results. For the Cloudflare Worker backend, WorkerURL defaults to
+// DefaultWorkerURL and DeviceID identifies the host for daily rate limiting.
 type Config struct {
-	BaseURL string
-	Model   string
-	APIKey  string
+	Provider  string
+	BaseURL   string
+	Model     string
+	APIKey    string
+	WorkerURL string
+	DeviceID  string
+	App       string
 }
 
-// Generator calls an OpenAI-compatible endpoint and validates its title-only
+// Generator calls the configured title backend and validates its title-only
 // response before returning it.
 type Generator struct {
 	Config Config
@@ -122,6 +128,9 @@ type Generator struct {
 // title is optional and callers can retain the existing session title when an
 // endpoint is unavailable.
 func (g Generator) Generate(ctx context.Context, input Input) (string, error) {
+	if strings.EqualFold(strings.TrimSpace(g.Config.Provider), ProviderCloudflare) {
+		return g.generateWorkerTitle(ctx, buildWorkerInitialRequest(input))
+	}
 	config := g.Config
 	config.BaseURL = strings.TrimSpace(config.BaseURL)
 	config.APIKey = strings.TrimSpace(config.APIKey)
@@ -179,6 +188,9 @@ func (g Generator) Generate(ctx context.Context, input Input) (string, error) {
 func (g Generator) GenerateConversation(ctx context.Context, input ConversationInput) (string, error) {
 	if !input.HasExchange() {
 		return "", errors.New("conversation has no user and assistant text yet")
+	}
+	if strings.EqualFold(strings.TrimSpace(g.Config.Provider), ProviderCloudflare) {
+		return g.generateWorkerTitle(ctx, buildWorkerConversationRequest(input))
 	}
 	config := g.Config
 	config.BaseURL = strings.TrimSpace(config.BaseURL)

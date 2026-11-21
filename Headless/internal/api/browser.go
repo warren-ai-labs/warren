@@ -159,27 +159,27 @@ type BrowserAction struct {
 
 // The closed action vocabulary. Anything outside this set is rejected.
 const (
-	BrowserActionNavigate  = "navigate"
-	BrowserActionBack      = "back"
-	BrowserActionForward   = "forward"
-	BrowserActionReload    = "reload"
-	BrowserActionClick     = "click"
-	BrowserActionType      = "type"
-	BrowserActionPress     = "press"
-	BrowserActionHover     = "hover"
-	BrowserActionScroll    = "scroll"
-	BrowserActionSelect    = "select"
-	BrowserActionWait      = "wait"
+	BrowserActionNavigate   = "navigate"
+	BrowserActionBack       = "back"
+	BrowserActionForward    = "forward"
+	BrowserActionReload     = "reload"
+	BrowserActionClick      = "click"
+	BrowserActionType       = "type"
+	BrowserActionPress      = "press"
+	BrowserActionHover      = "hover"
+	BrowserActionScroll     = "scroll"
+	BrowserActionSelect     = "select"
+	BrowserActionWait       = "wait"
 	BrowserActionScreenshot = "screenshot"
-	BrowserActionSnapshot  = "snapshot"
-	BrowserActionEvaluate  = "evaluate"
-	BrowserActionTabsList  = "tabs.list"
-	BrowserActionTabsNew   = "tabs.new"
-	BrowserActionTabsClose = "tabs.close"
+	BrowserActionSnapshot   = "snapshot"
+	BrowserActionEvaluate   = "evaluate"
+	BrowserActionTabsList   = "tabs.list"
+	BrowserActionTabsNew    = "tabs.new"
+	BrowserActionTabsClose  = "tabs.close"
 	BrowserActionTabsSelect = "tabs.select"
-	BrowserActionViewport  = "viewport"
-	BrowserActionCookies   = "cookies"
-	BrowserActionConsole   = "console"
+	BrowserActionViewport   = "viewport"
+	BrowserActionCookies    = "cookies"
+	BrowserActionConsole    = "console"
 )
 
 // BrowserActionResult is the outcome of one action.
@@ -204,14 +204,14 @@ type BrowserActionResult struct {
 // re-flatten it to find anything, and because the node count is what a caller
 // needs in order to bound its own context.
 type BrowserDomNode struct {
-	Selector    string  `json:"selector,omitempty"`
-	Tag         string  `json:"tag"`
-	Text        string  `json:"text,omitempty"`
-	Role        string  `json:"role,omitempty"`
-	Interactive bool    `json:"interactive,omitempty"`
-	Enabled     bool    `json:"enabled,omitempty"`
-	Visible     bool    `json:"visible,omitempty"`
-	Checked     *bool   `json:"checked,omitempty"`
+	Selector    string       `json:"selector,omitempty"`
+	Tag         string       `json:"tag"`
+	Text        string       `json:"text,omitempty"`
+	Role        string       `json:"role,omitempty"`
+	Interactive bool         `json:"interactive,omitempty"`
+	Enabled     bool         `json:"enabled,omitempty"`
+	Visible     bool         `json:"visible,omitempty"`
+	Checked     *bool        `json:"checked,omitempty"`
 	Rect        *BrowserRect `json:"rect,omitempty"`
 }
 
@@ -237,12 +237,12 @@ type BrowserConsoleEntry struct {
 // flags are reported so an agent can reason about a session without ever being
 // handed a value it does not need.
 type BrowserCookie struct {
-	Name     string `json:"name"`
-	Value    string `json:"value"`
-	Domain   string `json:"domain,omitempty"`
-	Path     string `json:"path,omitempty"`
+	Name     string  `json:"name"`
+	Value    string  `json:"value"`
+	Domain   string  `json:"domain,omitempty"`
+	Path     string  `json:"path,omitempty"`
 	Expires  float64 `json:"expires,omitempty"`
-	HTTPOnly bool   `json:"httpOnly,omitempty"`
-	Secure   bool   `json:"secure,omitempty"`
-	SameSite string `json:"sameSite,omitempty"`
+	HTTPOnly bool    `json:"httpOnly,omitempty"`
+	Secure   bool    `json:"secure,omitempty"`
+	SameSite string  `json:"sameSite,omitempty"`
 }

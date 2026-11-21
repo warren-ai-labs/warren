@@ -196,6 +196,12 @@ function useOverflowFlag(containerRef, deps) {
     const observer = new ResizeObserver(update);
     observer.observe(node);
     return () => observer.disconnect();
+  }, [containerRef]);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    setOverflowing(node.scrollHeight - node.clientHeight > 1);
     // The caller owns the extra dependencies; they are spread so React sees a
     // stable list length as long as the call site stays fixed.
   }, [containerRef, ...deps]);

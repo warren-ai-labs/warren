@@ -360,6 +360,7 @@ func (s *Service) appendCanonicalEventsLockedWithCheckpoint(sessionID string, en
 			return nil, err
 		}
 		entry.canonicalEvents = append(entry.canonicalEvents, assigned...)
+		entry.canonicalEvents = trimCanonicalEventCache(entry.canonicalEvents, 2000)
 		return assigned, nil
 	}
 	assigned := make([]api.CanonicalAgentEvent, 0, len(events))
@@ -411,6 +412,26 @@ func (s *Service) appendCanonicalEventsLockedWithCheckpoint(sessionID string, en
 		assigned = append(assigned, event)
 	}
 	return assigned, nil
+}
+
+func trimCanonicalEventCache(events []api.CanonicalAgentEvent, maxRecent int) []api.CanonicalAgentEvent {
+	if len(events) <= maxRecent {
+		return events
+	}
+	cutoff := len(events) - maxRecent
+	// Keep all interaction.* events from the evicted prefix so terminal
+	// interaction deduplication and context merging remain complete while
+	// preventing unbounded RAM growth on long-lived sessions backed by SQLite.
+	var retained []api.CanonicalAgentEvent
+	for i := 0; i < cutoff; i++ {
+		if strings.HasPrefix(events[i].Type, "interaction.") {
+			retained = append(retained, events[i])
+		}
+	}
+	trimmed := make([]api.CanonicalAgentEvent, 0, len(retained)+maxRecent)
+	trimmed = append(trimmed, retained...)
+	trimmed = append(trimmed, events[cutoff:]...)
+	return trimmed
 }
 
 func canonicalEventsEquivalent(existing, incoming api.CanonicalAgentEvent) bool {

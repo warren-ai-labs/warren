@@ -2,12 +2,15 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/abcdlsj/warren/Headless/internal/agent"
 	"github.com/abcdlsj/warren/Headless/internal/api"
+	"github.com/abcdlsj/warren/Headless/internal/settings"
 	sessiontitle "github.com/abcdlsj/warren/Headless/internal/title"
 )
 
@@ -38,7 +41,7 @@ const earlyTitleReasoningLimit = 4_000
 func providerSuppliesTitle(provider string) bool {
 	family, _ := splitAgentKey(provider)
 	switch family {
-	case "claude", "codex", "opencode", "qoder":
+	case "claude", "codex", "opencode", "qoder", "antigravity":
 		return true
 	}
 	return false
@@ -52,11 +55,30 @@ func (s *Service) titleAutomatic() bool {
 	return s.Settings.OpenAITitleEnabled
 }
 
-// titleEndpointConfigured reports whether the Host can ask its title endpoint
-// for a name at all: a base URL and a key are stored.
-func (s *Service) titleEndpointConfigured() bool {
+// effectiveTitleProvider returns the configured title backend. An empty value
+// preserves the legacy OpenAI behavior so unconfigured hosts never send data to
+// an external service without opt-in.
+func (s *Service) effectiveTitleProvider() string {
+	switch strings.ToLower(strings.TrimSpace(s.Settings.TitleProvider)) {
+	case settings.TitleProviderCloudflare:
+		return settings.TitleProviderCloudflare
+	default:
+		return settings.TitleProviderOpenAI
+	}
+}
+
+func (s *Service) openAIEndpointConfigured() bool {
 	return strings.TrimSpace(s.Settings.OpenAIBaseURL) != "" &&
 		strings.TrimSpace(s.Settings.OpenAIKey) != ""
+}
+
+// titleEndpointConfigured reports whether the Host can ask its configured title
+// backend for a name at all.
+func (s *Service) titleEndpointConfigured() bool {
+	if s.effectiveTitleProvider() == settings.TitleProviderCloudflare {
+		return true
+	}
+	return s.openAIEndpointConfigured()
 }
 
 // titleGenerationConfigured reports whether the Host's own title request is
@@ -68,12 +90,37 @@ func (s *Service) titleGenerationConfigured() bool {
 	return s.titleAutomatic() && s.titleEndpointConfigured()
 }
 
-func (s *Service) titleConfig() sessiontitle.Config {
-	return sessiontitle.Config{
-		BaseURL: s.Settings.OpenAIBaseURL,
-		Model:   s.Settings.OpenAIModel,
-		APIKey:  s.Settings.OpenAIKey,
+// ensureTitleDeviceID returns the persistent random identifier used by the
+// hosted Cloudflare title service for per-device daily rate limiting.
+func (s *Service) ensureTitleDeviceID() string {
+	if id := strings.TrimSpace(s.Settings.TitleDeviceID); id != "" {
+		return id
 	}
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "warren-fallback-device"
+	}
+	id := "wrn-" + hex.EncodeToString(raw[:])
+	s.Settings.TitleDeviceID = id
+	if s.SettingsPath != "" {
+		_ = settings.Save(s.SettingsPath, s.Settings)
+	}
+	return id
+}
+
+func (s *Service) titleConfig() sessiontitle.Config {
+	provider := s.effectiveTitleProvider()
+	cfg := sessiontitle.Config{
+		Provider: provider,
+		BaseURL:  s.Settings.OpenAIBaseURL,
+		Model:    s.Settings.OpenAIModel,
+		APIKey:   s.Settings.OpenAIKey,
+		App:      "warren",
+	}
+	if provider == settings.TitleProviderCloudflare {
+		cfg.DeviceID = s.ensureTitleDeviceID()
+	}
+	return cfg
 }
 
 // tryStartSessionTitle atomically claims the one automatic naming decision for
@@ -426,9 +473,26 @@ func (s *Service) TestOpenAITitle(ctx context.Context, baseURL, model, apiKey st
 	requestContext, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	_, err := (sessiontitle.Generator{Config: sessiontitle.Config{
-		BaseURL: baseURL,
-		Model:   model,
-		APIKey:  apiKey,
+		Provider: sessiontitle.ProviderOpenAI,
+		BaseURL:  baseURL,
+		Model:    model,
+		APIKey:   apiKey,
+	}}).Generate(requestContext, sessiontitle.Input{
+		User:      "Verify that this coding session title endpoint is reachable.",
+		Assistant: "The endpoint is responding.",
+	})
+	return err
+}
+
+// TestCloudflareTitle verifies reachability of the hosted Cloudflare Workers AI
+// title service using this host's persistent device ID.
+func (s *Service) TestCloudflareTitle(ctx context.Context) error {
+	requestContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_, err := (sessiontitle.Generator{Config: sessiontitle.Config{
+		Provider: sessiontitle.ProviderCloudflare,
+		DeviceID: s.ensureTitleDeviceID(),
+		App:      "warren",
 	}}).Generate(requestContext, sessiontitle.Input{
 		User:      "Verify that this coding session title endpoint is reachable.",
 		Assistant: "The endpoint is responding.",
@@ -550,10 +614,10 @@ func (s *Service) generateSessionTitle(sessionID, generation string, config sess
 }
 
 // tryStartResultSentence starts the one result-sentence request a turn may make.
-// It shares the title request's configuration and best-effort contract: when the
-// endpoint is missing or fails, the sidebar keeps the counts it already folds.
+// It uses the custom OpenAI endpoint only, leaving the hosted Cloudflare free
+// quota dedicated to session titles.
 func (s *Service) tryStartResultSentence(sessionID string) {
-	if !s.titleGenerationConfigured() {
+	if !s.titleAutomatic() || s.effectiveTitleProvider() != settings.TitleProviderOpenAI || !s.openAIEndpointConfigured() {
 		return
 	}
 	s.agentsMu.Lock()

@@ -51,13 +51,15 @@ export function enableTerminalTouchScroll(terminal, host) {
   let velocity = 0;
   let dragging = false;
   let frame = null;
+  let cachedStep = 0;
+  const measureStep = () => {
+    const rows = terminal.element?.querySelector(".xterm-rows");
+    const rowHeight = rows?.clientHeight;
+    if (rowHeight && terminal.rows > 0) return rowHeight / terminal.rows;
+    return terminal.options.fontSize * terminal.options.lineHeight || 16;
+  };
   const accumulator = new PixelScrollAccumulator({
-    getStep: () => {
-      const rows = terminal.element?.querySelector(".xterm-rows");
-      const rowHeight = rows?.clientHeight;
-      if (rowHeight && terminal.rows > 0) return rowHeight / terminal.rows;
-      return terminal.options.fontSize * terminal.options.lineHeight || 16;
-    },
+    getStep: () => cachedStep || (cachedStep = measureStep()),
     onLine: lines => terminal.scrollLines(lines),
   });
 
@@ -75,6 +77,7 @@ export function enableTerminalTouchScroll(terminal, host) {
     lastTime = Date.now();
     velocity = 0;
     dragging = false;
+    cachedStep = measureStep();
     accumulator.reset();
     cancelMomentum();
   };
@@ -101,9 +104,14 @@ export function enableTerminalTouchScroll(terminal, host) {
   const startMomentum = () => {
     if (Math.abs(velocity) < MOMENTUM_START) return;
     let speed = velocity;
-    const step = () => {
-      speed *= MOMENTUM_DECAY;
-      accumulator.add(speed * MOMENTUM_FRAME_MS);
+    let previousTimestamp = null;
+    const step = timestamp => {
+      const dt = previousTimestamp === null
+        ? MOMENTUM_FRAME_MS
+        : Math.min(48, Math.max(1, timestamp - previousTimestamp));
+      previousTimestamp = timestamp;
+      speed *= Math.pow(MOMENTUM_DECAY, dt / MOMENTUM_FRAME_MS);
+      accumulator.add(speed * dt);
       if (Math.abs(speed) > MOMENTUM_MIN) {
         frame = requestAnimationFrame(step);
       } else {

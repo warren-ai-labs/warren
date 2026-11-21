@@ -112,6 +112,7 @@ final class GhosttyAdapterTests: XCTestCase {
             id: TerminalSessionID(),
             attachmentID: TerminalAttachmentID(),
             workingDirectory: "/tmp",
+            observeANSISemantics: true,
             onInput: { _ in },
             onResize: { _, _ in }
         )
@@ -704,7 +705,8 @@ final class GhosttyAdapterTests: XCTestCase {
         let (surface, _, window) = try await makeMountedTerminal(
             recorder: recorder,
             outputRenderBudgetBytes: 4,
-            outputRenderYield: .milliseconds(1)
+            outputRenderYield: .milliseconds(1),
+            observeANSISemantics: true
         )
         defer { window.orderOut(nil) }
 
@@ -1011,6 +1013,7 @@ private func makeMountedTerminal(
     recorder: LockedInputRecorder,
     outputRenderBudgetBytes: Int = 128 * 1024,
     outputRenderYield: Duration = .milliseconds(8),
+    observeANSISemantics: Bool = false,
     suppressFocusLossReporting: Bool = false,
     preMountOutput: Data? = nil
 ) async throws -> (GhosttySurface, AppTerminalView, NSWindow) {
@@ -1020,6 +1023,7 @@ private func makeMountedTerminal(
         workingDirectory: "/tmp",
         outputRenderBudgetBytes: outputRenderBudgetBytes,
         outputRenderYield: outputRenderYield,
+        observeANSISemantics: observeANSISemantics,
         onInput: { recorder.append($0) },
         onResize: { _, _ in }
     )

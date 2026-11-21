@@ -4,6 +4,136 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-11-21
+
+A release that adds a free hosted model for session titles, lets Antigravity
+sessions take the name `agy` gave them, and removes the work that made long
+sessions and large Workspaces slower than they need to be. Settings → AI titles
+now offers a Provider choice: Cloudflare Free, the hosted Warren title service,
+or the custom OpenAI-compatible API that used to be the only option. The free
+provider needs no key and no configuration beyond switching titles on; it sends
+the first exchange to `title.warrenai.xyz` and keeps a per-device daily quota,
+and a Session keeps the title it already has when the quota or the network says
+no. The Host also reads the name `agy` stores for its own conversation and
+prefers it over its own title request, and a shell that already runs `agy` in a
+relocated home now becomes an Agent instead of staying a plain terminal. The
+desktop app, the Host and the web client stop retaining, blocking and
+invalidating on their hot paths: the terminal no longer records every byte for
+a snapshot production never reads, split drags commit once instead of per
+pixel, the git panel and file diffs run their queries in parallel, and the web
+client keeps its memo boundaries and its diff worker pool. The JSON control
+protocol remains at 4.0: no method was added or changed, and this release
+migrates no state.
+
+### Added
+
+- Choose the free hosted title provider. Settings → AI titles gains a Provider
+  choice between Cloudflare Free, the hosted Warren title service, and Custom
+  API, the OpenAI-compatible endpoint that was the only option before. The free
+  provider needs no key: the Host writes one random device ID into its settings
+  and sends it only so the service can count that device's daily quota. It
+  sends the first exchange when a Session starts, and recent text when a title
+  is regenerated; conversations and generated titles are never logged or
+  stored, and the service keeps salted hashes with daily counters. Titles stay
+  best effort: a device's 50 a day, an address's 300 a day or the shared pool's
+  2,500 a day can refuse a request, and the Session then keeps the title it
+  already had rather than waiting on one. Test Connection checks the service is
+  reachable without saving anything.
+- Title Antigravity sessions from `agy`'s own name. `agy` names its
+  conversations and stores the name in `conversation_summaries.title`, and the
+  Host now reads that row for the bound conversation and prefers it over its
+  own title request, the way a Codex thread name or a Claude `ai-title` event is
+  already preferred. The summaries database has a live writer, so it is opened
+  read-only with a one second busy timeout, and a conversation `agy` has not
+  named yet keeps Warren's own title request as its fallback.
+
+### Changed
+
+- Stop the desktop app retaining and re-deriving on its hot paths. The terminal
+  ANSI text and style recorder is now opt-in for `TerminalProbe` and tests, so a
+  production surface no longer keeps a growing copy of a Session's lifetime
+  output beside Ghostty, or parses the same bytes twice; the
+  synchronized-output scan reads the payload in place instead of copying it to
+  a heap array per frame. Dragging the editor split or a pane divider now holds
+  the ratio locally and commits it once on release, so the layout tracks at
+  frame rate instead of spamming an `@AppStorage` write or a pane-group RPC and
+  its conflict reload per pixel. External IDE options and their normalized
+  icons are resolved once per install rather than on every Workspace switch,
+  the desktop event store asks SQLite for count, minimum, maximum and
+  contiguity instead of loading every event to find them, and conversation Lead
+  derivation and inline markdown styling are cached per feed revision, with
+  streaming text taking a bounded path.
+- Bound and parallelize the Host's hot paths. The git panel runs its independent
+  reads in parallel and releases the mutation lock as soon as `fetch` finishes
+  instead of holding it through status, log, branch and pull-request lookups;
+  `git status` and file diffs run their git reads concurrently and skip numstat
+  for a side that has no changes; the output ring is a fixed circular buffer
+  with append and byte accounting that no longer rescans or shifts frames; the
+  in-memory canonical event cache keeps the newest 2,000 events plus every
+  `interaction.*` event; usage queries take a read lock and skip the attribution
+  resolver for an event that carries no usage; and on macOS one `lsof` call
+  resolves every process's working directory instead of walking the worktree
+  and then one subprocess per pid. The program-status scanner reuses its buffer
+  while still refusing to grow on a malformed sequence.
+- Keep the web client's memo boundaries and its worker pool. Sidebar, TopBar and
+  the new-session callback are stable, so terminal output and Agent batches stop
+  re-rendering navigation and the Agent toggle; the diff worker pool stays
+  mounted while a diff loads or fails instead of being torn down and rebuilt;
+  momentum scrolling is frame-rate independent and measures the row height once
+  per gesture; and the keyboard inset now adjusts when the keyboard shrinks as
+  well as when it grows.
+
+### Fixed
+
+- Turn a shell running `agy` in a relocated home into an Agent. A Session
+  created as `shell` can still hold an Agent when the CLI is started inside it,
+  but the Host only learned engine homes it had already seen, so a `--gemini_dir`
+  it had not met kept the Session a plain terminal. The Host now reads the
+  engine home from the running process, installs its bind hook there, and
+  resolves the transcript from the binding's own home rather than only from
+  `~/.gemini`.
+- Split a streaming answer that contains code. Streaming markdown stopped
+  splitting at the first `<` or link definition anywhere in the text, so an
+  answer with an HTML, JSX, XML or C++ snippet inside a fenced block fell back
+  to one block and re-rendered the whole answer on every token. The check now
+  applies only outside a fence.
+- Leave browser find alone in Agent and diff views. A `⌘F` or `Ctrl+F` while the
+  Agent conversation or a file diff was showing now opens the browser's own
+  find, instead of swallowing the shortcut for terminal search.
+- Precache the Agent markdown module. The service worker's shell list was
+  missing `assets/agent-markdown.js`, so an offline launch could miss the module
+  the conversation needs.
+- Recompute a message's overflow flag when its fold changes. The flag was only
+  recomputed by a resize observer, so a long prompt that was expanded or
+  collapsed could keep its old fade and scroll state.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0, no method was added or changed, and
+  this release migrates no state. The provider rides on the existing settings
+  read and update and on `settings.testOpenAI`, as a new `titleProvider`
+  parameter; a Host that predates this release ignores that parameter, keeps
+  using the custom endpoint, and reports no provider, so a client keeps the
+  previous AI-titles page.
+- Two optional keys are new in the Host's settings: `titleProvider` and
+  `titleDeviceID`. An existing Host writes neither until the provider is chosen
+  or the free provider is first used, and an empty provider keeps the custom
+  OpenAI endpoint for a Host that already had one. Nothing persisted changes
+  shape.
+- A title request never blocks a Session, and the free provider cannot hold one
+  up: a rate limit, an exhausted quota or an unreachable service leaves the
+  existing title in place, exactly as an unreachable custom endpoint did.
+- The hosted title service is deployed on its own from `TitleService/` (a
+  Cloudflare Worker with a D1 quota database) and is not packaged into
+  `Warren.app`; the app knows only the endpoint.
+- The Linux build no longer uploads a workflow artifact on every push. A
+  published release attaches `warren-headless-linux-amd64.tar.gz` to the GitHub
+  Release, the job can be re-run for a tag without republishing, and its
+  checksum file names the tarball instead of the runner's absolute path.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.42.1] - 2026-11-19
 
 A Desktop patch that lets a handoff brief be copied instead of delivered, and

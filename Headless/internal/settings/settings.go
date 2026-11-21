@@ -15,6 +15,12 @@ const (
 	RuntimeGhostline = "ghostline"
 )
 
+// TitleProvider values supported for automatic and regenerated session titles.
+const (
+	TitleProviderCloudflare = "cloudflare"
+	TitleProviderOpenAI     = "openai"
+)
+
 // DefaultRuntimeKind is used when neither the settings file nor --runtime
 // selects one.
 const DefaultRuntimeKind = RuntimeGhostline
@@ -56,9 +62,17 @@ type Settings struct {
 	OpenAIBaseURL string `json:"openaiBaseURL,omitempty"`
 	OpenAIModel   string `json:"openaiModel,omitempty"`
 	OpenAIKey     string `json:"openaiKey,omitempty"`
-	// OpenAITitleEnabled adds a title from the endpoint above whenever an agent
-	// has not named its own conversation. Providers that do name one (Codex,
-	// Claude Code, OpenCode, Qoder) are used as-is whether this is on or off.
+	// TitleProvider selects the session title backend: "cloudflare" for the
+	// hosted free Warren Title Service, or "openai" for the custom endpoint
+	// above. Empty keeps the custom OpenAI endpoint when configured.
+	TitleProvider string `json:"titleProvider,omitempty"`
+	// TitleDeviceID is a random per-host identifier sent to the hosted title
+	// service for per-device daily rate limiting.
+	TitleDeviceID string `json:"titleDeviceID,omitempty"`
+	// OpenAITitleEnabled adds a title from the configured title provider
+	// whenever an agent has not named its own conversation. Providers that do
+	// name one (Codex, Claude Code, OpenCode, Qoder) are used as-is whether
+	// this is on or off.
 	OpenAITitleEnabled bool `json:"openaiTitleEnabled"`
 	// PairedClients contains metadata for explicitly paired native clients.
 	// Only a SHA-256 token hash is persisted; bearer tokens are returned once

@@ -629,8 +629,8 @@ struct WarrenDesktopTabBar: View {
     }
 
     private func selectTab(_ tabID: String) {
-        guard pendingTabID == nil else { return }
         guard selectedTabID != tabID else {
+            pendingTabID = nil
             onSelectTab(tabID)
             return
         }

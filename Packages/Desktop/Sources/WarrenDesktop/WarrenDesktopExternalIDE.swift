@@ -176,11 +176,20 @@ final class WarrenDesktopExternalIDEService {
         let customIDEs: [WarrenDesktopCustomIDE]
     }
 
+    private struct ResolvedApp {
+        let id: String
+        let name: String
+        let applicationURL: URL
+        let icon: NSImage?
+    }
+
     let resolveApplicationURL: (String) -> URL?
     let directoryExists: (URL) -> Bool
     let applicationIcon: (URL) -> NSImage?
     let loadCustomIDEs: () -> [WarrenDesktopCustomIDE]
     let launch: Launch
+    private var cachedBuiltInApps: [ResolvedApp]?
+    private var cachedCustomApps: (key: [WarrenDesktopCustomIDE], apps: [ResolvedApp])?
     private var cachedOptions: (key: OptionsCacheKey, options: [WarrenDesktopExternalIDEOption])?
 
     init(
@@ -226,35 +235,61 @@ final class WarrenDesktopExternalIDEService {
 
         let availableWorkspaceURL = workspaceDirectoryExists ? workspaceURL : nil
 
-        var options: [WarrenDesktopExternalIDEOption] = []
-        for ide in WarrenDesktopExternalIDE.supported {
-            guard let applicationURL = resolveApplicationURL(ide.bundleIdentifier) else {
-                continue
+        // Installed macOS applications and their normalized icons do not vary
+        // by workspace, so resolve LaunchServices and AppKit icons once rather
+        // than on every workspace switch.
+        let builtInApps: [ResolvedApp]
+        if let cachedBuiltInApps {
+            builtInApps = cachedBuiltInApps
+        } else {
+            var resolved: [ResolvedApp] = []
+            for ide in WarrenDesktopExternalIDE.supported {
+                guard let applicationURL = resolveApplicationURL(ide.bundleIdentifier) else {
+                    continue
+                }
+                resolved.append(ResolvedApp(
+                    id: ide.id.rawValue,
+                    name: ide.name,
+                    applicationURL: applicationURL,
+                    icon: applicationIcon(applicationURL).map {
+                        WarrenDesktopExternalIDEIcon.normalized(
+                            $0,
+                            opticalScale: WarrenDesktopExternalIDEIcon.opticalScale(for: ide.id.rawValue)
+                        )
+                    }
+                ))
             }
-            options.append(WarrenDesktopExternalIDEOption(
-                id: ide.id.rawValue,
-                name: ide.name,
-                applicationURL: applicationURL,
-                workspaceURL: availableWorkspaceURL,
-                icon: applicationIcon(applicationURL).map {
-                    WarrenDesktopExternalIDEIcon.normalized(
-                        $0,
-                        opticalScale: WarrenDesktopExternalIDEIcon.opticalScale(for: ide.id.rawValue)
-                    )
-                }
-            ))
+            cachedBuiltInApps = resolved
+            builtInApps = resolved
         }
-        for custom in customIDEs {
-            let applicationURL = URL(fileURLWithPath: custom.path).standardizedFileURL
-            options.append(WarrenDesktopExternalIDEOption(
-                id: "custom:\(custom.id.uuidString)",
-                name: custom.name,
-                applicationURL: applicationURL,
+
+        let customApps: [ResolvedApp]
+        if let cachedCustomApps, cachedCustomApps.key == customIDEs {
+            customApps = cachedCustomApps.apps
+        } else {
+            let resolved = customIDEs.map { custom in
+                let applicationURL = URL(fileURLWithPath: custom.path).standardizedFileURL
+                return ResolvedApp(
+                    id: "custom:\(custom.id.uuidString)",
+                    name: custom.name,
+                    applicationURL: applicationURL,
+                    icon: applicationIcon(applicationURL).map {
+                        WarrenDesktopExternalIDEIcon.normalized($0)
+                    }
+                )
+            }
+            cachedCustomApps = (key: customIDEs, apps: resolved)
+            customApps = resolved
+        }
+
+        let options = (builtInApps + customApps).map { app in
+            WarrenDesktopExternalIDEOption(
+                id: app.id,
+                name: app.name,
+                applicationURL: app.applicationURL,
                 workspaceURL: availableWorkspaceURL,
-                icon: applicationIcon(applicationURL).map {
-                    WarrenDesktopExternalIDEIcon.normalized($0)
-                }
-            ))
+                icon: app.icon
+            )
         }
         cachedOptions = (key: cacheKey, options: options)
         return options

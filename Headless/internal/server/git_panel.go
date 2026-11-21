@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/abcdlsj/warren/Headless/internal/api"
 	"github.com/abcdlsj/warren/Headless/internal/git"
@@ -86,26 +87,46 @@ func (s *Service) loadGitPanel(ctx context.Context, workspace api.Workspace, fet
 	path := workspace.Path
 	if fetch {
 		unlock := s.lockGitMutation(workspace.ID)
-		defer unlock()
 		// Refresh the remote refs before comparing against origin/main. A
 		// failed fetch (offline, no remote) must not block the panel; the
-		// comparison then uses the last fetched refs.
+		// comparison then uses the last fetched refs. Release the mutation
+		// lock as soon as fetch finishes so commits/pushes are not blocked
+		// behind read-only panel queries or network PR lookups.
 		_ = git.Fetch(ctx, path)
+		unlock()
 	}
-	mainBranch := git.MainBranch(ctx, path)
-	status, err := git.StatusFor(ctx, path)
-	if err != nil {
-		return api.GitPanel{}, err
+
+	var (
+		mainBranch string
+		status     git.Status
+		statusErr  error
+		commits    []git.Commit
+		commitsErr error
+		branches   git.BranchList
+		branchErr  error
+		remoteURL  string
+		operation  string
+	)
+	var wg sync.WaitGroup
+	wg.Add(6)
+	go func() { defer wg.Done(); mainBranch = git.MainBranch(ctx, path) }()
+	go func() { defer wg.Done(); status, statusErr = git.StatusFor(ctx, path) }()
+	go func() { defer wg.Done(); commits, commitsErr = git.Log(ctx, path, 20) }()
+	go func() { defer wg.Done(); branches, branchErr = git.Branches(ctx, path) }()
+	go func() { defer wg.Done(); remoteURL, _ = git.RemoteURL(ctx, path) }()
+	go func() { defer wg.Done(); operation = git.OperationState(ctx, path) }()
+	wg.Wait()
+
+	if statusErr != nil {
+		return api.GitPanel{}, statusErr
 	}
-	commits, err := git.Log(ctx, path, 20)
-	if err != nil {
-		return api.GitPanel{}, err
+	if commitsErr != nil {
+		return api.GitPanel{}, commitsErr
 	}
-	branches, err := git.Branches(ctx, path)
-	if err != nil {
-		return api.GitPanel{}, err
+	if branchErr != nil {
+		return api.GitPanel{}, branchErr
 	}
-	remoteURL, _ := git.RemoteURL(ctx, path)
+
 	panel := api.GitPanel{
 		WorkspaceID: workspace.ID,
 		Branch:      status.Branch,
@@ -114,13 +135,70 @@ func (s *Service) loadGitPanel(ctx context.Context, workspace api.Workspace, fet
 		Behind:      status.Behind,
 		Remote:      remoteURL,
 		MainBranch:  strings.TrimPrefix(mainBranch, "refs/remotes/"),
-		Operation:   git.OperationState(ctx, path),
+		Operation:   operation,
 		Changes:     apiGitChanges(status.Changes),
 		Commits:     apiGitCommits(commits),
 		Branches:    apiGitBranches(branches),
 	}
+
+	var (
+		pr              *git.PullRequest
+		prErr           error
+		merged          bool
+		unmergedCommits []git.Commit
+		aheadOfMain     int
+		aheadOfMainOK   bool
+	)
+	var phase2 sync.WaitGroup
 	if remote && panel.Remote != "" {
-		pr, prErr := git.PullRequestForBranch(ctx, path)
+		phase2.Add(1)
+		go func() {
+			defer phase2.Done()
+			pr, prErr = git.PullRequestForBranch(ctx, path)
+		}()
+	}
+	if mainBranch != "" {
+		// The default branch itself has nothing to merge into; keep showing it
+		// as merged so the panel never labels its own history "not in main".
+		if status.Branch == strings.TrimPrefix(mainBranch, "refs/remotes/origin/") {
+			merged = true
+		} else {
+			phase2.Add(1)
+			go func() {
+				defer phase2.Done()
+				// A recorded base belongs to the workspace's own branch; a worktree
+				// switched elsewhere by hand must not reuse it.
+				base := ""
+				if workspace.Branch == status.Branch {
+					base = workspace.BaseCommit
+				}
+				if base == "" {
+					base, _ = git.BranchBase(ctx, path, status.Branch)
+				}
+				// The sidebar badge, `workspace list` and this panel must agree, so
+				// the merge decision is shared with the Host's merge projection.
+				if isMerged, known := git.MergedIntoTarget(ctx, path, mainBranch, status.Branch, base); known {
+					merged = isMerged
+				}
+				if !merged {
+					if unmerged, err := git.LogRangeFrom(ctx, path, mainBranch, base); err == nil {
+						unmergedCommits = unmerged
+					}
+				}
+			}()
+		}
+		phase2.Add(1)
+		go func() {
+			defer phase2.Done()
+			if ahead, _, err := git.AheadBehind(ctx, path, mainBranch); err == nil {
+				aheadOfMain = ahead
+				aheadOfMainOK = true
+			}
+		}()
+	}
+	phase2.Wait()
+
+	if remote && panel.Remote != "" {
 		if prErr != nil && !errors.Is(prErr, git.ErrNoPullRequest) {
 			panel.PullRequestError = prErr.Error()
 		} else if pr != nil {
@@ -128,33 +206,12 @@ func (s *Service) loadGitPanel(ctx context.Context, workspace api.Workspace, fet
 		}
 	}
 	if mainBranch != "" {
-		// The default branch itself has nothing to merge into; keep showing it
-		// as merged so the panel never labels its own history "not in main".
-		if status.Branch == strings.TrimPrefix(mainBranch, "refs/remotes/origin/") {
-			panel.Merged = true
-		} else {
-			// A recorded base belongs to the workspace's own branch; a worktree
-			// switched elsewhere by hand must not reuse it.
-			base := ""
-			if workspace.Branch == status.Branch {
-				base = workspace.BaseCommit
-			}
-			if base == "" {
-				base, _ = git.BranchBase(ctx, path, status.Branch)
-			}
-			// The sidebar badge, `workspace list` and this panel must agree, so
-			// the merge decision is shared with the Host's merge projection.
-			if merged, known := git.MergedIntoTarget(ctx, path, mainBranch, status.Branch, base); known {
-				panel.Merged = merged
-			}
-			if !panel.Merged {
-				if unmerged, err := git.LogRangeFrom(ctx, path, mainBranch, base); err == nil {
-					panel.UnmergedCommits = apiGitCommits(unmerged)
-				}
-			}
+		panel.Merged = merged
+		if len(unmergedCommits) > 0 {
+			panel.UnmergedCommits = apiGitCommits(unmergedCommits)
 		}
-		if ahead, _, err := git.AheadBehind(ctx, path, mainBranch); err == nil {
-			panel.AheadOfMain = ahead
+		if aheadOfMainOK {
+			panel.AheadOfMain = aheadOfMain
 		}
 	}
 	return panel, nil

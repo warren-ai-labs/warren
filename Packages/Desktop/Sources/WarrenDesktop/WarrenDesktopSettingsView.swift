@@ -198,8 +198,10 @@ struct WarrenDesktopSettingsView: View {
     let openAIBaseURL: String
     let openAIModel: String
     let openAITitleEnabled: Bool
+    let titleProvider: String
     let onSetOpenAISetting: (String, String) -> Void
     let onTestOpenAI: @MainActor (String, String, String?) async throws -> Void
+    let onTestCloudflareTitle: (@MainActor () async throws -> Void)?
     let projects: [Project]
     let projectGroups: [WarrenDesktopProjectGroup]
     let onSetProjectSetupScript: (ProjectID, String) -> Void
@@ -398,8 +400,10 @@ struct WarrenDesktopSettingsView: View {
         openAIBaseURL: String,
         openAIModel: String,
         openAITitleEnabled: Bool,
+        titleProvider: String = "",
         onSetOpenAISetting: @escaping (String, String) -> Void,
         onTestOpenAI: @escaping @MainActor (String, String, String?) async throws -> Void,
+        onTestCloudflareTitle: (@MainActor () async throws -> Void)? = nil,
         projects: [Project] = [],
         projectGroups: [WarrenDesktopProjectGroup] = [],
         onSetProjectSetupScript: @escaping (ProjectID, String) -> Void = { _, _ in },
@@ -445,8 +449,10 @@ struct WarrenDesktopSettingsView: View {
         self.openAIBaseURL = openAIBaseURL
         self.openAIModel = openAIModel
         self.openAITitleEnabled = openAITitleEnabled
+        self.titleProvider = titleProvider
         self.onSetOpenAISetting = onSetOpenAISetting
         self.onTestOpenAI = onTestOpenAI
+        self.onTestCloudflareTitle = onTestCloudflareTitle
         if !projectGroups.isEmpty {
             self.projectGroups = projectGroups
             self.projects = projectGroups.map(\.project)

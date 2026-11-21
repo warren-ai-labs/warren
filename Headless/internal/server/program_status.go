@@ -33,8 +33,7 @@ func (s *Service) bumpProgramRosterRevision() {
 	}
 	base := uint64(1)
 	if s.Store != nil {
-		_, revision := s.Store.SnapshotVersion()
-		base = revision + 1
+		base = s.Store.Revision() + 1
 	}
 	for {
 		current := s.programRosterRevision.Load()

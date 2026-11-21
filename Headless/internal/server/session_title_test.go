@@ -546,12 +546,12 @@ func TestLocalSessionTitleIgnoresAnUnreadableMessage(t *testing.T) {
 }
 
 func TestProviderSuppliesTitle(t *testing.T) {
-	for _, provider := range []string{"claude", "codex", "opencode", "qoder"} {
+	for _, provider := range []string{"claude", "codex", "opencode", "qoder", "antigravity"} {
 		if !providerSuppliesTitle(provider) {
 			t.Errorf("providerSuppliesTitle(%q) = false, want true", provider)
 		}
 	}
-	for _, provider := range []string{"", "shell", "custom", "pi", "antigravity", "browser"} {
+	for _, provider := range []string{"", "shell", "custom", "pi", "browser"} {
 		if providerSuppliesTitle(provider) {
 			t.Errorf("providerSuppliesTitle(%q) = true, want false", provider)
 		}
@@ -646,6 +646,52 @@ func TestSessionTitleFromQoderExchange(t *testing.T) {
 	}
 	if requests.Load() != 1 {
 		t.Fatalf("title requests = %d, want one", requests.Load())
+	}
+}
+
+func TestCloudflareTitleProviderConfiguresWithoutOpenAIKeyAndPersistsDeviceID(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	state, sessionID := newSessionTitleStoreForKind(t, "pi")
+	service := &Service{
+		Store:        state,
+		SettingsPath: settingsPath,
+		Settings: settings.Settings{
+			TitleProvider:      settings.TitleProviderCloudflare,
+			OpenAITitleEnabled: true,
+		},
+	}
+	service.lazyInit()
+	service.agents[sessionID] = &agentSession{}
+
+	if !service.titleEndpointConfigured() {
+		t.Fatal("cloudflare title provider should be configured without an OpenAI key")
+	}
+	if !service.titleGenerationConfigured() {
+		t.Fatal("cloudflare title provider should enable automatic title generation")
+	}
+	cfg := service.titleConfig()
+	if cfg.Provider != settings.TitleProviderCloudflare {
+		t.Fatalf("provider = %q, want cloudflare", cfg.Provider)
+	}
+	if cfg.DeviceID == "" {
+		t.Fatal("expected persistent DeviceID to be generated")
+	}
+	// Device ID must be persisted and reused across calls.
+	if second := service.titleConfig().DeviceID; second != cfg.DeviceID {
+		t.Fatalf("second DeviceID = %q, want %q", second, cfg.DeviceID)
+	}
+	saved, err := settings.Load(settingsPath)
+	if err != nil {
+		t.Fatalf("load saved settings: %v", err)
+	}
+	if saved.TitleDeviceID != cfg.DeviceID {
+		t.Fatalf("saved TitleDeviceID = %q, want %q", saved.TitleDeviceID, cfg.DeviceID)
+	}
+	// Result sentences stay off for the free Cloudflare quota.
+	service.agents[sessionID].turnAssistant = "Fixed reconnect"
+	service.tryStartResultSentence(sessionID)
+	if service.agents[sessionID].resultGenerationStarted {
+		t.Fatal("cloudflare title provider must not spend quota on per-turn result sentences")
 	}
 }
 

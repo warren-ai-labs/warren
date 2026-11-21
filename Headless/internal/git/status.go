@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Change is one working-tree change of a workspace.
@@ -35,13 +36,45 @@ func StatusFor(ctx context.Context, dir string) (Status, error) {
 		return Status{}, err
 	}
 	status := parseStatus(output)
-	staged, err := run(ctx, dir, "-c", "core.quotepath=false", "diff", "-M", "--cached", "--numstat", "-z")
-	if err != nil {
-		return Status{}, err
+	hasStaged := false
+	hasUnstaged := false
+	for _, change := range status.Changes {
+		if change.Staged {
+			hasStaged = true
+		} else {
+			hasUnstaged = true
+		}
 	}
-	unstaged, err := run(ctx, dir, "-c", "core.quotepath=false", "diff", "-M", "--numstat", "-z")
-	if err != nil {
-		return Status{}, err
+	if !hasStaged && !hasUnstaged {
+		return status, nil
+	}
+	var (
+		staged      string
+		stagedErr   error
+		unstaged    string
+		unstagedErr error
+	)
+	var wg sync.WaitGroup
+	if hasStaged {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			staged, stagedErr = run(ctx, dir, "-c", "core.quotepath=false", "diff", "-M", "--cached", "--numstat", "-z")
+		}()
+	}
+	if hasUnstaged {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			unstaged, unstagedErr = run(ctx, dir, "-c", "core.quotepath=false", "diff", "-M", "--numstat", "-z")
+		}()
+	}
+	wg.Wait()
+	if stagedErr != nil {
+		return Status{}, stagedErr
+	}
+	if unstagedErr != nil {
+		return Status{}, unstagedErr
 	}
 	stagedCounts := parseNumstat(staged)
 	unstagedCounts := parseNumstat(unstaged)

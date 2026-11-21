@@ -650,8 +650,9 @@ public final class WarrenMarkdownCache: @unchecked Sendable {
         streamingLock.unlock()
     }
 
-    public func preservedLineBreaks(for value: String) -> String {
+    public func preservedLineBreaks(for value: String, cacheable: Bool = true) -> String {
         guard value.contains("\n") else { return value }
+        guard cacheable else { return rawPreservingLineBreaks(value) }
         let key = value as NSString
         if let cached = lineBreaksCache.object(forKey: key) {
             return cached as String

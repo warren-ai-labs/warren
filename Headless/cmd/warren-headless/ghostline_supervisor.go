@@ -137,7 +137,7 @@ func (s *ghostlineSupervisor) handoffInProgress(now time.Time) bool {
 	if s.config.state == nil {
 		return false
 	}
-	migration := s.config.state.Snapshot().GhostlineMigration
+	migration := s.config.state.GhostlineMigration()
 	if migration == nil || migration.Phase == api.GhostlineMigrationRetired {
 		return false
 	}

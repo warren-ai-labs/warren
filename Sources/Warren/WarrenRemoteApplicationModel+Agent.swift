@@ -46,7 +46,7 @@ extension WarrenRemoteApplicationModel {
         var leadIDs: Set<TerminalSessionID> = []
         var signatures: [TerminalSessionID: String] = [:]
         for (sessionID, feed) in conversationFeeds {
-            let lead = WarrenLeadConversation.derive(from: feed.conversation) { id in
+            let lead = feed.lead { id in
                 guard let sessionID = TerminalSessionID(uuidString: id) else { return false }
                 return projection.session(id: sessionID) != nil
             }
@@ -81,7 +81,7 @@ extension WarrenRemoteApplicationModel {
         projection.sessions.compactMap { session -> WarrenDesktopAttentionAlert? in
             guard session.leadNeedsAttention,
                   let feed = conversationFeeds[session.id] else { return nil }
-            let lead = WarrenLeadConversation.derive(from: feed.conversation) { id in
+            let lead = feed.lead { id in
                 guard let sessionID = TerminalSessionID(uuidString: id) else { return false }
                 return projection.session(id: sessionID) != nil
             }

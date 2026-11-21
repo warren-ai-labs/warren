@@ -237,3 +237,68 @@ func writeCodexStateDB(t *testing.T, home string, rows []codexThreadRow) {
 		}
 	}
 }
+
+func TestAntigravityParserReportsItsStoredConversationTitle(t *testing.T) {
+	home := t.TempDir()
+	dbPath := filepath.Join(home, "conversation_summaries.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT)`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO conversation_summaries (conversation_id, title) VALUES (?, ?)`,
+		"conv-1", "Reconnect the socket"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+
+	parser := newAntigravityParser(4096)
+	parser.SetTitleSource(home, "conv-1")
+	if got := parser.TakeTitle(); got != "Reconnect the socket" {
+		t.Fatalf("TakeTitle() = %q, want the stored conversation title", got)
+	}
+	// The name is reported once; a later poll must not re-apply it.
+	if got := parser.TakeTitle(); got != "" {
+		t.Fatalf("second TakeTitle() = %q, want empty", got)
+	}
+}
+
+func TestAntigravityParserWaitsForAConversationName(t *testing.T) {
+	home := t.TempDir()
+	dbPath := filepath.Join(home, "conversation_summaries.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT)`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO conversation_summaries (conversation_id, title) VALUES (?, ?)`,
+		"conv-1", ""); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+
+	parser := newAntigravityParser(4096)
+	parser.SetTitleSource(home, "conv-1")
+	if got := parser.TakeTitle(); got != "" {
+		t.Fatalf("TakeTitle() = %q, want empty for an unnamed conversation", got)
+	}
+}
+
+func TestAntigravityTitleSourceFromTranscriptPath(t *testing.T) {
+	home, conversationID := antigravityTitleSourceFromTranscriptPath(
+		"/Users/u/.gemini/antigravity-cli/brain/3241a15e/.system_generated/logs/transcript.jsonl")
+	if home != "/Users/u/.gemini/antigravity-cli" || conversationID != "3241a15e" {
+		t.Fatalf("source = (%q, %q), want the product home and conversation ID", home, conversationID)
+	}
+	if home, conversationID := antigravityTitleSourceFromTranscriptPath("/tmp/transcript.jsonl"); home != "" || conversationID != "" {
+		t.Fatalf("unexpected source (%q, %q) for a non-agy transcript", home, conversationID)
+	}
+}

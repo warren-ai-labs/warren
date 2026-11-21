@@ -718,18 +718,27 @@ func resolveOpenCodeRootSessionID(ctx context.Context, db *sql.DB, sessionID str
 	return current
 }
 
+var openCodeIndexedDatabases sync.Map
+
 func ensureOpenCodeSessionDirectoryIndex(databasePath string) {
-	if strings.TrimSpace(databasePath) == "" {
+	databasePath = strings.TrimSpace(databasePath)
+	if databasePath == "" {
+		return
+	}
+	if _, alreadyIndexed := openCodeIndexedDatabases.LoadOrStore(databasePath, struct{}{}); alreadyIndexed {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	db, err := sql.Open("sqlite3", databasePath)
 	if err != nil {
+		openCodeIndexedDatabases.Delete(databasePath)
 		return
 	}
 	defer db.Close()
-	_, _ = db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_session_directory ON session(directory)")
+	if _, err := db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_session_directory ON session(directory)"); err != nil {
+		openCodeIndexedDatabases.Delete(databasePath)
+	}
 }
 
 type sqliteOpenCodeReader struct {

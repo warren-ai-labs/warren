@@ -8,6 +8,7 @@ func run() throws {
         id: TerminalSessionID(),
         attachmentID: TerminalAttachmentID(),
         workingDirectory: "/tmp",
+        observeANSISemantics: true,
         onInput: { _ in },
         onResize: { _, _ in }
     )

@@ -1,8 +1,8 @@
-const CACHE = "warren-vite-v20";
+const CACHE = "warren-vite-v21";
 const SHELL = [
   ".", "./manifest.webmanifest", "./icon.svg", "./favicon-16.png", "./favicon-32.png", "./icon-192.png", "./icon-512.png",
   "./apple-touch-icon.png", "./assets/app.js", "./assets/app.css",
-  "./assets/react.js", "./assets/xterm.js",
+  "./assets/react.js", "./assets/xterm.js", "./assets/agent-markdown.js",
 ];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)));

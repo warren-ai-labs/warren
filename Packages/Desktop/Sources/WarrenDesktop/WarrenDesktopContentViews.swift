@@ -626,10 +626,19 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
     var lonePaneChrome: LonePaneChrome? = nil
 
     @Environment(\.warrenPaneGroupHover) private var groupHover
+    /// Live divider ratio held locally during pointer drag so the split
+    /// tracks at frame rate without spamming Host pane-group RPCs or CAS
+    /// conflict reloads per pixel. Committed once when the drag ends.
+    @State private var liveDragRatio: (path: [Bool], ratio: Double)?
+
+    private var effectiveTree: SplitLayoutTree {
+        guard let liveDragRatio else { return tree }
+        return tree.updateRatio(path: liveDragRatio.path, ratio: liveDragRatio.ratio)
+    }
 
     var body: some View {
         GeometryReader { proxy in
-            let placement = tree.placement(
+            let placement = effectiveTree.placement(
                 in: proxy.size,
                 dividerThickness: WarrenLayoutMetrics.cardGap,
                 foldedPaneID: foldedPaneID
@@ -690,6 +699,18 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
                         totalLength: divider.totalLength,
                         foldableSides: divider.foldableSides,
                         onDrag: { ratio in
+                            liveDragRatio = (
+                                path: divider.path,
+                                ratio: clampedRatio(
+                                    ratio,
+                                    minimum: divider.minimumRatio,
+                                    maximum: divider.maximumRatio
+                                )
+                            )
+                        },
+                        onDragEnd: { ratio in
+                            liveDragRatio = nil
+                            guard let ratio else { return }
                             onResizeSplit(
                                 divider.path,
                                 clampedRatio(
@@ -710,6 +731,7 @@ struct WarrenDesktopSplitTreeView<TerminalSurface: View>: View {
                             )
                         },
                         onFold: { side, restoreRatio in
+                            liveDragRatio = nil
                             guard let paneID = divider.leafID(on: side) else { return }
                             onFoldPane(paneID, divider.path, restoreRatio)
                         }
@@ -826,6 +848,7 @@ struct WarrenDesktopSplitDivider: View {
     /// The sides whose pane a pull past the minimum may fold.
     var foldableSides: Set<SplitPaneSide> = []
     let onDrag: (Double) -> Void
+    var onDragEnd: (Double?) -> Void = { _ in }
     let onAdjust: (Double) -> Void
     /// Folds the pane on a side; the ratio is the one the drag started from,
     /// which the rail restores.
@@ -939,7 +962,16 @@ struct WarrenDesktopSplitDivider: View {
                     }
                     .onEnded { value in
                         let startRatio = dragStartRatio
-                        let finalPull = pointerRatio(for: value).flatMap {
+                        let finalPointer = pointerRatio(for: value)
+                        let finalTarget = finalPointer.flatMap {
+                            SplitLayoutTree.snapTarget(
+                                for: $0,
+                                totalLength: totalLength,
+                                minimum: minimumRatio,
+                                maximum: maximumRatio
+                            )
+                        }
+                        let finalPull = finalPointer.flatMap {
                             SplitLayoutTree.dividerPull(
                                 for: $0,
                                 totalLength: totalLength,
@@ -956,7 +988,10 @@ struct WarrenDesktopSplitDivider: View {
                             pull = nil
                         }
                         if let side = SplitLayoutTree.foldSide(releasing: finalPull, foldable: foldableSides) {
+                            onDragEnd(nil)
                             onFold(side, startRatio)
+                        } else {
+                            onDragEnd(finalTarget ?? finalPointer)
                         }
                     }
             )

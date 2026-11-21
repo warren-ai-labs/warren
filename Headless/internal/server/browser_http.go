@@ -112,7 +112,7 @@ func (s *HTTPServer) handleBrowserStream(writer http.ResponseWriter, request *ht
 			continue
 		}
 		var message struct {
-			Type   string           `json:"t"`
+			Type   string            `json:"t"`
 			Action api.BrowserAction `json:"action"`
 		}
 		if err := json.Unmarshal(payload, &message); err != nil || message.Type != "action" {

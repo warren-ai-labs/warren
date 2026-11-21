@@ -1212,7 +1212,15 @@ enum WarrenEmbeddedEditorChrome {
                 }
             }
             if (!layoutObserver) {
-                layoutObserver = new MutationObserver(redistribute);
+                let layoutTimer = null;
+                const scheduleRedistribute = () => {
+                    if (layoutTimer !== null) return;
+                    layoutTimer = setTimeout(() => {
+                        layoutTimer = null;
+                        redistribute();
+                    }, 16);
+                };
+                layoutObserver = new MutationObserver(scheduleRedistribute);
                 layoutObserver.observe(gridRoot, {
                     subtree: true,
                     attributes: true,
@@ -1677,8 +1685,11 @@ enum WarrenEmbeddedEditorChrome {
                     ".part.sidebar > .header-or-footer.header "
                         + ".monaco-action-bar .actions-container"
                 );
-                if (!actions
-                    || actions.querySelector(`.${controlClass}-files`)) {
+                if (!actions) {
+                    return;
+                }
+                if (actions.querySelector(`.${controlClass}-files`)) {
+                    syncObserver?.disconnect();
                     return;
                 }
                 syncObserver?.disconnect();
@@ -1718,9 +1729,15 @@ enum WarrenEmbeddedEditorChrome {
                 };
                 syncPreviewVisibility();
                 previewVisibilityObserver?.disconnect();
-                previewVisibilityObserver = new MutationObserver(() => {
-                    syncPreviewVisibility();
-                });
+                let previewTimer = null;
+                const schedulePreviewSync = () => {
+                    if (previewTimer !== null) return;
+                    previewTimer = setTimeout(() => {
+                        previewTimer = null;
+                        syncPreviewVisibility();
+                    }, 16);
+                };
+                previewVisibilityObserver = new MutationObserver(schedulePreviewSync);
                 previewVisibilityObserver.observe(workbench, {
                     attributes: true,
                     attributeFilter: ["aria-label", "class", "data-mode-id"],
@@ -1730,15 +1747,17 @@ enum WarrenEmbeddedEditorChrome {
             };
 
             sync();
-            // Keep the observer referenced: an inline observer can be
-            // collected before the header is rendered, leaving the toolbar
-            // permanently empty.
+            // Keep the observer referenced only while waiting for the header
+            // to mount; once controls are injected there is no need to observe
+            // every DOM mutation across the workbench.
             syncObserver?.disconnect();
-            syncObserver = new MutationObserver(sync);
-            syncObserver.observe(workbench, {
-                childList: true,
-                subtree: true
-            });
+            if (!injected()) {
+                syncObserver = new MutationObserver(sync);
+                syncObserver.observe(workbench, {
+                    childList: true,
+                    subtree: true
+                });
+            }
             return true;
         };
 
@@ -2488,16 +2507,23 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         if let existingWebView = webViews[workspacePath] {
             touchWebView(workspacePath)
             if let filePath {
-                let cliLaunched = openFileWithCLI(filePath: filePath, line: line, column: column)
-                if !cliLaunched {
-                    let targetURL = WarrenEmbeddedEditorConfiguration.workspaceURL(
-                        serverURL: serverURL,
-                        path: workspacePath,
+                Task { @MainActor [weak self, weak existingWebView] in
+                    guard let self, let existingWebView else { return }
+                    let cliLaunched = await self.openFileWithCLI(
                         filePath: filePath,
                         line: line,
                         column: column
                     )
-                    existingWebView.load(URLRequest(url: targetURL))
+                    if !cliLaunched {
+                        let targetURL = WarrenEmbeddedEditorConfiguration.workspaceURL(
+                            serverURL: serverURL,
+                            path: workspacePath,
+                            filePath: filePath,
+                            line: line,
+                            column: column
+                        )
+                        existingWebView.load(URLRequest(url: targetURL))
+                    }
                 }
             }
             return
@@ -2522,7 +2548,7 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         filePath: String,
         line: Int? = nil,
         column: Int? = nil
-    ) -> Bool {
+    ) async -> Bool {
         guard let executableURL = executableResolver(environment) else { return false }
         let process = Process()
         process.executableURL = executableURL
@@ -2545,20 +2571,42 @@ final class WarrenEmbeddedEditorModel: ObservableObject {
         process.environment = environment
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            let deadline = DispatchTime.now() + .milliseconds(1500)
-            let semaphore = DispatchSemaphore(value: 0)
-            process.terminationHandler = { _ in
-                semaphore.signal()
+        return await withCheckedContinuation { continuation in
+            final class ResumeGate: @unchecked Sendable {
+                private let lock = NSLock()
+                private var resumed = false
+
+                func claim() -> Bool {
+                    lock.withLock {
+                        guard !resumed else { return false }
+                        resumed = true
+                        return true
+                    }
+                }
             }
-            if semaphore.wait(timeout: deadline) == .timedOut {
-                process.terminate()
-                return false
+            let gate = ResumeGate()
+            let finish: @Sendable (Bool) -> Void = { success in
+                if gate.claim() {
+                    continuation.resume(returning: success)
+                }
             }
-            return process.terminationStatus == 0
-        } catch {
-            return false
+            process.terminationHandler = { terminated in
+                finish(terminated.terminationStatus == 0)
+            }
+            do {
+                try process.run()
+            } catch {
+                finish(false)
+                return
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(
+                deadline: .now() + .milliseconds(1500)
+            ) {
+                if gate.claim() {
+                    process.terminate()
+                    continuation.resume(returning: false)
+                }
+            }
         }
     }
 

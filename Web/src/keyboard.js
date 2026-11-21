@@ -55,10 +55,10 @@ export function useKeyboardInset(hostRef, { maxWidth = 1023 } = {}) {
           apply(0);
           return;
         }
-        if (inset <= appliedInset) return;
-        // A keyboard that grows taller (IME/layout switch) streams resize
-        // events per frame. Wait for the stream to settle so the shell does
-        // not reflow on every frame, then lift it to the final height.
+        if (Math.abs(inset - appliedInset) <= 8) return;
+        // A keyboard that changes height (IME/emoji/layout switch) streams
+        // resize events per frame. Wait for the stream to settle so the shell
+        // does not reflow on every frame, then adjust to the final height.
         clearSettle();
         settleTimer = setTimeout(() => {
           settleTimer = null;

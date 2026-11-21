@@ -437,6 +437,13 @@ type antigravityParser struct {
 	antigravityCallTool     map[string]string
 	antigravityPendingCalls []string
 	antigravityInteractions map[string]string
+	// titleHome and titleConversation identify the summaries row agy names
+	// this conversation in. titleCaptured keeps that name from being read
+	// again once Warren has applied it.
+	titleHome         string
+	titleConversation string
+	titleValue        string
+	titleCaptured     bool
 }
 
 func newAntigravityParser(contentLimit int) *antigravityParser {

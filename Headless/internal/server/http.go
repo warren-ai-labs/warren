@@ -228,9 +228,9 @@ func (s *HTTPServer) Handler() http.Handler {
 		hostID := ""
 		hostName := ""
 		if s.Service != nil && s.Service.Store != nil {
-			snap := s.Service.Store.Snapshot()
-			hostID = snap.Host.ID
-			hostName = snap.Host.Name
+			host := s.Service.Store.HostInfo()
+			hostID = host.ID
+			hostName = host.Name
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{
 			"ok":                  true,
@@ -574,6 +574,20 @@ func orderedRequestKey(command api.Envelope) string {
 		if id := strings.TrimSpace(command.Session); id != "" {
 			return "session:" + id
 		}
+	case "git.checkout", "git.pull", "git.push", "git.commit", "git.pr.create":
+		// Git mutations can run network operations (pull/push/gh pr create)
+		// and must not block the WebSocket reader, while staying strictly
+		// ordered per workspace so sequential git actions never race.
+		if id := stringParam(command.Params, "workspace"); id != "" {
+			return "git:" + id
+		}
+	case "browser.action":
+		if id := stringParam(command.Params, "session"); id != "" {
+			return "browser:" + id
+		}
+		if id := stringParam(command.Params, "sessionId"); id != "" {
+			return "browser:" + id
+		}
 	}
 	return ""
 }
@@ -581,6 +595,13 @@ func orderedRequestKey(command api.Envelope) string {
 func isBackgroundRequest(method string) bool {
 	switch method {
 	case "git.panel", "git.diff", "session.subscribe", "settings.testOpenAI",
+		// Subprocess, worktree setup, and network-backed commands can take
+		// seconds to minutes; keep them off the WebSocket reader so terminal
+		// input, heartbeats, and tab switches stay live.
+		"workspace.create",
+		"project.worktrees", "project.worktrees.import",
+		"session.title.regenerate",
+		"browser.session.create",
 		// A roster projection can walk Agent bindings and wait on lifecycle
 		// locks for seconds during startup. Every client may request one on
 		// connect, so keep it off the reader: otherwise it blocks the

@@ -113,8 +113,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     let openAIBaseURL: String
     let openAIModel: String
     let openAITitleEnabled: Bool
+    let titleProvider: String
     let onSetOpenAISetting: (String, String) -> Void
     let onTestOpenAI: @MainActor (String, String, String?) async throws -> Void
+    let onTestCloudflareTitle: (@MainActor () async throws -> Void)?
     let onSetProjectSetupScript: (ProjectID, String) -> Void
     let usageStats: WarrenUsageStats
     let usageState: WarrenUsageLoadState
@@ -397,10 +399,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         openAIBaseURL: String = "",
         openAIModel: String = "",
         openAITitleEnabled: Bool = false,
+        titleProvider: String = "",
         onSetOpenAISetting: @escaping (String, String) -> Void = { _, _ in },
         onTestOpenAI: @escaping @MainActor (String, String, String?) async throws -> Void = { _, _, _ in
             throw URLError(.unsupportedURL)
         },
+        onTestCloudflareTitle: (@MainActor () async throws -> Void)? = nil,
         onSetProjectSetupScript: @escaping (ProjectID, String) -> Void = { _, _ in },
         usageStats: WarrenUsageStats = WarrenUsageStats(),
         usageState: WarrenUsageLoadState = .idle,
@@ -496,8 +500,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         self.openAIBaseURL = openAIBaseURL
         self.openAIModel = openAIModel
         self.openAITitleEnabled = openAITitleEnabled
+        self.titleProvider = titleProvider
         self.onSetOpenAISetting = onSetOpenAISetting
         self.onTestOpenAI = onTestOpenAI
+        self.onTestCloudflareTitle = onTestCloudflareTitle
         self.onSetProjectSetupScript = onSetProjectSetupScript
         self.usageStats = usageStats
         self.usageState = usageState
@@ -2144,6 +2150,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             openAIBaseURL: openAIBaseURL,
             openAIModel: openAIModel,
             openAITitleEnabled: openAITitleEnabled,
+            titleProvider: titleProvider,
             // Projects only: the page never reads a group's Workspaces,
             // and their branch and status churn is not a Settings change.
             projects: projection.groups.map(\.project),
@@ -2192,8 +2199,10 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 openAIBaseURL: inputs.openAIBaseURL,
                 openAIModel: inputs.openAIModel,
                 openAITitleEnabled: inputs.openAITitleEnabled,
+                titleProvider: inputs.titleProvider,
                 onSetOpenAISetting: onSetOpenAISetting,
                 onTestOpenAI: onTestOpenAI,
+                onTestCloudflareTitle: onTestCloudflareTitle,
                 projects: inputs.projects,
                 onSetProjectSetupScript: onSetProjectSetupScript,
                 usageStats: inputs.usageStats,
@@ -2887,6 +2896,7 @@ struct WarrenDesktopSettingsInputs: Equatable {
     var openAIBaseURL = ""
     var openAIModel = ""
     var openAITitleEnabled = false
+    var titleProvider = ""
     var projects: [Project] = []
     var usageStats = WarrenUsageStats()
     var usageState: WarrenUsageLoadState = .idle

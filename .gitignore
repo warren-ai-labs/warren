@@ -11,6 +11,9 @@ xcuserdata/
 Web/node_modules/
 Web/.deploy/
 Web/.wrangler/
+TitleService/node_modules/
+TitleService/.wrangler/
+TitleService/.dev.vars
 Warren.app/
 Warren-*.zip
 Warren-*.zip.sha256

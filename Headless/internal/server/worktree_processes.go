@@ -66,6 +66,11 @@ func processAlive(pid int) bool {
 // a file open in the worktree is left alone.
 func processesWithCwdUnder(root string) ([]int, error) {
 	rootPath := resolvePath(root)
+	if runtime.GOOS == "darwin" {
+		if pids, ok := darwinProcessesWithCwdUnder(rootPath); ok {
+			return pids, nil
+		}
+	}
 	candidates, err := candidateProcesses(rootPath)
 	if err != nil {
 		return nil, err
@@ -84,6 +89,45 @@ func processesWithCwdUnder(root string) ([]int, error) {
 		}
 	}
 	return pids, nil
+}
+
+// darwinProcessesWithCwdUnder resolves every process cwd in a single lsof
+// invocation instead of walking the worktree with `+D` (which exits 1 when no
+// process matches and used to fall back to one lsof subprocess per PID).
+func darwinProcessesWithCwdUnder(rootPath string) ([]int, bool) {
+	output, err := exec.Command("lsof", "-d", "cwd", "-Fpn").Output()
+	if err != nil && len(output) == 0 {
+		return nil, false
+	}
+	selfPID := os.Getpid()
+	seen := make(map[int]struct{})
+	var pids []int
+	currentPID := 0
+	for _, line := range strings.Split(string(output), "\n") {
+		if len(line) < 2 {
+			continue
+		}
+		switch line[0] {
+		case 'p':
+			if pid, parseErr := strconv.Atoi(line[1:]); parseErr == nil {
+				currentPID = pid
+			} else {
+				currentPID = 0
+			}
+		case 'n':
+			if currentPID <= 0 || currentPID == selfPID {
+				continue
+			}
+			if _, exists := seen[currentPID]; exists {
+				continue
+			}
+			if pathWithin(rootPath, line[1:]) {
+				seen[currentPID] = struct{}{}
+				pids = append(pids, currentPID)
+			}
+		}
+	}
+	return pids, true
 }
 
 // candidateProcesses prefers lsof's directory scan so the per-process cwd

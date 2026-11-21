@@ -1,0 +1,16 @@
+{
+  "name": "warren-title-service",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bunx wrangler dev",
+    "deploy": "bunx wrangler deploy",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "db:migrate:remote": "bunx wrangler d1 migrations apply warren-title-quota --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250401.0",
+    "typescript": "^5.8.2"
+  }
+}

@@ -215,10 +215,10 @@ public actor WarrenAgentEventStore {
 
         var state = readState(db, namespace: namespace, streamID: streamID)
             ?? SyncState(namespace: namespace, streamID: streamID)
-        let rows = loadAll(db, namespace: namespace, streamID: streamID)
+        let summary = queryStreamSummary(db, namespace: namespace, streamID: streamID)
         let explicitBoundary = retainedFromSequence.map { min($0, UInt64(Int64.max)) }
-        if let maxSequence = rows.map(\.sequence).max() {
-            let localRetained = rows.map(\.sequence).min() ?? maxSequence
+        if let maxSequence = summary.maxSequence {
+            let localRetained = summary.minSequence ?? maxSequence
             // A page returned by a modern Host carries its authoritative
             // retention boundary. When that metadata is absent (older Host
             // or a live batch), keep the smallest locally observed sequence
@@ -234,9 +234,11 @@ public actor WarrenAgentEventStore {
                 streamID: streamID,
                 retainedFromSequence: retained,
                 headSequence: max(state.headSequence, maxSequence),
-                contiguousThrough: contiguousThrough(
-                    after: baseline,
-                    sequences: Set(rows.map(\.sequence))
+                contiguousThrough: advanceContiguousThrough(
+                    db,
+                    namespace: namespace,
+                    streamID: streamID,
+                    after: baseline
                 ),
                 checkpointSequence: state.checkpointSequence,
                 checkpoint: state.checkpoint,
@@ -274,12 +276,16 @@ public actor WarrenAgentEventStore {
             )
         }
 
-        if rows.count > maxEventsPerStream {
-            let cutoff = rows.sorted { $0.sequence > $1.sequence }.dropFirst(maxEventsPerStream).map(\.sequence).filter { $0 <= state.contiguousThrough }
-            for sequence in cutoff {
-                deleteEvent(db, namespace: namespace, streamID: streamID, sequence: sequence)
-            }
-            let localRetained = loadAll(db, namespace: namespace, streamID: streamID).map(\.sequence).min() ?? 0
+        if summary.count > maxEventsPerStream {
+            pruneOldEvents(
+                db,
+                namespace: namespace,
+                streamID: streamID,
+                contiguousThrough: state.contiguousThrough,
+                keepNewest: maxEventsPerStream
+            )
+            let postPrune = queryStreamSummary(db, namespace: namespace, streamID: streamID)
+            let localRetained = postPrune.minSequence ?? 0
             let retained = state.retainedFromSequence > 0
                 ? state.retainedFromSequence
                 : localRetained
@@ -288,9 +294,11 @@ public actor WarrenAgentEventStore {
                 streamID: streamID,
                 retainedFromSequence: retained,
                 headSequence: state.headSequence,
-                contiguousThrough: contiguousThrough(
-                    after: state.contiguousThrough,
-                    sequences: Set(loadAll(db, namespace: namespace, streamID: streamID).map(\.sequence))
+                contiguousThrough: advanceContiguousThrough(
+                    db,
+                    namespace: namespace,
+                    streamID: streamID,
+                    after: state.contiguousThrough
                 ),
                 checkpointSequence: state.checkpointSequence,
                 checkpoint: state.checkpoint,
@@ -763,6 +771,100 @@ public actor WarrenAgentEventStore {
               let lhs = try? decoder.decode(WarrenRemoteAgentEvent.self, from: leftData),
               let rhs = try? decoder.decode(WarrenRemoteAgentEvent.self, from: rightData) else { return left == right }
         return lhs == rhs
+    }
+
+    private struct StreamSummary {
+        let count: Int
+        let minSequence: UInt64?
+        let maxSequence: UInt64?
+    }
+
+    private func queryStreamSummary(
+        _ db: OpaquePointer,
+        namespace: Namespace,
+        streamID: String
+    ) -> StreamSummary {
+        let sql = "SELECT COUNT(*), MIN(sequence), MAX(sequence) FROM agent_events WHERE host_id = ? AND access_scope_id = ? AND stream_id = ?;"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            return StreamSummary(count: 0, minSequence: nil, maxSequence: nil)
+        }
+        defer { sqlite3_finalize(statement) }
+        bind(statement, 1, namespace.hostID)
+        bind(statement, 2, namespace.accessScopeID)
+        bind(statement, 3, streamID)
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            return StreamSummary(count: 0, minSequence: nil, maxSequence: nil)
+        }
+        let count = Int(sqlite3_column_int64(statement, 0))
+        guard count > 0,
+              sqlite3_column_type(statement, 1) != SQLITE_NULL,
+              sqlite3_column_type(statement, 2) != SQLITE_NULL else {
+            return StreamSummary(count: 0, minSequence: nil, maxSequence: nil)
+        }
+        return StreamSummary(
+            count: count,
+            minSequence: UInt64(max(0, sqlite3_column_int64(statement, 1))),
+            maxSequence: UInt64(max(0, sqlite3_column_int64(statement, 2)))
+        )
+    }
+
+    private func advanceContiguousThrough(
+        _ db: OpaquePointer,
+        namespace: Namespace,
+        streamID: String,
+        after: UInt64
+    ) -> UInt64 {
+        let sql = "SELECT sequence FROM agent_events WHERE host_id = ? AND access_scope_id = ? AND stream_id = ? AND sequence > ? ORDER BY sequence ASC;"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return after }
+        defer { sqlite3_finalize(statement) }
+        bind(statement, 1, namespace.hostID)
+        bind(statement, 2, namespace.accessScopeID)
+        bind(statement, 3, streamID)
+        sqlite3_bind_int64(statement, 4, Int64(min(after, UInt64(Int64.max))))
+        var cursor = after
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let sequence = UInt64(max(0, sqlite3_column_int64(statement, 0)))
+            if sequence == cursor + 1 {
+                cursor = sequence
+            } else if sequence > cursor + 1 {
+                break
+            }
+        }
+        return cursor
+    }
+
+    private func pruneOldEvents(
+        _ db: OpaquePointer,
+        namespace: Namespace,
+        streamID: String,
+        contiguousThrough: UInt64,
+        keepNewest: Int
+    ) {
+        let sql = """
+        DELETE FROM agent_events
+        WHERE host_id = ? AND access_scope_id = ? AND stream_id = ?
+          AND sequence <= ?
+          AND sequence NOT IN (
+              SELECT sequence FROM agent_events
+              WHERE host_id = ? AND access_scope_id = ? AND stream_id = ?
+              ORDER BY sequence DESC
+              LIMIT ?
+          );
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(statement) }
+        bind(statement, 1, namespace.hostID)
+        bind(statement, 2, namespace.accessScopeID)
+        bind(statement, 3, streamID)
+        sqlite3_bind_int64(statement, 4, Int64(min(contiguousThrough, UInt64(Int64.max))))
+        bind(statement, 5, namespace.hostID)
+        bind(statement, 6, namespace.accessScopeID)
+        bind(statement, 7, streamID)
+        sqlite3_bind_int64(statement, 8, Int64(keepNewest))
+        _ = sqlite3_step(statement)
     }
 
     private func contiguousThrough(after: UInt64, sequences: Set<UInt64>) -> UInt64 {

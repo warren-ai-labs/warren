@@ -263,10 +263,26 @@ func (s *Service) canonicalExecutionForSession(sessionID string) (api.AgentExecu
 	if turn.ID > 0 {
 		result.ActiveTurn = &turn
 	}
-	if history, err := s.canonicalHistoryPage(context.Background(), executionID, 0, 0, agentHistoryMaxLimit); err == nil {
-		result.HeadSequence = history.HeadSequence
+	if head, ok := s.canonicalStreamHead(context.Background(), executionID); ok {
+		result.HeadSequence = head
 	}
 	return result, true
+}
+
+func (s *Service) canonicalStreamHead(ctx context.Context, streamID string) (uint64, bool) {
+	streamID = strings.TrimSpace(streamID)
+	if streamID == "" {
+		return 0, false
+	}
+	if agentStore := s.agentStore(); agentStore != nil {
+		if _, head, found, err := agentStore.CanonicalStreamHead(ctx, streamID); err == nil && found {
+			return head, true
+		}
+	}
+	if history, err := s.canonicalHistoryPage(ctx, streamID, 0, 0, 1); err == nil {
+		return history.HeadSequence, true
+	}
+	return 0, false
 }
 
 // usageAttributionForStream maps a canonical stream to the project its spend

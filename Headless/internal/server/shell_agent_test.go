@@ -671,3 +671,92 @@ func TestEnsureAgentAdoptsQoderShellBinding(t *testing.T) {
 	}
 	entry.watcher.Close()
 }
+
+// A shell overlay keeps its conversation in the engine home its launcher
+// reported, not in the daemon's own. The binding is the only place that says
+// which directory that is.
+func TestEnsureAgentUsesAntigravityShellBindingHome(t *testing.T) {
+	t.Setenv("WARREN_DATA_DIR", t.TempDir())
+	workspace := t.TempDir()
+	geminiDir := t.TempDir()
+	conversation := "conv-shell"
+	transcriptPath := filepath.Join(geminiDir, "antigravity-cli", "brain", conversation, ".system_generated", "logs", "transcript.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcriptPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state := newStateWithSession(t, "session-shell", "runtime-shell")
+	if err := state.Update(func(value *api.State) error {
+		value.Workspaces[0].Path = workspace
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newMemoryOutputRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime-shell", workspace, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state, Runtime: runtime}
+	service.lazyInit()
+	session := state.Snapshot().Sessions[0]
+	if err := agent.WriteBinding(agent.BindPath(session.ID), agent.Binding{
+		Provider:       "antigravity",
+		SessionID:      conversation,
+		TranscriptPath: filepath.Join(geminiDir, "stale-transcript.jsonl"),
+		Cwd:            workspace,
+		Home:           geminiDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.WriteAgentStatus(agent.StatePath(session.ID), api.AgentStatus{Activity: api.AgentActivityReady}); err != nil {
+		t.Fatal(err)
+	}
+
+	entry, err := service.ensureAgent(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == nil || entry.watcher == nil {
+		t.Fatal("expected a watcher for the antigravity shell overlay")
+	}
+	if got := entry.watcher.Path(); got != transcriptPath {
+		t.Fatalf("watcher path = %q, want %q", got, transcriptPath)
+	}
+	entry.watcher.Close()
+}
+
+// A shell that runs an engine in a home of its own teaches the daemon that
+// home even before a binding exists, so the engine's next invocation can bind.
+func TestEnsureAgentLearnsShellEngineHome(t *testing.T) {
+	t.Setenv("WARREN_DATA_DIR", t.TempDir())
+	workspace := t.TempDir()
+	home := t.TempDir()
+	pid := agyInWorkspace(t, workspace, home)
+	if !processRunning(pid) {
+		t.Fatal("workspace engine did not start")
+	}
+
+	state := newStateWithSession(t, "session-shell", "runtime-shell")
+	if err := state.Update(func(value *api.State) error {
+		value.Workspaces[0].Path = workspace
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newMemoryOutputRuntime(t)
+	if err := runtime.Create(context.Background(), "runtime-shell", workspace, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Store: state, Runtime: runtime}
+	service.lazyInit()
+
+	if _, err := service.ensureAgent(context.Background(), state.Snapshot().Sessions[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "config", "hooks.json")); err != nil {
+		t.Fatalf("shell engine home was not armed: %v", err)
+	}
+}

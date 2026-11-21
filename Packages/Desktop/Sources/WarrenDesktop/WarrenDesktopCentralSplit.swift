@@ -35,11 +35,14 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var dragStartWidth: CGFloat?
+    /// Local drag ratio held while dragging so @AppStorage / root views are
+    /// updated once on release instead of every drag pixel.
+    @State private var liveRatio: Double?
 
     var body: some View {
         GeometryReader { proxy in
             let layout = layout(
-                terminalRatio: terminalRatio,
+                terminalRatio: liveRatio ?? terminalRatio,
                 availableWidth: proxy.size.width
             )
             HStack(spacing: 0) {
@@ -128,10 +131,14 @@ struct WarrenDesktopCentralSplit<Terminal: View, Editor: View>: View {
                             trailingMinimumWidth: trailingMinimumWidth,
                             defaultRatio: defaultRatio
                         ) else { return }
-                        terminalRatio = clamped / usableWidth
+                        liveRatio = clamped / usableWidth
                     }
                     .onEnded { _ in
                         dragStartWidth = nil
+                        if let finalRatio = liveRatio {
+                            liveRatio = nil
+                            terminalRatio = finalRatio
+                        }
                     }
             )
             .onTapGesture(count: 2) {

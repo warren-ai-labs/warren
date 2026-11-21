@@ -162,8 +162,27 @@ func (s *Service) persistOutputCursor(outputSession *outputSession, _, _ uint64)
 		return
 	}
 	outputSession.mu.Lock()
-	err := s.persistCursorLocked(outputSession)
+	epoch := outputSession.ring.Epoch
+	sequence := outputSession.ring.Upper()
+	hasCursor := outputSession.hasOutputCursor
+	cursorText := ""
+	if hasCursor {
+		cursorText = outputSession.outputCursor.String()
+	}
 	outputSession.mu.Unlock()
+
+	err := s.Store.Update(func(value *api.State) error {
+		for index := range value.Sessions {
+			if value.Sessions[index].ID == outputSession.sessionID && value.Sessions[index].Lifecycle == "running" {
+				value.Sessions[index].Epoch = epoch
+				value.Sessions[index].Sequence = sequence
+				if hasCursor {
+					value.Sessions[index].OutputCursor = cursorText
+				}
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		s.logWarn("persist output cursor", "session", outputSession.sessionID, "error", err)
 	}

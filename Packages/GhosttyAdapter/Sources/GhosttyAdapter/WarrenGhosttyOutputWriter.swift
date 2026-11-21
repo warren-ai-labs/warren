@@ -203,7 +203,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     /// before the snapshot swap, never append covered bytes after it.
     private let terminalFeedLock = NSLock()
     private let inMemory: InMemoryTerminalSession
-    private let ansiObserver: TerminalANSIObserver
+    private let ansiObserver: TerminalANSIObserver?
     private let budgetBytes: Int
     private let yield: Duration
     private var buffer = Buffer()
@@ -231,7 +231,6 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     // Foreground should draw at frame boundary (depth==0), not at queue-empty.
     private var syncDepth: Int = 0
     private var syncEnteredAt: ContinuousClock.Instant?
-    private var syncTail: [UInt8] = []
     /// The grid the Host produced the output now being written for, when the
     /// Host reports one. While it is set, Ghostty's grid follows the Host's
     /// marks instead of the view.
@@ -251,7 +250,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
 
     init(
         inMemory: InMemoryTerminalSession,
-        ansiObserver: TerminalANSIObserver,
+        ansiObserver: TerminalANSIObserver? = nil,
         // Large live TUI bursts and legacy recovery frames must drain without
         // delaying input echoes. Native cold recovery bypasses this VT parser
         // entirely through restoreSnapshot(_:epoch:sequence:).
@@ -397,7 +396,6 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                 buffer.reset(epoch: epoch, sequence: sequence)
                 syncDepth = 0
                 syncEnteredAt = nil
-                syncTail = []
             }
         }
     }
@@ -466,7 +464,6 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             latestRenderedSequence = sequence
             syncDepth = 0
             syncEnteredAt = nil
-            syncTail = []
         }
     }
 
@@ -509,7 +506,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     /// snapshots where ordering with in-flight feed work is not a concern).
     public func receive(_ payload: Data) {
 		terminalFeedLock.withLock {
-			ansiObserver.receive(payload)
+			ansiObserver?.receive(payload)
 			updateSyncDepth(with: payload)
 			if inMemory.receive(payload) {
 				onOutputReceived?()
@@ -520,26 +517,30 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     // MARK: - Synchronized output tracking
 
     private func updateSyncDepth(with payload: Data) {
-        // Scan for ESC[?2026h / ESC[?2026l. Split sequences across Data
-        // boundaries are rare (8-byte pattern) and ignored for simplicity.
-        let bytes = [UInt8](payload)
-        var delta = 0
-        var i = 0
-        while i + 7 < bytes.count {
-            // ESC [ ? 2 0 2 6 h/l  -> 0x1B 0x5B 0x3F 0x32 0x30 0x32 0x36 0x68/0x6C
-            if bytes[i] == 0x1B, bytes[i + 1] == 0x5B, bytes[i + 2] == 0x3F,
-               bytes[i + 3] == 0x32, bytes[i + 4] == 0x30, bytes[i + 5] == 0x32, bytes[i + 6] == 0x36 {
-                if bytes[i + 7] == 0x68 { // h
-                    delta += 1
-                    i += 8
-                    continue
-                } else if bytes[i + 7] == 0x6C { // l
-                    delta -= 1
-                    i += 8
-                    continue
+        // Scan for ESC[?2026h / ESC[?2026l without copying payload into a heap array.
+        guard payload.count >= 8 else { return }
+        let delta = payload.withUnsafeBytes { rawBuffer -> Int in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            var delta = 0
+            var i = 0
+            let limit = bytes.count - 7
+            while i < limit {
+                // ESC [ ? 2 0 2 6 h/l  -> 0x1B 0x5B 0x3F 0x32 0x30 0x32 0x36 0x68/0x6C
+                if bytes[i] == 0x1B, bytes[i + 1] == 0x5B, bytes[i + 2] == 0x3F,
+                   bytes[i + 3] == 0x32, bytes[i + 4] == 0x30, bytes[i + 5] == 0x32, bytes[i + 6] == 0x36 {
+                    if bytes[i + 7] == 0x68 { // h
+                        delta += 1
+                        i += 8
+                        continue
+                    } else if bytes[i + 7] == 0x6C { // l
+                        delta -= 1
+                        i += 8
+                        continue
+                    }
                 }
+                i += 1
             }
-            i += 1
+            return delta
         }
         guard delta != 0 else { return }
         lock.withLock {
@@ -658,7 +659,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                 }) else {
                     return (false, false)
                 }
-                ansiObserver.receive(slice.payload)
+                ansiObserver?.receive(slice.payload)
                 updateSyncDepth(with: slice.payload)
 				let received = inMemory.receive(slice.payload)
 				if received {

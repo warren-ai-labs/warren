@@ -474,9 +474,10 @@ struct WarrenLeadCrewMember: Identifiable {
     }
 
     static func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        return formatter.string(from: date)
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        let hour = components.hour ?? 0
+        let minute = components.minute ?? 0
+        return String(format: "%02d:%02d", hour, minute)
     }
 
     static func formatAge(_ interval: TimeInterval) -> String {

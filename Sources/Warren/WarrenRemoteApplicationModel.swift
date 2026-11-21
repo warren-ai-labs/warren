@@ -250,6 +250,8 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     @Published var openAIBaseURL = ""
     @Published var openAIModel = ""
     @Published var openAITitleEnabled = false
+    /// Session title backend: "cloudflare" (free hosted worker) or "openai".
+    @Published var titleProvider = ""
     var settingsLoaded = false
     /// Set while the daemon has announced an operator-initiated maintenance
     /// window (for example an app install that restarts the daemon). Clients
@@ -713,6 +715,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         openAIBaseURL = ""
         openAIModel = ""
         openAITitleEnabled = false
+        titleProvider = ""
         relaySettings = WarrenDesktopRelaySettings()
         lanPairing = WarrenDesktopLANPairing()
         remoteAccess = WarrenDesktopRemoteAccess()
@@ -1509,6 +1512,9 @@ final class WarrenRemoteApplicationModel: ObservableObject {
         if let enabled = result["openaiTitleEnabled"] as? Bool {
             openAITitleEnabled = enabled
         }
+        if let provider = result["titleProvider"] as? String {
+            titleProvider = provider
+        }
         if let relay = result["relay"] as? [String: Any] {
             relaySettings = Self.relaySettings(from: relay)
             loadRelayDevices()
@@ -1631,7 +1637,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
     }
 
     func setOpenAISetting(_ key: String, _ value: String) {
-        guard ["openaiBaseURL", "openaiModel", "openaiKey", "openaiTitleEnabled"].contains(key),
+        guard ["openaiBaseURL", "openaiModel", "openaiKey", "openaiTitleEnabled", "titleProvider"].contains(key),
               let wire else { return }
         Task { @MainActor [weak self] in
             do {
@@ -1641,6 +1647,7 @@ final class WarrenRemoteApplicationModel: ObservableObject {
                 case "openaiBaseURL": self.openAIBaseURL = value
                 case "openaiModel": self.openAIModel = value
                 case "openaiTitleEnabled": self.openAITitleEnabled = value == "true"
+                case "titleProvider": self.titleProvider = value
                 default: break // The API key is intentionally never retained by clients.
                 }
             } catch {
@@ -2072,6 +2079,11 @@ final class WarrenRemoteApplicationModel: ObservableObject {
             params["openaiKey"] = key
         }
         _ = try await wire.request("settings.testOpenAI", params: params)
+    }
+
+    func testCloudflareTitle() async throws {
+        guard let wire else { throw URLError(.notConnectedToInternet) }
+        _ = try await wire.request("settings.testOpenAI", params: ["titleProvider": "cloudflare"])
     }
 
     func relayEnrollmentRequest(

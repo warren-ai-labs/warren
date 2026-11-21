@@ -265,6 +265,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"openaiBaseURL":      value.OpenAIBaseURL,
 			"openaiModel":        value.OpenAIModel,
 			"openaiTitleEnabled": value.OpenAITitleEnabled,
+			"titleProvider":      value.TitleProvider,
 			"relay":              value.Relay,
 			"publicTunnel":       value.PublicTunnel,
 			"pairing":            pairing,
@@ -324,6 +325,12 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if err := p.requireOwner(); err != nil {
 			return err
 		}
+		if strings.EqualFold(strings.TrimSpace(stringParam(params, "titleProvider")), settings.TitleProviderCloudflare) {
+			if err := p.server.Service.TestCloudflareTitle(ctx); err != nil {
+				return err
+			}
+			return p.writeResult(command.ID, map[string]bool{"ok": true})
+		}
 		if err := p.server.Service.TestOpenAITitle(
 			ctx,
 			stringParam(params, "openaiBaseURL"),
@@ -372,7 +379,16 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 		if _, specified := params["openaiTitleEnabled"]; specified {
 			p.server.Service.Settings.OpenAITitleEnabled = boolParam(params, "openaiTitleEnabled")
 		}
-		if _, specified := params["openaiBaseURL"]; specified || params["openaiModel"] != nil || params["openaiKey"] != nil || params["openaiTitleEnabled"] != nil {
+		if _, specified := params["titleProvider"]; specified {
+			provider := strings.ToLower(strings.TrimSpace(stringParam(params, "titleProvider")))
+			switch provider {
+			case "", settings.TitleProviderCloudflare, settings.TitleProviderOpenAI:
+				p.server.Service.Settings.TitleProvider = provider
+			default:
+				return fmt.Errorf("unsupported title provider %q", provider)
+			}
+		}
+		if _, specified := params["openaiBaseURL"]; specified || params["openaiModel"] != nil || params["openaiKey"] != nil || params["openaiTitleEnabled"] != nil || params["titleProvider"] != nil {
 			if p.server.Service.SettingsPath != "" {
 				if err := settings.Save(p.server.Service.SettingsPath, p.server.Service.Settings); err != nil {
 					return err
@@ -415,6 +431,7 @@ func (p *wsPeer) handle(ctx context.Context, command api.Envelope) error {
 			"openaiBaseURL":      value.OpenAIBaseURL,
 			"openaiModel":        value.OpenAIModel,
 			"openaiTitleEnabled": value.OpenAITitleEnabled,
+			"titleProvider":      value.TitleProvider,
 			"relay":              value.Relay,
 			"publicTunnel":       value.PublicTunnel,
 			"pairing":            pairing,

@@ -670,15 +670,50 @@ func (s *AgentEventStore) CanonicalCheckpoint(
 	return api.AgentProjectionCheckpoint{Sequence: sequence, State: decodeCheckpoint(raw.String)}, true, nil
 }
 
+// CanonicalStreamHead returns the execution ID and latest sequence for streamID
+// without reading or decoding event payloads.
+func (s *AgentEventStore) CanonicalStreamHead(ctx context.Context, streamID string) (string, uint64, bool, error) {
+	if s == nil || s.db == nil {
+		return "", 0, false, nil
+	}
+	streamID = strings.TrimSpace(streamID)
+	if streamID == "" {
+		return "", 0, false, errors.New("canonical agent streamId is required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var (
+		executionID string
+		retained    uint64
+		head        uint64
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT execution_id, retained_from_sequence, head_sequence
+		FROM agent_stream_state WHERE stream_id = ?
+	`, streamID).Scan(&executionID, &retained, &head)
+	if err != nil && err != sql.ErrNoRows {
+		return "", 0, false, fmt.Errorf("query canonical stream head: %w", err)
+	}
+	if retained == 0 {
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT COALESCE(MAX(sequence), 0), COALESCE(MAX(execution_id), '')
+			FROM agent_event_journal WHERE stream_id = ?
+		`, streamID).Scan(&head, &executionID); err != nil {
+			return "", 0, false, fmt.Errorf("query canonical journal head: %w", err)
+		}
+	}
+	if executionID == "" {
+		return "", 0, false, nil
+	}
+	return executionID, head, true, nil
+}
+
 func (s *AgentEventStore) CanonicalExecution(ctx context.Context, streamID string) (api.AgentExecution, bool, error) {
-	result, err := s.QueryCanonicalEvents(ctx, streamID, 0, 0, maxHistoryLimit)
-	if err != nil {
+	executionID, head, found, err := s.CanonicalStreamHead(ctx, streamID)
+	if err != nil || !found {
 		return api.AgentExecution{}, false, err
 	}
-	if result.ExecutionID == "" {
-		return api.AgentExecution{}, false, nil
-	}
-	return api.AgentExecution{ID: result.ExecutionID, StreamID: streamID, HeadSequence: result.HeadSequence}, true, nil
+	return api.AgentExecution{ID: executionID, StreamID: streamID, HeadSequence: head}, true, nil
 }
 
 // canonicalEventsEquivalent compares the immutable semantic identity of an

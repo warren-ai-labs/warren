@@ -601,7 +601,6 @@ export function visibleStreamingText(value, complete) {
 /// the source.
 export function streamingMarkdownBlocks(source) {
   const value = text(source);
-  if (/^ {0,3}(\[[^\]]+\]:|<)/m.test(value)) return [value];
   const lines = value.split("\n");
   const blocks = [];
   let start = 0;
@@ -615,6 +614,9 @@ export function streamingMarkdownBlocks(source) {
       afterBlank = false;
       continue;
     }
+    // Check for link definitions and raw HTML only outside fenced code blocks
+    // so HTML/JSX/XML/C++ snippets inside code fences do not disable splitting.
+    if (/^ {0,3}(\[[^\]]+\]:|<)/.test(line)) return [value];
     if (afterBlank && index > start && /^[^\s]/.test(line) && !/^([*+-]|\d{1,9}[.)])(\s|$)/.test(line)) {
       blocks.push(lines.slice(start, index).join("\n"));
       start = index;

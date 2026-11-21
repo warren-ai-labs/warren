@@ -147,6 +147,31 @@ func (s *Store) SnapshotVersion() (api.State, uint64) {
 	return clone(s.state), s.revision
 }
 
+// Revision returns the current monotonic state revision without cloning state.
+func (s *Store) Revision() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.revision
+}
+
+// HostInfo returns the Host identity metadata without cloning the full state.
+func (s *Store) HostInfo() api.Host {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.Host
+}
+
+// GhostlineMigration returns a shallow copy of the current migration record, if any.
+func (s *Store) GhostlineMigration() *api.GhostlineMigration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.state.GhostlineMigration == nil {
+		return nil
+	}
+	copyValue := *s.state.GhostlineMigration
+	return &copyValue
+}
+
 func (s *Store) ChangesSince(revision uint64) <-chan struct{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

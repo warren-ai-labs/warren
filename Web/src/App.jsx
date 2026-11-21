@@ -383,6 +383,7 @@ export default function App() {
   const agentGapRequestsRef = useRef(new Set());
   const agentQueueRef = useRef({});
   const agentInterruptInFlightRef = useRef(new Set());
+  const agentViewActiveRef = useRef(false);
   const [agentViewOverride, setAgentViewOverride] = useState(null);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
   const [sessionSheetInitialKind, setSessionSheetInitialKind] = useState("");
@@ -3194,12 +3195,20 @@ export default function App() {
       setCatalog(previous => {
         const session = previous.sessions.get(message.session);
         if (!session) return previous;
+        const process = message.process || "";
+        const commandLine = message.commandLine || "";
+        const directory = message.directory || "";
+        if (session.process === process
+          && session.commandLine === commandLine
+          && session.directory === directory) {
+          return previous;
+        }
         const sessions = new Map(previous.sessions);
         sessions.set(message.session, {
           ...session,
-          process: message.process || "",
-          commandLine: message.commandLine || "",
-          directory: message.directory || "",
+          process,
+          commandLine,
+          directory,
         });
         return { ...previous, sessions };
       });
@@ -3542,8 +3551,10 @@ export default function App() {
       }
     };
     const scheduleWebGLForScroll = () => {
-      clearTimeout(webglScrollTimer);
       const inHistory = terminal.buffer.active.viewportY < terminal.buffer.active.baseY;
+      clearTimeout(webglScrollTimer);
+      webglScrollTimer = null;
+      if ((inHistory && webglDegraded) || (!inHistory && !webglDegraded)) return;
       webglScrollTimer = setTimeout(
         inHistory ? degradeWebGLForScroll : restoreWebGL,
         inHistory ? 250 : 1200
@@ -3552,7 +3563,9 @@ export default function App() {
     const onTerminalScroll = () => {
       scheduleWebGLForScroll();
       const buffer = terminal.buffer.active;
-      if (buffer.viewportY >= buffer.baseY) setHasNewTerminalOutput(false);
+      if (buffer.viewportY >= buffer.baseY) {
+        setHasNewTerminalOutput(previous => (previous ? false : previous));
+      }
     };
     const scrollSubscription = terminal.onScroll(onTerminalScroll);
     // xterm opens at its fallback 80x24 grid. Fit once synchronously and once
@@ -3622,7 +3635,7 @@ export default function App() {
         navigator.clipboard.writeText(text).catch(() => {});
       }
     };
-    terminal.element?.addEventListener("mouseup", copySelectionOnMouseUp);
+    terminal.element?.addEventListener("pointerup", copySelectionOnMouseUp);
     terminal.textarea?.addEventListener("focus", onTerminalFocus);
     terminal.textarea?.addEventListener("blur", onTerminalBlur);
     const releaseWindowFocus = () => {
@@ -3680,7 +3693,7 @@ export default function App() {
       dataSubscription.dispose();
       resizeSubscription.dispose();
       searchResultsSubscription.dispose();
-      terminal.element?.removeEventListener("mouseup", copySelectionOnMouseUp);
+      terminal.element?.removeEventListener("pointerup", copySelectionOnMouseUp);
       textarea?.removeEventListener("compositionstart", onCompositionStart);
       textarea?.removeEventListener("compositionend", onCompositionEnd);
       textarea?.removeEventListener("input", onTextareaInput);
@@ -4423,6 +4436,9 @@ export default function App() {
         event.preventDefault();
         setSearchOpen(true);
       } else if (event.key.toLowerCase() === "f") {
+        // Leave browser find intact when the terminal is hidden behind the
+        // Agent conversation or a file diff view.
+        if (agentViewActiveRef.current || (gitOpen && fileView)) return;
         event.preventDefault();
         openTerminalSearch();
       } else if (event.key === ",") {
@@ -4432,7 +4448,7 @@ export default function App() {
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [searchOpen, settingsOpen, drawerOpen, terminalSearchOpen, renameDialog, deleteDialog, openSettings, closeSearch, closeSettings, closeTerminalSearch, openTerminalSearch]);
+  }, [searchOpen, settingsOpen, drawerOpen, terminalSearchOpen, renameDialog, deleteDialog, gitOpen, fileView, openSettings, closeSearch, closeSettings, closeTerminalSearch, openTerminalSearch]);
 
   const chooseSearchWorkspace = useCallback(workspaceID => {
     closeSearch();
@@ -4537,8 +4553,10 @@ export default function App() {
   // The transcript's turns are memoized; stable callbacks let a streamed
   // batch re-render only the turn it touched.
   const openAgentLinkedSession = useCallback(sessionID => attachSessionRef.current?.(sessionID), []);
-  const catalogSessions = catalog?.sessions;
-  const agentSessionExists = useCallback(sessionID => Boolean(catalogSessions?.get?.(sessionID)), [catalogSessions]);
+  const catalogSessionsRef = useRef(catalog?.sessions);
+  catalogSessionsRef.current = catalog?.sessions;
+  const agentSessionExists = useCallback(sessionID => Boolean(catalogSessionsRef.current?.get?.(sessionID)), []);
+  const handleNewSession = useCallback(() => openSessionSheet(), [openSessionSheet]);
   // Stable navigation props, so the memoized Sidebar and TopBar skip the
   // renders driven by terminal output and Agent batches. Each workspace's
   // tabs are derived once per catalog.
@@ -4568,6 +4586,16 @@ export default function App() {
       && (agentViewOverride === "agent" || agentViewReady)
       && agentViewOverride !== "terminal",
   );
+  agentViewActiveRef.current = agentViewActive;
+  const selectedAgentAttention = Boolean(agentStateBySession[selectedSession?.id]?.status?.attention);
+  const showTopBarAgentToggle = isAgentSession && !isConversationSession;
+  const topBarAgentToggle = useMemo(() => (
+    showTopBarAgentToggle ? {
+      active: agentViewActive,
+      attention: selectedAgentAttention,
+      onSelect: toggleAgentView,
+    } : null
+  ), [showTopBarAgentToggle, agentViewActive, selectedAgentAttention, toggleAgentView]);
 
   // Load the first history page when an agent view becomes active. Live
   // batches arrive through the WebSocket, but the full conversation is
@@ -4772,7 +4800,7 @@ export default function App() {
           onChooseWorkspace={chooseWorkspace}
           onOpenWorkspace={openWorkspace}
           onNewSessionInWorkspace={openNewSessionInWorkspace}
-          onNewSession={() => openSessionSheet()}
+          onNewSession={handleNewSession}
           onOpenSearch={openSearchPanel}
           onOpenSettings={openSettings}
           onProjectContextMenu={projectContextMenu}
@@ -4798,7 +4826,7 @@ export default function App() {
               onAttachSession={attachSession}
               onToggleAgentView={toggleAgentView}
               onOpenMenu={openDrawer}
-              onNewSession={() => openSessionSheet()}
+              onNewSession={handleNewSession}
               onOpenMoreMenu={openMobileMoreMenu}
               onSessionContextMenu={sessionContextMenu}
               pendingSessionID={pendingSessionID}
@@ -4810,17 +4838,13 @@ export default function App() {
               <TopBar
                 session={selectedSession}
                 workspace={selectedWorkspace}
-                onNewSession={() => openSessionSheet()}
+                onNewSession={handleNewSession}
                 onOpenMenu={openDrawer}
                 onOpenSearch={openSearchPanel}
                 onToggleGit={toggleGitPanel}
                 gitActive={gitOpen}
                 creatingSession={Boolean(creatingSessionKind)}
-                agentToggle={isAgentSession && !isConversationSession ? {
-                  active: agentViewActive,
-                  attention: Boolean(agentStateBySession[selectedSession?.id]?.status?.attention),
-                  onSelect: toggleAgentView,
-                } : null}
+                agentToggle={topBarAgentToggle}
               />
             </>
           )}

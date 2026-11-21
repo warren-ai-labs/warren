@@ -317,6 +317,11 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 	} else {
 		binding, err := agent.ReadBinding(agent.BindPath(session.ID))
 		if err != nil || binding == nil || (binding.Provider != "codex" && binding.Provider != "claude" && binding.Provider != "opencode" && binding.Provider != "pi" && binding.Provider != "qoder" && binding.Provider != "antigravity") {
+			// A shell can hold an agent whose home the daemon has not seen
+			// before. Learning from the running process installs the bind hook
+			// there, so the engine's next invocation in this shell reports its
+			// own conversation instead of staying a plain terminal.
+			s.learnShellAgentHome(session, state)
 			s.clearShellAgentWithState(session, state)
 			return nil, nil
 		}
@@ -399,7 +404,7 @@ func (s *Service) ensureAgentWithState(ctx context.Context, session api.Session,
 			agentSessionID = binding.SessionID
 			transcriptPath = binding.TranscriptPath
 			if transcriptPath == "" || !regularFileExists(transcriptPath) {
-				transcriptPath = agent.FindAntigravityTranscript(binding.SessionID, workspacePath)
+				transcriptPath = agent.FindAntigravityTranscriptIn(binding.Home, binding.SessionID, workspacePath)
 			}
 			if transcriptPath == "" {
 				return nil, nil

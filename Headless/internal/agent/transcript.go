@@ -664,6 +664,12 @@ func Start(
 		subagentsDir = claudeSubagentsDir(path)
 		claude.SetSubagentsDir(subagentsDir)
 	}
+	if antigravity, ok := p.(*antigravityParser); ok {
+		// The name agy generated lives in the summaries database beside the
+		// conversation tree, not in the transcript being tailed.
+		home, conversationID := antigravityTitleSourceFromTranscriptPath(path)
+		antigravity.SetTitleSource(home, conversationID)
+	}
 	watcher := &Watcher{
 		sessionID:         sessionID,
 		provider:          provider,
@@ -930,6 +936,14 @@ func readNew(path string, offset int64, parser Parser) ([]api.AgentEvent, int64,
 // at byte zero. The parser state then suppresses duplicate snapshots and
 // projects only any delta that arrived while the watcher was behind.
 func readNewTracked(path string, offset int64, parser Parser, previous os.FileInfo) ([]api.AgentEvent, int64, os.FileInfo, error) {
+	if previous != nil {
+		if statInfo, err := os.Lstat(path); err == nil &&
+			statInfo.Mode().IsRegular() &&
+			os.SameFile(previous, statInfo) &&
+			statInfo.Size() == offset {
+			return nil, offset, previous, nil
+		}
+	}
 	file, err := openRegularFile(path)
 	if err != nil {
 		return nil, offset, previous, err

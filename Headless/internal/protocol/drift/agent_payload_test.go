@@ -146,10 +146,10 @@ func TestAgentPayloadTypes(t *testing.T) {
 		}
 		for _, tc := range cases {
 			event := api.CanonicalAgentEventFromObservation(api.AgentEvent{
-				ID:      "e-" + tc.eventType,
+				ID:       "e-" + tc.eventType,
 				Provider: "codex",
-				Type:    tc.eventType,
-				Payload: tc.payload,
+				Type:     tc.eventType,
+				Payload:  tc.payload,
 			}, "stream-1", "exec-1", 1, testTime)
 			event.Type = tc.eventType
 			check(t, event.Type, event.Payload)

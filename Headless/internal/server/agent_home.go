@@ -314,3 +314,22 @@ func processEnv(pid int) map[string]string {
 	}
 	return env
 }
+
+// learnShellAgentHome arms the hook in an engine home a shell session is
+// already running in. A shell has no provider until its CLI writes a binding,
+// so this is the only place the daemon can learn a relocated home before the
+// engine's next invocation. A session with a binding is already an agent and
+// needs no discovery.
+func (s *Service) learnShellAgentHome(session api.Session, state *api.State) {
+	if session.Kind != "shell" && session.Kind != "custom" {
+		return
+	}
+	if binding, err := agent.ReadBinding(agent.BindPath(session.ID)); err == nil && binding != nil {
+		return
+	}
+	workspacePath, err := sessionWorkingDirectory(*state, session.WorkspaceID)
+	if err != nil {
+		return
+	}
+	s.learnAgentHomes(workspacePath)
+}

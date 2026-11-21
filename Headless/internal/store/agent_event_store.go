@@ -47,7 +47,7 @@ func OpenAgentEventStore(dbPath string) (*AgentEventStore, error) {
 	uri := url.URL{
 		Scheme:   "file",
 		Path:     filepath.ToSlash(dbPath),
-		RawQuery: fmt.Sprintf("_pragma=busy_timeout(60000)&_pragma=journal_size_limit(%d)", journalSizeLimit),
+		RawQuery: fmt.Sprintf("_pragma=busy_timeout(60000)&_pragma=synchronous(NORMAL)&_pragma=journal_size_limit(%d)", journalSizeLimit),
 	}
 	db, err := sql.Open("sqlite3", uri.String())
 	if err != nil {

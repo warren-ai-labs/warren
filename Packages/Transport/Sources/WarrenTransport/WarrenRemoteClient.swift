@@ -2250,7 +2250,14 @@ public actor WarrenRemoteClient {
                 setConnectionState(.connected)
                 await socket.startHeartbeat()
                 _ = version
-                await restoreSubscriptions(on: socket)
+                // Restore retained subscriptions concurrently with draining
+                // `socket.events` so `.welcome`, initial `.roster`, and the
+                // active session's recovery frames are never blocked behind
+                // background subscriptions or dropped by the bounded stream.
+                let restoreTask = Task {
+                    await self.restoreSubscriptions(on: socket)
+                }
+                defer { restoreTask.cancel() }
                 for try await event in socket.events {
                     guard running, !Task.isCancelled else { return }
                     if case .disconnected(let reason) = event {

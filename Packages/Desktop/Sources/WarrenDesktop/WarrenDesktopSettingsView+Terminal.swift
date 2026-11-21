@@ -492,107 +492,189 @@ extension WarrenDesktopSettingsView {
 
     // MARK: - AI titles
 
+    var resolvedTitleProvider: String {
+        let trimmed = titleProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed == "cloudflare" || trimmed == "openai" {
+            return trimmed
+        }
+        return openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "cloudflare"
+            : "openai"
+    }
+
     func aiTitlesSection(palette: WarrenSettingsPalette) -> some View {
         VStack(alignment: .leading, spacing: 24) {
             // The page's first card had no heading, so it read as a stray box
-            // above the Endpoint group rather than as its own section.
+            // above the provider group rather than as its own section.
             WarrenSettingsGroup("Automatic titles") {
                 WarrenSettingsToggleRow(
                     title: "Generate Titles Automatically",
-                    description: "Codex, Claude Code, OpenCode, and Qoder name their own conversations and Warren keeps those names. This switch adds a title from the LLM below whenever an agent has not named the conversation.",
+                    description: "Codex, Claude Code, OpenCode, and Qoder name their own conversations and Warren keeps those names. This switch adds a title from the provider below whenever an agent has not named the conversation.",
                     isOn: Binding(
                         get: { openAITitleEnabled },
-                        set: { onSetOpenAISetting("openaiTitleEnabled", $0 ? "true" : "false") }
+                        set: { enabled in
+                            if enabled && titleProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                && openAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                onSetOpenAISetting("titleProvider", "cloudflare")
+                            }
+                            onSetOpenAISetting("openaiTitleEnabled", enabled ? "true" : "false")
+                        }
                     ),
                     accessibilityID: "settings.ai-titles.enabled"
                 )
+
+                WarrenSettingsRowDivider()
+
+                WarrenSettingsRow(
+                    "Provider",
+                    description: "Use the free Warren title service powered by Cloudflare Workers AI, or supply your own OpenAI-compatible API."
+                ) {
+                    WarrenSettingsSegmented(
+                        options: [
+                            ("cloudflare", "Cloudflare Free"),
+                            ("openai", "Custom API"),
+                        ],
+                        selection: Binding(
+                            get: { resolvedTitleProvider },
+                            set: { selected in
+                                openAITestStatus = .idle
+                                onSetOpenAISetting("titleProvider", selected)
+                            }
+                        ),
+                        accessibilityID: "settings.ai-titles.provider"
+                    )
+                }
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                WarrenSettingsGroup("Endpoint", accessory: "OpenAI-compatible") {
-                    WarrenSettingsRow("Base URL") {
-                        WarrenSettingsTextField(
-                            placeholder: "https://api.openai.com/v1",
-                            text: $openAIBaseURLDraft,
-                            monospaced: true,
-                            width: WarrenSettingsMetrics.fieldWidth,
-                            isEnabled: !openAITestStatus.isTesting,
-                            accessibilityID: "settings.ai-titles.base-url"
-                        )
-                    }
-                    WarrenSettingsRowDivider()
-                    WarrenSettingsRow("Model") {
-                        WarrenSettingsTextField(
-                            placeholder: "gpt-4o-mini",
-                            text: $openAIModelDraft,
-                            monospaced: true,
-                            width: WarrenSettingsMetrics.fieldWidth,
-                            isEnabled: !openAITestStatus.isTesting,
-                            accessibilityID: "settings.ai-titles.model"
-                        )
-                    }
-                    WarrenSettingsRowDivider()
-                    WarrenSettingsRow("API Key", description: "Stored only on this host.") {
-                        WarrenSettingsTextField(
-                            placeholder: "••••••••3f2a",
-                            text: $openAIKeyDraft,
-                            isSecure: true,
-                            monospaced: true,
-                            width: WarrenSettingsMetrics.fieldWidth,
-                            isEnabled: !openAITestStatus.isTesting,
-                            accessibilityID: "settings.ai-titles.api-key"
-                        )
-                    }
-                }
-
-                HStack(spacing: 12) {
-                    Button {
-                        testOpenAISettings(save: true)
-                    } label: {
-                        HStack(spacing: 6) {
-                            if openAITestStatus.isTesting {
-                                ProgressView().controlSize(.small)
-                            }
-                            Text(openAITestStatus.isTesting ? "Testing…" : "Save & Test")
+            if resolvedTitleProvider == "cloudflare" {
+                VStack(alignment: .leading, spacing: 12) {
+                    WarrenSettingsGroup("Cloudflare Workers AI", accessory: "Free · 50 / day") {
+                        WarrenSettingsRow(
+                            "Endpoint",
+                            description: "Sends only the first exchange (or recent text on Regenerate) to title.warrenai.xyz. Conversations are never logged or stored, and Warren falls back to a local title if the daily quota is reached."
+                        ) {
+                            Text("title.warrenai.xyz")
+                                .font(WarrenTypography.mono)
+                                .foregroundStyle(palette.inkQuiet)
+                                .accessibilityIdentifier("settings.ai-titles.cloudflare-endpoint")
                         }
                     }
-                    .buttonStyle(WarrenSettingsButtonStyle(kind: .primary))
-                    .disabled(openAITestStatus.isTesting)
-                    .accessibilityIdentifier("settings.ai-titles.save-and-test")
-                    .warrenSemanticElement(
-                        id: "settings.ai-titles.save-and-test",
-                        role: .button,
-                        label: "Save and test AI title connection",
-                        isEnabled: !openAITestStatus.isTesting,
-                        action: { testOpenAISettings(save: true) }
-                    )
 
-                    Button("Test") {
-                        testOpenAISettings(save: false)
-                    }
-                    .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
-                    .disabled(openAITestStatus.isTesting || !hasUnsavedOpenAIDraft)
-                    .accessibilityIdentifier("settings.ai-titles.test")
-                    .warrenSemanticElement(
-                        id: "settings.ai-titles.test",
-                        role: .button,
-                        label: "Test AI title connection",
-                        isEnabled: !openAITestStatus.isTesting && hasUnsavedOpenAIDraft,
-                        action: { testOpenAISettings(save: false) }
-                    )
+                    HStack(spacing: 12) {
+                        Button {
+                            testCloudflareTitleSettings()
+                        } label: {
+                            HStack(spacing: 6) {
+                                if openAITestStatus.isTesting {
+                                    ProgressView().controlSize(.small)
+                                }
+                                Text(openAITestStatus.isTesting ? "Testing…" : "Test Connection")
+                            }
+                        }
+                        .buttonStyle(WarrenSettingsButtonStyle(kind: .primary))
+                        .disabled(openAITestStatus.isTesting || onTestCloudflareTitle == nil)
+                        .accessibilityIdentifier("settings.ai-titles.cloudflare-test")
 
-                    switch openAITestStatus {
-                    case .idle:
-                        EmptyView()
-                    case .testing:
-                        WarrenSettingsStatusLine(tone: .busy, text: "Testing connection…")
-                    case .succeeded:
-                        WarrenSettingsStatusLine(tone: .ok, text: "Connection succeeded.")
-                    case .failed(let message):
-                        WarrenSettingsStatusLine(tone: .failed, text: message, isError: true)
+                        switch openAITestStatus {
+                        case .idle:
+                            EmptyView()
+                        case .testing:
+                            WarrenSettingsStatusLine(tone: .busy, text: "Testing connection…")
+                        case .succeeded:
+                            WarrenSettingsStatusLine(tone: .ok, text: "Connection succeeded.")
+                        case .failed(let message):
+                            WarrenSettingsStatusLine(tone: .failed, text: message, isError: true)
+                        }
                     }
+                    .padding(.leading, 14)
                 }
-                .padding(.leading, 14)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    WarrenSettingsGroup("Endpoint", accessory: "OpenAI-compatible") {
+                        WarrenSettingsRow("Base URL") {
+                            WarrenSettingsTextField(
+                                placeholder: "https://api.openai.com/v1",
+                                text: $openAIBaseURLDraft,
+                                monospaced: true,
+                                width: WarrenSettingsMetrics.fieldWidth,
+                                isEnabled: !openAITestStatus.isTesting,
+                                accessibilityID: "settings.ai-titles.base-url"
+                            )
+                        }
+                        WarrenSettingsRowDivider()
+                        WarrenSettingsRow("Model") {
+                            WarrenSettingsTextField(
+                                placeholder: "gpt-4o-mini",
+                                text: $openAIModelDraft,
+                                monospaced: true,
+                                width: WarrenSettingsMetrics.fieldWidth,
+                                isEnabled: !openAITestStatus.isTesting,
+                                accessibilityID: "settings.ai-titles.model"
+                            )
+                        }
+                        WarrenSettingsRowDivider()
+                        WarrenSettingsRow("API Key", description: "Stored only on this host.") {
+                            WarrenSettingsTextField(
+                                placeholder: "••••••••3f2a",
+                                text: $openAIKeyDraft,
+                                isSecure: true,
+                                monospaced: true,
+                                width: WarrenSettingsMetrics.fieldWidth,
+                                isEnabled: !openAITestStatus.isTesting,
+                                accessibilityID: "settings.ai-titles.api-key"
+                            )
+                        }
+                    }
+
+                    HStack(spacing: 12) {
+                        Button {
+                            testOpenAISettings(save: true)
+                        } label: {
+                            HStack(spacing: 6) {
+                                if openAITestStatus.isTesting {
+                                    ProgressView().controlSize(.small)
+                                }
+                                Text(openAITestStatus.isTesting ? "Testing…" : "Save & Test")
+                            }
+                        }
+                        .buttonStyle(WarrenSettingsButtonStyle(kind: .primary))
+                        .disabled(openAITestStatus.isTesting)
+                        .accessibilityIdentifier("settings.ai-titles.save-and-test")
+                        .warrenSemanticElement(
+                            id: "settings.ai-titles.save-and-test",
+                            role: .button,
+                            label: "Save and test AI title connection",
+                            isEnabled: !openAITestStatus.isTesting,
+                            action: { testOpenAISettings(save: true) }
+                        )
+
+                        Button("Test") {
+                            testOpenAISettings(save: false)
+                        }
+                        .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
+                        .disabled(openAITestStatus.isTesting || !hasUnsavedOpenAIDraft)
+                        .accessibilityIdentifier("settings.ai-titles.test")
+                        .warrenSemanticElement(
+                            id: "settings.ai-titles.test",
+                            role: .button,
+                            label: "Test AI title connection",
+                            isEnabled: !openAITestStatus.isTesting && hasUnsavedOpenAIDraft,
+                            action: { testOpenAISettings(save: false) }
+                        )
+
+                        switch openAITestStatus {
+                        case .idle:
+                            EmptyView()
+                        case .testing:
+                            WarrenSettingsStatusLine(tone: .busy, text: "Testing connection…")
+                        case .succeeded:
+                            WarrenSettingsStatusLine(tone: .ok, text: "Connection succeeded.")
+                        case .failed(let message):
+                            WarrenSettingsStatusLine(tone: .failed, text: message, isError: true)
+                        }
+                    }
+                    .padding(.leading, 14)
+                }
             }
         }
         .onAppear(perform: seedOpenAIFields)
@@ -603,12 +685,27 @@ extension WarrenDesktopSettingsView {
     }
 
     func saveOpenAISettings() {
+        onSetOpenAISetting("titleProvider", "openai")
         saveOpenAIField("openaiBaseURL", openAIBaseURLDraft)
         saveOpenAIField("openaiModel", openAIModelDraft)
         let key = openAIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         if !key.isEmpty {
             onSetOpenAISetting("openaiKey", key)
             openAIKeyDraft = ""
+        }
+    }
+
+    func testCloudflareTitleSettings() {
+        guard !openAITestStatus.isTesting, let onTestCloudflareTitle else { return }
+        onSetOpenAISetting("titleProvider", "cloudflare")
+        openAITestStatus = .testing
+        Task { @MainActor in
+            do {
+                try await onTestCloudflareTitle()
+                openAITestStatus = .succeeded
+            } catch {
+                openAITestStatus = .failed(error.localizedDescription)
+            }
         }
     }
 

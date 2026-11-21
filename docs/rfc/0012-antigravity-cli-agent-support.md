@@ -127,6 +127,24 @@ If hooks are disabled or `agy` is started manually in an unmanaged shell:
 3. If matched, the transcript path is resolved to:
    `~/.gemini/antigravity-cli/brain/<conversation_id>/.system_generated/logs/transcript.jsonl`.
 
+#### Shell Sessions and Relocated Homes
+
+A Session created as `shell` can still hold an Agent when the CLI is started
+inside it. Warren reads the engine home from the running `agy --gemini_dir`
+process and installs its bind hook there, so the engine's next invocation in
+that shell reports its conversation and the Session becomes an Agent. The same
+lookup uses the binding's `home`, not only the daemon's own `~/.gemini`, when it
+resolves the transcript.
+
+#### Conversation Title
+
+`agy` names its own conversation and stores that name in
+`conversation_summaries.title`. Warren reads it for the bound conversation and
+prefers it over its own title request, exactly as it does a Codex thread name or
+a Claude `ai-title` event. The summaries database is opened read-only, so a
+session whose conversation has not been named yet keeps Warren's own title
+request as its fallback.
+
 ---
 
 ### 3.2 Command Validation Rules

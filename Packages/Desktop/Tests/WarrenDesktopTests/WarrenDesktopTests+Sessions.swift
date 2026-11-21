@@ -318,7 +318,7 @@ extension WarrenDesktopTests {
 
         XCTAssertTrue(availableOptions.allSatisfy(\.isEnabled))
         XCTAssertTrue(unavailableOptions.allSatisfy { !$0.isEnabled })
-        XCTAssertEqual(resolveCount, WarrenDesktopExternalIDE.supported.count * 2)
+        XCTAssertEqual(resolveCount, WarrenDesktopExternalIDE.supported.count)
     }
     func testConnectionPresentationNamesRuntimeMigration() {
         let migrating = WarrenDesktopConnectionPresentation(

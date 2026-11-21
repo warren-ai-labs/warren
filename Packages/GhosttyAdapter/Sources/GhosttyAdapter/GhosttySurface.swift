@@ -27,7 +27,10 @@ public final class GhosttySurface: Identifiable {
     /// Ghostty's ANSI parsing happens off it.
     public let outputWriter: WarrenGhosttyOutputWriter
     private let onViewportResize: @Sendable (Int, Int) -> Void
-    private let ansiObserver = TerminalANSIObserver()
+    /// Opt-in ANSI text/style recorder used only by `TerminalProbe` and tests.
+    /// Production surfaces leave this nil so long-lived sessions do not retain
+    /// an unbounded copy of lifetime PTY output or parse ANSI twice.
+    private let ansiObserver: TerminalANSIObserver?
     /// Optional viewport fingerprint used by callers that can safely capture
     /// the grid before demotion. TerminalSurfaceManager deliberately leaves
     /// this unset because a synchronous grid read can contend with output
@@ -50,7 +53,8 @@ public final class GhosttySurface: Identifiable {
         font: TerminalFontPreference = .init(),
         backgroundOpacity: Double = 1,
         outputRenderBudgetBytes: Int = 64 * 1024,
-        outputRenderYield: Duration = .milliseconds(1),
+        outputRenderYield: Duration = .microseconds(200),
+        observeANSISemantics: Bool = false,
         onInput: @escaping @Sendable (Data) -> Void,
         onResize: @escaping @Sendable (Int, Int) -> Void,
         onOpenURL: (@MainActor (String, TerminalOpenURLKind, String?) -> Bool)? = nil
@@ -58,6 +62,7 @@ public final class GhosttySurface: Identifiable {
         self.id = id
         self.attachmentID = attachmentID
         self.onViewportResize = onResize
+        self.ansiObserver = observeANSISemantics ? TerminalANSIObserver() : nil
         self.onOpenURL = onOpenURL
         self.font = font
         self.backgroundOpacity = backgroundOpacity
@@ -487,7 +492,11 @@ public final class GhosttySurface: Identifiable {
     }
 
     public func semanticSnapshot() -> TerminalSemanticSnapshot {
-        ansiObserver.snapshot()
+        ansiObserver?.snapshot() ?? TerminalSemanticSnapshot(
+            plainText: "",
+            runs: [],
+            containsStyledText: false
+        )
     }
 
     /// Re-sync a reattached warm surface with Ghostty's viewport state.
