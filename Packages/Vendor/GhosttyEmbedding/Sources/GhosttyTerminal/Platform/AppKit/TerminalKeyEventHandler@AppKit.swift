@@ -42,9 +42,11 @@
         ) -> Bool {
             // AppKit sometimes resolves non-text keys into editing commands
             // (for example Shift-Tab -> insertBacktab:). In a terminal, those
-            // commands still need to reach Ghostty as the original hardware key.
-            let _ = selector
-            return true
+            // commands still need to reach Ghostty as the original hardware key
+            // without text. `noop:` is AppKit's fallback for unhandled command
+            // chords (such as ⌘C / ⌘V) and must keep the normal key path so
+            // `handleKeyDown` stays consistent with `keyIsBinding`.
+            selector != Selector(("noop:"))
         }
 
         func handleKeyDown(with event: NSEvent) {
@@ -284,14 +286,35 @@
             consumedFlags.remove(.command)
             input.consumed_mods = TerminalInputModifiers(from: consumedFlags).ghosttyMods
 
-            if type == .keyDown || type == .keyUp,
-               let chars = characters(byApplyingModifiers: []),
-               let codepoint = chars.unicodeScalars.first
-            {
-                input.unshifted_codepoint = codepoint.value
+            if type == .keyDown || type == .keyUp {
+                input.unshifted_codepoint = Self.resolveUnshiftedCodepoint(
+                    fromAppliedCharacters: characters(byApplyingModifiers: []),
+                    keyCode: keyCode,
+                    charactersIgnoringModifiers: charactersIgnoringModifiers
+                )
             }
 
             return input
+        }
+
+        nonisolated static func resolveUnshiftedCodepoint(
+            fromAppliedCharacters applied: String?,
+            keyCode: UInt16,
+            charactersIgnoringModifiers: String?,
+            layoutLookup: (UInt16) -> UInt32? = KeyboardLayout.unshiftedCodepoint(for:)
+        ) -> UInt32 {
+            if let scalar = applied?.unicodeScalars.first {
+                return scalar.value
+            }
+            if let codepoint = layoutLookup(keyCode) {
+                return codepoint
+            }
+            if let filtered = TerminalInputText.filteredFunctionKeyText(charactersIgnoringModifiers),
+               let scalar = filtered.unicodeScalars.first
+            {
+                return scalar.value
+            }
+            return 0
         }
 
         var filteredCharacters: String? {
@@ -313,7 +336,7 @@
                 var flags = modifierFlags
                 flags.remove(.control)
                 return TerminalInputText.filteredFunctionKeyText(
-                    characters(byApplyingModifiers: flags)
+                    characters(byApplyingModifiers: flags) ?? charactersIgnoringModifiers
                 )
             }
 

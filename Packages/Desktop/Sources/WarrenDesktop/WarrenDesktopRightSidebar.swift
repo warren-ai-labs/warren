@@ -68,27 +68,42 @@ public enum WarrenDesktopRightSidebarTab: Hashable, Sendable {
 @MainActor
 public final class WarrenDesktopInspectorActivity: ObservableObject {
     @Published public var changeCount: Int
+    @Published public private(set) var hasKeyboardFocus: Bool = false
+    private var focusedSources: Set<String> = []
 
     public init(changeCount: Int = 0) {
         self.changeCount = changeCount
     }
+
+    public func setKeyboardFocus(_ focused: Bool, source: String) {
+        if focused {
+            focusedSources.insert(source)
+        } else {
+            focusedSources.remove(source)
+        }
+        let next = !focusedSources.isEmpty
+        if hasKeyboardFocus != next {
+            hasKeyboardFocus = next
+        }
+    }
 }
 
-/// The right sidebar: one card holding the Inspector's pages and the embedded
-/// editor, with one tab row and the external-editor control.
+/// The right sidebar: one card beside the terminal that hosts either the
+/// Inspector's three tabs (Changes, History, Files) or the Embedded Editor as
+/// a separate mode with its own minimal header.
 ///
-/// The Inspector and the editor used to occupy the same column but never
-/// together: the editor took precedence and the Inspector came back when it
-/// closed. They are two pages of one container now, so neither has to displace
-/// the other and a Tab is how the user moves between them.
+/// The top bar keeps a single right-sidebar toggle. Inside the sidebar, the
+/// Inspector tabs stay grouped on the leading side and the Embedded Editor
+/// launches from a dedicated trailing control beside the external IDE icon.
+/// Entering Editor mode replaces the Inspector tab bar with a minimal Editor
+/// header whose close button closes the right sidebar and clears the
+/// workspace's editor marker.
 struct WarrenDesktopRightSidebar: View {
-    /// The page shown for the current Workspace.
+    /// The mode shown for the current Workspace.
     let tab: WarrenDesktopRightSidebarTab
     let inspectorAvailable: Bool
     let editorAvailable: Bool
-    /// Whether the embedded editor is running for this Workspace. It is not the
-    /// same as "the editor tab is selected": closing the region keeps the tab
-    /// and its place.
+    /// Whether the embedded editor is running for this Workspace.
     let editorRunning: Bool
     /// The number drawn on the Changes tab, from the Inspector's model.
     let changeCount: Int
@@ -97,12 +112,15 @@ struct WarrenDesktopRightSidebar: View {
     /// The embedded editor's content.
     let editorContent: () -> AnyView
     let onSelectTab: (WarrenDesktopRightSidebarTab) -> Void
-    /// Closes the editor region without hiding the sidebar.
+    /// Switches from Editor mode to the Workspace's last Inspector tab without
+    /// closing the right sidebar or clearing the editor marker.
+    let onOpenInspector: () -> Void
+    /// Closes the embedded editor and the right sidebar.
     let onCloseEditor: () -> Void
     /// The external-editor control, present only where the Host allows one.
     let externalIDE: ExternalIDE?
 
-    /// The external-editor control at the end of the tab row.
+    /// The external-editor control at the end of the header row.
     struct ExternalIDE {
         /// The editor a plain click opens, and the name the tooltip carries.
         let name: String?
@@ -118,8 +136,9 @@ struct WarrenDesktopRightSidebar: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hoveredTab: WarrenDesktopRightSidebarTab?
+    @State private var hoveredTab: WarrenDesktopInspectorTab?
+    @State private var isOpenEditorHovered = false
+    @State private var isOpenInspectorHovered = false
     @State private var isCloseHovered = false
     @State private var isIDEBodyHovered = false
 
@@ -129,7 +148,7 @@ struct WarrenDesktopRightSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            tabRow
+            headerRow
             Rectangle()
                 .fill(tokens.chromeDivider)
                 .frame(height: 1)
@@ -143,38 +162,62 @@ struct WarrenDesktopRightSidebar: View {
         .accessibilityLabel("Right sidebar")
     }
 
-    // MARK: - Tab row
+    // MARK: - Header
 
-    private var tabRow: some View {
+    @ViewBuilder
+    private var headerRow: some View {
+        switch tab {
+        case .inspector:
+            inspectorHeader
+        case .editor:
+            editorHeader
+        }
+    }
+
+    private var inspectorHeader: some View {
         HStack(spacing: 2) {
             if inspectorAvailable {
                 inspectorTabButton(.changes)
                 inspectorTabButton(.history)
                 inspectorTabButton(.files)
             }
-            if inspectorAvailable, editorAvailable {
-                Rectangle()
-                    .fill(tokens.foreground.opacity(0.18))
-                    .frame(width: 1, height: 14)
-                    .padding(.horizontal, 4)
-                    .accessibilityHidden(true)
-            }
-            if editorAvailable {
-                editorTabButton
-            }
             Spacer(minLength: 4)
+            if editorAvailable {
+                openEditorButton
+            }
             if let externalIDE {
                 externalIDEControl(externalIDE)
             }
         }
         .padding(.horizontal, 6)
-        .frame(height: 36)
+        .frame(height: WarrenLayoutMetrics.tabBarHeight)
+    }
+
+    private var editorHeader: some View {
+        HStack(spacing: 2) {
+            Text("Editor")
+                .font(WarrenTypography.panelTabSelected)
+                .foregroundStyle(tokens.foreground)
+                .padding(.leading, 8)
+                .accessibilityLabel("Editor")
+
+            Spacer(minLength: 4)
+            if inspectorAvailable {
+                openInspectorButton
+            }
+            if let externalIDE {
+                externalIDEControl(externalIDE)
+            }
+            closeEditorButton
+        }
+        .padding(.horizontal, 6)
+        .frame(height: WarrenLayoutMetrics.tabBarHeight)
     }
 
     private func inspectorTabButton(_ inspector: WarrenDesktopInspectorTab) -> some View {
         let page = WarrenDesktopRightSidebarTab.inspector(inspector)
         let isSelected = tab == page
-        let isHovered = hoveredTab == page
+        let isHovered = hoveredTab == inspector
         return Button {
             onSelectTab(page)
         } label: {
@@ -192,7 +235,7 @@ struct WarrenDesktopRightSidebar: View {
             }
             .foregroundStyle(isSelected ? tokens.foreground : tokens.mutedForeground)
             .padding(.horizontal, 8)
-            .frame(height: 26)
+            .frame(height: WarrenLayoutMetrics.tabPillHeight)
             .background(
                 isSelected
                     ? tokens.tertiaryWash
@@ -202,7 +245,7 @@ struct WarrenDesktopRightSidebar: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .onHover { hoveredTab = $0 ? page : (hoveredTab == page ? nil : hoveredTab) }
+        .onHover { hoveredTab = $0 ? inspector : (hoveredTab == inspector ? nil : hoveredTab) }
         .accessibilityLabel(inspector.title)
         .accessibilityValue(accessibilityValue(for: inspector))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -221,83 +264,97 @@ struct WarrenDesktopRightSidebar: View {
         return "\(changeCount) changes"
     }
 
-    private var editorTabButton: some View {
-        let page = WarrenDesktopRightSidebarTab.editor
-        let isSelected = tab == page
-        let isHovered = hoveredTab == page
-        let showsClose = editorRunning && (isSelected || isHovered)
-        // Not running reads quieter, as the spec draws it: it is a page the user
-        // can start, not one that is live.
-        let titleColor: Color = isSelected
-            ? tokens.foreground
-            : (editorRunning ? tokens.mutedForeground : tokens.mutedForeground.opacity(0.7))
-        return HStack(spacing: 4) {
-            Button {
-                onSelectTab(page)
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left.forwardslash.chevron.right")
-                        .font(.system(size: 10.5, weight: .medium))
-                    WarrenDesktopPanelTabTitle("Editor", isSelected: isSelected)
-                }
-                .foregroundStyle(titleColor)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-
-            if showsClose {
-                Button(action: onCloseEditor) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 8.5, weight: .semibold))
-                        .foregroundStyle(isCloseHovered ? tokens.foreground : tokens.mutedForeground)
-                        .frame(width: 16, height: 16)
-                        .background(
-                            isCloseHovered ? tokens.foreground.opacity(0.12) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        )
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .onHover { isCloseHovered = $0 }
-                .warrenTooltip("Close Editor")
-                .accessibilityLabel("Close Editor")
-                .warrenSemanticElement(
-                    id: "right-sidebar.editor.close",
-                    role: .button,
-                    label: "Close Editor",
-                    action: onCloseEditor
+    /// Launches the Embedded Editor mode from the Inspector header, kept on the
+    /// trailing side beside the external IDE action so it never reads as a
+    /// fourth Inspector tab.
+    private var openEditorButton: some View {
+        let open = { onSelectTab(.editor) }
+        return Button(action: open) {
+            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(editorRunning || isOpenEditorHovered ? tokens.foreground : tokens.mutedForeground)
+                .frame(width: 28, height: 26)
+                .background(
+                    isOpenEditorHovered ? tokens.fillHover : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
                 )
-            }
+                .contentShape(.rect)
         }
-        .padding(.leading, 8)
-        .padding(.trailing, showsClose ? 4 : 8)
-        // The close key widens the tab; it fades in as the tab grows to it.
-        // The tab is the last before the spacer, so nothing else moves.
-        .animation(
-            WarrenMotion.animation(.feedback, reduceMotion: reduceMotion),
-            value: showsClose
-        )
-        .frame(height: 26)
-        .background(
-            isSelected
-                ? tokens.tertiaryWash
-                : (isHovered ? tokens.fillHover : Color.clear),
-            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-        )
-        .contentShape(.rect)
-        .onHover { hoveredTab = $0 ? page : (hoveredTab == page ? nil : hoveredTab) }
-        .warrenTooltip("Embedded Editor")
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Editor")
-        .accessibilityValue(!editorRunning ? "Not running" : (isSelected ? "Selected" : ""))
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .buttonStyle(.plain)
+        .onHover { isOpenEditorHovered = $0 }
+        .warrenTooltip("Open Embedded Editor")
+        .accessibilityLabel("Open Embedded Editor")
+        .accessibilityValue(editorRunning ? "Running" : "")
         .warrenSemanticElement(
-            id: "right-sidebar.tab.editor",
+            id: "right-sidebar.editor.open",
             role: .button,
-            label: "Editor",
+            label: "Open Embedded Editor",
             value: editorRunning ? "Running" : "Not running",
-            isSelected: isSelected,
-            action: { onSelectTab(page) }
+            action: open
+        )
+    }
+
+    /// Switches from Editor mode back to the Inspector without closing the
+    /// right sidebar or clearing the Workspace's editor marker.
+    private var openInspectorButton: some View {
+        Button(action: onOpenInspector) {
+            HStack(spacing: 4) {
+                Text("Inspector")
+                    .font(WarrenTypography.panelTab)
+                if changeCount > 0 {
+                    Text("\(changeCount)")
+                        .font(WarrenTypography.count)
+                        .warrenNumericTransition(value: changeCount)
+                        .foregroundStyle(isOpenInspectorHovered ? tokens.foreground.opacity(0.8) : tokens.mutedForeground)
+                        .padding(.horizontal, 4)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(tokens.tertiaryWash, in: Capsule())
+                }
+            }
+            .foregroundStyle(isOpenInspectorHovered ? tokens.foreground : tokens.mutedForeground)
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .background(
+                isOpenInspectorHovered ? tokens.fillHover : Color.clear,
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { isOpenInspectorHovered = $0 }
+        .warrenTooltip("Switch to Inspector")
+        .accessibilityLabel("Inspector")
+        .accessibilityValue(changeCount > 0 ? "\(changeCount) changes" : "")
+        .warrenSemanticElement(
+            id: "right-sidebar.inspector.open",
+            role: .button,
+            label: "Inspector",
+            value: changeCount > 0 ? "\(changeCount) changes" : "",
+            action: onOpenInspector
+        )
+    }
+
+    private var closeEditorButton: some View {
+        Button(action: onCloseEditor) {
+            Image(systemName: "xmark")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(isCloseHovered ? tokens.foreground : tokens.mutedForeground)
+                .frame(width: 28, height: 26)
+                .background(
+                    isCloseHovered ? tokens.fillHover : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { isCloseHovered = $0 }
+        .warrenTooltip("Close Editor")
+        .accessibilityLabel("Close Editor")
+        .warrenSemanticElement(
+            id: "right-sidebar.editor.close",
+            role: .button,
+            label: "Close Editor",
+            action: onCloseEditor
         )
     }
 
@@ -368,7 +425,7 @@ struct WarrenDesktopRightSidebar: View {
         let open = { onSelectTab(.editor) }
         return VStack(spacing: 10) {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
-                .font(.system(size: 20, weight: .light))
+                .font(.system(size: 20, weight: .regular))
                 .foregroundStyle(tokens.mutedForeground.opacity(0.8))
             Text("Embedded editor is not running")
                 .font(WarrenTypography.emptyStateTitle)

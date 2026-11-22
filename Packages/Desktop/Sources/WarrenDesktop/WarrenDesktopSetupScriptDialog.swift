@@ -41,16 +41,17 @@ public struct WarrenDesktopSetupScriptDialog: View {
                 .padding(10)
                 .frame(minHeight: 220)
                 .background(
-                    tokens.background,
-                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    tokens.inputSurface,
+                    in: RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                 )
                 .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    RoundedRectangle(cornerRadius: WarrenRadius.small, style: .continuous)
                         .strokeBorder(
-                            isEditorFocused ? tokens.foreground.opacity(0.54) : tokens.cardBorder,
-                            lineWidth: 1
+                            isEditorFocused ? tokens.focusRing : tokens.cardBorder,
+                            lineWidth: WarrenSpacing.hairline
                         )
                 }
+                .shadow(color: isEditorFocused ? tokens.focusRing.opacity(0.55) : .clear, radius: 3)
                 .focused($isEditorFocused)
                 .accessibilityIdentifier("project.setup-script.path")
                 .onAppear { isEditorFocused = true }
@@ -72,9 +73,6 @@ public struct WarrenDesktopSetupScriptDialog: View {
                         .disabled(script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("project.setup-script.clear")
                 }
-                Text("Tab switches fields")
-                    .font(WarrenTypography.dialogMeta)
-                    .foregroundStyle(tokens.ink4)
             }
         }
         .onExitCommand(perform: onCancel)

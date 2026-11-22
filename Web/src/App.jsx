@@ -115,7 +115,7 @@ function sessionAgentCapabilities(catalog, connectionCapabilities, sessionID) {
   }
   return session.agentCapabilities.filter(capability => connectionCapabilities?.has(capability));
 }
-const FileDiffView = lazy(() => import("./filediff.jsx").then(module => ({ default: module.FileDiffView })));
+const FileDiffHost = lazy(() => import("./filediff.jsx").then(module => ({ default: module.FileDiffHost })));
 import { handleUnixTextEditingKey, InputQueue, MobileInputDeduper } from "./input.js";
 import { sessionTargetLabel } from "./presentation.js";
 import { OutputBatcher } from "./output.js";
@@ -179,6 +179,7 @@ const storageKeys = {
   presetCommands: "warren.presetCommands",
   presetOrder: "warren.presetOrder",
   hiddenPresets: "warren.hiddenPresets",
+  theme: "warren.theme",
 };
 
 // How often the open git panel re-fetches remote refs while it stays visible.
@@ -190,9 +191,9 @@ const REQUEST_TIMEOUT_MS = 30_000;
 
 const defaultFontFamily = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
 const defaultFontSize = matchMedia("(max-width: 767px)").matches ? 12 : 13;
-// The Desktop's dark terminal (GhosttySurface and TerminalPalette.ember), so a
-// Session looks the same in either client.
-const terminalTheme = {
+// The Desktop's dark and Ember Paper light terminal palettes, so a Session
+// looks the same in either client and follows the active appearance.
+const darkTerminalTheme = {
   background: "#0b0b0b",
   foreground: "#ededed",
   cursor: "#e07850",
@@ -215,13 +216,42 @@ const terminalTheme = {
   brightCyan: "#73c7d3",
   brightWhite: "#ffffff",
 };
+const lightTerminalTheme = {
+  background: "#ffffff",
+  foreground: "#1c1917",
+  cursor: "#b7522c",
+  cursorAccent: "#ffffff",
+  selectionBackground: "rgba(183, 82, 44, 0.22)",
+  black: "#1c1917",
+  red: "#b3261e",
+  green: "#2f7d51",
+  yellow: "#8a5a00",
+  blue: "#1c6fb8",
+  magenta: "#85467f",
+  cyan: "#2a7b72",
+  white: "#e2ddd9",
+  brightBlack: "#6e6863",
+  brightRed: "#c93b3b",
+  brightGreen: "#3c8f60",
+  brightYellow: "#9c6808",
+  brightBlue: "#2b7fd1",
+  brightMagenta: "#9a5794",
+  brightCyan: "#348e84",
+  brightWhite: "#ffffff",
+};
 const pendingInputLimit = 64 * 1024;
 const terminalRecoveryTimeoutMs = 15_000;
-const terminalSearchDecorations = {
+const darkTerminalSearchDecorations = {
   matchBackground: "#3a3837",
   matchOverviewRuler: "#f59e0b",
   activeMatchBackground: "#e07850",
   activeMatchColorOverviewRuler: "#e07850",
+};
+const lightTerminalSearchDecorations = {
+  matchBackground: "#ebe7e3",
+  matchOverviewRuler: "#8a5a00",
+  activeMatchBackground: "#e5b8a4",
+  activeMatchColorOverviewRuler: "#b7522c",
 };
 const isCoarsePointer = () => (
   typeof window.matchMedia === "function"
@@ -297,6 +327,24 @@ export default function App() {
   const [fontFamily, setFontFamily] = useState(() => localStorage.getItem(storageKeys.fontFamily) || defaultFontFamily);
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem(storageKeys.fontSize)) || defaultFontSize);
   const [titleTemplate, setTitleTemplate] = useState(() => localStorage.getItem(storageKeys.titleTemplate) || defaultTitleTemplate);
+  const [themePreference, setThemePreference] = useState(() => {
+    const stored = localStorage.getItem(storageKeys.theme);
+    return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+  });
+  const systemLight = useMediaQuery("(prefers-color-scheme: light)");
+  const resolvedTheme = themePreference === "light" || (themePreference === "system" && systemLight) ? "light" : "dark";
+  const resolvedThemeRef = useRef(resolvedTheme);
+  resolvedThemeRef.current = resolvedTheme;
+  useEffect(() => {
+    document.documentElement.dataset.theme = resolvedTheme;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", resolvedTheme === "light" ? "#ffffff" : "#0b0b0b");
+    try {
+      localStorage.setItem(storageKeys.theme, themePreference);
+    } catch {
+      // Theme preference persistence is optional in private browsing.
+    }
+  }, [resolvedTheme, themePreference]);
   const [presetCommands, setPresetCommands] = useState(() => loadPresetCommands());
   const [presetOrder, setPresetOrder] = useState(() => loadPresetOrder());
   const [hiddenPresets, setHiddenPresets] = useState(() => loadHiddenPresets());
@@ -791,6 +839,19 @@ export default function App() {
     const projectName = catalog.projectsByID.get(selectedWorkspace.project)?.name || "";
     return sessionTargetLabel(projectName, selectedWorkspace.branch || selectedWorkspace.name || "");
   }, [catalog.projectsByID, selectedWorkspace]);
+  const sessionSheetWorkspaces = useMemo(() => {
+    const options = [];
+    for (const project of catalog.projects) {
+      const workspaces = catalog.workspacesByProject.get(project.id) || [];
+      for (const workspace of workspaces) {
+        options.push({
+          id: workspace.id,
+          label: sessionTargetLabel(project.name || "", workspace.branch || workspace.name || "") || workspace.id,
+        });
+      }
+    }
+    return options;
+  }, [catalog.projects, catalog.workspacesByProject]);
   const tabs = useMemo(
     () => selectedWorkspaceID ? workspaceTabs(catalog, selectedWorkspaceID) : [],
     [catalog, selectedWorkspaceID],
@@ -1161,6 +1222,7 @@ export default function App() {
   }, [announceFeedback, loadGitPanel, request, runGitAction, selectedWorkspaceID]);
 
   const [fileView, setFileView] = useState(null);
+  const [fileDiffMounted, setFileDiffMounted] = useState(false);
   const [fileDiff, setFileDiff] = useState({ loading: false, diff: "", content: "", error: "" });
   const fileViewKeyRef = useRef(null);
   const fileViewRef = useRef(null);
@@ -1194,9 +1256,10 @@ export default function App() {
   }, []);
 
   const setFileDiffView = useCallback(({ viewTab, diffStyle } = {}) => {
+    const narrow = typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
     const next = {
       viewTab: viewTab === "file" ? "file" : "diff",
-      diffStyle: diffStyle === "split" ? "split" : "unified",
+      diffStyle: diffStyle === "split" && !narrow ? "split" : "unified",
     };
     fileDiffViewRef.current = next;
     setFileDiffViewTabState(next.viewTab);
@@ -1204,6 +1267,7 @@ export default function App() {
   }, []);
 
   const openFileView = useCallback((change, commit = "", workspaceID = selectedWorkspaceID) => {
+    setFileDiffMounted(true);
     const key = commit ? `${workspaceID}:${commit}:${change.path}` : `${workspaceID}:${change.staged ? "s" : "u"}:${change.path}`;
     const requestToken = { key, workspaceID };
     fileDiffRequestRef.current = requestToken;
@@ -2216,7 +2280,9 @@ export default function App() {
     }
     addon.findNext(query, {
       incremental: true,
-      decorations: terminalSearchDecorations,
+      decorations: resolvedThemeRef.current === "light"
+        ? lightTerminalSearchDecorations
+        : darkTerminalSearchDecorations,
     });
   }, []);
 
@@ -2236,7 +2302,11 @@ export default function App() {
     const addon = searchAddonRef.current;
     const query = terminalSearchQueryRef.current;
     if (!addon || !query) return;
-    const options = { decorations: terminalSearchDecorations };
+    const options = {
+      decorations: resolvedThemeRef.current === "light"
+        ? lightTerminalSearchDecorations
+        : darkTerminalSearchDecorations,
+    };
     if (direction === "next") addon.findNext(query, options);
     else addon.findPrevious(query, options);
   }, [runTerminalSearchQuery]);
@@ -2680,9 +2750,13 @@ export default function App() {
     }
   }, [attachSession, autoStartAI, cancelSubscription, clearPendingSession, clearTerminalSearch, createSession, persistCurrentGitUI, recordNavigation, restoreGitUIForWorkspace, visiblePresets]);
 
-  const chooseSessionPreset = useCallback((kind, settings) => {
-    createSession(kind, null, settings);
-  }, [createSession]);
+  const chooseSessionPreset = useCallback((kind, settings, workspaceID = null) => {
+    const targetWorkspaceID = workspaceID || selectedWorkspaceID;
+    if (targetWorkspaceID && targetWorkspaceID !== appStateRef.current.activeWorkspace) {
+      chooseWorkspace(targetWorkspaceID, null, false);
+    }
+    createSession(kind, targetWorkspaceID, settings);
+  }, [chooseWorkspace, createSession, selectedWorkspaceID]);
 
   const openSessionSheet = useCallback((kind = "") => {
     setSessionSheetInitialKind(kind);
@@ -3263,44 +3337,56 @@ export default function App() {
           hostNameRef.current = message.host_name.trim();
         }
         const detail = hostOfflineDetail(message) || connectionErrorDetail(message);
-        setConnectionStatus({ message: detail, online: false });
-        // Relay waited ~15s for the Host before sending this, and an
-        // unauthorized socket will not fix itself either. Both are facts, not
-        // flaps, so they skip the grace period.
-        presenter().lost(detail);
-        setEmptyOverride({ loading: false, message: detail });
-        clearPendingSession();
-        // A stated reason replaces a queued switch: the user is being told what
-        // is wrong, so retrying silently underneath it would only confuse.
-        clearDeferredSwitch();
-        announceFeedback(detail || "Connection failed", "error");
+        const reportConnectionError = () => {
+          setConnectionStatus({ message: detail, online: false });
+          // Relay waited ~15s for the Host before sending this, and an
+          // unauthorized socket will not fix itself either. Both are facts, not
+          // flaps, so they skip the grace period.
+          presenter().lost(detail);
+          setEmptyOverride({ loading: false, message: detail });
+          clearPendingSession();
+          // A stated reason replaces a queued switch: the user is being told what
+          // is wrong, so retrying silently underneath it would only confuse.
+          clearDeferredSwitch();
+          announceFeedback(detail || "Connection failed", "error");
+        };
         if (detail === "unauthorized") {
           // Relay access capabilities are intentionally short lived. Rotate
           // through the HttpOnly refresh cookie once before treating an
-          // unauthorized socket as terminal; the shareable pairing link is
-          // not needed again while this refresh family remains valid.
+          // unauthorized socket as terminal; defer WelcomeScreen and error
+          // chrome until refresh fails so a silent rotation never flashes.
           const hasRelayConfig = hasRelayHostID || hasRelayInviteID;
-          if (hasRelayConfig && !relayRefreshInFlightRef.current) {
-            relayRefreshInFlightRef.current = true;
-            runtime.refresh().then(token => {
-              relayRefreshInFlightRef.current = false;
-              const connection = connectionRef.current;
-              if (!token || !connection) {
+          if (hasRelayConfig) {
+            if (!relayRefreshInFlightRef.current) {
+              relayRefreshInFlightRef.current = true;
+              presenter().unsettled("Reconnecting…");
+              runtime.refresh().then(token => {
+                relayRefreshInFlightRef.current = false;
+                const connection = connectionRef.current;
+                if (!token || !connection) {
+                  runtime.clearToken?.();
+                  connection?.stop();
+                  reportConnectionError();
+                  return;
+                }
+                connection.token = token;
+                connection.reset();
+              }).catch(() => {
+                relayRefreshInFlightRef.current = false;
                 runtime.clearToken?.();
-                connection?.stop();
-                return;
-              }
-              connection.token = token;
-              connection.reset();
-            }).catch(() => {
-              relayRefreshInFlightRef.current = false;
+                connectionRef.current?.stop();
+                reportConnectionError();
+              });
+            }
+          } else {
+            reportConnectionError();
+            if (!runtime.usesControlPlane || !hasRelayConfig) {
               runtime.clearToken?.();
               connectionRef.current?.stop();
-            });
-          } else if (!runtime.usesControlPlane || !hasRelayConfig) {
-            runtime.clearToken?.();
-            connectionRef.current?.stop();
+            }
           }
+        } else {
+          reportConnectionError();
         }
       }
       break;
@@ -3413,7 +3499,7 @@ export default function App() {
     if (!terminalHost) return undefined;
 
     const terminal = new Terminal({
-      theme: terminalTheme,
+      theme: resolvedThemeRef.current === "light" ? lightTerminalTheme : darkTerminalTheme,
       fontFamily,
       fontSize,
       lineHeight: 1.12,
@@ -3722,6 +3808,12 @@ export default function App() {
       batcherRef.current = null;
     };
   }, [beginSubscription, request, requestSessionFocus, scheduleRemoteResize, scheduleTerminalFit, sendInput]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.options.theme = resolvedTheme === "light" ? lightTerminalTheme : darkTerminalTheme;
+  }, [resolvedTheme]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -4419,6 +4511,11 @@ export default function App() {
         closeTerminalSearch();
         return;
       }
+      if (event.key === "Escape" && gitOpen && fileView) {
+        event.preventDefault();
+        closeFileView();
+        return;
+      }
       if (event.key === "Escape" && drawerOpen) {
         setDrawerOpen(false);
         return;
@@ -4448,10 +4545,11 @@ export default function App() {
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [searchOpen, settingsOpen, drawerOpen, terminalSearchOpen, renameDialog, deleteDialog, gitOpen, fileView, openSettings, closeSearch, closeSettings, closeTerminalSearch, openTerminalSearch]);
+  }, [searchOpen, settingsOpen, drawerOpen, terminalSearchOpen, renameDialog, deleteDialog, gitOpen, fileView, openSettings, closeFileView, closeSearch, closeSettings, closeTerminalSearch, openTerminalSearch]);
 
   const chooseSearchWorkspace = useCallback(workspaceID => {
     closeSearch();
+    setInboxOpen(false);
     chooseWorkspace(workspaceID);
   }, [chooseWorkspace, closeSearch]);
 
@@ -4471,6 +4569,7 @@ export default function App() {
     if (target.kind === "session") {
       if (!target.workspace) return;
       closeSearch();
+      setInboxOpen(false);
       chooseWorkspace(target.workspace, target.id);
       return;
     }
@@ -4513,12 +4612,14 @@ export default function App() {
     }
   }, [applyRemoteSettings, autoStartAI, request]);
 
-  const updateOpenAISetting = useCallback((key, value) => {
-    const params = { [key]: value };
+  const updateOpenAISetting = useCallback((keyOrPatch, value) => {
+    const params = typeof keyOrPatch === "object" && keyOrPatch !== null
+      ? { ...keyOrPatch }
+      : { [keyOrPatch]: value };
     request("settings.put", params, applyRemoteSettings);
-    if (key === "openaiBaseURL") setOpenaiBaseURL(value);
-    if (key === "openaiModel") setOpenaiModel(value);
-    if (key === "openaiTitleEnabled") setOpenaiTitleEnabled(value);
+    if ("openaiBaseURL" in params) setOpenaiBaseURL(params.openaiBaseURL);
+    if ("openaiModel" in params) setOpenaiModel(params.openaiModel);
+    if ("openaiTitleEnabled" in params) setOpenaiTitleEnabled(params.openaiTitleEnabled);
   }, [applyRemoteSettings, request]);
 
   const updateAgentCompletionSound = useCallback(enabled => {
@@ -4567,7 +4668,22 @@ export default function App() {
       return cache.get(workspaceID);
     };
   }, [catalog]);
-  const openNewSessionInWorkspace = useCallback(workspaceID => openWorkspace(workspaceID, true), [openWorkspace]);
+  const openSessionFromSidebar = useCallback((workspaceID, sessionID) => {
+    setInboxOpen(false);
+    chooseWorkspace(workspaceID, sessionID);
+  }, [chooseWorkspace]);
+  const chooseWorkspaceFromSidebar = useCallback(workspaceID => {
+    setInboxOpen(false);
+    chooseWorkspace(workspaceID);
+  }, [chooseWorkspace]);
+  const openWorkspaceFromSidebar = useCallback(workspaceID => {
+    setInboxOpen(false);
+    openWorkspace(workspaceID);
+  }, [openWorkspace]);
+  const openNewSessionInWorkspace = useCallback(workspaceID => {
+    setInboxOpen(false);
+    openWorkspace(workspaceID, true);
+  }, [openWorkspace]);
   const openSearchPanel = useCallback(() => setSearchOpen(true), []);
   const toggleGitPanel = useCallback(() => setGitOpenState(open => !open), [setGitOpenState]);
   const isAgentSession = isSupportedAgentSession(selectedSession);
@@ -4587,7 +4703,10 @@ export default function App() {
       && agentViewOverride !== "terminal",
   );
   agentViewActiveRef.current = agentViewActive;
-  const selectedAgentAttention = Boolean(agentStateBySession[selectedSession?.id]?.status?.attention);
+  const selectedAgentAttention = Boolean(
+    agentStateBySession[selectedSession?.id]?.status?.attention
+    || selectedSession?.agentStatus?.attention,
+  );
   const showTopBarAgentToggle = isAgentSession && !isConversationSession;
   const topBarAgentToggle = useMemo(() => (
     showTopBarAgentToggle ? {
@@ -4791,14 +4910,14 @@ export default function App() {
           activeWorkspace={selectedWorkspaceID}
           activeSession={activeSession}
           hostName={hostName}
-          onOpenSession={chooseWorkspace}
+          onOpenSession={openSessionFromSidebar}
           onSessionContextMenu={sessionContextMenu}
           expandedProjects={expandedProjects}
           tabsForWorkspace={tabsForWorkspace}
           connection={connectionView}
           onToggleProject={toggleProject}
-          onChooseWorkspace={chooseWorkspace}
-          onOpenWorkspace={openWorkspace}
+          onChooseWorkspace={chooseWorkspaceFromSidebar}
+          onOpenWorkspace={openWorkspaceFromSidebar}
           onNewSessionInWorkspace={openNewSessionInWorkspace}
           onNewSession={handleNewSession}
           onOpenSearch={openSearchPanel}
@@ -4823,6 +4942,7 @@ export default function App() {
               connection={connectionView}
               agentSession={isAgentSession && !isConversationSession ? selectedSession : null}
               agentViewActive={agentViewActive}
+              agentAttention={selectedAgentAttention}
               onAttachSession={attachSession}
               onToggleAgentView={toggleAgentView}
               onOpenMenu={openDrawer}
@@ -4859,12 +4979,13 @@ export default function App() {
             }}
           >
             <div id="terminal" ref={terminalHostRef} hidden={agentViewActive || (gitOpen && Boolean(fileView))} />
-            {gitOpen && fileView && (
-              <Suspense fallback={<p className="git-empty file-diff-empty">Loading diff viewer…</p>}>
-                <FileDiffView
-                  path={fileView.path}
-                  staged={fileView.staged}
-                  commit={fileView.commit}
+            {fileDiffMounted && (
+              <Suspense fallback={gitOpen && fileView ? <p className="git-empty file-diff-empty">Loading diff viewer…</p> : null}>
+                <FileDiffHost
+                  active={gitOpen && Boolean(fileView)}
+                  path={fileView?.path || ""}
+                  staged={Boolean(fileView?.staged)}
+                  commit={fileView?.commit || ""}
                   loading={fileDiff.loading}
                   diff={fileDiff.diff}
                   content={fileDiff.content}
@@ -4873,6 +4994,7 @@ export default function App() {
                   onClose={closeFileView}
                   viewTab={fileDiffViewTab}
                   diffStyle={fileDiffStyle}
+                  theme={resolvedTheme}
                   onViewTabChange={setFileDiffViewTab}
                   onDiffStyleChange={setFileDiffStyle}
                 />
@@ -4882,6 +5004,7 @@ export default function App() {
               // One view for every Agent. A chat (ACP) Session has no
               // terminal behind it, so it is always ready and in control.
               <AgentView
+                hidden={gitOpen && Boolean(fileView)}
                 session={selectedSession}
                 turn={agentStateBySession[selectedSession.id]?.turn || selectedSession.agentTurn || null}
                 events={selectedAgentEvents}
@@ -4956,8 +5079,8 @@ export default function App() {
               tabCount={tabs.length}
               projectCount={catalog.projects.length}
               override={emptyOverride}
-              onNewSession={() => createSession("shell")}
-              onReconnect={reconnectWithAuth}
+              onNewSession={handleNewSession}
+              onReconnect={() => connectionRef.current?.reconnectNow()}
             />
             )}
           </section>
@@ -4971,6 +5094,7 @@ export default function App() {
               activeSession={activeSession}
               grouping={inboxGrouping}
               onGroupingChange={changeInboxGrouping}
+              onOpenMenu={openDrawer}
               onOpenSession={openSessionFromInbox}
               onNewSession={newSessionFromInbox}
               onOpenSearch={openSearchPanel}
@@ -4989,6 +5113,7 @@ export default function App() {
             refreshing={gitRefreshing}
             error={gitError}
             action={gitAction}
+            fileView={fileView}
             onRefresh={() => loadGitPanel(true)}
             onPull={() => runGitAction("git.pull", { workspace: selectedWorkspaceID })}
             onPush={() => runGitAction("git.push", { workspace: selectedWorkspaceID })}
@@ -5004,6 +5129,7 @@ export default function App() {
       </div>
       <SettingsPage
         open={settingsOpen}
+        themePreference={themePreference}
         fontFamily={fontFamily}
         fontSize={fontSize}
         titleTemplate={titleTemplate}
@@ -5019,6 +5145,7 @@ export default function App() {
         titlePreview={titlePreview}
         placeholders={Object.entries(titlePlaceholders)}
         onClose={closeSettings}
+        onThemePreferenceChange={setThemePreference}
         onFontFamilyChange={updateFontFamily}
         onFontSizeChange={updateFontSize}
         onTitleTemplateChange={updateTitleTemplate}
@@ -5050,6 +5177,8 @@ export default function App() {
           pendingKind={creatingSessionKind}
           initialKind={sessionSheetInitialKind}
           target={sessionSheetTarget}
+          workspaces={sessionSheetWorkspaces}
+          selectedWorkspaceID={selectedWorkspaceID}
         />
       )}
       <WorktreeImportDialog

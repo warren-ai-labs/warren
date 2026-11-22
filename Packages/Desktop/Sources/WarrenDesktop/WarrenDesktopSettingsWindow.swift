@@ -145,6 +145,7 @@ private struct WarrenDesktopSettingsWindowRoot: View {
 
     var body: some View {
         content
+            .warrenUnixTextEditing()
             .environment(\.warrenMenuCenter, menuCenter)
             .warrenMenuOverlay(menuCenter)
             .warrenTooltipHost()

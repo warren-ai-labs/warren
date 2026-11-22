@@ -182,6 +182,7 @@ export function GitPanel({
   refreshing,
   error,
   action,
+  fileView = null,
   onRefresh,
   onPull,
   onPush,
@@ -202,7 +203,7 @@ export function GitPanel({
   const [openPanes, setOpenPanes] = useState(() => new Set(
     saved?.openPanes ? saved.openPanes : ["checkout", "pr", "changes", "history"],
   ));
-  const [selectedKey, setSelectedKey] = useState(saved?.selectedKey || null);
+  const selectedKey = fileView ? changeKey(fileView, fileView.commit || "") : null;
   const [commitOpen, setCommitOpen] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [prOpen, setPrOpen] = useState(false);
@@ -289,8 +290,6 @@ export function GitPanel({
   }, [branchTouched, data]);
 
   const openFile = (change, commit = "") => {
-    const key = changeKey(change, commit);
-    setSelectedKey(previous => (previous === key ? null : key));
     onOpenFile(change, commit);
   };
 
@@ -346,7 +345,7 @@ export function GitPanel({
         </div>
       </header>
 
-      {error && <div className="git-error">{error}</div>}
+      {error && <div className="git-error" role="alert">{error}</div>}
 
       <div className="git-panel-body">
         {refreshing && !data && (
@@ -547,8 +546,15 @@ export function GitPanel({
           open={openPanes.has("changes")}
           onToggle={() => togglePane("changes")}
         >
+          {data && changeCount === 0 && <p className="git-empty">No changes</p>}
           <ChangeSection title="Staged" changes={data?.staged || []} selectedKey={selectedKey} onOpenFile={openFile} />
-          <ChangeSection title="Changes" changes={data?.unstaged || []} selectedKey={selectedKey} onOpenFile={openFile} showTitle={false} />
+          <ChangeSection
+            title="Unstaged"
+            changes={data?.unstaged || []}
+            selectedKey={selectedKey}
+            onOpenFile={openFile}
+            showTitle={(data?.staged?.length || 0) > 0}
+          />
         </GitPane>
 
         <GitPane

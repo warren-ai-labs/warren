@@ -374,7 +374,7 @@ export function ProgramStatusDot({ programStatus }) {
   // The tooltip carries the program's own message when it sent one; the label
   // stays stable for assistive technology and names the subject.
   const title = programStatusDetail(programStatus, mark);
-  return <span className={className} title={title} aria-label={programStatusMarkLabel(mark)} role="img" />;
+  return <span className={className} data-tooltip={title} aria-label={programStatusMarkLabel(mark)} role="img" />;
 }
 
 /// The single status dot a row draws.
@@ -467,7 +467,8 @@ function writeRevealedFold(key, value) {
 /// a row keeps its height.
 function SidebarSessionRow({ session, workspace, active, acknowledgedLifecycle, onOpen, onContextMenu }) {
   const summary = sessionRowSummary(session);
-  const mark = resolveDrawnActivityMark(session.agentStatus, acknowledgedLifecycle);
+  const mark = resolveDrawnActivityMark(session.agentStatus, acknowledgedLifecycle)
+    || resolveProgramStatusMark(session.programStatus);
   // Working, waiting, failed, or done and not yet seen: the title steps up a
   // tier so the rows that want something stand out of a long list.
   const live = Boolean(mark && mark !== "exited");
@@ -507,7 +508,10 @@ function BranchName({ branch }) {
 /// state, then how many Sessions there are.
 function FoldSummary({ sessions, acknowledgments }) {
   const marks = sessions
-    .map(session => resolveDrawnActivityMark(session.agentStatus, acknowledgments[session.id] ?? null))
+    .map(session => (
+      resolveDrawnActivityMark(session.agentStatus, acknowledgments[session.id] ?? null)
+      || resolveProgramStatusMark(session.programStatus)
+    ))
     .filter(mark => mark && mark !== "exited")
     .slice(0, 6);
   if (!sessions.length) return null;
@@ -665,7 +669,7 @@ function SidebarView({
         </span>
         {isBuild && <span className="build-badge">Build</span>}
         {onOpenSearch && (
-          <button type="button" className="tree-icon-button" aria-label="Search projects" data-tooltip="Search" onClick={onOpenSearch}>
+          <button type="button" className="tree-icon-button" aria-label="Search projects" data-tooltip="Search" data-tooltip-shortcut="⌘K" onClick={onOpenSearch}>
             <SearchIcon />
           </button>
         )}
@@ -742,14 +746,13 @@ function SidebarView({
                   </button>
                 )}
                 {!open && <FoldSummary sessions={projectSessions} acknowledgments={acknowledgments} />}
-                <button
-                  type="button"
+                <span
                   className="project-chevron"
-                  aria-label={open ? `Collapse ${project.name}` : `Expand ${project.name}`}
+                  aria-hidden="true"
                   onClick={() => onToggleProject(project.id)}
                 >
                   <span className="chevron">{ChevronDownSmallIcon}</span>
-                </button>
+                </span>
               </div>
               <div className="workspace-list">
                 {(() => {
@@ -886,7 +889,7 @@ function SidebarView({
         )}
       </div>
       <footer className="sidebar-footer">
-        <button type="button" className="footer-settings" onClick={onOpenSettings}>
+        <button type="button" className="footer-settings" data-tooltip="Settings" data-tooltip-shortcut="⌘," onClick={onOpenSettings}>
           <span className="footer-tile" aria-hidden="true"><SettingsIcon /></span>
           <span>Settings</span>
         </button>
@@ -942,7 +945,7 @@ function TopBarView({
       )}
       {/* The panels and "+" sit in one capsule, as on the Desktop. */}
       <div className="chrome-capsule">
-        <button type="button" className="chrome-button topbar-search" aria-label="Search projects" onClick={onOpenSearch}>
+        <button type="button" className="chrome-button topbar-search" aria-label="Search projects" data-tooltip="Search" data-tooltip-shortcut="⌘K" onClick={onOpenSearch}>
           <SearchIcon />
         </button>
         <button
@@ -950,6 +953,7 @@ function TopBarView({
           className={`chrome-button${gitActive ? " active" : ""}`}
           aria-label="Toggle Git panel"
           aria-pressed={gitActive}
+          data-tooltip="Git"
           onClick={onToggleGit}
         >
           {GitIcon}
@@ -987,6 +991,7 @@ export function MobileInbox({
   activeSession = null,
   grouping = "status",
   onGroupingChange,
+  onOpenMenu,
   onOpenSession,
   onNewSession,
   onOpenSearch,
@@ -1011,6 +1016,11 @@ export function MobileInbox({
       inert={open ? undefined : true}
     >
       <header className="inbox-bar">
+        {onOpenMenu && (
+          <button type="button" className="inbox-icon-button" aria-label="Projects and workspaces" onClick={onOpenMenu}>
+            {MenuIcon}
+          </button>
+        )}
         <span className={connectionClassName("inbox-host", connection)} data-tooltip={connection.message}>
           <span className="inbox-host-tile" aria-hidden="true">
             {monogram(hostName || "Warren")}
@@ -1112,6 +1122,7 @@ export function MobileShell({
   connection,
   agentSession,
   agentViewActive,
+  agentAttention = false,
   onAttachSession,
   onToggleAgentView,
   onOpenMenu,
@@ -1122,6 +1133,10 @@ export function MobileShell({
   creatingSession = false,
   onBack = null,
 }) {
+  const tabStopIndex = rovingTabIndex(
+    tabs.findIndex(session => session.id === activeSession),
+    tabs.length,
+  );
   const handleTabListKeyDown = event => {
     if (!tabs.length) return;
     const focused = tabs.findIndex(session => session.id === event.target?.dataset?.session);
@@ -1195,10 +1210,10 @@ export function MobileShell({
             </button>
             <button
               type="button"
-              className={agentViewActive ? "active" : undefined}
+              className={[agentViewActive ? "active" : "", agentAttention ? "has-attention" : ""].filter(Boolean).join(" ") || undefined}
               aria-pressed={agentViewActive}
-              aria-label="Agent chat"
-              data-tooltip="Agent chat"
+              aria-label={agentAttention ? "Agent chat (needs attention)" : "Agent chat"}
+              data-tooltip={agentAttention ? "Agent needs attention" : "Agent chat"}
               onClick={() => onToggleAgentView("agent")}
             >
               {agentChatIcon}
@@ -1217,7 +1232,7 @@ export function MobileShell({
         </button>
       </div>
       <nav className="mobile-tabs" role="tablist" aria-label="Sessions" onKeyDown={handleTabListKeyDown}>
-        {tabs.map(session => {
+        {tabs.map((session, index) => {
           const active = session.id === activeSession;
           const pending = session.id === pendingSessionID;
           return (
@@ -1226,7 +1241,7 @@ export function MobileShell({
               role="tab"
               data-session={session.id}
               aria-selected={active}
-              tabIndex={active ? 0 : -1}
+              tabIndex={index === tabStopIndex ? 0 : -1}
               className={`mobile-tab${active ? " active" : ""}${pending ? " pending" : ""}`}
               disabled={Boolean(pendingSessionID) || creatingSession}
               aria-busy={pending || undefined}
@@ -1490,8 +1505,17 @@ export function EmptyTerminal({
     if (override.message === "unauthorized") {
       hidden = true;
       content = null;
+    } else if (override.loading) {
+      content = <Loading message={override.message} />;
+    } else if (onReconnect && override.message !== "Session ended") {
+      content = (
+        <div className="empty-state">
+          <p className="empty-hint">{override.message}</p>
+          <button type="button" className="empty-action" onClick={onReconnect}>Retry now</button>
+        </div>
+      );
     } else {
-      content = override.loading ? <Loading message={override.message} /> : <span>{override.message}</span>;
+      content = <span>{override.message}</span>;
     }
   } else if (activeSession && terminalReadySession === activeSession) {
     hidden = true;
@@ -1504,7 +1528,7 @@ export function EmptyTerminal({
     content = (
       <div className="empty-state">
         <div className="empty-title">Select a session</div>
-        <p className="empty-hint">Choose a tab above to open its terminal.</p>
+        <p className="empty-hint">Choose a session from the sidebar to open it.</p>
       </div>
     );
   } else if (activeWorkspace) {
@@ -1512,7 +1536,7 @@ export function EmptyTerminal({
       <div className="empty-state">
         {terminalIcon}
         <div className="empty-title">No sessions here yet</div>
-        <p className="empty-hint">Start a shell or an Agent from + in the tab bar.</p>
+        <p className="empty-hint">Start a shell or an Agent from + in the toolbar.</p>
         <button type="button" className="empty-action" onClick={onNewSession}>New session</button>
       </div>
     );
@@ -1661,7 +1685,17 @@ export function MobileKeys({ onInput }) {
   );
 }
 
-export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = null, initialKind = "", target = "" }) {
+export function SessionSheet({
+  open,
+  presets,
+  onChoose,
+  onClose,
+  pendingKind = null,
+  initialKind = "",
+  target = "",
+  workspaces = [],
+  selectedWorkspaceID = null,
+}) {
   const firstItemRef = useRef(null);
   const cancelRef = useRef(null);
   const sheetRef = useRef(null);
@@ -1674,6 +1708,7 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedReasoning, setSelectedReasoning] = useState("default");
   const [customModel, setCustomModel] = useState("");
+  const [pickedWorkspaceID, setPickedWorkspaceID] = useState(selectedWorkspaceID || "");
   // Chat drives the provider over ACP; Terminal runs its TUI. The last choice
   // is remembered on this device.
   const [sessionInterface, setSessionInterface] = useState(() => {
@@ -1689,7 +1724,8 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
     setSelectedModel("");
     setSelectedReasoning("default");
     setCustomModel("");
-  }, [initialKind, open, presets]);
+    setPickedWorkspaceID(selectedWorkspaceID || workspaces[0]?.id || "");
+  }, [initialKind, open, presets, selectedWorkspaceID, workspaces]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -1710,6 +1746,10 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
   }, [open, selectedKind]);
 
   if (!open) return null;
+  const effectiveWorkspaceID = pickedWorkspaceID || selectedWorkspaceID || workspaces[0]?.id || null;
+  const pickedWorkspace = workspaces.find(workspace => workspace.id === effectiveWorkspaceID) || null;
+  const effectiveTarget = pickedWorkspace?.label || target;
+  const showWorkspacePicker = workspaces.length > 1;
   const selectedPreset = presets.find(preset => preset.kind === selectedKind) || null;
   const isAgentPreset = Boolean(selectedPreset && !["shell", "trae"].includes(selectedPreset.kind));
   const availableModels = selectedPreset ? getAvailableAgentModels(selectedPreset.kind) : [];
@@ -1725,7 +1765,7 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
     onChoose(selectedKind, chat ? { handler: "acp" } : {
       model: selectedModel,
       reasoning: selectedReasoning,
-    });
+    }, effectiveWorkspaceID);
   };
   return (
     <div
@@ -1739,8 +1779,8 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
         className="session-sheet"
         role="dialog"
         aria-modal="true"
-        aria-label={target ? `New session in ${target}` : "New session"}
-        aria-describedby={target ? "session-sheet-target" : undefined}
+        aria-label={effectiveTarget ? `New session in ${effectiveTarget}` : "New session"}
+        aria-describedby={effectiveTarget ? "session-sheet-target" : undefined}
         onClick={event => event.stopPropagation()}
       >
         <div
@@ -1787,7 +1827,7 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
                 <SessionPresetIcon kind={selectedPreset.kind} />
                 <span>{selectedPreset.label}</span>
               </div>
-              {target && <div className="session-sheet-context" id="session-sheet-target">in {target}</div>}
+              {effectiveTarget && <div className="session-sheet-context" id="session-sheet-target">in {effectiveTarget}</div>}
             </div>
             {offersChat && (
               <div className="session-sheet-interface" role="radiogroup" aria-label="Interface">
@@ -1860,15 +1900,30 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
               aria-busy={pendingKind === selectedKind || undefined}
               onClick={submitSelection}
             >
-              {pendingKind === selectedKind ? "Starting…" : "Create session"}
+              {pendingKind === selectedKind ? "Starting…" : "Create"}
             </button>
           </>
         ) : (
           <>
             <div className="session-sheet-head">
               <div className="session-sheet-title">New session</div>
-              {target && <div className="session-sheet-context" id="session-sheet-target">in {target}</div>}
+              {effectiveTarget && !showWorkspacePicker && <div className="session-sheet-context" id="session-sheet-target">in {effectiveTarget}</div>}
             </div>
+            {showWorkspacePicker && (
+              <label className="session-sheet-field session-sheet-workspace" id="session-sheet-target">
+                <span>Workspace</span>
+                <select
+                  aria-label="Target workspace"
+                  value={effectiveWorkspaceID || ""}
+                  disabled={Boolean(pendingKind)}
+                  onChange={event => setPickedWorkspaceID(event.target.value)}
+                >
+                  {workspaces.map(workspace => (
+                    <option key={workspace.id} value={workspace.id}>{workspace.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             {presets.map((preset, index) => (
               <button
                 type="button"
@@ -1884,7 +1939,7 @@ export function SessionSheet({ open, presets, onChoose, onClose, pendingKind = n
                     setSelectedReasoning("default");
                     setCustomModel("");
                   } else {
-                    onChoose(preset.kind);
+                    onChoose(preset.kind, undefined, effectiveWorkspaceID);
                   }
                 }}
               >
@@ -1931,8 +1986,7 @@ export function WorktreeImportDialog({ dialog, onClose, onToggle, onImport }) {
         event.preventDefault();
         event.stopPropagation();
         const current = dialogStateRef.current;
-        const selectedCount = current?.selectedPaths?.length || 0;
-        if (current && !current.loading && selectedCount === 0) onCloseRef.current();
+        if (current && !current.loading) onCloseRef.current();
       }
     };
     document.addEventListener("keydown", handleKeyDown);
@@ -2021,7 +2075,7 @@ export function WorktreeImportDialog({ dialog, onClose, onToggle, onImport }) {
               disabled={dialog.loading || Boolean(dialog.error) || selected.size === 0}
               onClick={onImport}
             >
-              Import selected
+              Import
             </button>
           </div>
         </div>
@@ -2182,6 +2236,7 @@ export function ConfirmationDialog({
 
 export function SettingsPage({
   open,
+  themePreference = "system",
   fontFamily,
   fontSize,
   titleTemplate,
@@ -2197,6 +2252,7 @@ export function SettingsPage({
   titlePreview,
   placeholders,
   onClose,
+  onThemePreferenceChange,
   onFontFamilyChange,
   onFontSizeChange,
   onTitleTemplateChange,
@@ -2212,11 +2268,97 @@ export function SettingsPage({
   onRestore,
 }) {
   const placeholderNoteID = useId();
-  const [activeSection, setActiveSection] = useState("font");
+  const settingsRef = useRef(null);
+  const backButtonRef = useRef(null);
+  const openaiSavedTimerRef = useRef(null);
+  const [activeSection, setActiveSection] = useState("appearance");
   const [searchQuery, setSearchQuery] = useState("");
+  const [fontFamilyDraft, setFontFamilyDraft] = useState(fontFamily);
+  const [fontSizeDraft, setFontSizeDraft] = useState(String(fontSize));
+  const [titleTemplateDraft, setTitleTemplateDraft] = useState(titleTemplate);
+  const [openaiBaseURLDraft, setOpenaiBaseURLDraft] = useState(openaiBaseURL);
+  const [openaiModelDraft, setOpenaiModelDraft] = useState(openaiModel);
+  const [openaiKeyDraft, setOpenaiKeyDraft] = useState("");
+  const [openaiSaved, setOpenaiSaved] = useState(false);
+  useFocusRestore(open);
+  useFocusTrap(open, settingsRef);
   useBodyScrollLock(open);
 
+  useEffect(() => { setFontFamilyDraft(fontFamily); }, [fontFamily]);
+  useEffect(() => { setFontSizeDraft(String(fontSize)); }, [fontSize]);
+  useEffect(() => { setTitleTemplateDraft(titleTemplate); }, [titleTemplate]);
+  useEffect(() => { setOpenaiBaseURLDraft(openaiBaseURL); }, [openaiBaseURL]);
+  useEffect(() => { setOpenaiModelDraft(openaiModel); }, [openaiModel]);
+
+  useEffect(() => {
+    if (open) {
+      backButtonRef.current?.focus();
+    } else {
+      setSearchQuery("");
+      setOpenaiKeyDraft("");
+      setOpenaiSaved(false);
+    }
+  }, [open]);
+
+  useEffect(() => () => {
+    if (openaiSavedTimerRef.current !== null) clearTimeout(openaiSavedTimerRef.current);
+  }, []);
+
+  const commitFontFamily = () => {
+    const trimmed = fontFamilyDraft.trim();
+    onFontFamilyChange(trimmed);
+    if (!trimmed) setFontFamilyDraft(fontFamily);
+  };
+
+  const commitFontSize = () => {
+    const parsed = Number(fontSizeDraft);
+    const clamped = Number.isFinite(parsed) && fontSizeDraft.trim() !== ""
+      ? Math.min(32, Math.max(8, Math.round(parsed)))
+      : fontSize;
+    onFontSizeChange(clamped);
+    setFontSizeDraft(String(clamped));
+  };
+
+  const commitTitleTemplate = () => {
+    const trimmed = titleTemplateDraft.trim();
+    onTitleTemplateChange(trimmed);
+    if (!trimmed) setTitleTemplateDraft(titleTemplate);
+  };
+
+  const openaiDirty = (
+    openaiBaseURLDraft !== openaiBaseURL
+    || openaiModelDraft !== openaiModel
+    || openaiKeyDraft.length > 0
+  );
+
+  const commitOpenAIField = (key, value, current) => {
+    if (value === current) return;
+    onOpenAISettingChange(key, value);
+  };
+
+  const saveOpenAISettings = () => {
+    const patch = {};
+    if (openaiBaseURLDraft !== openaiBaseURL) patch.openaiBaseURL = openaiBaseURLDraft;
+    if (openaiModelDraft !== openaiModel) patch.openaiModel = openaiModelDraft;
+    if (openaiKeyDraft.length > 0) patch.openaiKey = openaiKeyDraft;
+    if (Object.keys(patch).length === 0) return;
+    onOpenAISettingChange(patch);
+    setOpenaiKeyDraft("");
+    setOpenaiSaved(true);
+    if (openaiSavedTimerRef.current !== null) clearTimeout(openaiSavedTimerRef.current);
+    openaiSavedTimerRef.current = setTimeout(() => {
+      openaiSavedTimerRef.current = null;
+      setOpenaiSaved(false);
+    }, 1800);
+  };
+
   const sections = useMemo(() => [
+    {
+      id: "appearance",
+      label: "Appearance",
+      description: "Choose Ember Dark, Ember Paper Light, or follow your system.",
+      keywords: ["appearance", "theme", "light", "dark", "system", "paper", "ember", "color"],
+    },
     {
       id: "font",
       label: "Font",
@@ -2263,12 +2405,10 @@ export function SettingsPage({
         .some(value => String(value).toLowerCase().includes(needle)),
     );
   }, [needle, sections]);
-  const terminalSections = visibleSections.filter(section => section.id !== "notifications");
+  const generalSections = visibleSections.filter(section => section.id === "appearance");
+  const terminalSections = visibleSections.filter(section => !["appearance", "notifications"].includes(section.id));
   const notificationSections = visibleSections.filter(section => section.id === "notifications");
-
-  useEffect(() => {
-    if (!open) setSearchQuery("");
-  }, [open]);
+  const isTerminalSection = ["font", "title", "presets"].includes(activeSection);
 
   useEffect(() => {
     if (needle && visibleSections.length && !visibleSections.some(section => section.id === activeSection)) {
@@ -2281,10 +2421,16 @@ export function SettingsPage({
   if (!open) return null;
 
   return (
-    <section className={`settings-page settings${open ? " open" : ""}`} aria-label="Settings">
+    <section
+      ref={settingsRef}
+      className={`settings-page settings${open ? " open" : ""}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Settings"
+    >
       <nav className="settings-nav" aria-label="Settings sections">
         <div className="settings-nav-top">
-          <button type="button" className="settings-back" aria-label="Back to Warren" onClick={onClose}>
+          <button ref={backButtonRef} type="button" className="settings-back" aria-label="Back to Warren" onClick={onClose}>
             <BackIcon />
             <span>Back</span>
           </button>
@@ -2313,6 +2459,19 @@ export function SettingsPage({
           )}
         </div>
         <div className="settings-nav-scroll">
+          {generalSections.length > 0 && <div className="settings-nav-label">General</div>}
+          {generalSections.map(section => (
+            <button
+              type="button"
+              className={`settings-nav-item${activeSection === section.id ? " active" : ""}`}
+              aria-current={activeSection === section.id ? "true" : undefined}
+              key={section.id}
+              onClick={() => setActiveSection(section.id)}
+            >
+              <AppearanceIcon />
+              <span>{section.label}</span>
+            </button>
+          ))}
           {terminalSections.length > 0 && <div className="settings-nav-label">Terminal</div>}
           {terminalSections.map(section => (
             <button
@@ -2326,9 +2485,11 @@ export function SettingsPage({
                 ? terminalIcon
                 : section.id === "title"
                   ? <TitleIcon />
-              : section.id === "workspaces"
+                  : section.id === "workspaces"
                     ? <BranchIcon />
-                    : <PresetIcon />}
+                    : section.id === "openai"
+                      ? <SparkleIcon />
+                      : <PresetIcon />}
               <span>{section.label}</span>
             </button>
           ))}
@@ -2355,7 +2516,33 @@ export function SettingsPage({
       <div className="settings-detail">
         <div className="settings-content">
           {visibleSections.length ? (
-            activeSection === "font" ? (
+            activeSection === "appearance" ? (
+              <section className="settings-section">
+                <header className="settings-page-heading">
+                  <h2>Appearance</h2>
+                  <p>Choose Ember Dark, Ember Paper Light, or follow your system preference.</p>
+                </header>
+                <div className="settings-theme-options" role="radiogroup" aria-label="Appearance">
+                  {[
+                    ["system", "System", "Follow your OS appearance automatically"],
+                    ["dark", "Dark", "Ember neutral dark"],
+                    ["light", "Light", "Ember Paper warm light"],
+                  ].map(([value, label, hint]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={themePreference === value}
+                      className={`settings-theme-option${themePreference === value ? " active" : ""}`}
+                      onClick={() => onThemePreferenceChange?.(value)}
+                    >
+                      <span>{label}</span>
+                      <small>{hint}</small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ) : activeSection === "font" ? (
               <section className="settings-section">
                 <header className="settings-page-heading">
                   <h2>Terminal font</h2>
@@ -2364,14 +2551,47 @@ export function SettingsPage({
                 <div className="settings-fields">
                   <label>
                     Font family
-                    <input value={fontFamily} onChange={event => onFontFamilyChange(event.target.value)} autoComplete="off" spellCheck="false" />
+                    <input
+                      value={fontFamilyDraft}
+                      onChange={event => setFontFamilyDraft(event.target.value)}
+                      onBlur={commitFontFamily}
+                      onKeyDown={event => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitFontFamily();
+                        }
+                      }}
+                      autoComplete="off"
+                      spellCheck="false"
+                    />
                   </label>
                   <label>
                     Size
-                    <input type="number" min="8" max="32" step="1" value={fontSize} onChange={event => onFontSizeChange(event.target.value)} />
+                    <input
+                      type="number"
+                      min="8"
+                      max="32"
+                      step="1"
+                      value={fontSizeDraft}
+                      onChange={event => {
+                        const raw = event.target.value;
+                        setFontSizeDraft(raw);
+                        const parsed = Number(raw);
+                        if (raw.trim() !== "" && Number.isInteger(parsed) && parsed >= 8 && parsed <= 32) {
+                          onFontSizeChange(parsed);
+                        }
+                      }}
+                      onBlur={commitFontSize}
+                      onKeyDown={event => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitFontSize();
+                        }
+                      }}
+                    />
                   </label>
                 </div>
-                <div className="font-preview" style={{ fontFamily, fontSize: `${fontSize}px` }}>Aa&nbsp;&nbsp;The quick brown fox&nbsp;&nbsp;0123456789</div>
+                <div className="font-preview" style={{ fontFamily: fontFamilyDraft.trim() || fontFamily, fontSize: `${fontSize}px` }}>Aa&nbsp;&nbsp;The quick brown fox&nbsp;&nbsp;0123456789</div>
               </section>
             ) : activeSection === "presets" ? (
               <section className="settings-section">
@@ -2511,11 +2731,52 @@ export function SettingsPage({
                   <h2>AI session titles</h2>
                   <p>Codex, Claude Code, OpenCode, and Qoder name their own conversations and Warren keeps those names. Everything below is the fallback used whenever an agent has not named the conversation.</p>
                 </header>
-                <div className="settings-fields">
-                  <label>API base URL<input value={openaiBaseURL} onChange={event => onOpenAISettingChange("openaiBaseURL", event.target.value)} placeholder="https://api.openai.com/v1" autoComplete="off" /></label>
-                  <label>Model<input value={openaiModel} onChange={event => onOpenAISettingChange("openaiModel", event.target.value)} placeholder="gpt-4o-mini" autoComplete="off" /></label>
-                  <label>API key<input type="password" onChange={event => onOpenAISettingChange("openaiKey", event.target.value)} placeholder="Leave blank to keep the saved key" autoComplete="off" /></label>
-                </div>
+                <form
+                  className="settings-openai-form"
+                  onSubmit={event => {
+                    event.preventDefault();
+                    saveOpenAISettings();
+                  }}
+                >
+                  <div className="settings-fields">
+                    <label>
+                      API base URL
+                      <input
+                        value={openaiBaseURLDraft}
+                        onChange={event => { setOpenaiBaseURLDraft(event.target.value); setOpenaiSaved(false); }}
+                        onBlur={() => commitOpenAIField("openaiBaseURL", openaiBaseURLDraft, openaiBaseURL)}
+                        placeholder="https://api.openai.com/v1"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label>
+                      Model
+                      <input
+                        value={openaiModelDraft}
+                        onChange={event => { setOpenaiModelDraft(event.target.value); setOpenaiSaved(false); }}
+                        onBlur={() => commitOpenAIField("openaiModel", openaiModelDraft, openaiModel)}
+                        placeholder="gpt-4o-mini"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label>
+                      API key
+                      <input
+                        type="password"
+                        value={openaiKeyDraft}
+                        onChange={event => { setOpenaiKeyDraft(event.target.value); setOpenaiSaved(false); }}
+                        placeholder="Leave blank to keep the saved key"
+                        autoComplete="off"
+                      />
+                    </label>
+                  </div>
+                  <div className="settings-openai-actions">
+                    <button type="submit" className="settings-save-button" disabled={!openaiDirty}>
+                      Save
+                    </button>
+                    {openaiSaved && <span className="settings-saved-note" role="status">Saved</span>}
+                  </div>
+                </form>
                 <label className="settings-toggle">
                   <input type="checkbox" checked={openaiTitleEnabled} onChange={event => onOpenAISettingChange("openaiTitleEnabled", event.target.checked)} />
                   <span><strong>Generate titles automatically</strong><small>Adds a concise title from the opening exchange only when the agent has not named the conversation. Disabled by default. The key is stored only by the Warren host and is never sent back to clients.</small></span>
@@ -2529,7 +2790,19 @@ export function SettingsPage({
                 </header>
                 <label>
                   Auxiliary template
-                  <input value={titleTemplate} onChange={event => onTitleTemplateChange(event.target.value)} autoComplete="off" spellCheck="false" />
+                  <input
+                    value={titleTemplateDraft}
+                    onChange={event => setTitleTemplateDraft(event.target.value)}
+                    onBlur={commitTitleTemplate}
+                    onKeyDown={event => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        commitTitleTemplate();
+                      }
+                    }}
+                    autoComplete="off"
+                    spellCheck="false"
+                  />
                 </label>
                 <div className="settings-preview">Preview: {titlePreview}</div>
                 <div className="placeholder-list">
@@ -2548,12 +2821,31 @@ export function SettingsPage({
           ) : (
             <div className="settings-empty">No settings match “{searchQuery}”.</div>
           )}
-          <div className="settings-footer">
-            <button type="button" className="settings-reset" onClick={onRestore}>Restore terminal defaults</button>
-          </div>
+          {visibleSections.length > 0 && isTerminalSection && (
+            <div className="settings-footer">
+              <button type="button" className="settings-reset" onClick={onRestore}>Restore terminal defaults</button>
+            </div>
+          )}
         </div>
       </div>
     </section>
+  );
+}
+
+function AppearanceIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M8 2.5a5.5 5.5 0 0 0 0 11Z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function SparkleIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 2.2 9.4 6.6 13.8 8 9.4 9.4 8 13.8 6.6 9.4 2.2 8 6.6 6.6Z" />
+    </svg>
   );
 }
 
@@ -2661,7 +2953,20 @@ export function SearchPanel({
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <section ref={panelRef} className="search-panel" role="dialog" aria-modal="true" aria-label="Search">
+      <section
+        ref={panelRef}
+        className="search-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search"
+        onKeyDown={event => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            onClose();
+          }
+        }}
+      >
         <div className="search-input-wrap">
           <SearchIcon />
           <label className="visually-hidden" htmlFor="warren-search">
@@ -2671,6 +2976,11 @@ export function SearchPanel({
             ref={inputRef}
             id="warren-search"
             className="search-input"
+            role="combobox"
+            aria-expanded={open}
+            aria-controls="warren-search-results"
+            aria-autocomplete="list"
+            aria-activedescendant={rows[activeIndex] ? `search-option-${activeIndex}` : undefined}
             value={query}
             onChange={event => onQueryChange(event.target.value)}
             onKeyDown={handleKeyDown}
@@ -2690,10 +3000,11 @@ export function SearchPanel({
           )}
           <kbd className="search-kbd">esc</kbd>
         </div>
-        <div className="search-results" role="listbox" aria-label="Search results">
+        <div id="warren-search-results" className="search-results" role="listbox" aria-label="Search results">
           {rows.map((row, index) => (
             <SearchResultRow
               key={row.key}
+              id={`search-option-${index}`}
               row={row}
               active={index === activeIndex}
               onHover={() => setActiveIndex(index)}
@@ -2723,7 +3034,7 @@ export function SearchPanel({
  * The kind glyph carries the row's activity as colour, which is why no row spends
  * horizontal space on the words "Session" or "Working".
  */
-function SearchResultRow({ row, active, onHover, onChoose, registerRef }) {
+function SearchResultRow({ id, row, active, onHover, onChoose, registerRef }) {
   // A Session row leads with its provider's own mark, so the kind reads at a
   // glance instead of every session looking like a bare terminal.
   const glyph = row.provider
@@ -2735,9 +3046,11 @@ function SearchResultRow({ row, active, onHover, onChoose, registerRef }) {
 
   return (
     <button
+      id={id}
       type="button"
       ref={registerRef}
       role="option"
+      tabIndex={-1}
       aria-selected={active}
       className={`search-item search-${row.scope}-item${active ? " active" : ""}`}
       onMouseEnter={onHover}
@@ -2814,7 +3127,7 @@ export function TransientFeedback({ feedback }) {
 // read in the Session no longer lights the Workspace either.
 function highestMark(sessions, acknowledgments) {
   return sessions.reduce((highest, session) => {
-    const mark = sessionMark(session, acknowledgments);
+    const mark = sessionMark(session, acknowledgments) || resolveProgramStatusMark(session?.programStatus);
     return activityMarkPriority(mark) > activityMarkPriority(highest) ? mark : highest;
   }, null);
 }

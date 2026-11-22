@@ -67,3 +67,10 @@ test("the summary counts what needs a person first", () => {
     "1 idle",
   );
 });
+
+test("OSC 7501 programStatus classifies shell sessions when agentStatus is absent", () => {
+  assert.equal(inboxBucket({ kind: "shell", programStatus: { state: "blocked", kind: "question" } }), "attention");
+  assert.equal(inboxBucket({ kind: "shell", programStatus: { state: "error" } }), "attention");
+  assert.equal(inboxBucket({ kind: "shell", programStatus: { state: "working" } }), "running");
+  assert.equal(inboxBucket({ kind: "shell", programStatus: { state: "done" } }), "idle");
+});

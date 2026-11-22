@@ -25,6 +25,17 @@
   <link rel="preload" href="/preset-antigravity.svg" as="image" />
   <link rel="preload" href="/preset-trae.svg" as="image" />
   <title>Warren</title>
+  <script>
+    (function () {
+      try {
+        var pref = localStorage.getItem("warren.theme") || "system";
+        var light = pref === "light" || (pref === "system" && window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches);
+        document.documentElement.dataset.theme = light ? "light" : "dark";
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", light ? "#ffffff" : "#0b0b0b");
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
   <div id="root"></div>

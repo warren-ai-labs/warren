@@ -209,6 +209,7 @@ final class WarrenDesignSystemTests: XCTestCase {
             XCTAssertEqual(glass.cardSurface, glass.popoverSurface)
             XCTAssertEqual(glass.inputSurface, glass.popoverSurface)
             XCTAssertNotEqual(glass.popoverSurface, shipped.popoverSurface)
+            XCTAssertNotEqual(glass.cardBorderFocused, shipped.cardBorderFocused)
             // Text and status colors are calibrated against the Ember ground,
             // which the coat preserves, so glass must not touch them.
             XCTAssertEqual(glass.foreground, shipped.foreground)

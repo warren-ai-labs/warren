@@ -3,6 +3,7 @@ import {
   activityMarkWord,
   resolveActivityMark,
 } from "./activity.js";
+import { programStatusDetail, resolveProgramStatusMark } from "./program-status.js";
 import { resolvedCommand } from "./title.js";
 
 // The sidebar reads like the Desktop's: a Project, its Workspaces, and under
@@ -26,9 +27,15 @@ const attentionReasonWords = {
 /// not the fact the line states, so a row never collapses under the pointer
 /// that just selected it.
 export function sessionRowSummary(session = {}) {
-  const mark = resolveActivityMark(session.agentStatus);
+  const agentMark = resolveActivityMark(session.agentStatus);
+  const programMark = agentMark ? null : resolveProgramStatusMark(session.programStatus);
+  const mark = agentMark || programMark;
   const tier = activityMarkTier(mark);
   if (tier === "actionable") {
+    if (programMark) {
+      const text = programStatusDetail(session.programStatus, programMark) || activityMarkWord(programMark) || "Needs attention";
+      return { tone: programMark === "failed" ? "danger" : "attention", text };
+    }
     const word = activityMarkWord(mark) || "Needs attention";
     const reason = String(session.agentStatus?.attention?.reason || "").trim().toLowerCase();
     const detail = attentionReasonWords[reason];
@@ -38,13 +45,25 @@ export function sessionRowSummary(session = {}) {
   // carry; only a shell's command adds anything.
   const resolved = resolvedCommand(session);
   const command = resolved.toLowerCase() === String(session.kind || "").toLowerCase() ? "" : resolved;
-  if (tier === "live") return { tone: "live", text: command ? `Working · ${command}` : "Working" };
+  if (tier === "live") {
+    if (programMark) {
+      const message = typeof session.programStatus?.message === "string" ? session.programStatus.message.trim() : "";
+      return { tone: "live", text: message || (command ? `Working · ${command}` : "Working") };
+    }
+    return { tone: "live", text: command ? `Working · ${command}` : "Working" };
+  }
   // A resting Agent says what its turn accomplished when the Host could ask a
   // model for a sentence. That is the line the Desktop draws, and it is worth
   // more than restating the state the dot already carries.
   const accomplished = String(session.resultSentence || "").trim();
   if (accomplished) return { tone: "plain", text: accomplished };
-  if (mark === "ready") return { tone: "plain", text: command ? `Done · ${command}` : "Done" };
+  if (mark === "ready") {
+    if (programMark) {
+      const message = typeof session.programStatus?.message === "string" ? session.programStatus.message.trim() : "";
+      return { tone: "plain", text: message || (command ? `Done · ${command}` : "Done") };
+    }
+    return { tone: "plain", text: command ? `Done · ${command}` : "Done" };
+  }
   return { tone: "plain", text: command };
 }
 

@@ -153,12 +153,12 @@ struct WarrenDesktopSidebarHeader: View {
             // name, so the card adds the route and the connection's state.
             .warrenDetailHover { host?.detailRows ?? [] }
             .accessibilityLabel("Host \(host?.name ?? "")")
-            .accessibilityValue(host?.connectionLabel ?? "")
+            .accessibilityValue(hostAccessibilityValue)
             .warrenSemanticElement(
                 id: "sidebar.host",
                 role: .button,
                 label: "Host \(host?.name ?? "")",
-                value: host?.connectionLabel ?? "",
+                value: hostAccessibilityValue,
                 isEnabled: onToggleHostPicker != nil,
                 isSelected: isHostPickerPresented,
                 action: { if !isHostPickerPresented { onToggleHostPicker?() } }
@@ -178,6 +178,12 @@ struct WarrenDesktopSidebarHeader: View {
         .padding(.leading, 8)
         .padding(.trailing, 10)
         .frame(height: WarrenDesktopSidebarMetrics.headerHostRowHeight)
+    }
+
+    private var hostAccessibilityValue: String {
+        let connection = host?.connectionLabel ?? ""
+        guard isPublicAccessOn else { return connection }
+        return connection.isEmpty ? "Public Access on" : "\(connection), Public Access on"
     }
 
     /// The Public Access indicator: a quiet globe with the green dot at its

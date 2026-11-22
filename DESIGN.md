@@ -346,10 +346,14 @@ notice center silences the notifications; the badge has its own switch.
 
 ### 10.2 Inspector
 
-The Inspector is a native column beside the terminal (⌥⌘B, or the trailing
-control of the tab bar) that shows what the work in a Workspace changed. It
-takes the editor region's place in the central split; when both are asked for,
-the editor wins and the Inspector returns when the editor closes.
+The Inspector is a native column beside the terminal (⌥⌘B, or the single
+right-sidebar toggle in the tab bar) that shows what the work in a Workspace
+changed. The right sidebar keeps the Inspector's three tabs (**Changes**,
+**History**, **Files**) separate from the Embedded Editor: on a local Host, a
+trailing action beside the external IDE icon switches the sidebar into Editor
+mode with its own minimal header (carrying an Inspector switch back to the
+Inspector, the external IDE button, and a close button), and closing the Editor
+closes the right sidebar and clears the Workspace's editor marker.
 
 - **Changes** and **History** read the Host's Git panel (`git.panel`,
   `git.diff`), so they work for any Host. Changes lists the working tree with

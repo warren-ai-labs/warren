@@ -325,6 +325,7 @@ struct WarrenDesktopPaneGroupPill: View {
         .background(WarrenDesktopPaneGroupWindowProbe(box: hostWindow))
         .focusable()
         .focused($isFocused)
+        .warrenFocusRing(isFocused, cornerRadius: Metrics.tabPillRadius)
         .onAppear(perform: installKeyMonitor)
         .onDisappear(perform: removeKeyMonitor)
         .warrenSemanticElement(
@@ -375,7 +376,11 @@ struct WarrenDesktopPaneGroupPill: View {
                     .padding(-1.5)
                     .opacity(lifted ? 0 : 1)
             )
-            .shadow(color: .black.opacity(lifted ? 0.55 : 0), radius: 5, y: 4)
+            .shadow(
+                color: .black.opacity(lifted ? (colorScheme == .light ? 0.18 : 0.55) : 0),
+                radius: 5,
+                y: 4
+            )
             .overlay(alignment: .bottomTrailing) {
                 if let mark = member.mark, mark.isDrawn, lifted || member.needsPerson {
                     Circle()

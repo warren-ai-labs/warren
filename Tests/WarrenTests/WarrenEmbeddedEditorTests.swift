@@ -1249,6 +1249,202 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
     }
 
     @MainActor
+    func testEditorChromeReinjectsSidebarControlsWhenActionBarRerenders() async throws {
+        let configuration = WKWebViewConfiguration()
+        WarrenEmbeddedEditorChrome.install(in: configuration, appearance: .dark)
+        let webView = WKWebView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 200),
+            configuration: configuration
+        )
+        let navigation = WarrenEmbeddedEditorTestNavigation()
+        await navigation.load(#"""
+        <div class="monaco-workbench">
+            <div class="part sidebar">
+                <div class="header-or-footer header">
+                    <div class="monaco-action-bar">
+                        <ul class="actions-container">
+                            <li class="action-item native-panel"></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="part statusbar">
+                <div class="statusbar-item" id="status.editor.mode"
+                     aria-label="Markdown">Markdown</div>
+            </div>
+        </div>
+        """#, in: webView)
+        try await Task.sleep(for: .milliseconds(300))
+
+        // Simulate VS Code's CompositeBar clearing and rebuilding .actions-container
+        // (e.g. during startup hydration or when the sash narrows the sidebar).
+        _ = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const container = document.querySelector(".actions-container");
+            container.innerHTML = '<li class="action-item native-rebuilt"></li>';
+        })();
+        """#)
+        try await Task.sleep(for: .milliseconds(100))
+
+        let afterClear = try await webView.evaluateJavaScript(#"""
+        JSON.stringify({
+            files: document.querySelector(".warren-sidebar-control-files") !== null,
+            search: document.querySelector(".warren-sidebar-control-search") !== null,
+            git: document.querySelector(".warren-sidebar-control-git") !== null,
+            previewVisible: (() => {
+                const preview = document.querySelector(".warren-sidebar-control-markdown-preview");
+                return preview !== null && getComputedStyle(preview).display !== "none";
+            })(),
+            reload: document.querySelector(".warren-sidebar-control-reload") !== null
+        });
+        """#)
+        let afterClearData = try XCTUnwrap((afterClear as? String)?.data(using: .utf8))
+        let afterClearState = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: afterClearData) as? [String: Bool]
+        )
+        XCTAssertEqual(afterClearState["files"], true)
+        XCTAssertEqual(afterClearState["search"], true)
+        XCTAssertEqual(afterClearState["git"], true)
+        XCTAssertEqual(afterClearState["previewVisible"], true)
+        XCTAssertEqual(afterClearState["reload"], true)
+
+        // Simulate replacing the entire sidebar header element.
+        _ = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const sidebar = document.querySelector(".part.sidebar");
+            const oldHeader = sidebar.querySelector(".header-or-footer.header");
+            const newHeader = document.createElement("div");
+            newHeader.className = "header-or-footer header";
+            newHeader.innerHTML = '<div class="monaco-action-bar"><ul class="actions-container"></ul></div>';
+            oldHeader.replaceWith(newHeader);
+        })();
+        """#)
+        try await Task.sleep(for: .milliseconds(100))
+
+        let afterReplace = try await webView.evaluateJavaScript(#"""
+        JSON.stringify({
+            files: document.querySelector(".warren-sidebar-control-files") !== null,
+            search: document.querySelector(".warren-sidebar-control-search") !== null,
+            git: document.querySelector(".warren-sidebar-control-git") !== null,
+            preview: document.querySelector(".warren-sidebar-control-markdown-preview") !== null,
+            reload: document.querySelector(".warren-sidebar-control-reload") !== null
+        });
+        """#)
+        let afterReplaceData = try XCTUnwrap((afterReplace as? String)?.data(using: .utf8))
+        let afterReplaceState = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: afterReplaceData) as? [String: Bool]
+        )
+        XCTAssertEqual(afterReplaceState["files"], true)
+        XCTAssertEqual(afterReplaceState["search"], true)
+        XCTAssertEqual(afterReplaceState["git"], true)
+        XCTAssertEqual(afterReplaceState["preview"], true)
+        XCTAssertEqual(afterReplaceState["reload"], true)
+    }
+
+    /// Opt-in acceptance against the real local `code-server` binary: boots the
+    /// embedded editor model against this repository and verifies the injected
+    /// sidebar controls survive startup hydration and sash narrowing.
+    @MainActor
+    func testLiveCodeServerRendersSidebarControls() async throws {
+        guard ProcessInfo.processInfo.environment["WARREN_LIVE_EDITOR_TEST"] == "1" else {
+            throw XCTSkip("Set WARREN_LIVE_EDITOR_TEST=1 to verify against a live code-server")
+        }
+        let tempSupport = FileManager.default.temporaryDirectory
+            .appendingPathComponent("warren-live-editor-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempSupport, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempSupport) }
+
+        let repoPath = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .path
+        let readmePath = URL(fileURLWithPath: repoPath).appendingPathComponent("README.md").path
+
+        let model = WarrenEmbeddedEditorModel(supportDirectory: tempSupport)
+        defer { model.stop() }
+        model.openFile(workspacePath: repoPath, filePath: readmePath)
+
+        let readyDeadline = ContinuousClock.now + .seconds(25)
+        while ContinuousClock.now < readyDeadline {
+            if case .ready = model.phase, model.webView(workspacePath: repoPath) != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        guard case .ready = model.phase, let webView = model.webView(workspacePath: repoPath) else {
+            return XCTFail("Embedded editor did not reach ready phase: \(model.phase)")
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = webView
+        webView.frame = window.contentLayoutRect
+        window.orderBack(nil)
+        defer { window.orderOut(nil) }
+
+        // Wait for workbench to reveal and sash narrowing + hydration to settle.
+        let revealDeadline = ContinuousClock.now + .seconds(20)
+        while webView.isHidden, ContinuousClock.now < revealDeadline {
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        try await Task.sleep(for: .seconds(4))
+
+        let inspection = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const ids = ["files", "search", "git", "markdown-preview", "reload"];
+            const sidebar = document.querySelector(".part.sidebar");
+            const editorEl = document.querySelector(".monaco-editor");
+            const editorAttrs = editorEl
+                ? Object.fromEntries([...editorEl.attributes].map((a) => [a.name, a.value]))
+                : null;
+            const statusItems = [...document.querySelectorAll(".part.statusbar .statusbar-item")].map((el) => ({
+                id: el.id,
+                aria: el.getAttribute("aria-label"),
+                text: el.textContent?.trim()
+            }));
+            const controls = Object.fromEntries(ids.map((id) => {
+                const el = document.querySelector(`.warren-sidebar-control-${id}`);
+                const rect = el?.getBoundingClientRect();
+                const style = el ? getComputedStyle(el) : null;
+                return [id, {
+                    present: el !== null,
+                    display: style?.display ?? null,
+                    width: rect ? Math.round(rect.width) : 0,
+                    height: rect ? Math.round(rect.height) : 0
+                }];
+            }));
+            return JSON.stringify({
+                sidebarWidth: sidebar ? Math.round(sidebar.getBoundingClientRect().width) : 0,
+                editorAttrs,
+                statusItems,
+                activeTab: document.querySelector(".part.editor .tab.active")?.getAttribute("aria-label")
+                    ?? document.querySelector(".part.editor .tab.active")?.textContent?.trim()
+                    ?? document.querySelector(".part.editor .tab")?.getAttribute("aria-label")
+                    ?? null,
+                controls
+            });
+        })();
+        """#)
+        let raw = try XCTUnwrap(inspection as? String)
+        let data = try XCTUnwrap(raw.data(using: .utf8))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let controls = try XCTUnwrap(json["controls"] as? [String: [String: Any]])
+        for id in ["files", "search", "git", "markdown-preview", "reload"] {
+            let entry = try XCTUnwrap(controls[id], "Missing control \(id): \(raw)")
+            XCTAssertEqual(entry["present"] as? Bool, true, "\(id) should be present: \(raw)")
+            XCTAssertNotEqual(entry["display"] as? String, "none", "\(id) should be visible: \(raw)")
+            XCTAssertGreaterThan(entry["width"] as? Int ?? 0, 0, "\(id) should have positive width: \(raw)")
+            XCTAssertGreaterThan(entry["height"] as? Int ?? 0, 0, "\(id) should have positive height: \(raw)")
+        }
+    }
+
+    @MainActor
     func testEditorChromeGitButtonUsesNativeSourceControlAction() async throws {
         let configuration = WKWebViewConfiguration()
         WarrenEmbeddedEditorChrome.install(in: configuration, appearance: .dark)
@@ -1490,6 +1686,55 @@ final class WarrenEmbeddedEditorTests: XCTestCase {
         })();
         """#)
         XCTAssertEqual(nonMarkdown as? Bool, false)
+    }
+
+    @MainActor
+    func testEditorChromeDetectsMarkdownFromEditorDataURIWhenStatusModeIsAbsent() async throws {
+        let configuration = WKWebViewConfiguration()
+        WarrenEmbeddedEditorChrome.install(in: configuration, appearance: .dark)
+        let webView = WKWebView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 200),
+            configuration: configuration
+        )
+        let navigation = WarrenEmbeddedEditorTestNavigation()
+        await navigation.load(#"""
+        <div class="monaco-workbench">
+            <div class="part sidebar">
+                <div class="header-or-footer header">
+                    <div class="monaco-action-bar">
+                        <ul class="actions-container"></ul>
+                    </div>
+                </div>
+            </div>
+            <div class="monaco-editor focused"
+                 data-uri="vscode-remote://127.0.0.1:4000/work/README.md">
+                <div class="native-edit-context" role="textbox" tabindex="0"></div>
+            </div>
+        </div>
+        """#, in: webView)
+        try await Task.sleep(for: .milliseconds(300))
+
+        let markdownVisible = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const preview = document.querySelector(".warren-sidebar-control-markdown-preview");
+            return preview !== null && getComputedStyle(preview).display !== "none";
+        })();
+        """#)
+        XCTAssertEqual(markdownVisible as? Bool, true)
+
+        _ = try await webView.evaluateJavaScript(#"""
+        document.querySelector(".monaco-editor")
+            .setAttribute("data-uri", "vscode-remote://127.0.0.1:4000/work/main.swift");
+        """#)
+        try await Task.sleep(for: .milliseconds(100))
+
+        let swiftVisible = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const preview = document.querySelector(".warren-sidebar-control-markdown-preview");
+            return preview !== null && getComputedStyle(preview).display !== "none";
+        })();
+        """#)
+        XCTAssertEqual(swiftVisible as? Bool, false)
     }
 
     @MainActor

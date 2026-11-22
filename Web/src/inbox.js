@@ -1,4 +1,5 @@
 import { activityMarkTier, resolveActivityMark } from "./activity.js";
+import { resolveProgramStatusMark } from "./program-status.js";
 import { resolvedCommand } from "./title.js";
 
 // The phone's home screen: every Session on the Host, sorted by what it asks
@@ -19,7 +20,7 @@ export const inboxGroupings = ["status", "project"];
 /// Acknowledgments are ignored on purpose: having read a completion does not
 /// change what the Session is doing, and the row must not move when it is read.
 export function inboxBucket(session = {}) {
-  const mark = resolveActivityMark(session.agentStatus);
+  const mark = resolveActivityMark(session.agentStatus) || resolveProgramStatusMark(session.programStatus);
   if (mark) {
     const tier = activityMarkTier(mark);
     if (tier === "actionable") return "attention";

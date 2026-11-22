@@ -483,34 +483,39 @@ struct WarrenDesktopSidebar: View {
         presentation == .peek ? sidebarState.width : sidebarState.renderedWidth
     }
 
-    /// The peek's foot: the hint that it will move away, and the pin chord.
+    /// The peek's foot: the hint that it will move away, and clicking it pins
+    /// the sidebar open (matching ⌘B).
     private func peekPinRow(tokens: WarrenColorTokens) -> some View {
-        HStack(spacing: WarrenSpacing.compact) {
-            Text("Click a session to jump. Moves away to hide.")
-                .font(WarrenTypography.navigationMeta)
-                .foregroundStyle(tokens.treeQuietText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
-            HStack(spacing: WarrenSpacing.xxs) {
-                // The menus' own shortcut text, rather than a hand-drawn cap
-                // that matched nothing else in the app.
-                WarrenDesktopMenuKeycaps(keys: "\u{2318}B")
-                Text("pin")
+        Button(action: toggleSidebar) {
+            HStack(spacing: WarrenSpacing.compact) {
+                Text("Click a session to jump. Moves away to hide.")
                     .font(WarrenTypography.navigationMeta)
                     .foregroundStyle(tokens.treeQuietText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                HStack(spacing: WarrenSpacing.xxs) {
+                    // The menus' own shortcut text, rather than a hand-drawn cap
+                    // that matched nothing else in the app.
+                    WarrenDesktopMenuKeycaps(keys: "\u{2318}B")
+                    Text("pin")
+                        .font(WarrenTypography.navigationMeta)
+                        .foregroundStyle(tokens.treeQuietText)
+                }
             }
+            .padding(.horizontal, 14)
+            .frame(height: WarrenDesktopSidebarMetrics.footerHeight)
+            .contentShape(.rect)
         }
-        .padding(.horizontal, 14)
-        .frame(height: WarrenDesktopSidebarMetrics.footerHeight)
+        .buttonStyle(WarrenInteractiveRowStyle())
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(tokens.cardBorder)
                 .frame(height: 1)
                 .accessibilityHidden(true)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Pin sidebar with Command-B")
+        .accessibilityLabel("Pin sidebar")
+        .accessibilityHint("Keep the sidebar open (Command-B)")
     }
 
     @ViewBuilder
@@ -647,13 +652,25 @@ private struct WarrenDesktopSidebarPresentationStyle: ViewModifier {
     let presentation: WarrenDesktopSidebarPresentation
     let tokens: WarrenColorTokens
 
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.warrenWindowMaterial) private var windowMaterial
+
     func body(content: Content) -> some View {
         switch presentation {
         case .docked:
             content.background(tokens.workbenchCardFill)
         case .peek:
             content
-                .background(tokens.peekSurface)
+                .background {
+                    if windowMaterial == .glass {
+                        ZStack {
+                            Rectangle().fill(.regularMaterial)
+                            tokens.peekSurface
+                        }
+                    } else {
+                        tokens.peekSurface
+                    }
+                }
                 .clipShape(RoundedRectangle(
                     cornerRadius: WarrenLayoutMetrics.cardRadius,
                     style: .continuous
@@ -665,7 +682,12 @@ private struct WarrenDesktopSidebarPresentationStyle: ViewModifier {
                     )
                     .strokeBorder(tokens.cardBorder, lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(0.6), radius: 40, x: 12, y: 0)
+                .shadow(
+                    color: .black.opacity(colorScheme == .light ? 0.16 : 0.6),
+                    radius: 40,
+                    x: 12,
+                    y: 0
+                )
         }
     }
 }

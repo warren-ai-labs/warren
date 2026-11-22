@@ -10,6 +10,7 @@
 
 import { resolvedCommand, terminalTabTitle } from "./title.js";
 import { activityMarkLifecycle, resolveDrawnActivityMark } from "./activity.js";
+import { resolveProgramStatusMark } from "./program-status.js";
 
 /** Where a matched value came from. The value is its ranking weight. */
 export const fieldRole = {
@@ -556,7 +557,8 @@ export function searchDescriptors(catalog, acknowledgments = {}) {
     const project = workspace ? projectsByID.get(workspace.project) : null;
     // The full status, not only its lifecycle: an attention payload that
     // arrives with `ready` still reads as the request it is.
-    const mark = resolveDrawnActivityMark(tab.agentStatus, acknowledgments[tab.session] ?? null);
+    const mark = resolveDrawnActivityMark(tab.agentStatus, acknowledgments[tab.session] ?? null)
+      || resolveProgramStatusMark(tab.programStatus);
     if (workspace) {
       workspaceMarks.set(
         workspace.id,

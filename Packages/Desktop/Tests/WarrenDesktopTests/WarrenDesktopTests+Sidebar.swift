@@ -906,7 +906,8 @@ extension WarrenDesktopTests {
         XCTAssertFalse(nodeIDs.contains("onboarding.add-project"))
         XCTAssertFalse(nodeIDs.contains("onboarding.import-superset"))
         // A remote Host has no embedded editor, so the right sidebar has no
-        // Editor page and nothing to open it with.
+        // Editor launcher and nothing to open it with.
+        XCTAssertFalse(nodeIDs.contains("right-sidebar.editor.open"))
         XCTAssertFalse(nodeIDs.contains("right-sidebar.tab.editor"))
         if nodeIDs.contains("right-sidebar.toggle") {
             try recorder.perform(.press, on: "right-sidebar.toggle")
@@ -914,6 +915,7 @@ extension WarrenDesktopTests {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
             nodeIDs = Set(recorder.snapshot().nodes.map(\.id))
         }
+        XCTAssertFalse(nodeIDs.contains("right-sidebar.editor.open"))
         XCTAssertFalse(nodeIDs.contains("right-sidebar.tab.editor"))
     }
     func testSidebarDragRequiresFivePointMovementThreshold() {

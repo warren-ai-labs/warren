@@ -625,6 +625,7 @@ private struct WarrenSettingsPickerPanel<Value: Hashable>: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var hot: Int?
+    @State private var hotFromKeyboard = false
 
     var body: some View {
         let palette = WarrenSettingsPalette.resolved(for: colorScheme)
@@ -652,8 +653,10 @@ private struct WarrenSettingsPickerPanel<Value: Hashable>: View {
                     .frame(maxWidth: .infinity, minHeight: WarrenDesktopMenuMetrics.rowHeight, alignment: .leading)
                     .contentShape(Rectangle())
                 }
+                .id(index)
                 .buttonStyle(WarrenDesktopMenuRowStyle(forceHover: hot == index))
                 .onHover { inside in
+                    hotFromKeyboard = false
                     hot = inside ? index : (hot == index ? nil : hot)
                 }
                 .accessibilityAddTraits(isChecked ? .isSelected : [])
@@ -667,6 +670,10 @@ private struct WarrenSettingsPickerPanel<Value: Hashable>: View {
                     .padding(.top, 4)
             }
         }
+        .preference(
+            key: WarrenDesktopMenuHotItemKey.self,
+            value: hotFromKeyboard ? hot : nil
+        )
         .overlay { WarrenDesktopKeyCatcher(onKey: handle) }
     }
 
@@ -680,12 +687,16 @@ private struct WarrenSettingsPickerPanel<Value: Hashable>: View {
         guard !options.isEmpty else { return false }
         switch event.keyCode {
         case 125: // down
+            hotFromKeyboard = true
             hot = ((hot ?? currentIndex ?? -1) + 1) % options.count
         case 126: // up
+            hotFromKeyboard = true
             hot = ((hot ?? currentIndex ?? options.count) - 1 + options.count) % options.count
         case 115: // home
+            hotFromKeyboard = true
             hot = 0
         case 119: // end
+            hotFromKeyboard = true
             hot = options.count - 1
         case 36, 76: // return
             guard let hot else { return true }
@@ -759,12 +770,11 @@ struct WarrenSettingsStepper: View {
             Image(systemName: symbol)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(palette.inkQuiet)
-                .frame(width: 28, height: 26)
+                .frame(width: 28, height: 32)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(WarrenChromeButtonStyle())
         .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.42)
         .accessibilityLabel(symbol == "minus" ? "Decrease" : "Increase")
     }
 }

@@ -57,55 +57,70 @@ public struct WarrenDialog<Content: View, Footer: View>: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         WarrenModalBackdrop {
             GeometryReader { proxy in
-                VStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // The title row carries the one key that leaves the
-                        // dialog. It used to ride inside the Cancel button as a
-                        // cap, which put a second label in a button that already
-                        // says what it does; herdr keeps the hint in the title
-                        // row, out of every button, and so does this.
-                        HStack(alignment: .firstTextBaseline, spacing: 12) {
-                            Text(title)
-                                .font(WarrenTypography.dialogTitle)
-                                .foregroundStyle(tokens.foreground)
-                            Spacer(minLength: 0)
-                            #if os(macOS)
-                            // A key, drawn as a key: at body size and weight
-                            // the old "Esc" read as a word in the title line
-                            // rather than as the one way out of the dialog.
-                            WarrenKeycap("esc")
-                            #endif
-                        }
-                        if let message, !message.isEmpty {
-                            // The dialog's one paragraph. Body size with a
-                            // little air between the lines: at 12pt on the
-                            // default leading a two-line sentence read as one
-                            // dense block under the title.
-                            Text(message)
-                                .font(WarrenTypography.body)
-                                .foregroundStyle(tokens.mutedForeground)
-                                .lineSpacing(3)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.top, 6)
-                        }
-                        content
-                            .padding(.top, contentTopPadding)
-                        footer
-                            .padding(.top, 16)
-                    }
-                    // 20 on the window grid: the dialog's own margin is a
-                    // spacing step, not a number of its own.
-                    .padding(20)
-                    // A window narrower than the dialog's width gets a narrower
-                    // dialog, never one cut off at both sides.
-                    .frame(maxWidth: width.points)
-                    .warrenPresentationSurface(role: .modal)
-                    .padding(.horizontal, Self.windowMargin)
-                    .padding(.vertical, Self.windowMargin)
+                ViewThatFits(in: .vertical) {
+                    dialogCard(tokens: tokens, scrollable: false)
+                    dialogCard(tokens: tokens, scrollable: true)
                 }
+                .padding(.horizontal, Self.windowMargin)
+                .padding(.vertical, Self.windowMargin)
                 .frame(width: proxy.size.width, height: proxy.size.height)
             }
         }
+    }
+
+    private func dialogCard(tokens: WarrenColorTokens, scrollable: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // The title row carries the one key that leaves the
+            // dialog. It used to ride inside the Cancel button as a
+            // cap, which put a second label in a button that already
+            // says what it does; herdr keeps the hint in the title
+            // row, out of every button, and so does this.
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(title)
+                    .font(WarrenTypography.dialogTitle)
+                    .foregroundStyle(tokens.foreground)
+                Spacer(minLength: 0)
+                #if os(macOS)
+                // A key, drawn as a key: at body size and weight
+                // the old "Esc" read as a word in the title line
+                // rather than as the one way out of the dialog.
+                WarrenKeycap("esc")
+                #endif
+            }
+            if let message, !message.isEmpty {
+                // The dialog's one paragraph. Body size with a
+                // little air between the lines: at 12pt on the
+                // default leading a two-line sentence read as one
+                // dense block under the title.
+                Text(message)
+                    .font(WarrenTypography.body)
+                    .foregroundStyle(tokens.mutedForeground)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
+            }
+            if contentTopPadding > 0 {
+                if scrollable {
+                    ScrollView(.vertical) {
+                        content
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.top, contentTopPadding)
+                } else {
+                    content
+                        .padding(.top, contentTopPadding)
+                }
+            }
+            footer
+                .padding(.top, 16)
+        }
+        // 20 on the window grid: the dialog's own margin is a
+        // spacing step, not a number of its own.
+        .padding(20)
+        // A window narrower than the dialog's width gets a narrower
+        // dialog, never one cut off at both sides.
+        .frame(maxWidth: width.points)
+        .warrenPresentationSurface(role: .modal)
     }
 }
 

@@ -165,11 +165,20 @@ enum WarrenDesktopTaskCreationPresentation {
 }
 
 struct WarrenDesktopTaskCreatorView: View {
+    private enum Field: Hashable {
+        case name
+        case source
+        case externalID
+        case url
+    }
+
     let onCancel: () -> Void
 
     @StateObject private var coordinator: WarrenDesktopTaskCreationCoordinator
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
+    @FocusState private var focusedField: Field?
+    @State private var hasAttemptedSubmit = false
 
     init(
         onCancel: @escaping () -> Void,
@@ -181,6 +190,20 @@ struct WarrenDesktopTaskCreatorView: View {
             onCreate: onCreate,
             onCreated: onCreated
         ))
+    }
+
+    private var visibleValidationMessage: String? {
+        guard let message = coordinator.validationMessage else { return nil }
+        if !hasAttemptedSubmit {
+            let isEditingPair = focusedField == .source || focusedField == .externalID
+            if isEditingPair && message == "Source and external ID must be provided together." {
+                return nil
+            }
+            if focusedField == .url && message == "URL must be an absolute HTTP(S) URL." {
+                return nil
+            }
+        }
+        return message
     }
 
     var body: some View {
@@ -200,36 +223,38 @@ struct WarrenDesktopTaskCreatorView: View {
                     labelFont: WarrenTypography.dialogFieldLabel,
                     inputFont: WarrenTypography.dialogInput
                 )
+                .focused($focusedField, equals: .name)
                 .disabled(coordinator.isSubmitting)
                 WarrenInputField(
                     "Source (optional)",
                     text: coordinator.binding(\.source),
-                    placeholder: "tapd",
+                    placeholder: "linear",
                     monospaced: false,
                     labelFont: WarrenTypography.dialogFieldLabel,
                     inputFont: WarrenTypography.dialogInput
                 )
+                .focused($focusedField, equals: .source)
                 .disabled(coordinator.isSubmitting)
                 WarrenInputField(
                     "External ID (optional)",
                     text: coordinator.binding(\.externalID),
                     placeholder: "123",
                     monospaced: true,
-                    labelFont: WarrenTypography.dialogFieldLabel,
-                    inputFont: WarrenTypography.dialogInput
+                    labelFont: WarrenTypography.dialogFieldLabel
                 )
+                .focused($focusedField, equals: .externalID)
                 .disabled(coordinator.isSubmitting)
                 WarrenInputField(
                     "URL (optional)",
                     text: coordinator.binding(\.url),
                     placeholder: "https://tracker.example/tasks/123",
                     monospaced: true,
-                    labelFont: WarrenTypography.dialogFieldLabel,
-                    inputFont: WarrenTypography.dialogInput
+                    labelFont: WarrenTypography.dialogFieldLabel
                 )
+                .focused($focusedField, equals: .url)
                 .disabled(coordinator.isSubmitting)
 
-                if let message = coordinator.validationMessage ?? coordinator.errorMessage {
+                if let message = visibleValidationMessage ?? coordinator.errorMessage {
                     Text(message)
                         .font(WarrenTypography.dialogBody)
                         .foregroundStyle(tokens.destructive)
@@ -260,6 +285,7 @@ struct WarrenDesktopTaskCreatorView: View {
     }
 
     private func submit() {
+        hasAttemptedSubmit = true
         Task { @MainActor in
             await coordinator.submit()
         }

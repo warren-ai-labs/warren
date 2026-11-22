@@ -222,24 +222,28 @@ struct WarrenDesktopMenuPanelButtonModifier<Panel: View>: ViewModifier {
 
     @Environment(\.warrenMenuCenter) private var center: WarrenDesktopMenuCenter?
     @State private var presentedID: UUID?
+    @State private var frameReader = WarrenDesktopFrameReader()
 
     func body(content: Content) -> some View {
-        content.overlay {
+        Button {
+            let frame = frameReader.read?() ?? .zero
+            presentedID = center?.presentPanel(
+                AnyView(panel()),
+                at: CGPoint(
+                    x: frame.minX,
+                    y: frame.maxY + WarrenDesktopMenuMetrics.anchorGap
+                ),
+                width: width,
+                title: title
+            )
+        } label: {
+            content
+        }
+        .buttonStyle(.plain)
+        .background {
             GeometryReader { geo in
+                let _ = frameReader.read = { geo.frame(in: .global) }
                 Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        let frame = geo.frame(in: .global)
-                        presentedID = center?.presentPanel(
-                            AnyView(panel()),
-                            at: CGPoint(
-                                x: frame.minX,
-                                y: frame.maxY + WarrenDesktopMenuMetrics.anchorGap
-                            ),
-                            width: width,
-                            title: title
-                        )
-                    }
             }
         }
         .preference(
@@ -289,23 +293,27 @@ struct WarrenDesktopMenuButtonModifier: ViewModifier {
     let title: String?
 
     @Environment(\.warrenMenuCenter) private var center: WarrenDesktopMenuCenter?
+    @State private var frameReader = WarrenDesktopFrameReader()
 
     func body(content: Content) -> some View {
-        content.overlay {
+        Button {
+            let frame = frameReader.read?() ?? .zero
+            center?.present(
+                actions,
+                at: CGPoint(
+                    x: frame.minX,
+                    y: frame.maxY + WarrenDesktopMenuMetrics.anchorGap
+                ),
+                title: title
+            )
+        } label: {
+            content
+        }
+        .buttonStyle(.plain)
+        .background {
             GeometryReader { geo in
+                let _ = frameReader.read = { geo.frame(in: .global) }
                 Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        let frame = geo.frame(in: .global)
-                        center?.present(
-                            actions,
-                            at: CGPoint(
-                                x: frame.minX,
-                                y: frame.maxY + WarrenDesktopMenuMetrics.anchorGap
-                            ),
-                            title: title
-                        )
-                    }
             }
         }
     }
@@ -552,6 +560,7 @@ struct WarrenDesktopActionMenu: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var page: Page?
     @State private var hot: Int = -1
+    @State private var hotFromKeyboard = false
 
     private struct Page {
         let title: String
@@ -597,6 +606,10 @@ struct WarrenDesktopActionMenu: View {
             }
             rows
         }
+        .preference(
+            key: WarrenDesktopMenuHotItemKey.self,
+            value: hotFromKeyboard && hot >= 0 ? hot : nil
+        )
         .warrenMenuSurface(width: WarrenDesktopMenuMetrics.menuWidth)
         .overlay { WarrenDesktopKeyCatcher(onKey: handle) }
         .onExitCommand {
@@ -605,21 +618,28 @@ struct WarrenDesktopActionMenu: View {
     }
 
     private func returnRow(_ title: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(WarrenDesktopMenuPalette.resolved(for: colorScheme).secondaryGlyph)
-                .frame(width: WarrenDesktopMenuMetrics.actionSize, height: WarrenDesktopMenuMetrics.actionSize)
-            Text(title)
-                .font(WarrenTypography.menuPageTitle)
-                .foregroundStyle(WarrenDesktopMenuPalette.resolved(for: colorScheme).rowText)
-                .lineLimit(1)
-            Spacer(minLength: 0)
+        Button {
+            page = nil
+            hot = -1
+            hotFromKeyboard = false
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(WarrenDesktopMenuPalette.resolved(for: colorScheme).secondaryGlyph)
+                    .frame(width: WarrenDesktopMenuMetrics.actionSize, height: WarrenDesktopMenuMetrics.actionSize)
+                Text(title)
+                    .font(WarrenTypography.menuPageTitle)
+                    .foregroundStyle(WarrenDesktopMenuPalette.resolved(for: colorScheme).rowText)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 2)
+            .frame(height: WarrenDesktopMenuMetrics.rowHeight)
+            .contentShape(.rect)
         }
-        .padding(.horizontal, 2)
-        .frame(height: WarrenDesktopMenuMetrics.rowHeight)
-        .contentShape(.rect)
-        .onTapGesture { page = nil }
+        .buttonStyle(WarrenDesktopMenuRowStyle())
+        .accessibilityLabel("Back from \(title)")
     }
 
     private var rows: some View {
@@ -686,12 +706,14 @@ struct WarrenDesktopActionMenu: View {
             .frame(maxWidth: .infinity, minHeight: WarrenDesktopMenuMetrics.rowHeight, alignment: .leading)
             .contentShape(.rect)
         }
+        .id(index)
         .buttonStyle(WarrenDesktopMenuRowStyle(danger: danger, forceHover: isEnabled && hot == index))
         // A muted row never takes the highlight: it cannot be run, so it must
         // not look like the row a Return would choose.
         .disabled(!isEnabled)
         .onHover { inside in
             guard isEnabled else { return }
+            hotFromKeyboard = false
             hot = inside ? index : (hot == index ? -1 : hot)
         }
     }
@@ -706,12 +728,16 @@ struct WarrenDesktopActionMenu: View {
     private func handle(_ event: NSEvent) -> Bool {
         switch event.keyCode {
         case 125: // down
+            hotFromKeyboard = true
             move(1)
         case 126: // up
+            hotFromKeyboard = true
             move(-1)
         case 115: // home
+            hotFromKeyboard = true
             hot = firstSelectable(from: -1, step: 1)
         case 119: // end
+            hotFromKeyboard = true
             hot = firstSelectable(from: entries.count, step: -1)
         case 36, 76: // return
             guard hot >= 0 else { return true }
@@ -720,9 +746,9 @@ struct WarrenDesktopActionMenu: View {
             guard hot >= 0, entries[hot].opensPage else { return true }
             open(hot)
         case 123: // left
-            if page != nil { page = nil; hot = -1 }
+            if page != nil { page = nil; hot = -1; hotFromKeyboard = false }
         case 53: // escape
-            if page != nil { page = nil; hot = -1 } else { onDismiss() }
+            if page != nil { page = nil; hot = -1; hotFromKeyboard = false } else { onDismiss() }
         default:
             return false
         }

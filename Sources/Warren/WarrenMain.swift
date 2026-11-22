@@ -942,19 +942,19 @@ private final class WarrenAppDelegate: NSObject, NSApplicationDelegate, NSWindow
         let nextPaneGroupItem = viewMenu.addItem(
             withTitle: "Next Pane Group",
             action: #selector(WarrenAppDelegate.postCommand(_:)),
-            keyEquivalent: "`"
+            keyEquivalent: "]"
         )
         nextPaneGroupItem.target = target
-        nextPaneGroupItem.keyEquivalentModifierMask = [.command]
+        nextPaneGroupItem.keyEquivalentModifierMask = [.command, .option]
         nextPaneGroupItem.representedObject = WarrenDesktopCommand.nextPaneGroup.rawValue
 
         let previousPaneGroupItem = viewMenu.addItem(
             withTitle: "Previous Pane Group",
             action: #selector(WarrenAppDelegate.postCommand(_:)),
-            keyEquivalent: "`"
+            keyEquivalent: "["
         )
         previousPaneGroupItem.target = target
-        previousPaneGroupItem.keyEquivalentModifierMask = [.command, .shift]
+        previousPaneGroupItem.keyEquivalentModifierMask = [.command, .option]
         previousPaneGroupItem.representedObject = WarrenDesktopCommand.previousPaneGroup.rawValue
 
         viewMenuItem.submenu = viewMenu

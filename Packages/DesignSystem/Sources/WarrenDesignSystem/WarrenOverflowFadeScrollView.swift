@@ -26,6 +26,7 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
     /// moment a scroll left the top.
     @State private var edgeModel = WarrenScrollEdgeModel()
     @State private var activity = WarrenScrollActivity()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
         _ axes: Axis.Set = .vertical,
@@ -79,8 +80,12 @@ public struct WarrenOverflowFadeScrollView<Content: View>: View {
                     surface: surface,
                     showsEdgeChevrons: showsEdgeChevrons,
                     onScroll: { anchor in
-                        withAnimation(.easeOut(duration: 0.18)) {
+                        if reduceMotion {
                             proxy.scrollTo(contentID, anchor: anchor)
+                        } else {
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                proxy.scrollTo(contentID, anchor: anchor)
+                            }
                         }
                     }
                 )
@@ -186,27 +191,31 @@ private struct WarrenScrollEdgeIndicators: View {
             }
             .overlay(alignment: .leading) {
                 fade(edge: .leading)
-                    .opacity(horizontalIndicatorVisible(edges.canScrollLeft) ? 1 : 0)
+                    .opacity(horizontalFadeVisible(edges.canScrollLeft) ? 1 : 0)
             }
             .overlay(alignment: .trailing) {
                 fade(edge: .trailing)
-                    .opacity(horizontalIndicatorVisible(edges.canScrollRight) ? 1 : 0)
+                    .opacity(horizontalFadeVisible(edges.canScrollRight) ? 1 : 0)
             }
             .overlay(alignment: .leading) {
                 chevron(edge: .leading) { onScroll(.leading) }
-                    .opacity(horizontalIndicatorVisible(edges.canScrollLeft) ? 1 : 0)
-                    .allowsHitTesting(horizontalIndicatorVisible(edges.canScrollLeft))
-                    .accessibilityHidden(!horizontalIndicatorVisible(edges.canScrollLeft))
+                    .opacity(horizontalChevronVisible(edges.canScrollLeft) ? 1 : 0)
+                    .allowsHitTesting(horizontalChevronVisible(edges.canScrollLeft))
+                    .accessibilityHidden(!horizontalChevronVisible(edges.canScrollLeft))
             }
             .overlay(alignment: .trailing) {
                 chevron(edge: .trailing) { onScroll(.trailing) }
-                    .opacity(horizontalIndicatorVisible(edges.canScrollRight) ? 1 : 0)
-                    .allowsHitTesting(horizontalIndicatorVisible(edges.canScrollRight))
-                    .accessibilityHidden(!horizontalIndicatorVisible(edges.canScrollRight))
+                    .opacity(horizontalChevronVisible(edges.canScrollRight) ? 1 : 0)
+                    .allowsHitTesting(horizontalChevronVisible(edges.canScrollRight))
+                    .accessibilityHidden(!horizontalChevronVisible(edges.canScrollRight))
             }
     }
 
-    private func horizontalIndicatorVisible(_ canScroll: Bool) -> Bool {
+    private func horizontalFadeVisible(_ canScroll: Bool) -> Bool {
+        axes.contains(.horizontal) && canScroll
+    }
+
+    private func horizontalChevronVisible(_ canScroll: Bool) -> Bool {
         showsEdgeChevrons && axes.contains(.horizontal) && canScroll
     }
 
@@ -260,8 +269,8 @@ private struct WarrenScrollEdgeIndicators: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 4)
-        .accessibilityLabel(edge == .trailing ? "Scroll tabs forward" : "Scroll tabs backward")
-        .warrenTooltip(edge == .trailing ? "More tabs" : "Earlier tabs")
+        .accessibilityLabel(edge == .trailing ? "Scroll right" : "Scroll left")
+        .warrenTooltip(edge == .trailing ? "Scroll right" : "Scroll left")
     }
 }
 

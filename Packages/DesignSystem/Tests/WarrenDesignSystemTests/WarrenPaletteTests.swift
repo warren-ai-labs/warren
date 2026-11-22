@@ -102,6 +102,13 @@ final class WarrenPaletteTests: XCTestCase {
                 palette.ink3.contrastRatio(with: ground), 4.5,
                 "\(name): secondary ink is below the small-text floor"
             )
+            // Quiet metadata and keycaps use ink4; keep it above the 3:1 floor on paper.
+            if palette.appearance == .light {
+                XCTAssertGreaterThanOrEqual(
+                    palette.ink4.contrastRatio(with: ground), 3.0,
+                    "\(name): quiet ink is below the 3:1 legibility floor"
+                )
+            }
         }
     }
 

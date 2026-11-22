@@ -238,7 +238,10 @@ extension WarrenDesktopSettingsView {
             subtitle: setupScriptSummary(project),
             leading: { EmptyView() },
             trailing: {
-                Button("Edit…") { editingSetupScriptProjectID = project.id }
+                Button("Edit…") {
+                    setupScriptDraft = setupScriptValues[project.id] ?? project.setupScript ?? ""
+                    editingSetupScriptProjectID = project.id
+                }
                     .buttonStyle(WarrenSettingsButtonStyle(kind: .secondary))
                     .accessibilityLabel("Edit setup script for \(project.name)")
             }
@@ -262,17 +265,18 @@ extension WarrenDesktopSettingsView {
         if let id = editingSetupScriptProjectID,
            let project = projects.first(where: { $0.id == id }) {
             WarrenDesktopSetupScriptDialog(
-                script: Binding(
-                    get: { setupScriptValues[id] ?? project.setupScript ?? "" },
-                    set: { setupScriptValues[id] = $0 }
-                ),
+                script: $setupScriptDraft,
                 onClear: {
+                    setupScriptDraft = ""
                     setupScriptValues[id] = ""
                     onSetProjectSetupScript(id, "")
                     editingSetupScriptProjectID = nil
                 },
-                onCancel: { editingSetupScriptProjectID = nil },
+                onCancel: {
+                    editingSetupScriptProjectID = nil
+                },
                 onSave: {
+                    setupScriptValues[id] = setupScriptDraft
                     saveSetupScript(for: project)
                     editingSetupScriptProjectID = nil
                 }

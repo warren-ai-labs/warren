@@ -163,16 +163,20 @@ public enum WarrenTypography {
     /// stored path, a key chord, a command summary). Half a point under `code`
     /// so a readout sits with the 12pt label on its row rather than over it.
     public static let codeSmall = Font.system(size: 11.5, weight: .regular, design: .monospaced)
-    /// The Conversation's reading role: 15/22 for the answer, the person's
+    /// The Conversation's reading role: 14/21 for the answer, the person's
     /// message, and the composer (the kit's `reading` tier). One size for all
     /// three keeps the transcript and the field it is written in on the same
-    /// line grid.
-    public static let reading = Font.system(size: 15, weight: .regular)
-    public static let readingEmphasis = Font.system(size: 15, weight: .medium)
-    public static let readingStrong = Font.system(size: 15, weight: .semibold)
-    /// An answer's section heading: 16/22 semibold. It is the only text that
-    /// outranks the reading body, and it never grows the leading.
-    public static let readingTitle = Font.system(size: 16, weight: .semibold)
+    /// line grid, scaled to sit comfortably beside the 12pt chrome around it.
+    public static let reading = Font.system(size: 14, weight: .regular)
+    public static let readingEmphasis = Font.system(size: 14, weight: .medium)
+    public static let readingStrong = Font.system(size: 14, weight: .semibold)
+    /// An answer's section headings (H1/H2 at 17pt, H3+ at 15pt), kept in the
+    /// system face so long-form reading stays cohesive with the body text.
+    public static let readingTitle = Font.system(size: 17, weight: .semibold)
+    public static let readingSubheading = Font.system(size: 15, weight: .semibold)
+    /// The empty Conversation pane's prompt heading: system face rather than
+    /// Avenir Next so the reading surface keeps one voice top to bottom.
+    public static let conversationEmptyTitle = Font.system(size: 20, weight: .medium)
     /// The kit's caption role, 12/17; it replaces the old 11.5pt meta tier.
     public static let caption = Font.system(size: 12, weight: .regular)
     public static let captionEmphasis = Font.system(size: 12, weight: .medium)

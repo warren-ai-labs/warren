@@ -196,10 +196,13 @@ struct WarrenBrowserViewerHost: NSViewRepresentable {
 
     @MainActor
     final class ViewerNavigationDelegate: NSObject, WKNavigationDelegate {
+        /// Shared strong instance because `WKWebView.navigationDelegate` is weak.
+        static let shared = ViewerNavigationDelegate()
+
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
         ) {
             // The viewer is a single document. A link the user clicks inside the
             // page is a navigation the agent should perform, not something this
@@ -220,7 +223,7 @@ struct WarrenBrowserViewerHost: NSViewRepresentable {
             // the user's system Chrome. RFC 0022 §5.4.
             configuration.websiteDataStore = .nonPersistent()
             let webView = WKWebView(frame: .zero, configuration: configuration)
-            webView.navigationDelegate = ViewerNavigationDelegate()
+            webView.navigationDelegate = ViewerNavigationDelegate.shared
             webView.allowsMagnification = false
             webView.allowsBackForwardNavigationGestures = false
             webView.setValue(false, forKey: "drawsBackground")
@@ -288,17 +291,22 @@ struct WarrenBrowserSurface: View {
         } else {
             VStack(spacing: WarrenSpacing.standard) {
                 Image(systemName: "network.slash")
-                    .font(.system(size: 22, weight: .light))
+                    .font(.system(size: 22, weight: .regular))
                     .foregroundStyle(tokens.mutedForeground)
                 Text("Host not connected")
                     .font(WarrenTypography.emptyStateTitle)
+                    .foregroundStyle(tokens.foreground)
                 Text("The browser runs on the Host that owns it. Reconnect to watch it.")
                     .font(WarrenTypography.body)
                     .foregroundStyle(tokens.mutedForeground)
                     .multilineTextAlignment(.center)
+                Button("Reconnect") {
+                    model.retryConnection()
+                }
+                .buttonStyle(WarrenPrimaryButtonStyle())
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(tokens.background)
+            .background(tokens.canvas)
         }
     }
 }

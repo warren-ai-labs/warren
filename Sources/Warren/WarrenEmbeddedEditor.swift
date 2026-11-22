@@ -1414,6 +1414,10 @@ enum WarrenEmbeddedEditorChrome {
         const controlClass = "warren-sidebar-control";
         let waitObserver;
         let syncObserver;
+        let sidebarObserver;
+        let headerObserver;
+        let observedSidebar = null;
+        let observedHeader = null;
 
         const injected = () =>
             !!document.querySelector(`.${controlClass}-files`);
@@ -1671,6 +1675,7 @@ enum WarrenEmbeddedEditorChrome {
         ];
         let previewControl;
         let previewVisibilityObserver;
+        let previewTimer = null;
 
         const attach = () => {
             const workbench = document.querySelector(".monaco-workbench");
@@ -1680,7 +1685,36 @@ enum WarrenEmbeddedEditorChrome {
             waitObserver?.disconnect();
             installStyle();
 
+            const watchHeader = () => {
+                const sidebar = workbench.querySelector(".part.sidebar");
+                if (sidebar && sidebar !== observedSidebar) {
+                    sidebarObserver?.disconnect();
+                    observedSidebar = sidebar;
+                    sidebarObserver = new MutationObserver(sync);
+                    sidebarObserver.observe(sidebar, {
+                        childList: true,
+                        subtree: false
+                    });
+                }
+                const header = workbench.querySelector(
+                    ".part.sidebar > .header-or-footer.header"
+                );
+                if (header && header !== observedHeader) {
+                    headerObserver?.disconnect();
+                    observedHeader = header;
+                    headerObserver = new MutationObserver(sync);
+                    headerObserver.observe(header, {
+                        childList: true,
+                        subtree: true
+                    });
+                }
+                if (observedSidebar && observedHeader) {
+                    syncObserver?.disconnect();
+                }
+            };
+
             const sync = () => {
+                watchHeader();
                 const actions = workbench.querySelector(
                     ".part.sidebar > .header-or-footer.header "
                         + ".monaco-action-bar .actions-container"
@@ -1689,10 +1723,8 @@ enum WarrenEmbeddedEditorChrome {
                     return;
                 }
                 if (actions.querySelector(`.${controlClass}-files`)) {
-                    syncObserver?.disconnect();
                     return;
                 }
-                syncObserver?.disconnect();
                 const isMarkdown = () => {
                     const editor = workbench.querySelector(
                         ".monaco-editor.focused, .monaco-editor"
@@ -1701,16 +1733,21 @@ enum WarrenEmbeddedEditorChrome {
                         return editor.getAttribute("data-mode-id") === "markdown";
                     }
                     // VS Code 1.112 replaced Monaco's data-mode-id with the
-                    // stable status bar language item and native edit context.
-                    // Read the item rather than guessing from the file name so
-                    // untitled and extensionless Markdown documents work too.
+                    // status bar language item and data-uri on .monaco-editor.
+                    // Prefer the status bar mode when present (handles untitled
+                    // and extensionless Markdown), and fall back to data-uri
+                    // when the status bar has not mounted status.editor.mode.
                     const mode = workbench.querySelector(
                         '[id="status.editor.mode"]'
                     );
                     const modeName = mode?.getAttribute("aria-label")
                         ?? mode?.textContent
                         ?? "";
-                    return /^\s*markdown\s*$/i.test(modeName);
+                    if (modeName.trim()) {
+                        return /^\s*markdown\s*$/i.test(modeName);
+                    }
+                    const uri = editor?.getAttribute("data-uri") ?? "";
+                    return /\.(md|markdown|mdown|mkd|mkdn|mdx)(?:$|[?#])/i.test(uri);
                 };
                 previewControl = undefined;
                 const mountedControls = controls.map((control) => {
@@ -1729,7 +1766,10 @@ enum WarrenEmbeddedEditorChrome {
                 };
                 syncPreviewVisibility();
                 previewVisibilityObserver?.disconnect();
-                let previewTimer = null;
+                if (previewTimer !== null) {
+                    clearTimeout(previewTimer);
+                    previewTimer = null;
+                }
                 const schedulePreviewSync = () => {
                     if (previewTimer !== null) return;
                     previewTimer = setTimeout(() => {
@@ -1740,18 +1780,20 @@ enum WarrenEmbeddedEditorChrome {
                 previewVisibilityObserver = new MutationObserver(schedulePreviewSync);
                 previewVisibilityObserver.observe(workbench, {
                     attributes: true,
-                    attributeFilter: ["aria-label", "class", "data-mode-id"],
+                    attributeFilter: ["aria-label", "class", "data-mode-id", "data-uri"],
                     childList: true,
                     subtree: true
                 });
             };
 
             sync();
-            // Keep the observer referenced only while waiting for the header
-            // to mount; once controls are injected there is no need to observe
-            // every DOM mutation across the workbench.
+            // Observe the whole workbench only until the sidebar header mounts.
+            // Once headerObserver and sidebarObserver are attached, broad
+            // workbench observation stops while action-bar re-renders (from
+            // startup hydration, sash narrowing, or resizes) still re-inject
+            // the controls immediately.
             syncObserver?.disconnect();
-            if (!injected()) {
+            if (!observedSidebar || !observedHeader) {
                 syncObserver = new MutationObserver(sync);
                 syncObserver.observe(workbench, {
                     childList: true,
@@ -3134,7 +3176,7 @@ struct WarrenEmbeddedEditorSurface: View {
             phaseContent(model.phase, tokens: tokens)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(tokens.background)
+        .background(tokens.canvas)
         // Keyed on what the region needs, not only on which Workspace it shows.
         // A task keyed on the path alone fires once, and the model can lose the
         // editor while the path stays put — see `needsActivation`.
@@ -3186,9 +3228,11 @@ struct WarrenEmbeddedEditorSurface: View {
     private func unavailable(tokens: WarrenColorTokens) -> some View {
         VStack(spacing: WarrenSpacing.standard) {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
-                .font(.system(size: 22, weight: .light))
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(tokens.mutedForeground)
             Text("code-server is required")
                 .font(WarrenTypography.emptyStateTitle)
+                .foregroundStyle(tokens.foreground)
             Text("Install it with Homebrew, then retry. Warren keeps a separate editor profile and prepares language extensions after the editor opens.")
                 .font(WarrenTypography.body)
                 .multilineTextAlignment(.center)
@@ -3205,7 +3249,6 @@ struct WarrenEmbeddedEditorSurface: View {
                 .buttonStyle(WarrenPrimaryButtonStyle())
             }
         }
-        .foregroundStyle(tokens.mutedForeground)
         .padding(WarrenSpacing.large)
         .accessibilityElement(children: .contain)
     }
@@ -3213,10 +3256,11 @@ struct WarrenEmbeddedEditorSurface: View {
     private func failure(_ message: String, tokens: WarrenColorTokens) -> some View {
         VStack(spacing: WarrenSpacing.standard) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 22, weight: .light))
+                .font(.system(size: 22, weight: .regular))
                 .foregroundStyle(tokens.warning)
             Text("Editor unavailable")
                 .font(WarrenTypography.emptyStateTitle)
+                .foregroundStyle(tokens.foreground)
             Text(message)
                 .font(WarrenTypography.body)
                 .foregroundStyle(tokens.mutedForeground)

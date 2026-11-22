@@ -258,6 +258,8 @@ public struct WarrenInputField: View {
     private let placeholder: String
     private let monospaced: Bool
     private let focusOnAppear: Bool
+    private let axis: Axis
+    private let lineLimit: ClosedRange<Int>?
     private let onSubmit: (() -> Void)?
     private let labelFont: Font
     private let inputFont: Font
@@ -278,6 +280,8 @@ public struct WarrenInputField: View {
         focusOnAppear: Bool = false,
         labelFont: Font = WarrenTypography.dialogFieldLabel,
         inputFont: Font? = nil,
+        axis: Axis = .horizontal,
+        lineLimit: ClosedRange<Int>? = nil,
         onSubmit: (() -> Void)? = nil
     ) {
         self.label = label
@@ -287,6 +291,8 @@ public struct WarrenInputField: View {
         self.focusOnAppear = focusOnAppear
         self.labelFont = labelFont
         self.inputFont = inputFont ?? (monospaced ? WarrenTypography.code : WarrenTypography.dialogInput)
+        self.axis = axis
+        self.lineLimit = lineLimit
         self.onSubmit = onSubmit
     }
 
@@ -297,12 +303,13 @@ public struct WarrenInputField: View {
                 .font(labelFont)
                 .foregroundStyle(tokens.mutedForeground)
 
-            TextField(placeholder, text: $text)
+            fieldControl
                 .textFieldStyle(.plain)
                 .font(inputFont)
                 .focused($isFocused)
                 .padding(.horizontal, WarrenSpacing.compact)
-                .frame(minHeight: 32)
+                .padding(.vertical, axis == .vertical ? 6 : 0)
+                .frame(minHeight: 32, alignment: axis == .vertical ? .topLeading : .leading)
                 .background(tokens.inputSurface)
                 .clipShape(.rect(cornerRadius: WarrenRadius.small))
                 .overlay {
@@ -316,15 +323,25 @@ public struct WarrenInputField: View {
                 // was, so focus also carries a soft halo: the field still reads
                 // as the one holding the keyboard without an orange outline.
                 .shadow(color: isFocused ? tokens.focusRing.opacity(0.55) : .clear, radius: 3)
-                .onSubmit {
-                    onSubmit?()
-                }
                 .accessibilityLabel(label)
         }
         .onAppear {
             if focusOnAppear {
                 isFocused = true
             }
+        }
+    }
+
+    @ViewBuilder
+    private var fieldControl: some View {
+        if axis == .vertical {
+            TextField(placeholder, text: $text, axis: .vertical)
+                .lineLimit(lineLimit ?? 2...4)
+        } else if let onSubmit {
+            TextField(placeholder, text: $text)
+                .onSubmit(onSubmit)
+        } else {
+            TextField(placeholder, text: $text)
         }
     }
 }
@@ -360,10 +377,11 @@ public struct WarrenSecondaryButtonStyle: ButtonStyle {
         @Environment(\.isFocused) private var environmentFocused
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.warrenWindowMaterial) private var windowMaterial
         @State private var hovered = false
 
         var body: some View {
-            let tokens = WarrenColorTokens.resolved(for: colorScheme)
+            let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
             let state = WarrenInteractionState.resolve(
                 disabled: !isEnabled,
                 pressed: configuration.isPressed,
@@ -441,10 +459,11 @@ public struct WarrenDestructiveButtonStyle: ButtonStyle {
         @Environment(\.isFocused) private var environmentFocused
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.warrenWindowMaterial) private var windowMaterial
         @State private var hovered = false
 
         var body: some View {
-            let tokens = WarrenColorTokens.resolved(for: colorScheme)
+            let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
             let state = WarrenInteractionState.resolve(
                 disabled: !isEnabled,
                 pressed: configuration.isPressed,

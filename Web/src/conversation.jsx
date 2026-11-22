@@ -21,8 +21,85 @@ import {
 /// shown relative to it.
 export const ConversationRoot = createContext("");
 
-const markdownComponents = {
+export async function copyTextToClipboard(text) {
+  const value = String(text ?? "");
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // Fall back to a temporary textarea when the Clipboard API is denied or
+      // unavailable (for example over plain HTTP on a LAN host).
+    }
+  }
+  if (typeof document === "undefined") return false;
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  } finally {
+    textarea.remove();
+  }
+  return ok;
+}
+
+function extractNodeText(node) {
+  if (node === null || node === undefined || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(extractNodeText).join("");
+  if (typeof node === "object" && "props" in node) return extractNodeText(node.props?.children);
+  return "";
+}
+
+function CodeBlock({ children, ...props }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef(null);
+  useEffect(() => () => {
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
+  }, []);
+  const handleCopy = async () => {
+    const ok = await copyTextToClipboard(extractNodeText(children).replace(/\n$/, ""));
+    if (!ok) return;
+    setCopied(true);
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      setCopied(false);
+    }, 1200);
+  };
+  return (
+    <div className="markdown-code-block">
+      <pre {...props}>{children}</pre>
+      <button
+        type="button"
+        className="markdown-code-copy"
+        onClick={handleCopy}
+        aria-label={copied ? "Copied code" : "Copy code"}
+        data-tooltip={copied ? "Copied" : "Copy code"}
+      >
+        {copied ? "✓" : <CopyIcon />}
+      </button>
+    </div>
+  );
+}
+
+export const markdownComponents = {
   a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
+  table: ({ node, ...props }) => (
+    <div className="markdown-table-wrap">
+      <table {...props} />
+    </div>
+  ),
+  pre: ({ node, children, ...props }) => <CodeBlock {...props}>{children}</CodeBlock>,
 };
 
 const remarkPlugins = [remarkGfm];
@@ -241,7 +318,7 @@ function FileRow({ file }) {
   return (
     <div className="conversation-file">
       <button type="button" className="conversation-file-row" disabled={!hasDiff} onClick={() => setOpen(value => !value)} aria-expanded={hasDiff ? open : undefined}>
-        <span className="conversation-file-name" data-tooltip={file.file}>{displayPath(file.file, root)}</span>
+        <span className="conversation-file-name" data-tooltip={file.file}><bdi>{displayPath(file.file, root)}</bdi></span>
         <ChangeCount additions={file.additions} deletions={file.deletions} />
         {hasDiff && <span className={`conversation-caret down${open ? " open" : ""}`} aria-hidden="true">›</span>}
       </button>
@@ -253,18 +330,26 @@ function FileRow({ file }) {
 /// Copy and the time the answer landed, quiet under the answer.
 function AnswerFooter({ answer, endedAt }) {
   const [copied, setCopied] = useState(false);
+  const timerRef = useRef(null);
+  useEffect(() => () => {
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
+  }, []);
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(answer);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {
+    const ok = await copyTextToClipboard(answer);
+    if (!ok) {
       setCopied(false);
+      return;
     }
+    setCopied(true);
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      setCopied(false);
+    }, 1200);
   };
   return (
     <div className="conversation-answer-footer">
-      <button type="button" className="conversation-icon-button" onClick={copy} aria-label={copied ? "Copied" : "Copy answer"} data-tooltip="Copy answer">
+      <button type="button" className="conversation-icon-button" onClick={copy} aria-label={copied ? "Copied" : "Copy answer"} data-tooltip={copied ? "Copied" : "Copy answer"}>
         {copied ? "✓" : <CopyIcon />}
       </button>
       {endedAt > 0 && <time dateTime={new Date(endedAt).toISOString()}>{formatAnswerTime(endedAt)}</time>}
@@ -329,7 +414,7 @@ export const Turn = memo(function Turn({ turn, live, waiting, onOpenSession, ses
 /// A quiet chip in the composer's lower row that opens the selectors it
 /// stands for (RFC 0023 §6.11) above the composer, and, on the model chip,
 /// the way out to the provider's own terminal UI (§6.12).
-export function SelectorChip({ label, icon = null, config, onSetConfig, canHandoff = false, handoffBlocked = "", onHandoff = async () => {} }) {
+export function SelectorChip({ label, icon = null, align = "end", config, onSetConfig, canHandoff = false, handoffBlocked = "", onHandoff = async () => {} }) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState("");
   const [error, setError] = useState("");
@@ -391,7 +476,7 @@ export function SelectorChip({ label, icon = null, config, onSetConfig, canHando
         <span className="composer-chip-chevron" aria-hidden="true">⌄</span>
       </button>
       {open && (
-        <div className="conversation-menu" role="menu" aria-label="Agent settings">
+        <div className={`conversation-menu${align === "start" ? " align-start" : ""}`} role="menu" aria-label="Agent settings">
           {config.map(option => {
             if (isToggleOption(option)) {
               const on = option.currentValue.toLowerCase() === "on";
@@ -472,8 +557,8 @@ export function SelectorChip({ label, icon = null, config, onSetConfig, canHando
                 aria-busy={pending === "handoff" || undefined}
                 onClick={handoff}
               >
-                <span className="conversation-menu-check" aria-hidden="true" />
                 <span className="conversation-menu-label">Continue in terminal</span>
+                <span className="conversation-menu-check" aria-hidden="true" />
               </button>
               {handoffBlocked && <p className="conversation-menu-note">{handoffBlocked}</p>}
             </section>

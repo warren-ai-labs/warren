@@ -9,6 +9,10 @@ struct WarrenWorkspaceCreatorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @StateObject private var coordinator: WarrenWorkspaceCreationCoordinator
+    /// Tracks the last value auto-filled from Branch so typing into Branch keeps
+    /// `displayName` synced until the user edits `displayName` directly.
+    @State private var lastAutoFilledDisplayName = ""
+    @FocusState private var isSetupArgumentsFocused: Bool
 
     init(
         project: Project,
@@ -49,13 +53,14 @@ struct WarrenWorkspaceCreatorView: View {
                     text: coordinator.binding(\.branch),
                     placeholder: "main",
                     monospaced: true,
-                    labelFont: WarrenTypography.dialogFieldLabel,
-                    inputFont: WarrenTypography.dialogInput
+                    labelFont: WarrenTypography.dialogFieldLabel
                 )
                 .disabled(coordinator.isSubmitting)
                 .onChange(of: coordinator.branch) { value in
-                    if coordinator.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let trimmedName = coordinator.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmedName.isEmpty || coordinator.displayName == lastAutoFilledDisplayName {
                         coordinator.displayName = value
+                        lastAutoFilledDisplayName = value
                     }
                 }
 
@@ -73,16 +78,42 @@ struct WarrenWorkspaceCreatorView: View {
                             .foregroundStyle(tokens.mutedForeground)
                             .lineLimit(2)
 
-                        WarrenInputField(
-                            "Setup arguments",
-                            text: coordinator.binding(\.setupArgumentsText),
-                            placeholder: "One argument per line",
-                            monospaced: true,
-                            labelFont: WarrenTypography.dialogFieldLabel,
-                            inputFont: WarrenTypography.dialogInput
-                        )
+                        VStack(alignment: .leading, spacing: WarrenSpacing.xs) {
+                            Text("Setup arguments")
+                                .font(WarrenTypography.dialogFieldLabel)
+                                .foregroundStyle(tokens.mutedForeground)
+                            ZStack(alignment: .topLeading) {
+                                if coordinator.setupArgumentsText.isEmpty {
+                                    Text("One argument per line")
+                                        .font(WarrenTypography.code)
+                                        .foregroundStyle(tokens.mutedForeground.opacity(0.6))
+                                        .padding(.horizontal, WarrenSpacing.compact + 4)
+                                        .padding(.vertical, 8)
+                                        .allowsHitTesting(false)
+                                }
+                                TextEditor(text: coordinator.binding(\.setupArgumentsText))
+                                    .font(WarrenTypography.code)
+                                    .scrollContentBackground(.hidden)
+                                    .focused($isSetupArgumentsFocused)
+                                    .padding(.horizontal, WarrenSpacing.xs)
+                                    .padding(.vertical, 6)
+                                    .frame(minHeight: 68, maxHeight: 112)
+                                    .accessibilityLabel("Setup arguments")
+                                    .accessibilityIdentifier("workspace-creation.setup-arguments")
+                            }
+                            .background(tokens.inputSurface)
+                            .clipShape(.rect(cornerRadius: WarrenRadius.small))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: WarrenRadius.small)
+                                    .strokeBorder(
+                                        isSetupArgumentsFocused ? tokens.focusRing : tokens.border,
+                                        lineWidth: WarrenSpacing.hairline
+                                    )
+                            }
+                            .shadow(color: isSetupArgumentsFocused ? tokens.focusRing.opacity(0.55) : .clear, radius: 3)
+                            .opacity(coordinator.isSubmitting || !coordinator.runSetupScript ? 0.55 : 1)
+                        }
                         .disabled(coordinator.isSubmitting || !coordinator.runSetupScript)
-                        .accessibilityIdentifier("workspace-creation.setup-arguments")
 
                         Text("The script runs in the new worktree. The first two arguments are the main repository and worktree paths.")
                             .font(WarrenTypography.dialogMeta)

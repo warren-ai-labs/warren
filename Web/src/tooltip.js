@@ -190,10 +190,28 @@ export function installTooltips(doc = document) {
     if (!from || anchorOf(event.relatedTarget) === from) return;
     center.leave(from);
   };
+  const onFocusIn = event => {
+    const anchor = anchorOf(event.target);
+    if (!anchor || anchorOf(event.relatedTarget) === anchor) return;
+    // Show keyboard tooltips on focus-visible so pointer clicks do not leave a bubble.
+    try {
+      if (event.target instanceof Element && !event.target.matches(":focus-visible")) return;
+    } catch {
+      // Ignore engines without :focus-visible support.
+    }
+    center.enter(anchor);
+  };
+  const onFocusOut = event => {
+    const from = anchorOf(event.target);
+    if (!from || anchorOf(event.relatedTarget) === from) return;
+    center.leave(from);
+  };
   const dismiss = () => center.dismiss();
 
   doc.addEventListener("pointerover", onOver);
   doc.addEventListener("pointerout", onOut);
+  doc.addEventListener("focusin", onFocusIn);
+  doc.addEventListener("focusout", onFocusOut);
   doc.addEventListener("pointerdown", dismiss, true);
   doc.addEventListener("keydown", dismiss, true);
   doc.addEventListener("scroll", dismiss, true);
@@ -205,6 +223,8 @@ export function installTooltips(doc = document) {
     center.dismiss();
     doc.removeEventListener("pointerover", onOver);
     doc.removeEventListener("pointerout", onOut);
+    doc.removeEventListener("focusin", onFocusIn);
+    doc.removeEventListener("focusout", onFocusOut);
     doc.removeEventListener("pointerdown", dismiss, true);
     doc.removeEventListener("keydown", dismiss, true);
     doc.removeEventListener("scroll", dismiss, true);

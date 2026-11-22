@@ -36,8 +36,12 @@ export function useKeyboardInset(hostRef, { maxWidth = 1023 } = {}) {
     let appliedInset = 0;
     let settleTimer = null;
     const apply = inset => {
-      host.style.paddingBottom = inset > 0 ? `${inset}px` : "";
+      const value = inset > 0 ? `${inset}px` : "";
+      host.style.paddingBottom = value;
       host.dataset.keyboardInset = inset > 0 ? "open" : "";
+      // Publish the inset on :root so bottom-anchored fixed overlays
+      // (dialogs, sheets, search, Git panel) lift above the soft keyboard.
+      document.documentElement.style.setProperty("--keyboard-inset", inset > 0 ? `${inset}px` : "0px");
     };
     const clearSettle = () => {
       if (settleTimer !== null) {

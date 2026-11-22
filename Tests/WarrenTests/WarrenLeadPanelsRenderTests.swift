@@ -150,16 +150,14 @@ final class WarrenLeadPanelsRenderTests: XCTestCase {
             let suffix = light ? "light" : "dark"
             try write(
                 mount(
-                    // The dock the Conversation pane builds: one joined stack,
-                    // the top panel rounded and the one under it square.
-                    VStack(spacing: -1) {
+                    // The dock the Conversation pane builds: independent full-width
+                    // rounded cards with a breathing gap between them.
+                    VStack(spacing: 8) {
                         WarrenConversationStackPanel(
-                            outline: WarrenConversationPalette.resolved(for: light ? .light : .dark).line2,
-                            roundsTop: true
+                            outline: WarrenConversationPalette.resolved(for: light ? .light : .dark).line2
                         ) { decision }
                         WarrenConversationStackPanel(
-                            outline: WarrenConversationPalette.resolved(for: light ? .light : .dark).line2,
-                            roundsTop: false
+                            outline: WarrenConversationPalette.resolved(for: light ? .light : .dark).line2
                         ) { checksPanel }
                     }
                     .padding(.vertical, 16),
@@ -172,8 +170,7 @@ final class WarrenLeadPanelsRenderTests: XCTestCase {
             try write(
                 mount(
                     WarrenConversationStackPanel(
-                        outline: WarrenConversationPalette.resolved(for: light ? .light : .dark).line2,
-                        roundsTop: true
+                        outline: WarrenConversationPalette.resolved(for: light ? .light : .dark).line
                     ) { crew }
                     .padding(.vertical, 16),
                     light: light

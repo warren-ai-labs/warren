@@ -16,7 +16,8 @@ import {
 import { tooltipDescription, useFocusTrap } from "./components.jsx";
 import { activityMarkWord } from "./activity.js";
 import { composerChips, projectConversation, reuseUnchangedTurns, withStateEvents } from "./conversation.js";
-import { ContextMeter, ConversationRoot, ModeIcon, PlanStrip, SelectorChip, Turn } from "./conversation.jsx";
+import { ContextMeter, ConversationRoot, ModeIcon, PlanStrip, SelectorChip, Turn, markdownComponents } from "./conversation.jsx";
+import { rovingIndex } from "./roving.js";
 
 const PROVIDER_NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", pi: "Pi", qoder: "Qoder", antigravity: "Antigravity" };
 
@@ -54,6 +55,7 @@ export function AgentView({
   onHandoff = async () => {},
   onOpenSession = () => {},
   sessionExists = () => false,
+  hidden = false,
 }) {
   const attachmentNoteID = useId();
   const listRef = useRef(null);
@@ -175,11 +177,15 @@ export function AgentView({
   // Measuring after new content lands would read a large batch as the
   // reader having scrolled away.
   const followsBottomRef = useRef(true);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   useEffect(() => {
     const list = listRef.current;
     if (!list) return undefined;
     const update = () => {
-      followsBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 160;
+      const distance = list.scrollHeight - list.scrollTop - list.clientHeight;
+      const atBottom = distance < 160;
+      followsBottomRef.current = atBottom;
+      setShowJumpToLatest(!atBottom && list.scrollHeight - list.clientHeight > 160);
     };
     update();
     list.addEventListener("scroll", update, { passive: true });
@@ -435,6 +441,8 @@ export function AgentView({
     <ConversationRoot.Provider value={session?.directory || session?.cwd || ""}>
     <div
       className="agent-view"
+      hidden={hidden}
+      inert={hidden || undefined}
       onPointerDown={event => event.stopPropagation()}
       onClick={event => event.stopPropagation()}
       onDragOver={event => {
@@ -497,6 +505,21 @@ export function AgentView({
           </>
         )}
       </div>
+      {showJumpToLatest && turns.length > 0 && (
+        <button
+          type="button"
+          className="agent-jump-latest"
+          onClick={() => {
+            const list = listRef.current;
+            if (!list) return;
+            list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+            followsBottomRef.current = true;
+            setShowJumpToLatest(false);
+          }}
+        >
+          ↓ Jump to latest
+        </button>
+      )}
       {attention && <AgentAttention attention={attention} onOpenTerminal={onOpenTerminal} onFocusComposer={() => inputRef.current?.focus()} />}
       {(actionError || submitError) && (
         <div className="agent-action-error" role="alert">{actionError || submitError}</div>
@@ -545,7 +568,7 @@ export function AgentView({
               {attachments.map((item, index) => (
                 <span key={`${item.file.name}-${item.file.lastModified}-${index}`} className={`agent-attachment-chip ${item.status}`}>
                   <span className="agent-attachment-icon" aria-hidden="true">
-                    {item.file.type?.startsWith("image/") ? "🖼️" : "📄"}
+                    {item.file.type?.startsWith("image/") ? <ImageIcon /> : <FileIcon />}
                   </span>
                   <span className="agent-attachment-name" data-tooltip={item.file.name}>{item.file.name}</span>
                   {item.status === "uploading" && <small className="agent-attachment-progress">{Math.round(item.progress * 100)}%</small>}
@@ -569,7 +592,12 @@ export function AgentView({
               ))}
             </div>
           )}
-          <div className="agent-input-surface">
+          <div
+            className="agent-input-surface"
+            onClick={() => {
+              if (!hasControl && ready && canSendForStatus(agentStatus)) onRequestControl();
+            }}
+          >
             <PlanStrip plan={conversation.plan} />
             <div className="agent-input-row">
               <textarea
@@ -601,10 +629,7 @@ export function AgentView({
                 aria-label="Message"
                 rows={1}
                 enterKeyHint="send"
-                autoCapitalize="off"
-                autoCorrect="off"
                 autoComplete="off"
-                spellCheck="false"
                 readOnly={!ready || !canSendForStatus(agentStatus)}
                 disabled={uploadingAttachments || submitStatus === "sending"}
               />
@@ -627,6 +652,7 @@ export function AgentView({
                 <SelectorChip
                   label={chips.mode.currentName.replace(/ \(.*\)$/, "")}
                   icon={<ModeIcon value={chips.mode.currentValue} />}
+                  align="start"
                   config={[chips.mode]}
                   onSetConfig={onSetConfig}
                 />
@@ -678,10 +704,21 @@ export function AgentView({
           {showInputMeta && (
             <div className="agent-input-meta" aria-label="Agent controls">
               {disabledReason && (
-                <span className={`agent-input-reason${!hasControl ? " locked" : ""}`}>
-                  {!hasControl && <LockIcon />}
-                  {disabledReason}
-                </span>
+                !hasControl ? (
+                  <button
+                    type="button"
+                    className="agent-input-reason locked"
+                    onClick={() => {
+                      onRequestControl();
+                      inputRef.current?.focus();
+                    }}
+                  >
+                    <LockIcon />
+                    {disabledReason}
+                  </button>
+                ) : (
+                  <span className="agent-input-reason">{disabledReason}</span>
+                )
               )}
               {queueItems.length > 0 && (
                 <button type="button" className="agent-queue-button" onClick={() => setShowQueue(previous => !previous)}>
@@ -754,7 +791,7 @@ function canSendForStatus(status) {
 
 function agentInputDisabledReason({ ready, hasControl, status }) {
   if (!ready) return "Agent is starting in Terminal.";
-  if (!hasControl) return "";
+  if (!hasControl) return "View-only — click to take control";
   const activity = String(status?.activity || "").toLowerCase();
   if (status?.attention?.kind === "approval") return "Permission required — review the request.";
   switch (activity) {
@@ -1162,40 +1199,60 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
   const interactionPending = pending && canInteract && state === "pending";
   const isSelected = (questionID, id) => (answers[questionID] || []).includes(id);
 
-  const questionContent = questions.map(question => (
-    <fieldset className="agent-question" key={question.id}>
-      <legend>{question.prompt}</legend>
-      <div className="agent-structured-options" role={question.selection === "multiple" ? "group" : "radiogroup"} aria-label={question.prompt}>
-        {question.options.map((option, index) => {
-          const id = optionID(option) || `option-${index}`;
-          const selected = isSelected(question.id, id);
-          return (
-            <button
-              key={`${question.id}-${id}`}
-              type="button"
-              className={selected ? "selected" : ""}
-              onClick={() => toggleQuestionOption(question, id)}
-              disabled={!interactionPending}
-              aria-pressed={selected}
-            >
-              <span>{optionLabel(option) || id}</span>
-              {option.description && <small>{option.description}</small>}
-            </button>
-          );
-        })}
-      </div>
-      {question.allowCustom && (
-        <input
-          className="agent-question-custom"
-          value={customAnswers[question.id] || ""}
-          onChange={event => setCustomAnswers(previous => ({ ...previous, [question.id]: event.target.value }))}
-          placeholder="Custom answer"
-          aria-label={`${question.prompt} custom answer`}
-          disabled={!interactionPending}
-        />
-      )}
-    </fieldset>
-  ));
+  const questionContent = questions.map(question => {
+    const isSingle = question.selection !== "multiple";
+    return (
+      <fieldset className="agent-question" key={question.id}>
+        <legend>{question.prompt}</legend>
+        <div
+          className="agent-structured-options"
+          role={isSingle ? "radiogroup" : "group"}
+          aria-label={question.prompt}
+          onKeyDown={isSingle ? event => {
+            const buttons = Array.from(event.currentTarget.querySelectorAll('[role="radio"]:not(:disabled)'));
+            const current = buttons.indexOf(document.activeElement);
+            if (current < 0 || !buttons.length) return;
+            const next = rovingIndex(event.key, current, buttons.length, { orientation: "vertical" });
+            if (next < 0) return;
+            event.preventDefault();
+            const option = question.options[next];
+            if (option) toggleQuestionOption(question, optionID(option) || `option-${next}`);
+            buttons[next]?.focus();
+          } : undefined}
+        >
+          {question.options.map((option, index) => {
+            const id = optionID(option) || `option-${index}`;
+            const selected = isSelected(question.id, id);
+            return (
+              <button
+                key={`${question.id}-${id}`}
+                type="button"
+                role={isSingle ? "radio" : undefined}
+                aria-checked={isSingle ? selected : undefined}
+                aria-pressed={isSingle ? undefined : selected}
+                className={selected ? "selected" : ""}
+                onClick={() => toggleQuestionOption(question, id)}
+                disabled={!interactionPending}
+              >
+                <span>{optionLabel(option) || id}</span>
+                {option.description && <small>{option.description}</small>}
+              </button>
+            );
+          })}
+        </div>
+        {question.allowCustom && (
+          <input
+            className="agent-question-custom"
+            value={customAnswers[question.id] || ""}
+            onChange={event => setCustomAnswers(previous => ({ ...previous, [question.id]: event.target.value }))}
+            placeholder="Custom answer"
+            aria-label={`${question.prompt} custom answer`}
+            disabled={!interactionPending}
+          />
+        )}
+      </fieldset>
+    );
+  });
 
   const permissionContent = permissionOptions.map((option, index) => {
     const id = optionID(option) || `option-${index}`;
@@ -1259,19 +1316,19 @@ function StructuredAgentBlock({ event, onInteraction = () => {}, canInteract = f
 }
 
 function structuredIcon(type) {
-  return {
-    question: "?",
-    permission: "✓",
-    confirmation: "!",
-    plan: "☷",
-    todo: "☑",
-    goal: "◎",
-    activity: "•",
-    plugin: "◆",
-    subagent: "◇",
-    attachment: "⌕",
-    queue: "⌛",
-  }[type] || "•";
+  switch (type) {
+  case "plan": return <PlanIcon />;
+  case "todo": return <ChecklistIcon />;
+  case "queue": return <QueueIcon />;
+  case "question": return "?";
+  case "permission": return "✓";
+  case "confirmation": return "!";
+  case "goal": return "◎";
+  case "plugin": return "◆";
+  case "subagent": return "◇";
+  case "attachment": return <FileIcon />;
+  default: return "•";
+  }
 }
 
 function structuredStateLabel(state) {
@@ -1351,7 +1408,7 @@ function AgentQueuePanel({ items, onClose, onEdit, onDelete, onMoveToFront, onRe
   return (
     <div ref={panelRef} className="agent-queue-panel" role="dialog" aria-modal="true" aria-label="Queued messages">
       <div className="agent-queue-panel-head"><strong>Queued messages</strong><button ref={closeButtonRef} type="button" onClick={onClose} aria-label="Close queue">×</button></div>
-      {items.length === 0 ? <p>No queued messages.</p> : items.map(item => (
+      {items.length === 0 ? <p>No queued messages.</p> : items.map((item, index) => (
         <div
           className={`agent-queue-item ${item.status || "queued"}`}
           key={item.id}
@@ -1395,6 +1452,30 @@ function AgentQueuePanel({ items, onClose, onEdit, onDelete, onMoveToFront, onRe
               <button type="button" className="agent-icon-button" onClick={() => beginEdit(item)} aria-label="Edit queued message" data-tooltip="Edit queued message">
                 <EditIcon />
               </button>
+            )}
+            {item.status !== "sending" && editingID !== item.id && items.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  className="agent-icon-button"
+                  disabled={index === 0 || items[index - 1]?.status === "sending"}
+                  aria-label="Move message up"
+                  data-tooltip="Move up"
+                  onClick={() => onReorder(item.id, items[index - 1].id)}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="agent-icon-button"
+                  disabled={index === items.length - 1 || items[index + 1]?.status === "sending"}
+                  aria-label="Move message down"
+                  data-tooltip="Move down"
+                  onClick={() => onReorder(item.id, items[index + 2]?.id || null)}
+                >
+                  ↓
+                </button>
+              </>
             )}
             {item.status !== "sending" && editingID !== item.id && <button type="button" onClick={() => onMoveToFront(item.id)}>Move to front</button>}
             {item.status !== "sending" && editingID !== item.id && (deleteID === item.id ? (
@@ -1454,12 +1535,57 @@ function ChevronRightIcon() {
   );
 }
 
+function ImageIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
+      <circle cx="5.5" cy="6" r="1" />
+      <path d="m2.5 11.5 3.3-3.2 2.4 2.3 2.1-2 3.2 2.9" />
+    </svg>
+  );
+}
+
+function FileIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 2h5.2L12.5 5.3V14H4z" />
+      <path d="M9.2 2v3.3h3.3" />
+    </svg>
+  );
+}
+
+function PlanIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" aria-hidden="true">
+      <path d="M3 4h10M3 8h10M3 12h6.5" />
+    </svg>
+  );
+}
+
+function ChecklistIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
+      <path d="m5.5 8.2 1.7 1.7 3.4-3.6" />
+    </svg>
+  );
+}
+
+function QueueIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M8 5v3.2l2.2 1.3" />
+    </svg>
+  );
+}
+
 const REMARK_PLUGINS = [remarkGfm];
 
 const MarkdownContent = memo(function MarkdownContent({ value }) {
   return (
     <div className="agent-markdown">
-      <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{value}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={markdownComponents}>{value}</ReactMarkdown>
     </div>
   );
 });

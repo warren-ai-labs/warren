@@ -52,7 +52,6 @@ struct WarrenDesktopTabItem: View {
     @FocusState private var isTabFocused: Bool
     @FocusState private var isCloseFocused: Bool
     @State private var isHovered = false
-    @State private var isCloseHovered = false
 
     private var exposesClose: Bool {
         tab.sessionID != nil && (isHovered || isCloseFocused || forceHover)
@@ -188,6 +187,11 @@ struct WarrenDesktopTabItem: View {
             .accessibilityLabel("Tab \(displayTitle)")
             .accessibilityValue(isSelected ? "Selected" : "Not selected")
             .accessibilityAddTraits(isSelected ? .isSelected : [])
+            .accessibilityActions {
+                if tab.sessionID != nil {
+                    Button("Close pane \(displayTitle)", action: onClose)
+                }
+            }
             .warrenSemanticElement(
                 id: "tab.\(tab.id)",
                 role: .tab,
@@ -200,21 +204,16 @@ struct WarrenDesktopTabItem: View {
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
+                    .frame(width: 18, height: 18)
+                    .contentShape(.rect)
                     .accessibilityHidden(true)
             }
             .buttonStyle(WarrenChromeButtonStyle(isFocused: isCloseFocused))
-            .frame(width: 18, height: 18)
-            .contentShape(.rect)
-            .background(
-                isCloseHovered ? tokens.fillHover : .clear,
-                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
-            )
             .foregroundStyle(tokens.mutedForeground)
             .opacity(exposesClose ? 1 : 0)
             .allowsHitTesting(exposesClose)
             .focused($isCloseFocused)
-            .onHover { isCloseHovered = $0 }
-            .accessibilityHidden(!exposesClose)
+            .accessibilityHidden(tab.sessionID == nil)
             .accessibilityLabel("Close pane \(displayTitle)")
             .warrenSemanticElement(
                 id: "tab.\(tab.id).close",
@@ -294,7 +293,7 @@ struct WarrenDesktopTabItem: View {
                         WarrenDesktopStatusDot(
                             mark: mark,
                             size: 6,
-                            ring: tokens.workbenchCardFill,
+                            ring: isSelected ? tokens.selectedTabPillFill : tokens.workbenchCardFill,
                             tokens: tokens
                         )
                         .offset(x: 3, y: 3)
@@ -355,18 +354,17 @@ struct WarrenDesktopTabAddSlot: View {
                             .font(.system(size: 13, weight: .regular))
                     }
                 }
+                .frame(width: 28, height: WarrenLayoutMetrics.tabPillHeight)
+                .contentShape(.rect)
                 .accessibilityHidden(true)
             }
             // Drawn like the panels button beside it: two plain glyphs at the
             // trailing edge, not a boxed control competing with the Tabs.
             .buttonStyle(WarrenChromeButtonStyle())
             .disabled(!isEnabled || isLoading)
-            .frame(width: 28, height: WarrenLayoutMetrics.tabPillHeight)
-            .contentShape(.rect)
             .foregroundStyle(tokens.mutedForeground)
-            .opacity(isEnabled ? 1 : 0.45)
             .accessibilityLabel(isLoading ? "Starting session" : "New session")
-            .warrenTooltip("New session")
+            .warrenTooltip("New session", shortcut: "⌘T")
             .warrenSemanticElement(
                 id: "tab.new",
                 role: .button,

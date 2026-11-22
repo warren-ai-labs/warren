@@ -97,9 +97,9 @@ test("composite chrome strips expose a single roving tab stop", () => {
   assert.match(components, /function useRovingFocus\(/);
   assert.match(components, /node\.tabIndex = index === active \? 0 : -1;/);
   // The phone pill strip is the only ARIA tablist left; the desktop header
-  // names the one Session and holds no Tabs. Exactly the selected pill stays
-  // in the Tab order.
-  const stops = components.match(/tabIndex=\{active \? 0 : -1\}/g) || [];
+  // names the one Session and holds no Tabs. Exactly one pill stays in the
+  // Tab order via rovingTabIndex.
+  const stops = components.match(/tabIndex=\{index === tabStopIndex \? 0 : -1\}/g) || [];
   assert.equal(stops.length, 1);
   assert.match(components, /data-overflow=\{scrollOverflows \? "true" : undefined\}/);
 });

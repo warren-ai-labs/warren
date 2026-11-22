@@ -66,6 +66,12 @@ test("the badge counts Sessions waiting on a person, not working or finished one
     {},
   ];
   assert.equal(actionableSessionCount(sessions), 3);
+  assert.equal(actionableSessionCount([
+    { programStatus: { state: "blocked", kind: "permission" } },
+    { programStatus: { state: "error" } },
+    { programStatus: { state: "working" } },
+    { programStatus: { state: "done" } },
+  ]), 2);
   assert.equal(actionableSessionCount(undefined), 0);
 });
 

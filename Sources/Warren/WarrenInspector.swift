@@ -212,11 +212,11 @@ struct WarrenInspectorSurface: View {
     var body: some View {
         Group {
             switch tab {
-            case .changes: WarrenInspectorChanges(inspector: inspector)
+            case .changes: WarrenInspectorChanges(inspector: inspector, activity: activity)
             case .history: WarrenInspectorHistory(inspector: inspector)
             case .files:
                 if readsLocalFiles {
-                    WarrenInspectorFiles(inspector: inspector)
+                    WarrenInspectorFiles(inspector: inspector, activity: activity)
                 } else {
                     WarrenInspectorEmpty(
                         symbol: "externaldrive.badge.icloud",
@@ -255,6 +255,7 @@ struct WarrenInspectorSurface: View {
 
 private struct WarrenInspectorChanges: View {
     @ObservedObject var inspector: WarrenInspectorModel
+    let activity: WarrenDesktopInspectorActivity
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
@@ -263,16 +264,16 @@ private struct WarrenInspectorChanges: View {
         if let panel = inspector.panel {
             let staged = panel.changes.filter(\.staged)
             let unstaged = panel.changes.filter { !$0.staged }
-            VStack(spacing: 0) {
-                branchStrip(panel, tokens: tokens)
-                Rectangle()
-                    .fill(tokens.chromeDivider)
-                    .frame(height: WarrenSpacing.hairline)
-                ScrollView {
+            ScrollView {
                 VStack(alignment: .leading, spacing: WarrenSpacing.standard) {
-                    WarrenInspectorBranchCard(inspector: inspector, panel: panel)
+                    WarrenInspectorBranchCard(inspector: inspector, activity: activity, panel: panel)
                     if !panel.changes.isEmpty {
-                        WarrenInspectorCommitBox(inspector: inspector, count: panel.changes.count)
+                        WarrenInspectorCommitBox(
+                            inspector: inspector,
+                            activity: activity,
+                            stagedCount: staged.count,
+                            unstagedCount: unstaged.count
+                        )
                     }
                     if let error = inspector.actionError {
                         Text(error)
@@ -294,7 +295,6 @@ private struct WarrenInspectorChanges: View {
                 }
                 .padding(WarrenSpacing.medium)
             }
-            }
         } else if let error = inspector.loadError {
             WarrenInspectorEmpty(symbol: "exclamationmark.triangle", title: "Git is unavailable here", detail: error)
         } else {
@@ -302,37 +302,6 @@ private struct WarrenInspectorChanges: View {
                 .padding(.top, WarrenSpacing.compact)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-    }
-
-    /// The branch and refresh controls that used to sit in the Inspector's own
-    /// header: they are the Changes page's top row now.
-    private func branchStrip(
-        _ panel: WarrenRemoteGitPanel,
-        tokens: WarrenColorTokens
-    ) -> some View {
-        HStack(spacing: WarrenSpacing.compact) {
-            WarrenBranchGlyph(size: 11)
-            Text(panel.branch.isEmpty ? "detached" : panel.branch)
-                .font(WarrenTypography.branchName)
-                .foregroundStyle(tokens.ink2)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .warrenTooltip(panel.upstream.map { "Tracks \($0)" } ?? "No upstream")
-            Spacer(minLength: 0)
-            Button {
-                Task { await inspector.refresh(force: true) }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(tokens.mutedForeground)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .warrenTooltip("Refresh")
-        }
-        .padding(.horizontal, WarrenSpacing.medium)
-        .frame(height: 30)
     }
 
     private func changeSection(_ title: String, changes: [WarrenRemoteGitChange], tokens: WarrenColorTokens) -> some View {
@@ -381,13 +350,17 @@ private struct WarrenInspectorChanges: View {
 /// Branch, how it stands against its upstream and the main line, any Git
 /// operation in progress, and the pull request for it.
 private struct WarrenInspectorBranchCard: View {
+    private enum PRField: Hashable { case title, body }
+
     @ObservedObject var inspector: WarrenInspectorModel
+    let activity: WarrenDesktopInspectorActivity
     let panel: WarrenRemoteGitPanel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @State private var composingPR = false
     @State private var prTitle = ""
     @State private var prBody = ""
+    @FocusState private var focusedPRField: PRField?
     /// A Create is in flight from this editor. The editor stays open until
     /// it succeeds, so a failure never throws away what was written.
     @State private var submittingPR = false
@@ -407,9 +380,22 @@ private struct WarrenInspectorBranchCard: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
+                        .warrenTooltip(panel.upstream.map { "Tracks \($0)" } ?? "No upstream")
                     meta(standing, tokens: tokens)
                 }
                 Spacer(minLength: 0)
+                Button {
+                    Task { await inspector.refresh(force: true) }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(tokens.mutedForeground)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(WarrenChromeButtonStyle())
+                .warrenTooltip("Refresh")
+                .accessibilityLabel("Refresh")
                 syncButton("Pull", symbol: "arrow.down", badge: panel.behind, action: "pull", tokens: tokens) { inspector.pull() }
                     .disabled(panel.upstream == nil)
                 syncButton("Push", symbol: "arrow.up", badge: panel.ahead, action: "push", tokens: tokens) { inspector.push() }
@@ -427,10 +413,12 @@ private struct WarrenInspectorBranchCard: View {
                         TextField("Title", text: $prTitle)
                             .textFieldStyle(.plain)
                             .font(WarrenTypography.bodyEmphasis)
+                            .focused($focusedPRField, equals: .title)
                         TextField("Description", text: $prBody, axis: .vertical)
                             .textFieldStyle(.plain)
                             .font(WarrenTypography.dialogInput)
                             .lineLimit(2...6)
+                            .focused($focusedPRField, equals: .body)
                         HStack {
                             Spacer(minLength: 0)
                             Button("Cancel") {
@@ -531,6 +519,18 @@ private struct WarrenInspectorBranchCard: View {
         .padding(.vertical, WarrenSpacing.compact)
         .background(tokens.inputSurface.opacity(0.45), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
+        .onChange(of: focusedPRField != nil) { focused in
+            activity.setKeyboardFocus(focused, source: "pr-composer")
+        }
+        .onChange(of: composingPR) { open in
+            if !open {
+                focusedPRField = nil
+                activity.setKeyboardFocus(false, source: "pr-composer")
+            }
+        }
+        .onDisappear {
+            activity.setKeyboardFocus(false, source: "pr-composer")
+        }
         .onChange(of: inspector.action) { action in
             guard submittingPR, action == nil else { return }
             submittingPR = false
@@ -630,14 +630,27 @@ struct WarrenBranchGlyph: View {
 }
 
 /// Commit everything in the working tree, as the Web panel does. ⌘Return
-/// commits from the field.
+/// commits from the field; plain Return inserts a newline.
 private struct WarrenInspectorCommitBox: View {
     @ObservedObject var inspector: WarrenInspectorModel
-    let count: Int
+    let activity: WarrenDesktopInspectorActivity
+    let stagedCount: Int
+    let unstagedCount: Int
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
     @FocusState private var focused: Bool
     @State private var draft = ""
+
+    private var summaryCopy: String {
+        let total = stagedCount + unstagedCount
+        if unstagedCount == 0 {
+            return total == 1 ? "Commits 1 staged file" : "Commits \(total) staged files"
+        }
+        if stagedCount == 0 {
+            return total == 1 ? "Stages and commits 1 file" : "Stages and commits all \(total) files"
+        }
+        return "Stages and commits all \(total) files (\(stagedCount) staged)"
+    }
 
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
@@ -656,9 +669,8 @@ private struct WarrenInspectorCommitBox: View {
                 .padding(.horizontal, WarrenSpacing.medium)
                 .padding(.top, 10)
                 .padding(.bottom, WarrenSpacing.small)
-                .onSubmit { if canCommit { submit() } }
             HStack {
-                Text(count == 1 ? "Commits 1 file" : "Commits all \(count) files")
+                Text(summaryCopy)
                     .font(WarrenTypography.footnote)
                     .foregroundStyle(tokens.mutedForeground)
                 Spacer(minLength: 0)
@@ -693,6 +705,12 @@ private struct WarrenInspectorCommitBox: View {
         .onAppear { draft = inspector.commitMessage }
         .onChange(of: inspector.workspaceID) { _ in draft = inspector.commitMessage }
         .onChange(of: draft) { inspector.commitMessage = $0 }
+        .onChange(of: focused) { isFocused in
+            activity.setKeyboardFocus(isFocused, source: "commit-box")
+        }
+        .onDisappear {
+            activity.setKeyboardFocus(false, source: "commit-box")
+        }
     }
 }
 
@@ -976,7 +994,7 @@ struct WarrenInspectorEmpty: View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
         VStack(spacing: WarrenSpacing.compact) {
             Image(systemName: symbol)
-                .font(.system(size: 20, weight: .light))
+                .font(.system(size: 20, weight: .regular))
                 .foregroundStyle(tokens.mutedForeground.opacity(0.8))
             Text(title)
                 .font(WarrenTypography.emptyStateTitle)

@@ -225,10 +225,11 @@ public struct WarrenPrimaryButtonStyle: ButtonStyle {
         @Environment(\.isFocused) private var environmentFocused
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.warrenWindowMaterial) private var windowMaterial
         @State private var hovered = false
 
         var body: some View {
-            let tokens = WarrenColorTokens.resolved(for: colorScheme)
+            let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
             let focused = isFocused || environmentFocused
             let state = WarrenInteractionState.resolve(
                 disabled: !isEnabled,

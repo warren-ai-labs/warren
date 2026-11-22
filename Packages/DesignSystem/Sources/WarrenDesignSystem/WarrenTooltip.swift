@@ -264,7 +264,15 @@ private struct WarrenTooltipLayer: View {
                     .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: WarrenMotion.stateChangeDuration), value: center.tip == nil)
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: WarrenMotion.stateChangeDuration),
+            value: center.tip == nil
+        )
+        .onChange(of: center.tip == nil) { isDismissed in
+            if isDismissed {
+                size = .zero
+            }
+        }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

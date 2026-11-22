@@ -297,22 +297,25 @@ private enum ConversationLayout {
     static let column: CGFloat = 720
     static let widePadding: CGFloat = 24
     static let narrowPadding: CGFloat = 16
-    /// 44 between turns. The last turn leaves room for the answer actions,
-    /// which are overlaid below the content instead of taking a layout row.
-    static let turnGap: CGFloat = 44
-    static let lastTurnGap: CGFloat = 34
+    /// Gap between turns (each turn now carries its own in-flow footer row).
+    static let turnGap: CGFloat = 28
+    static let lastTurnGap: CGFloat = 12
     /// 12 between an answer's blocks, 16 from the message to the work trail.
     static let innerGap: CGFloat = 12
     static let askGap: CGFloat = 16
-    static let bubbleRadius: CGFloat = 12
+    static let bubbleRadius: CGFloat = 14
     static let panelRadius: CGFloat = 12
+    static let composerRadius: CGFloat = 14
+    /// Fixed leading slot for disclosure chevrons so Work trail and Thought
+    /// share one vertical axis.
+    static let disclosureSlotWidth: CGFloat = 12
     /// A pane narrower than this is a split pane: chips lose their labels and
     /// the message bubble takes more of the width.
     static let narrowBreakpoint: CGFloat = 560
     static let bubbleWidthRatio: CGFloat = 0.75
     static let bubbleWidthRatioNarrow: CGFloat = 0.88
     /// The folded message height and its fade.
-    static let foldedMaxHeight: CGFloat = 208
+    static let foldedMaxHeight: CGFloat = 200
 }
 
 /// Reading leading for each of the pane's text roles, as the design's
@@ -486,7 +489,8 @@ struct WarrenConversationView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     if isEmptyConversation {
                         emptySession
-                            .frame(minHeight: max(0, viewportHeight - 12), alignment: .bottom)
+                            .padding(.bottom, 28)
+                            .frame(minHeight: max(0, viewportHeight - 16), alignment: .center)
                     } else {
                         ForEach(Array(conversation.turns.enumerated()), id: \.element.id) { index, turn in
                             WarrenConversationTurnView(
@@ -604,7 +608,7 @@ struct WarrenConversationView: View {
             .frame(height: 28)
             .background(palette.raise, in: Capsule())
             .overlay(Capsule().strokeBorder(palette.focus, lineWidth: 1))
-            .shadow(color: .black.opacity(0.5), radius: 7, y: 4)
+            .shadow(color: .black.opacity(colorScheme == .light ? 0.14 : 0.5), radius: 7, y: 4)
         }
         .buttonStyle(.plain)
     }
@@ -628,14 +632,14 @@ struct WarrenConversationView: View {
             || !crew.isEmpty
         let panelIdentity = "\(actionError ?? "-")|\(decision?.id ?? "-")|\(leadDecision?.id ?? "-")|\(leadChecks?.id ?? "-")|\(crew.count)|\(plan?.current ?? "-")|\(feed.queuedPrompts.count)"
         if hasPanels {
-            VStack(spacing: -1) {
+            VStack(spacing: 8) {
                 if let actionError {
-                    WarrenConversationStackPanel(outline: palette.red.opacity(0.55), roundsTop: true) {
+                    WarrenConversationStackPanel(outline: palette.red.opacity(0.55)) {
                         WarrenConversationBanner(message: actionError) { self.actionError = nil }
                     }
                 }
                 if let decision {
-                    WarrenConversationStackPanel(outline: palette.line2, roundsTop: actionError == nil) {
+                    WarrenConversationStackPanel(outline: palette.line2) {
                         WarrenConversationDecisionDock(
                             decision: decision,
                             count: conversation.decisions.count,
@@ -649,10 +653,7 @@ struct WarrenConversationView: View {
                     .id(decision.id)
                 }
                 if let leadDecision {
-                    WarrenConversationStackPanel(
-                        outline: palette.line2,
-                        roundsTop: actionError == nil && decision == nil
-                    ) {
+                    WarrenConversationStackPanel(outline: palette.line2) {
                         WarrenLeadDecisionPanel(
                             question: leadDecision.question,
                             reason: nil,
@@ -664,10 +665,7 @@ struct WarrenConversationView: View {
                     .id(leadDecision.id)
                 }
                 if let leadChecks {
-                    WarrenConversationStackPanel(
-                        outline: palette.line2,
-                        roundsTop: actionError == nil && decision == nil && leadDecision == nil
-                    ) {
+                    WarrenConversationStackPanel(outline: palette.line2) {
                         WarrenLeadChecksPanel(
                             checks: leadChecks.checks,
                             outcomes: resolvedLeadChecks,
@@ -682,10 +680,7 @@ struct WarrenConversationView: View {
                     .id(leadChecks.id)
                 }
                 if plan != nil || !feed.queuedPrompts.isEmpty || !crew.isEmpty {
-                    WarrenConversationStackPanel(
-                        outline: palette.line2,
-                        roundsTop: actionError == nil && decision == nil && leadDecision == nil && leadChecks == nil
-                    ) {
+                    WarrenConversationStackPanel(outline: palette.line) {
                         VStack(alignment: .leading, spacing: 0) {
                             if let plan {
                                 WarrenConversationPlanStrip(plan: plan)
@@ -716,7 +711,7 @@ struct WarrenConversationView: View {
                     }
                 }
             }
-            .padding(.bottom, -1)
+            .padding(.bottom, 8)
             .animation(WarrenMotion.animation(.overlay, reduceMotion: reduceMotion), value: panelIdentity)
         }
     }
@@ -777,18 +772,19 @@ struct WarrenConversationView: View {
                     onCopyLastAnswer: copyLastAnswer,
                     onFocusChange: { focused = $0 }
                 )
-                .frame(height: min(max(textHeight, 46), 220))
+                .frame(height: min(max(textHeight, 26), 200))
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 14)
             .padding(.top, 12)
+            .padding(.bottom, 2)
             composerFooter
         }
-        .background(palette.raise, in: RoundedRectangle(cornerRadius: WarrenRadius.composer, style: .continuous))
+        .background(palette.raise, in: RoundedRectangle(cornerRadius: ConversationLayout.composerRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: WarrenRadius.composer, style: .continuous)
+            RoundedRectangle(cornerRadius: ConversationLayout.composerRadius, style: .continuous)
                 .strokeBorder(focused ? palette.focus : palette.line2, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
+        .shadow(color: .black.opacity(colorScheme == .light ? 0.08 : 0.30), radius: 8, y: 2)
     }
 
     private func pickAttachments() {
@@ -861,7 +857,7 @@ struct WarrenConversationView: View {
             sendButton
         }
         .padding(.horizontal, 10)
-        .padding(.top, 8)
+        .padding(.top, 6)
         .padding(.bottom, 10)
     }
 
@@ -921,38 +917,51 @@ struct WarrenConversationView: View {
 
     // MARK: Empty session
 
+    static func formattedWorkspacePath(_ path: String?, homeDirectory: String = NSHomeDirectory()) -> String {
+        guard let raw = path?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return "this workspace"
+        }
+        let home = homeDirectory.hasSuffix("/") ? String(homeDirectory.dropLast()) : homeDirectory
+        if !home.isEmpty {
+            if raw == home {
+                return "~"
+            }
+            if raw.hasPrefix(home + "/") {
+                return "~/" + raw.dropFirst(home.count + 1)
+            }
+        }
+        return raw
+    }
+
     private var emptySession: some View {
-        let place = root.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
-        return VStack(alignment: .leading, spacing: 6) {
+        let place = Self.formattedWorkspacePath(root)
+        return VStack(alignment: .leading, spacing: 8) {
             Text("What should we work on?")
-                .font(WarrenTypography.emptyStateTitle)
+                .font(WarrenTypography.conversationEmptyTitle)
                 .foregroundStyle(palette.ink)
             HStack(spacing: 6) {
                 Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 11))
-                Text(place.isEmpty ? "this workspace" : "~/" + place)
+                    .font(.system(size: 10.5, weight: .medium))
+                Text(place)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 if let branch, !branch.isEmpty {
                     Text("·")
                     Text(branch)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
-            .font(WarrenTypography.mono)
-            .foregroundStyle(palette.ink4)
-            .padding(.bottom, 10)
+            .font(WarrenTypography.monoSmall)
+            .foregroundStyle(palette.ink3)
+            .padding(.bottom, 12)
             if !suggestions.isEmpty {
-                HStack(spacing: 6) {
+                WarrenDesktopFlowLayout(spacing: 8, lineSpacing: 8) {
                     ForEach(suggestions.prefix(3), id: \.self) { suggestion in
-                        Button {
+                        WarrenConversationSuggestionChip(title: suggestion) {
                             draft = suggestion
-                        } label: {
-                            Text(suggestion)
-                                .font(WarrenTypography.caption)
-                                .foregroundStyle(palette.ink2)
-                                .padding(.horizontal, 12)
-                                .frame(height: 28)
-                                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(palette.line2, lineWidth: 1))
+                            localFocusRequest &+= 1
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -1275,6 +1284,36 @@ private enum ConversationComposerMetrics {
     static let verticalInset: CGFloat = 2
 }
 
+private struct WarrenConversationSuggestionChip: View {
+    let title: String
+    let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hovering = false
+
+    var body: some View {
+        let palette = WarrenConversationPalette.resolved(for: colorScheme)
+        Button(action: action) {
+            Text(title)
+                .font(WarrenTypography.caption)
+                .foregroundStyle(hovering ? palette.ink : palette.ink2)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .background(
+                    hovering ? palette.bubble : palette.raise,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(hovering ? palette.line2 : palette.line, lineWidth: 1)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
 /// What typing into the composer at a pending decision means.
 ///
 /// A question can take the text as its answer (`resolution["text"]`). A
@@ -1328,6 +1367,8 @@ private struct WarrenConversationTurnView: View, Equatable {
 
     var body: some View {
         let running = live && turn.status == .running
+        let showsWorkTrail = running || !turn.steps.isEmpty || !turn.narration.isEmpty
+        let showsReasoning = !turn.reasoning.text.isEmpty
         VStack(alignment: .leading, spacing: ConversationLayout.innerGap) {
             if let prompt = turn.prompt {
                 WarrenConversationPromptView(
@@ -1341,23 +1382,27 @@ private struct WarrenConversationTurnView: View, Equatable {
                 )
                 .padding(.bottom, ConversationLayout.askGap - ConversationLayout.innerGap)
             }
-            if running || !turn.steps.isEmpty || !turn.narration.isEmpty {
-                WarrenConversationWorkTrail(
-                    turn: turn,
-                    running: running,
-                    waiting: waiting,
-                    contentWidth: contentWidth,
-                    actions: actions
-                )
-            }
-            if !turn.reasoning.text.isEmpty {
-                WarrenConversationDisclosure(label: reasoningLabel) {
-                    Text(turn.reasoning.text)
-                        .font(WarrenTypography.body)
-                        .lineSpacing(ConversationLeading.reasoning)
-                        .foregroundStyle(palette.ink3)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+            if showsWorkTrail || showsReasoning {
+                VStack(alignment: .leading, spacing: 2) {
+                    if showsWorkTrail {
+                        WarrenConversationWorkTrail(
+                            turn: turn,
+                            running: running,
+                            waiting: waiting,
+                            contentWidth: contentWidth,
+                            actions: actions
+                        )
+                    }
+                    if showsReasoning {
+                        WarrenConversationDisclosure(label: reasoningLabel) {
+                            Text(turn.reasoning.text)
+                                .font(WarrenTypography.body)
+                                .lineSpacing(ConversationLeading.reasoning)
+                                .foregroundStyle(palette.ink3)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
             }
             let answer = running
@@ -1415,8 +1460,6 @@ private struct WarrenConversationTurnView: View, Equatable {
                     onReviewAll: { actions.reviewFile(turn.files[0]) }
                 )
             }
-        }
-        .overlay(alignment: .bottomTrailing) {
             if !running, !turn.answer.isEmpty {
                 WarrenConversationAnswerFooter(
                     answer: turn.answer,
@@ -1426,7 +1469,7 @@ private struct WarrenConversationTurnView: View, Equatable {
                     // last turn: an earlier turn's prompt is old context.
                     onRetry: isLast ? { onRetry(turn) } : nil
                 )
-                .offset(y: 26)
+                .padding(.top, -4)
             }
         }
         .contentShape(Rectangle())
@@ -1445,7 +1488,7 @@ private struct WarrenConversationTurnView: View, Equatable {
 /// The person's message: a bubble on the trailing side, so the answers own the
 /// reading column. A long paste folds at eight lines with an inline "Show more",
 /// and hovering reveals Copy and Edit and resend.
-private struct WarrenConversationPromptView: View {
+struct WarrenConversationPromptView: View {
     let prompt: String
     let attachments: [String]
     var meta: String?
@@ -1478,10 +1521,9 @@ private struct WarrenConversationPromptView: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 0) {
-                    ZStack(alignment: .bottomLeading) {
+                    ZStack(alignment: .bottom) {
                         WarrenConversationMarkdown(text: prompt, style: .message, streaming: false)
                             .frame(maxHeight: folds && !expanded ? ConversationLayout.foldedMaxHeight : nil, alignment: .top)
-                            .padding(.bottom, folds ? 24 : 0)
                             .clipped()
                         if folds && !expanded {
                             LinearGradient(
@@ -1489,33 +1531,32 @@ private struct WarrenConversationPromptView: View {
                                 startPoint: .top,
                                 endPoint: .bottom
                             )
-                            .frame(height: 64)
+                            .frame(height: 44)
                             .allowsHitTesting(false)
                         }
-                        if folds {
-                            Button {
-                                expanded.toggle()
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(expanded ? "Show less" : "Show more")
-                                    Image(systemName: "chevron.down")
-                                        .font(.system(size: 8, weight: .semibold))
-                                        .rotationEffect(.degrees(expanded ? 180 : 0))
-                                }
-                                .font(WarrenTypography.caption)
-                                .foregroundStyle(palette.ink3)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.leading, 14)
-                            .padding(.bottom, 8)
-                        }
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(palette.bubble, in: RoundedRectangle(cornerRadius: ConversationLayout.bubbleRadius, style: .continuous))
+                    if folds {
+                        Button {
+                            expanded.toggle()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(expanded ? "Show less" : "Show more")
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 8, weight: .semibold))
+                                    .rotationEffect(.degrees(expanded ? 180 : 0))
+                            }
+                            .font(WarrenTypography.captionEmphasis)
+                            .foregroundStyle(palette.ink3)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 8)
+                    }
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
                 .frame(maxWidth: maxWidth, alignment: .leading)
+                .background(palette.bubble, in: RoundedRectangle(cornerRadius: ConversationLayout.bubbleRadius, style: .continuous))
                 .overlay(alignment: .topLeading) {
                     HStack(spacing: 2) {
                         iconButton("square.on.square", label: "Copy", action: onCopy)
@@ -1528,6 +1569,12 @@ private struct WarrenConversationPromptView: View {
                     .opacity(hovering ? 1 : 0)
                     .allowsHitTesting(hovering)
                     .accessibilityHidden(!hovering)
+                }
+                .accessibilityActions {
+                    Button("Copy", action: onCopy)
+                    if let onEdit {
+                        Button("Edit and resend", action: onEdit)
+                    }
                 }
                 if let meta {
                     Text(meta)
@@ -1554,8 +1601,11 @@ private struct WarrenConversationPromptView: View {
         .accessibilityLabel(label)
     }
 
+    private static let foldedCharacterLimit = 600
+
     static func isLong(_ text: String) -> Bool {
-        text.split(separator: "\n", omittingEmptySubsequences: false).count > foldedLineLimit
+        text.count > foldedCharacterLimit
+            || text.split(separator: "\n", omittingEmptySubsequences: false).count > foldedLineLimit
     }
 }
 
@@ -1590,43 +1640,46 @@ private struct WarrenConversationAttachmentChips: View {
 
     var body: some View {
         let palette = WarrenConversationPalette.resolved(for: colorScheme)
-        HStack(spacing: 6) {
-            ForEach(attachments) { attachment in
-                HStack(spacing: 6) {
-                    Image(systemName: attachment.failure == nil ? "doc" : "exclamationmark.triangle")
-                        .font(.system(size: 11))
-                    Text(attachment.name).lineLimit(1)
-                    Text(detail(attachment))
-                        .foregroundStyle(attachment.failure == nil ? palette.ink4 : palette.red)
-                        .lineLimit(1)
-                    Button {
-                        onRemove(attachment.id)
-                    } label: {
-                        Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
-                    }
-                    .buttonStyle(.plain)
-                }
-                .font(WarrenTypography.caption)
-                .foregroundStyle(attachment.failure == nil ? palette.ink2 : palette.red)
-                .padding(.horizontal, 10)
-                .frame(height: 28)
-                .background(palette.raise, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(
-                            attachment.failure == nil ? palette.line2 : palette.red.opacity(0.6),
-                            lineWidth: 1
-                        )
-                )
-                .overlay(alignment: .bottomLeading) {
-                    if attachment.isUploading {
-                        GeometryReader { geometry in
-                            Rectangle()
-                                .fill(palette.ink3)
-                                .frame(width: geometry.size.width * min(1, max(0, attachment.progress)), height: 2)
-                                .frame(maxHeight: .infinity, alignment: .bottom)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(attachments) { attachment in
+                    HStack(spacing: 6) {
+                        Image(systemName: attachment.failure == nil ? "doc" : "exclamationmark.triangle")
+                            .font(.system(size: 11))
+                        Text(attachment.name).lineLimit(1)
+                        Text(detail(attachment))
+                            .foregroundStyle(attachment.failure == nil ? palette.ink4 : palette.red)
+                            .lineLimit(1)
+                        Button {
+                            onRemove(attachment.id)
+                        } label: {
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove \(attachment.name)")
+                    }
+                    .font(WarrenTypography.caption)
+                    .foregroundStyle(attachment.failure == nil ? palette.ink2 : palette.red)
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .background(palette.raise, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(
+                                attachment.failure == nil ? palette.line2 : palette.red.opacity(0.6),
+                                lineWidth: 1
+                            )
+                    )
+                    .overlay(alignment: .bottomLeading) {
+                        if attachment.isUploading {
+                            GeometryReader { geometry in
+                                Rectangle()
+                                    .fill(palette.ink3)
+                                    .frame(width: geometry.size.width * min(1, max(0, attachment.progress)), height: 2)
+                                    .frame(maxHeight: .infinity, alignment: .bottom)
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
                     }
                 }
             }
@@ -1666,6 +1719,7 @@ private struct WarrenConversationDisclosure<Content: View>: View {
                         .font(.system(size: 8, weight: .semibold))
                         .rotationEffect(.degrees(open ? 90 : 0))
                         .foregroundStyle(palette.ink4)
+                        .frame(width: ConversationLayout.disclosureSlotWidth, alignment: .center)
                     Text(label)
                         .font(WarrenTypography.caption)
                         .foregroundStyle(palette.ink3)
@@ -1677,7 +1731,7 @@ private struct WarrenConversationDisclosure<Content: View>: View {
             .buttonStyle(.plain)
             if open {
                 content()
-                    .padding(.leading, 14)
+                    .padding(.leading, 12)
                     .overlay(alignment: .leading) {
                         Rectangle().fill(palette.line).frame(width: 1)
                     }
@@ -1758,6 +1812,17 @@ private struct WarrenConversationWorkTrail: View {
                 if !turn.steps.isEmpty { open.toggle() }
             } label: {
                 HStack(spacing: 6) {
+                    Group {
+                        if !turn.steps.isEmpty {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 8, weight: .semibold))
+                                .rotationEffect(.degrees(open ? 90 : 0))
+                                .foregroundStyle(palette.ink4)
+                        } else {
+                            Color.clear
+                        }
+                    }
+                    .frame(width: ConversationLayout.disclosureSlotWidth, alignment: .center)
                     if running {
                         if waiting {
                             Text("Waiting").font(WarrenTypography.caption).foregroundStyle(palette.ink3)
@@ -1793,12 +1858,6 @@ private struct WarrenConversationWorkTrail: View {
                             .font(WarrenTypography.caption)
                             .foregroundStyle(palette.red)
                     }
-                    if !turn.steps.isEmpty {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 8, weight: .semibold))
-                            .rotationEffect(.degrees(open ? 90 : 0))
-                            .foregroundStyle(palette.ink4)
-                    }
                 }
                 .frame(height: 22)
                 .contentShape(Rectangle())
@@ -1806,13 +1865,13 @@ private struct WarrenConversationWorkTrail: View {
             .buttonStyle(.plain)
 
             if running, !open, !window.isEmpty {
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(window.enumerated()), id: \.element.id) { index, step in
                         WarrenConversationStepLine(step: step, dim: index < window.count - 1, current: index == window.count - 1)
                             .transition(.offset(y: 3).combined(with: .opacity))
                     }
                 }
-                .padding(.leading, 20)
+                .padding(.leading, 18)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: window.map(\.id))
             }
 
@@ -1823,7 +1882,7 @@ private struct WarrenConversationWorkTrail: View {
                     }
                 }
                 .padding(.vertical, 2)
-                .padding(.leading, 14)
+                .padding(.leading, 12)
                 .overlay(alignment: .leading) {
                     Rectangle().fill(palette.line).frame(width: 1)
                 }
@@ -2043,10 +2102,10 @@ private struct WarrenConversationAnswerFooter: View {
                     .foregroundStyle(palette.ink4)
                     .padding(.leading, 6)
             }
+            Spacer(minLength: 0)
         }
-        .padding(.top, 2)
-        .padding(.leading, -4)
-        .frame(height: 26, alignment: .leading)
+        .padding(.leading, -5)
+        .frame(height: 24, alignment: .leading)
         .opacity(visible ? 1 : 0)
         .allowsHitTesting(visible)
         .accessibilityHidden(!visible)
@@ -2067,12 +2126,12 @@ private struct WarrenConversationAnswerFooter: View {
     private func iconButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 12))
+                .font(.system(size: 11.5))
                 .foregroundStyle(palette.ink4)
                 .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(WarrenConversationQuietButtonStyle())
         .warrenTooltip(label)
         .accessibilityLabel(label)
     }
@@ -2130,19 +2189,21 @@ struct WarrenConversationMarkdown: View {
                 caret: streaming && isLast,
                 font: WarrenTypography.reading,
                 lineSpacing: ConversationLeading.reading,
-                lineHeight: 22
+                lineHeight: 21
             )
         case .heading(let level, let value):
             inlineContent(
                 value,
                 tokens: tokens,
                 caret: false,
-                font: style == .answer ? WarrenTypography.readingTitle : WarrenTypography.readingStrong,
+                font: style == .answer
+                    ? (level <= 2 ? WarrenTypography.readingTitle : WarrenTypography.readingSubheading)
+                    : WarrenTypography.readingStrong,
                 lineSpacing: ConversationLeading.readingTitle,
                 lineHeight: 22
             )
         case .unorderedList(let items), .orderedList(let items):
-            VStack(alignment: .leading, spacing: style == .message ? 2 : 4) {
+            VStack(alignment: .leading, spacing: style == .message ? 2 : 5) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         marker(item, tokens: tokens)
@@ -2152,13 +2213,13 @@ struct WarrenConversationMarkdown: View {
                             caret: false,
                             font: WarrenTypography.reading,
                             lineSpacing: ConversationLeading.reading,
-                            lineHeight: 22
+                            lineHeight: 21
                         )
                     }
-                    .padding(.leading, CGFloat(item.depth) * 18)
+                    .padding(.leading, CGFloat(item.depth) * 16)
                 }
             }
-            .padding(.leading, 20)
+            .padding(.leading, 8)
         case .quote(let value):
             inlineContent(
                 value,
@@ -2166,7 +2227,7 @@ struct WarrenConversationMarkdown: View {
                 caret: false,
                 font: WarrenTypography.reading,
                 lineSpacing: ConversationLeading.reading,
-                lineHeight: 22,
+                lineHeight: 21,
                 color: palette.ink3
             )
                 .foregroundStyle(palette.ink3)
@@ -2187,7 +2248,7 @@ struct WarrenConversationMarkdown: View {
                     caret: false,
                     font: WarrenTypography.reading,
                     lineSpacing: ConversationLeading.reading,
-                    lineHeight: 22
+                    lineHeight: 21
                 )
             }
             .padding(.leading, 10)
@@ -2246,23 +2307,23 @@ struct WarrenConversationMarkdown: View {
         } else if item.marker == "•" {
             Text(item.depth == 0 ? "•" : "◦")
                 .font(WarrenTypography.reading)
-                .foregroundStyle(style == .message ? palette.ink3 : palette.ink4)
+                .foregroundStyle(palette.ink3)
                 .frame(minWidth: 10, alignment: .center)
         } else {
             Text(item.marker)
                 .font(WarrenTypography.reading.monospacedDigit())
-                .foregroundStyle(style == .message ? palette.ink3 : palette.ink4)
+                .foregroundStyle(palette.ink3)
                 .frame(minWidth: 18, alignment: .trailing)
         }
     }
 
-    /// Room above a block. An answer's headings open a section (22 above, 8
+    /// Room above a block. An answer's headings open a section (20 above, 6
     /// below); a bubble's blocks are a flat 8.
     private func spacing(before index: Int, blocks: [WarrenMarkdownBlock]) -> CGFloat {
         guard style == .answer else { return 8 }
-        if case .heading = blocks[index - 1] { return 8 }
+        if case .heading = blocks[index - 1] { return 6 }
         switch blocks[index] {
-        case .heading(let level, _): return level <= 2 ? 22 : 14
+        case .heading(let level, _): return level <= 2 ? 20 : 14
         case .code, .table: return 12
         default: return 12
         }
@@ -2295,8 +2356,8 @@ struct WarrenConversationMarkdown: View {
         let key = "\(style == .answer ? "a" : "m")\(colorScheme == .light ? "l" : "d")|\(value)"
         if cacheable, let cached = WarrenConversationInlineCache.shared.value(for: key) { return cached }
         let source = WarrenMarkdownCache.shared.preservedLineBreaks(for: value, cacheable: cacheable)
-        let codeFont = Font.system(size: 13, design: .monospaced)
-        let codeBackground = style == .message ? palette.ink.opacity(0.07) : palette.bubble
+        let codeFont = Font.system(size: 12.5, design: .monospaced)
+        let codeBackground = palette.ink.opacity(colorScheme == .dark ? 0.08 : 0.06)
         guard var attributed = try? AttributedString(
             markdown: source,
             options: .init(interpretedSyntax: .full, failurePolicy: .returnPartiallyParsedIfPossible)
@@ -2446,6 +2507,7 @@ private struct WarrenConversationTable: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(alignment: .top) { palette.code.frame(height: headerHeight) }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(palette.line, lineWidth: 1))
@@ -2454,9 +2516,15 @@ private struct WarrenConversationTable: View {
     private var compactColumns: Set<Int> {
         let rows = [table.headers] + table.rows
         let count = rows.map(\.count).max() ?? 0
-        return Set((0..<count).filter { column in
+        var compact = Set((0..<count).filter { column in
             count > 1 && rows.allSatisfy { column >= $0.count || $0[column].count <= 28 }
         })
+        // Keep the trailing column flexible when every column is short so the
+        // table aligns with full-width code blocks and cards in the column.
+        if count > 0, compact.count == count {
+            compact.remove(count - 1)
+        }
+        return compact
     }
 
     private func cell(_ value: String, column: Int, compact: Bool) -> some View {
@@ -2535,6 +2603,7 @@ private struct WarrenConversationFilesCard: View {
     let files: [WarrenConversation.FileChange]
     let onReview: (WarrenConversation.FileChange) -> Void
     let onReviewAll: () -> Void
+    @State private var hoveredID: String?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.conversationRoot) private var root
 
@@ -2546,7 +2615,7 @@ private struct WarrenConversationFilesCard: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Text("\(files.count) file\(files.count == 1 ? "" : "s") changed")
-                    .font(WarrenTypography.caption)
+                    .font(WarrenTypography.captionEmphasis)
                     .foregroundStyle(palette.ink2)
                 HStack(spacing: 4) {
                     Text("+\(additions)").foregroundStyle(palette.green)
@@ -2560,10 +2629,13 @@ private struct WarrenConversationFilesCard: View {
                     .foregroundStyle(palette.ink3)
                     .warrenTooltip("Open every change in the Changes tab")
             }
-            .frame(height: 34)
+            .frame(height: 32)
             .padding(.horizontal, 12)
+            .background(palette.code)
             .overlay(alignment: .bottom) { Rectangle().fill(palette.line).frame(height: 1) }
             ForEach(Array(files.enumerated()), id: \.element.id) { index, file in
+                let displayPath = WarrenConversation.displayPath(file.file, root: root)
+                let directory = Self.directoryPath(of: displayPath)
                 Button {
                     onReview(file)
                 } label: {
@@ -2574,30 +2646,46 @@ private struct WarrenConversationFilesCard: View {
                             .foregroundStyle(palette.ink2)
                             .lineLimit(1)
                             .layoutPriority(1)
-                        Text(WarrenConversation.displayPath(file.file, root: root))
-                            .font(WarrenTypography.caption)
-                            .foregroundStyle(palette.ink4)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        if let directory {
+                            Text(directory)
+                                .font(WarrenTypography.caption)
+                                .foregroundStyle(palette.ink4)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                         Spacer(minLength: 8)
                         WarrenConversationChangeCount(additions: file.additions, deletions: file.deletions)
                     }
                     .frame(height: 30)
                     .padding(.horizontal, 12)
+                    .background(hoveredID == file.id ? palette.hover : Color.clear)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onHover { inside in
+                    if inside {
+                        hoveredID = file.id
+                    } else if hoveredID == file.id {
+                        hoveredID = nil
+                    }
+                }
                 .warrenTooltip("Open \(file.file) in Changes")
                 if index < files.count - 1 {
-                    Rectangle().fill(palette.line.opacity(0.5)).frame(height: 1)
+                    Rectangle().fill(palette.line.opacity(0.6)).frame(height: 1)
                 }
             }
         }
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(palette.line2, lineWidth: 1)
+                .strokeBorder(palette.line, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private static func directoryPath(of path: String) -> String? {
+        guard let slash = path.lastIndex(of: "/") else { return nil }
+        let dir = String(path[..<slash])
+        return dir.isEmpty ? nil : dir
     }
 }
 
@@ -2757,25 +2845,21 @@ private struct WarrenConversationContextMeter: View {
 
 // MARK: - Stacked panels
 
-/// One panel resting on the composer: the shared raised surface, square at the
-/// bottom so it merges with the composer's top edge, outlined on its sides and
-/// top only. Panels stack with a 1pt overlap, so one line separates them.
+/// One panel stacked above the composer: a full-width rounded card sharing the
+/// composer's raised surface and separated from its neighbours by a quiet gap.
 struct WarrenConversationStackPanel<Content: View>: View {
     var outline: Color
-    var roundsTop: Bool
     @ViewBuilder var content: () -> Content
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let palette = WarrenConversationPalette.resolved(for: colorScheme)
+        let shape = RoundedRectangle(cornerRadius: ConversationLayout.panelRadius, style: .continuous)
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(palette.raise, in: WarrenPanelShape(roundsTop: roundsTop, radius: ConversationLayout.panelRadius))
-            .overlay(
-                WarrenPanelOutline(roundsTop: roundsTop, radius: ConversationLayout.panelRadius)
-                    .stroke(outline, lineWidth: 1)
-            )
-            .padding(.horizontal, 12)
+            .background(palette.raise, in: shape)
+            .overlay(shape.strokeBorder(outline, lineWidth: 1))
+            .shadow(color: .black.opacity(colorScheme == .light ? 0.06 : 0.22), radius: 6, y: 2)
             .transition(.offset(y: 6).combined(with: .opacity))
     }
 }
@@ -2789,51 +2873,6 @@ enum WarrenConversationModeIcon {
         case "bypasspermissions", "full-access", "yolo": "exclamationmark.shield"
         default: "checkmark.shield"
         }
-    }
-}
-
-/// A rectangle whose top corners take `radius` when asked and no corner does
-/// otherwise. A shape of its own because the per-corner rectangle is not
-/// available on every macOS Warren supports.
-private struct WarrenPanelShape: Shape {
-    let roundsTop: Bool
-    let radius: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        guard roundsTop else { return Path(rect) }
-        let r = min(radius, rect.width / 2, rect.height)
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
-        path.addQuadCurve(to: CGPoint(x: rect.minX + r, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
-        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + r), control: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.closeSubpath()
-        return path
-    }
-}
-
-/// The sides and top of `WarrenPanelShape`, open along the bottom.
-private struct WarrenPanelOutline: Shape {
-    let roundsTop: Bool
-    let radius: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        let inset = rect.insetBy(dx: 0.5, dy: 0.5)
-        let r = roundsTop ? min(radius, inset.width / 2, inset.height) : 0
-        var path = Path()
-        path.move(to: CGPoint(x: inset.minX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: inset.minX, y: inset.minY + r))
-        if r > 0 {
-            path.addQuadCurve(to: CGPoint(x: inset.minX + r, y: inset.minY), control: CGPoint(x: inset.minX, y: inset.minY))
-        }
-        path.addLine(to: CGPoint(x: inset.maxX - r, y: inset.minY))
-        if r > 0 {
-            path.addQuadCurve(to: CGPoint(x: inset.maxX, y: inset.minY + r), control: CGPoint(x: inset.maxX, y: inset.minY))
-        }
-        path.addLine(to: CGPoint(x: inset.maxX, y: rect.maxY))
-        return path
     }
 }
 
@@ -3310,7 +3349,7 @@ private struct WarrenConversationDecisionDock: View {
         } label: {
             HStack(spacing: 8) {
                 Text(entry.label)
-                    .font(.system(size: 12.5, weight: entry.role == .recommended ? .medium : .regular))
+                    .font(entry.role == .recommended ? WarrenTypography.dialogCriticalAction : WarrenTypography.dialogAction)
                     .lineLimit(1)
                 // The chosen option's key turns into the spinner, so the
                 // answer shows where it was given, whether by click or key.
@@ -3403,7 +3442,7 @@ private struct WarrenConversationTextView: NSViewRepresentable {
         textView.isRichText = false
         textView.allowsUndo = true
         textView.drawsBackground = false
-        textView.font = .systemFont(ofSize: 15)
+        textView.font = .systemFont(ofSize: 14)
         textView.textColor = .labelColor
         textView.textContainerInset = NSSize(
             width: ConversationComposerMetrics.horizontalInset,
@@ -3490,7 +3529,7 @@ private struct WarrenConversationTextView: NSViewRepresentable {
             guard let container = textView.textContainer, let layout = textView.layoutManager else { return }
             layout.ensureLayout(for: container)
             let used = layout.usedRect(for: container).height + textView.textContainerInset.height * 2
-            let next = max(22, ceil(used))
+            let next = max(21, ceil(used))
             if abs(next - parent.height) > 0.5 {
                 DispatchQueue.main.async { self.parent.height = next }
             }

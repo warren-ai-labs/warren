@@ -123,6 +123,31 @@ final class WarrenConversationSurfaceTests: XCTestCase {
         )
     }
 
+    func testFormattedWorkspacePathUsesTildeOnlyForHomePaths() {
+        XCTAssertEqual(
+            WarrenConversationView.formattedWorkspacePath("/Users/alice/repo/app", homeDirectory: "/Users/alice"),
+            "~/repo/app"
+        )
+        XCTAssertEqual(
+            WarrenConversationView.formattedWorkspacePath("/Users/alice", homeDirectory: "/Users/alice"),
+            "~"
+        )
+        XCTAssertEqual(
+            WarrenConversationView.formattedWorkspacePath("/opt/worktrees/app", homeDirectory: "/Users/alice"),
+            "/opt/worktrees/app"
+        )
+        XCTAssertEqual(
+            WarrenConversationView.formattedWorkspacePath(nil, homeDirectory: "/Users/alice"),
+            "this workspace"
+        )
+    }
+
+    func testLongSingleParagraphPromptFoldsByCharacterCount() {
+        XCTAssertFalse(WarrenConversationPromptView.isLong("Short prompt"))
+        XCTAssertTrue(WarrenConversationPromptView.isLong(String(repeating: "a", count: 601)))
+        XCTAssertTrue(WarrenConversationPromptView.isLong("1\n2\n3\n4\n5\n6\n7\n8\n9"))
+    }
+
     @MainActor
     private func render(_ view: NSView, to path: String) async throws {
         view.layoutSubtreeIfNeeded()

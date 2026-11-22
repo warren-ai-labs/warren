@@ -1,4 +1,5 @@
 import { activityMarkTier, resolveActivityMark } from "./activity.js";
+import { resolveProgramStatusMark } from "./program-status.js";
 
 // Safari has no beforeinstallprompt, so the Web client has to recognize the
 // one browser where "Add to Home Screen" is the only way to install and say so
@@ -60,7 +61,8 @@ export function actionableSessionCount(sessions) {
   let count = 0;
   for (const session of sessions || []) {
     if (session?.lifecycle && session.lifecycle !== "running") continue;
-    if (activityMarkTier(resolveActivityMark(session?.agentStatus)) === "actionable") count += 1;
+    const mark = resolveActivityMark(session?.agentStatus) || resolveProgramStatusMark(session?.programStatus);
+    if (activityMarkTier(mark) === "actionable") count += 1;
   }
   return count;
 }

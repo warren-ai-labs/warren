@@ -109,13 +109,13 @@ public struct WarrenDesktopEmptyStage<Actions: View>: View {
             switch mark {
             case .symbol(let name):
                 Image(systemName: name)
-                    .font(.system(size: 17, weight: .light))
+                    .font(.system(size: 17, weight: .regular))
                     .foregroundStyle(tokens.treeSecondaryText)
             case .progress:
                 WarrenLoadingIndicator(size: 16, accessibilityLabel: title)
             case .warning(let name):
                 Image(systemName: name)
-                    .font(.system(size: 17, weight: .light))
+                    .font(.system(size: 17, weight: .regular))
                     .foregroundStyle(tokens.warning)
             }
         }

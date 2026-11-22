@@ -309,6 +309,153 @@ final class GhosttyAdapterTests: XCTestCase {
         XCTAssertTrue(mods.rawValue & GHOSTTY_MODS_CTRL_RIGHT.rawValue == 0)
     }
 
+    func testAppKitInputModifiersGateRightSidesOnLogicalFlags() {
+        // Removing `.control` or `.command` leaves the low 16 device-dependent
+        // bits intact. Those orphaned masks must not produce `*_RIGHT` bits in
+        // `consumed_mods` for remapped keys such as Caps Lock -> Right Control.
+        var strippedControl = appKitFlags([.control], device: NX_DEVICERCTLKEYMASK)
+        strippedControl.remove(.control)
+        XCTAssertEqual(TerminalInputModifiers(from: strippedControl), [])
+
+        var strippedCommand = appKitFlags([.command], device: NX_DEVICERCMDKEYMASK)
+        strippedCommand.remove(.command)
+        XCTAssertEqual(TerminalInputModifiers(from: strippedCommand), [])
+
+        let event = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: appKitFlags([.control], device: NX_DEVICERCTLKEYMASK),
+            timestamp: 1,
+            windowNumber: 0,
+            context: nil,
+            characters: "\u{03}",
+            charactersIgnoringModifiers: "c",
+            isARepeat: false,
+            keyCode: 8
+        )!
+        let keyInput = event.buildKeyInput(action: GHOSTTY_ACTION_PRESS)
+        XCTAssertEqual(
+            keyInput.mods.rawValue,
+            GHOSTTY_MODS_CTRL.rawValue | GHOSTTY_MODS_CTRL_RIGHT.rawValue
+        )
+        XCTAssertEqual(keyInput.consumed_mods.rawValue, GHOSTTY_MODS_NONE.rawValue)
+    }
+
+    func testAppKitUnshiftedCodepointFallsBackWhenAppliedCharactersIsNil() {
+        // macOS 14+ fast path: applied characters win without querying layout.
+        var lookupCalled = false
+        let direct = NSEvent.resolveUnshiftedCodepoint(
+            fromAppliedCharacters: "v",
+            keyCode: 9,
+            charactersIgnoringModifiers: "V",
+            layoutLookup: { _ in lookupCalled = true; return 0x78 }
+        )
+        XCTAssertEqual(direct, UInt32(UnicodeScalar("v").value))
+        XCTAssertFalse(lookupCalled)
+
+        // macOS 13 path: when `characters(byApplyingModifiers: [])` returns nil,
+        // query the active keyboard layout before falling back to ignoring-mods.
+        let fromLayout = NSEvent.resolveUnshiftedCodepoint(
+            fromAppliedCharacters: nil,
+            keyCode: 9,
+            charactersIgnoringModifiers: "V",
+            layoutLookup: { keyCode in
+                XCTAssertEqual(keyCode, 9)
+                return UInt32(UnicodeScalar("v").value)
+            }
+        )
+        XCTAssertEqual(fromLayout, UInt32(UnicodeScalar("v").value))
+
+        // Secondary fallback when layout lookup returns nil, skipping PUA keys.
+        let fromIgnoring = NSEvent.resolveUnshiftedCodepoint(
+            fromAppliedCharacters: nil,
+            keyCode: 9,
+            charactersIgnoringModifiers: "v",
+            layoutLookup: { _ in nil }
+        )
+        XCTAssertEqual(fromIgnoring, UInt32(UnicodeScalar("v").value))
+
+        let puaIgnored = NSEvent.resolveUnshiftedCodepoint(
+            fromAppliedCharacters: nil,
+            keyCode: 126,
+            charactersIgnoringModifiers: "\u{F700}",
+            layoutLookup: { _ in nil }
+        )
+        XCTAssertEqual(puaIgnored, 0)
+    }
+
+    func testAppKitInterpretedCommandReplaySkipsNoop() {
+        XCTAssertFalse(
+            TerminalKeyEventHandler.shouldReplayInterpretedCommand(
+                Selector(("noop:"))
+            )
+        )
+        XCTAssertTrue(
+            TerminalKeyEventHandler.shouldReplayInterpretedCommand(
+                #selector(NSResponder.insertBacktab(_:))
+            )
+        )
+    }
+
+    @MainActor
+    func testCommandPasteAndUnboundCommandThroughPerformKeyEquivalent() async throws {
+        let recorder = LockedInputRecorder()
+        let (_, view, window) = try await makeMountedTerminal(recorder: recorder)
+        defer { window.orderOut(nil) }
+        window.makeFirstResponder(view)
+
+        let pasteboard = NSPasteboard.general
+        let savedString = pasteboard.string(forType: .string)
+        defer {
+            pasteboard.clearContents()
+            if let savedString {
+                pasteboard.setString(savedString, forType: .string)
+            }
+        }
+
+        pasteboard.clearContents()
+        pasteboard.setString("warren-paste-ok", forType: .string)
+
+        for deviceMask in [NX_DEVICELCMDKEYMASK, NX_DEVICERCMDKEYMASK] {
+            let pasteEvent = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: appKitFlags([.command], device: deviceMask),
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: "v",
+                charactersIgnoringModifiers: "v",
+                isARepeat: false,
+                keyCode: 9
+            ))
+            XCTAssertTrue(view.performKeyEquivalent(with: pasteEvent))
+        }
+
+        try await waitUntil {
+            recorder.allBytes() == Data("warren-paste-okwarren-paste-ok".utf8)
+        }
+
+        // Unbound command chord must not emit literal text into the PTY.
+        let beforeCount = recorder.allBytes().count
+        let unboundEvent = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: appKitFlags([.command], device: NX_DEVICELCMDKEYMASK),
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "j",
+            charactersIgnoringModifiers: "j",
+            isARepeat: false,
+            keyCode: 38
+        ))
+        _ = view.performKeyEquivalent(with: unboundEvent)
+        view.keyDown(with: unboundEvent)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(recorder.allBytes().count, beforeCount)
+    }
+
     private func appKitFlags(
         _ flags: NSEvent.ModifierFlags,
         device: Int32

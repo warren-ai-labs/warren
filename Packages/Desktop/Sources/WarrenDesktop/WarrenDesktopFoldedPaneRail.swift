@@ -37,7 +37,12 @@ struct WarrenDesktopFoldedPaneRail: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .warrenCard(fill: isHovered ? tokens.fillHover : nil)
+        .overlay {
+            RoundedRectangle(cornerRadius: WarrenLayoutMetrics.cardRadius, style: .continuous)
+                .fill(isHovered ? tokens.fillHover : .clear)
+                .allowsHitTesting(false)
+        }
+        .warrenCard()
         .onHover { isHovered = $0 }
         .warrenTooltip("Restore \(title)")
         .accessibilityLabel("Restore \(title)")

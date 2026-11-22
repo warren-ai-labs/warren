@@ -22,28 +22,42 @@ struct WarrenDesktopConfirmationDialog<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
+    @ViewBuilder
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial)
-        WarrenDialog(title, message: message) {
-            VStack(alignment: .leading, spacing: 14) {
-                content()
-                if let validationMessage {
-                    Text(validationMessage)
-                        .font(WarrenTypography.dialogBody)
-                        .foregroundStyle(tokens.destructive)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        if Content.self == EmptyView.self, validationMessage == nil {
+            WarrenDialog(title, message: message) {
+                WarrenDesktopDialogFooter(
+                    confirmLabel: confirmLabel,
+                    isDestructive: isDestructive,
+                    isConfirmEnabled: isConfirmEnabled,
+                    onCancel: onCancel,
+                    onConfirm: onConfirm
+                )
             }
-        } footer: {
-            WarrenDesktopDialogFooter(
-                confirmLabel: confirmLabel,
-                isDestructive: isDestructive,
-                isConfirmEnabled: isConfirmEnabled,
-                onCancel: onCancel,
-                onConfirm: onConfirm
-            )
+            .onExitCommand(perform: onCancel)
+        } else {
+            WarrenDialog(title, message: message) {
+                VStack(alignment: .leading, spacing: 14) {
+                    content()
+                    if let validationMessage {
+                        Text(validationMessage)
+                            .font(WarrenTypography.dialogBody)
+                            .foregroundStyle(tokens.destructive)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } footer: {
+                WarrenDesktopDialogFooter(
+                    confirmLabel: confirmLabel,
+                    isDestructive: isDestructive,
+                    isConfirmEnabled: isConfirmEnabled,
+                    onCancel: onCancel,
+                    onConfirm: onConfirm
+                )
+            }
+            .onExitCommand(perform: onCancel)
         }
-        .onExitCommand(perform: onCancel)
     }
 }
 

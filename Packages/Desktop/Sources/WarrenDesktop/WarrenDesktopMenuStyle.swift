@@ -190,6 +190,15 @@ extension EnvironmentValues {
     }
 }
 
+/// Reports the keyboard-highlighted row's id upward so `WarrenDesktopMenuHeightCap`
+/// can scroll long pickers and menus to keep the active selection visible.
+struct WarrenDesktopMenuHotItemKey: PreferenceKey {
+    static let defaultValue: Int? = nil
+    static func reduce(value: inout Int?, nextValue: () -> Int?) {
+        value = nextValue() ?? value
+    }
+}
+
 /// Keeps a menu's content inside the window. Content that fits is drawn as
 /// is; only content taller than the room scrolls, so a short window never
 /// pushes the bottom of a menu (the "+" menu's Launch commands row, the last
@@ -202,8 +211,14 @@ struct WarrenDesktopMenuHeightCap: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if let maxHeight, contentHeight > maxHeight {
-            ScrollView(.vertical) {
-                measured(content)
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    measured(content)
+                }
+                .onPreferenceChange(WarrenDesktopMenuHotItemKey.self) { target in
+                    guard let target else { return }
+                    proxy.scrollTo(target)
+                }
             }
             .frame(height: max(maxHeight, 0))
         } else {

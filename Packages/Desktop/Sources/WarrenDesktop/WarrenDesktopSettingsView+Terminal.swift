@@ -185,7 +185,7 @@ extension WarrenDesktopSettingsView {
                 in: RoundedRectangle(cornerRadius: WarrenRadius.row, style: .continuous)
             )
             .shadow(
-                color: .black.opacity(draggedPresetID == preset.id ? 0.45 : 0),
+                color: .black.opacity(draggedPresetID == preset.id ? (colorScheme == .light ? 0.14 : 0.45) : 0),
                 radius: 10,
                 y: 8
             )
@@ -195,8 +195,14 @@ extension WarrenDesktopSettingsView {
                     .padding(6)
                     .background(palette.card)
                     .onAppear { draggedPresetID = preset.id }
+                    .onDisappear {
+                        if draggedPresetID == preset.id {
+                            draggedPresetID = nil
+                        }
+                    }
             }
             .dropDestination(for: String.self) { ids, _ in
+                defer { draggedPresetID = nil }
                 guard let dragged = ids.first, dragged != preset.id else { return false }
                 presetOrder = WarrenDesktopSessionPreset.moving(
                     dragged,
@@ -204,6 +210,10 @@ extension WarrenDesktopSettingsView {
                     in: presetOrder
                 )
                 return true
+            } isTargeted: { isTargeted in
+                if !isTargeted, draggedPresetID != nil {
+                    // Leave clearing to preview disappear / drop completion while dragging.
+                }
             }
             .overlay(alignment: .leading) {
                 // ⌥↑ / ⌥↓ belong to the row the keyboard is on. The buttons carry
@@ -300,10 +310,11 @@ extension WarrenDesktopSettingsView {
         } label: {
             Image(systemName: symbolName)
                 .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(WarrenSettingsPalette.resolved(for: colorScheme).inkQuiet)
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(WarrenChromeButtonStyle())
         .disabled(disabled)
         .accessibilityLabel("Move \(preset.presetBarTitle) \(directionLabel)")
         .accessibilityIdentifier("settings.preset-order.\(preset.id).\(directionLabel)")
@@ -377,11 +388,9 @@ extension WarrenDesktopSettingsView {
                         ForEach(Array(customIDEs.enumerated()), id: \.element.id) { index, ide in
                             if index > 0 { WarrenSettingsRowDivider() }
                             let optionID = "custom:\(ide.id.uuidString)"
-                            Button { externalIDEID = optionID } label: {
-                                WarrenSettingsListRow(
-                                    title: ide.name,
-                                    subtitle: ide.path,
-                                    leading: {
+                            HStack(spacing: 10) {
+                                Button { externalIDEID = optionID } label: {
+                                    HStack(spacing: 10) {
                                         HStack(spacing: 8) {
                                             editorCheck(externalIDEID == optionID)
                                             Image(nsImage: WarrenDesktopExternalIDEIcon.normalized(
@@ -391,17 +400,30 @@ extension WarrenDesktopSettingsView {
                                             .scaledToFit()
                                             .frame(width: 18, height: 18)
                                         }
-                                    },
-                                    trailing: {
-                                        WarrenSettingsInlineButton(systemImage: "trash", label: "Remove \(ide.name)") {
-                                            removeCustomIDE(ide)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(ide.name)
+                                                .font(WarrenTypography.settingsBodyEmphasis)
+                                                .foregroundStyle(palette.inkBody)
+                                            Text(ide.path)
+                                                .font(WarrenTypography.settingsMeta)
+                                                .foregroundStyle(palette.meta)
+                                                .lineLimit(2)
                                         }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
                                     }
-                                )
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Use \(ide.name) for Open in Editor")
+                                .accessibilityAddTraits(externalIDEID == optionID ? [.isSelected] : [])
+
+                                WarrenSettingsInlineButton(systemImage: "trash", label: "Remove \(ide.name)") {
+                                    removeCustomIDE(ide)
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Use \(ide.name) for Open in Editor")
-                            .accessibilityAddTraits(externalIDEID == optionID ? [.isSelected] : [])
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .frame(minHeight: 48)
                         }
                     }
                 }
@@ -566,7 +588,7 @@ extension WarrenDesktopSettingsView {
                         } label: {
                             HStack(spacing: 6) {
                                 if openAITestStatus.isTesting {
-                                    ProgressView().controlSize(.small)
+                                    WarrenLoadingIndicator(size: 12, accessibilityLabel: "Testing connection")
                                 }
                                 Text(openAITestStatus.isTesting ? "Testing…" : "Test Connection")
                             }
@@ -632,7 +654,7 @@ extension WarrenDesktopSettingsView {
                         } label: {
                             HStack(spacing: 6) {
                                 if openAITestStatus.isTesting {
-                                    ProgressView().controlSize(.small)
+                                    WarrenLoadingIndicator(size: 12, accessibilityLabel: "Testing connection")
                                 }
                                 Text(openAITestStatus.isTesting ? "Testing…" : "Save & Test")
                             }

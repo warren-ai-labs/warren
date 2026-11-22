@@ -65,3 +65,22 @@ test("a branch's prefix is everything through its last slash", () => {
   assert.deepEqual(branchParts("trailing/"), { prefix: "", name: "trailing/" });
   assert.deepEqual(branchParts(""), { prefix: "", name: "" });
 });
+
+test("OSC 7501 programStatus drives the summary when no agentStatus is present", () => {
+  assert.deepEqual(
+    sessionRowSummary({ kind: "shell", programStatus: { state: "blocked", kind: "permission", message: "Approve deploy?" } }),
+    { tone: "attention", text: "Approve deploy?" },
+  );
+  assert.deepEqual(
+    sessionRowSummary({ kind: "shell", programStatus: { state: "error", message: "Build failed" } }),
+    { tone: "danger", text: "Build failed" },
+  );
+  assert.deepEqual(
+    sessionRowSummary({ kind: "shell", programStatus: { state: "working", message: "Compiling" } }),
+    { tone: "live", text: "Compiling" },
+  );
+  assert.deepEqual(
+    sessionRowSummary({ kind: "shell", programStatus: { state: "done", message: "Tests passed" } }),
+    { tone: "plain", text: "Tests passed" },
+  );
+});

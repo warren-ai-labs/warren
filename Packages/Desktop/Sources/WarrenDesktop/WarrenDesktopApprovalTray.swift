@@ -309,17 +309,24 @@ struct WarrenDesktopApprovalTrayPanel: View {
         let entries = store.entries
         VStack(alignment: .leading, spacing: 0) {
             header(count: entries.count, palette: palette)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                        row(entry, isFirst: index == 0, palette: palette)
-                            .transition(.opacity)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                            row(entry, isFirst: index == 0, palette: palette)
+                                .id(entry.id)
+                                .transition(.opacity)
+                        }
                     }
+                    .animation(
+                        reduceMotion ? nil : .easeOut(duration: WarrenMotion.stateChangeDuration),
+                        value: entries.map(\.id)
+                    )
                 }
-                .animation(
-                    reduceMotion ? nil : .easeOut(duration: WarrenMotion.stateChangeDuration),
-                    value: entries.map(\.id)
-                )
+                .onChange(of: hotID) { id in
+                    guard let id else { return }
+                    proxy.scrollTo(id)
+                }
             }
             .frame(maxHeight: 480)
         }
@@ -408,11 +415,10 @@ struct WarrenDesktopApprovalTrayPanel: View {
             }
 
             if let decision = entry.decision {
-                HStack(spacing: 2) {
+                WarrenDesktopFlowLayout(spacing: 4, lineSpacing: 4) {
                     ForEach(Array(decision.options.enumerated()), id: \.element.id) { index, option in
                         optionButton(option, index: index, entry: entry, decision: decision, palette: palette)
                     }
-                    Spacer(minLength: 0)
                 }
                 if let error = errors[decision.id] {
                     Text(error)
@@ -569,5 +575,81 @@ struct WarrenDesktopApprovalTrayPanel: View {
         let current = entries.firstIndex { $0.id == hotID } ?? (step > 0 ? -1 : entries.count)
         let next = (current + step + entries.count) % entries.count
         hotID = entries[next].id
+    }
+}
+
+/// Wrapping horizontal flow layout for chip rows and option lists that should
+/// never clip or overflow narrow panes.
+public struct WarrenDesktopFlowLayout: Layout {
+    public let spacing: CGFloat
+    public let lineSpacing: CGFloat
+
+    public init(spacing: CGFloat = 6, lineSpacing: CGFloat = 6) {
+        self.spacing = spacing
+        self.lineSpacing = lineSpacing
+    }
+
+    public func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var widestRow: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(
+                ProposedViewSize(width: maxWidth.isFinite ? maxWidth : nil, height: nil)
+            )
+            let needed = rowWidth > 0 ? rowWidth + spacing + size.width : size.width
+            if rowWidth > 0 && needed > maxWidth {
+                widestRow = max(widestRow, rowWidth)
+                totalHeight += rowHeight + lineSpacing
+                rowWidth = size.width
+                rowHeight = size.height
+            } else {
+                rowWidth = needed
+                rowHeight = max(rowHeight, size.height)
+            }
+        }
+        widestRow = max(widestRow, rowWidth)
+        totalHeight += rowHeight
+        return CGSize(
+            width: maxWidth.isFinite ? min(widestRow, maxWidth) : widestRow,
+            height: totalHeight
+        )
+    }
+
+    public func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let maxWidth = bounds.width
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(
+                ProposedViewSize(width: maxWidth.isFinite ? maxWidth : nil, height: nil)
+            )
+            if x > bounds.minX && x + size.width > bounds.maxX + 0.5 {
+                x = bounds.minX
+                y += rowHeight + lineSpacing
+                rowHeight = 0
+            }
+            subview.place(
+                at: CGPoint(x: x, y: y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: min(size.width, maxWidth), height: size.height)
+            )
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }

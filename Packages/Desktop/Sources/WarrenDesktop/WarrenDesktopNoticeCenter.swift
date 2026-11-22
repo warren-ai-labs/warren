@@ -123,7 +123,7 @@ struct WarrenDesktopNoticeContent: View {
             if notices.isEmpty {
                 VStack(spacing: WarrenSpacing.compact) {
                     Image(systemName: "bell.slash")
-                        .font(.system(size: 20, weight: .light))
+                        .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(tokens.mutedForeground)
                     Text("No notifications")
                         .font(WarrenTypography.popoverTitle)
@@ -226,10 +226,14 @@ struct WarrenDesktopNoticeContent: View {
         .padding(WarrenSpacing.standard)
     }
 
-    private func relativeDate(_ date: Date) -> String {
+    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
+        return formatter
+    }()
+
+    private func relativeDate(_ date: Date) -> String {
+        Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date())
     }
 }
 

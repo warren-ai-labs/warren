@@ -72,9 +72,6 @@ struct WarrenDesktopCommandPalette: View {
     /// Set when the pointer, not the keyboard, moved the selection, so the
     /// list does not scroll a row the pointer is already on.
     @State private var selectionFollowsPointer = false
-    /// The measured height of the result rows, so the panel can end where they
-    /// end instead of at the scroll cap.
-    @State private var resultsContentHeight: CGFloat = 0
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
@@ -145,13 +142,6 @@ struct WarrenDesktopCommandPalette: View {
         // The dialog family's surface and radius: the palette is the one
         // dialog without a title block, not a menu.
         .warrenPresentationSurface(role: .commandSurface, cornerRadius: WarrenRadius.large)
-        .onPreferenceChange(PaletteResultsHeightKey.self) { height in
-            // One write per measurement, and only when it moved: the panel's
-            // own height depends on this value, so a write on every layout
-            // pass would re-enter layout for as long as the palette was open.
-            guard abs(height - resultsContentHeight) > 0.5 else { return }
-            resultsContentHeight = height
-        }
         .onExitCommand(perform: onDismiss)
         .onChange(of: projection) { newProjection in
             rebuildIndex(for: newProjection)
@@ -197,17 +187,18 @@ struct WarrenDesktopCommandPalette: View {
 
     // MARK: - Layout
 
-    private struct PaletteResultsHeightKey: PreferenceKey {
-        static let defaultValue: CGFloat = 0
-        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-            value = max(value, nextValue())
-        }
-    }
-
     private func divider(palette: WarrenDesktopMenuPalette) -> some View {
         Rectangle()
             .fill(palette.divider)
             .frame(height: WarrenSpacing.hairline)
+    }
+
+    /// Every row has a fixed height (`commandPaletteRowHeight`), so computing the
+    /// list height directly from `rows.count` avoids a preference-key delay or a
+    /// height jump when recovering from an empty search result.
+    private var exactResultsHeight: CGFloat {
+        CGFloat(rows.count) * WarrenLayoutMetrics.commandPaletteRowHeight
+            + WarrenLayoutMetrics.commandPaletteResultsPadding * 2
     }
 
     private func resultsList(
@@ -226,14 +217,6 @@ struct WarrenDesktopCommandPalette: View {
                     }
                 }
                 .padding(WarrenLayoutMetrics.commandPaletteResultsPadding)
-                .background {
-                    GeometryReader { proxy in
-                        Color.clear.preference(
-                            key: PaletteResultsHeightKey.self,
-                            value: proxy.size.height
-                        )
-                    }
-                }
             }
             // The panel takes its results' height, up to the cap, rather than
             // the cap. A ScrollView is greedy, so asking it for `maxHeight`
@@ -241,7 +224,7 @@ struct WarrenDesktopCommandPalette: View {
             // rows and left most of the panel empty.
             .frame(
                 height: min(
-                    resultsContentHeight,
+                    exactResultsHeight,
                     min(resultsMaxHeight, WarrenLayoutMetrics.commandPaletteResultsMaxHeight)
                 )
             )
@@ -286,9 +269,17 @@ struct WarrenDesktopCommandPalette: View {
         .frame(height: WarrenLayoutMetrics.commandInputHeight)
     }
 
+    private static let filterHints: [(token: String, tooltip: String)] = [
+        ("w:", "Filter workspaces"),
+        ("p:", "Filter projects"),
+        ("s:", "Filter sessions"),
+        ("t:", "Filter tasks"),
+        ("g:", "Filter branches"),
+        ("@blocked", "Filter blocked sessions"),
+    ]
+
     /// The key-hint bar: how to move, open and close on the left, and the
-    /// scope filters on the right, so the placeholder can stay a sentence
-    /// instead of a cheat sheet.
+    /// interactive scope filter pills on the right.
     private func footer(palette: WarrenDesktopMenuPalette) -> some View {
         HStack(spacing: 14) {
             keyHint(["\u{2191}", "\u{2193}"], "Select")
@@ -297,16 +288,38 @@ struct WarrenDesktopCommandPalette: View {
 
             Spacer(minLength: WarrenSpacing.compact)
 
-            Text("w: p: s: t: g: @blocked")
-                .font(WarrenTypography.monoSmall)
-                .foregroundStyle(palette.meta)
-                .lineLimit(1)
-                .accessibilityLabel("Narrow with w:, p:, s:, t:, g:, or @blocked")
+            HStack(spacing: 4) {
+                ForEach(Self.filterHints, id: \.token) { hint in
+                    Button {
+                        applyFilterHint(hint.token)
+                    } label: {
+                        Text(hint.token)
+                            .font(WarrenTypography.monoSmall)
+                            .foregroundStyle(palette.meta)
+                            .padding(.horizontal, 4)
+                            .frame(height: 18)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(WarrenChromeButtonStyle())
+                    .warrenTooltip(hint.tooltip)
+                    .accessibilityLabel(hint.tooltip)
+                }
+            }
         }
         .font(WarrenTypography.popoverMeta)
         .foregroundStyle(palette.meta)
         .padding(.horizontal, WarrenSpacing.medium)
         .frame(height: WarrenLayoutMetrics.commandPaletteFooterHeight)
+    }
+
+    private func applyFilterHint(_ token: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix(token) { return }
+        if token.hasSuffix(":") {
+            queryBinding.wrappedValue = trimmed.isEmpty ? token : "\(token)\(trimmed)"
+        } else {
+            queryBinding.wrappedValue = trimmed.isEmpty ? "\(token) " : "\(trimmed) \(token)"
+        }
     }
 
     private func keyHint(_ caps: [String], _ label: String) -> some View {

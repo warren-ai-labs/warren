@@ -129,7 +129,15 @@ public extension WarrenPalette {
         }
     }
     /// Metadata ink: the quietest tier that is still read as text.
-    var ink4: WarrenRGB { background.mixed(with: foreground, 0.365) }
+    ///
+    /// Paper steps closer to its ink so keycaps and quiet metadata clear the
+    /// 3:1 legibility floor on white instead of fading out as on a dark ground.
+    var ink4: WarrenRGB {
+        switch appearance {
+        case .dark: background.mixed(with: foreground, 0.365)
+        case .light: background.mixed(with: foreground, 0.50)
+        }
+    }
 
     /// The one base the sidebar's tiers fade from.
     ///

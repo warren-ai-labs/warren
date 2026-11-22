@@ -401,7 +401,7 @@ struct WarrenDesktopSidebarHostStack: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: Metrics.tileSize)
             .clipped()
-            .padding(.leading, isLifted ? Metrics.liftedLabelInset : Metrics.labelInset)
+            .padding(.leading, isLifted ? 0 : Metrics.labelInset)
 
             if needsAttention {
                 Circle()
@@ -484,7 +484,7 @@ struct WarrenDesktopSidebarHostStack: View {
         if location.y < Metrics.pullBand, !isPulled {
             pull()
         }
-        let x = location.x - Metrics.liftedLabelInset
+        let x = location.x - Metrics.liftedTileInset
         if let index = Metrics.tileIndex(atX: x, tileCount: stackedHosts.count), index != hotIndex {
             setHot(index)
         }
@@ -657,6 +657,9 @@ struct WarrenDesktopSidebarHostStack: View {
                 .accessibilityHidden(true)
         }
         .contentShape(.rect)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(host.name)
+        .accessibilityValue("Selected. \(host.panelSubtitle)")
         .warrenContextMenu(contextActions(for: host))
         .overlay(alignment: .trailing) {
             if let onSetSidebarVisibility, host.canToggleSidebarMembership {
@@ -664,9 +667,7 @@ struct WarrenDesktopSidebarHostStack: View {
                     .padding(.trailing, 8)
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(host.name)
-        .accessibilityValue("Selected. \(host.panelSubtitle)")
+        .accessibilityElement(children: .contain)
         .warrenSemanticElement(
             id: "sidebar.other-host.\(host.id)",
             role: .button,

@@ -359,6 +359,7 @@ struct WarrenDesktopSettingsView: View {
     @AppStorage("warren.desktop.externalIDEID") var externalIDEID = ""
     @State var setupScriptValues: [ProjectID: String] = [:]
     @State var editingSetupScriptProjectID: ProjectID?
+    @State var setupScriptDraft = ""
     @State var editingPresetID: String?
     /// The preset being dragged, so it can be lifted while the pointer carries
     /// it and the row it is over can take it.

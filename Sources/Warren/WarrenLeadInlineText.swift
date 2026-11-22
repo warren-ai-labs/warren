@@ -190,14 +190,14 @@ struct WarrenLeadReferenceCapsule: View {
                     }
                 }
             Text(label)
-                .font(.system(size: 14))
+                .font(WarrenTypography.bodyEmphasis)
                 .foregroundStyle(closed ? palette.ink3 : palette.ink)
                 .lineLimit(1)
                 .fixedSize()
         }
         .padding(.leading, 4)
         .padding(.trailing, 7)
-        .frame(height: 22)
+        .frame(height: 21)
         .background(
             closed ? Color.clear : (hovering ? palette.press : palette.bubble),
             in: RoundedRectangle(cornerRadius: 6, style: .continuous)

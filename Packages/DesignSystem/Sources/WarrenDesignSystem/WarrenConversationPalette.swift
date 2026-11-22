@@ -57,8 +57,8 @@ public struct WarrenConversationPalette: Sendable {
         line2: WarrenColorTokens.hex(0x2E2E_2E),
         ink: WarrenColorTokens.hex(0xEDED_ED),
         ink2: WarrenColorTokens.hex(0xD4D4_D4),
-        ink3: WarrenColorTokens.hex(0x8A8A_8A),
-        ink4: WarrenColorTokens.hex(0x5C5C_5C),
+        ink3: WarrenColorTokens.hex(0x9494_94),
+        ink4: WarrenColorTokens.hex(0x7575_75),
         focus: WarrenColorTokens.hex(0x3A3A_3A),
         quote: WarrenColorTokens.hex(0x3A3A_3A),
         hover: WarrenColorTokens.hex(0x1414_14),
@@ -81,8 +81,8 @@ public struct WarrenConversationPalette: Sendable {
         line2: WarrenColorTokens.hex(0xD9D3_CD),
         ink: WarrenColorTokens.hex(0x1C19_17),
         ink2: WarrenColorTokens.hex(0x3A34_2F),
-        ink3: WarrenColorTokens.hex(0x6B65_60),
-        ink4: WarrenColorTokens.hex(0x9A93_8C),
+        ink3: WarrenColorTokens.hex(0x635D_58),
+        ink4: WarrenColorTokens.hex(0x827B_74),
         // One step past line2, as Ember's #3A3A3A is past #2E2E2E, so a
         // focused composer still lifts its outline.
         focus: WarrenColorTokens.hex(0xC9C2_BB),

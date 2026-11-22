@@ -195,10 +195,6 @@ extension WarrenDesktopTests {
         try recorder.perform(.press, on: "right-sidebar.toggle")
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-
-        try recorder.perform(.press, on: "right-sidebar.tab.editor")
-        hostingView.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         hostingView.layoutSubtreeIfNeeded()
 
         let split = recorder.snapshot()
@@ -245,8 +241,7 @@ extension WarrenDesktopTests {
         XCTAssertFalse(received.isEmpty)
         received.removeAll()
 
-        // The Editor tab's close box turns the region off without hiding the
-        // sidebar.
+        // Closing the editor closes the right sidebar and clears the marker.
         try recorder.perform(.press, on: "right-sidebar.editor.close")
         hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
@@ -254,6 +249,10 @@ extension WarrenDesktopTests {
 
         let closed = recorder.snapshot()
         XCTAssertNil(closed.nodes.first { $0.id == "embedded-editor.surface" })
+        XCTAssertEqual(
+            closed.nodes.first { $0.id == "right-sidebar.toggle" }?.value,
+            "Hidden"
+        )
         // Closing does not end the Terminal's Session or reach the Host.
         XCTAssertNotNil(closed.nodes.first { $0.id == "test-terminal.tab-main" })
         XCTAssertTrue(received.isEmpty)
@@ -270,6 +269,139 @@ extension WarrenDesktopTests {
         XCTAssertNil(
             closed.nodes.first { $0.id.hasPrefix("workspace-editor-entry.") }
         )
+    }
+
+    func testRightSidebarSeparatesInspectorTabsFromEditorAndClosesSidebarOnEditorClose() throws {
+        let defaults = UserDefaults.standard
+        let previousDefault = defaults.object(
+            forKey: WarrenPreferenceKey.embeddedEditorDefaultIDE
+        )
+        let previousInspectorOpen = defaults.object(forKey: "warren.desktop.inspectorOpen")
+        defaults.set(false, forKey: WarrenPreferenceKey.embeddedEditorDefaultIDE)
+        defaults.set(false, forKey: "warren.desktop.inspectorOpen")
+        defer {
+            if let previousDefault {
+                defaults.set(previousDefault, forKey: WarrenPreferenceKey.embeddedEditorDefaultIDE)
+            } else {
+                defaults.removeObject(forKey: WarrenPreferenceKey.embeddedEditorDefaultIDE)
+            }
+            if let previousInspectorOpen {
+                defaults.set(previousInspectorOpen, forKey: "warren.desktop.inspectorOpen")
+            } else {
+                defaults.removeObject(forKey: "warren.desktop.inspectorOpen")
+            }
+        }
+
+        let recorder = WarrenSemanticRecorder()
+        let root = WarrenDesktopRoot(
+            projection: WarrenDesktopFixture.preview.projection,
+            embeddedEditorAvailable: true,
+            editorSurface: { workspace in
+                AnyView(
+                    Text("editor:\(workspace.name)")
+                        .warrenSemanticElement(
+                            id: "embedded-editor.surface",
+                            role: .group,
+                            label: "Embedded editor"
+                        )
+                )
+            },
+            inspectorSurface: { workspace, tab, _ in
+                AnyView(
+                    Text("inspector:\(workspace.name):\(tab.rawValue)")
+                        .warrenSemanticElement(
+                            id: "inspector.surface.\(tab.rawValue)",
+                            role: .group,
+                            label: tab.title
+                        )
+                )
+            },
+            persistenceEnabled: false
+        ) { context in
+            TestTerminalSurface(context: context)
+        }
+        .environment(\.colorScheme, .dark)
+        .environment(\.warrenSemanticRecorder, recorder)
+
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1600, height: 800)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        // Open the right sidebar: Inspector shows Changes/History/Files and a
+        // separate Editor launcher, never an Editor tab mixed into the row.
+        try recorder.perform(.press, on: "right-sidebar.toggle")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let inspectorSnapshot = recorder.snapshot()
+        XCTAssertNotNil(inspectorSnapshot.nodes.first { $0.id == "right-sidebar.tab.changes" })
+        XCTAssertNotNil(inspectorSnapshot.nodes.first { $0.id == "right-sidebar.tab.history" })
+        XCTAssertNotNil(inspectorSnapshot.nodes.first { $0.id == "right-sidebar.tab.files" })
+        XCTAssertNotNil(inspectorSnapshot.nodes.first { $0.id == "right-sidebar.editor.open" })
+        XCTAssertNil(inspectorSnapshot.nodes.first { $0.id == "right-sidebar.tab.editor" })
+        XCTAssertNil(inspectorSnapshot.nodes.first { $0.id == "embedded-editor.surface" })
+
+        // Switch to History first so we can verify Editor -> Inspector restores it.
+        try recorder.perform(.press, on: "right-sidebar.tab.history")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        // Launch the Embedded Editor: Inspector tabs disappear and Editor shows
+        // its own header with a switch back to Inspector and a close button.
+        try recorder.perform(.press, on: "right-sidebar.editor.open")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let editorSnapshot = recorder.snapshot()
+        XCTAssertNotNil(editorSnapshot.nodes.first { $0.id == "embedded-editor.surface" })
+        XCTAssertNotNil(editorSnapshot.nodes.first { $0.id == "right-sidebar.inspector.open" })
+        XCTAssertNotNil(editorSnapshot.nodes.first { $0.id == "right-sidebar.editor.close" })
+        XCTAssertNil(editorSnapshot.nodes.first { $0.id == "right-sidebar.tab.changes" })
+        XCTAssertNil(editorSnapshot.nodes.first { $0.id == "right-sidebar.tab.history" })
+        XCTAssertNil(editorSnapshot.nodes.first { $0.id == "right-sidebar.tab.files" })
+
+        // Switching to Inspector returns to the last Inspector tab while keeping
+        // the editor running in the background.
+        try recorder.perform(.press, on: "right-sidebar.inspector.open")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let backToInspector = recorder.snapshot()
+        XCTAssertNotNil(backToInspector.nodes.first { $0.id == "inspector.surface.history" })
+        XCTAssertEqual(
+            backToInspector.nodes.first { $0.id == "right-sidebar.editor.open" }?.value,
+            "Running"
+        )
+        XCTAssertNil(backToInspector.nodes.first { $0.id == "embedded-editor.surface" })
+
+        // Return to Editor, then close it: closing the Editor closes the right
+        // sidebar completely.
+        try recorder.perform(.press, on: "right-sidebar.editor.open")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        try recorder.perform(.press, on: "right-sidebar.editor.close")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let closedSnapshot = recorder.snapshot()
+        XCTAssertEqual(
+            closedSnapshot.nodes.first { $0.id == "right-sidebar.toggle" }?.value,
+            "Hidden"
+        )
+        XCTAssertNil(closedSnapshot.nodes.first { $0.id == "embedded-editor.surface" })
+        XCTAssertNil(closedSnapshot.nodes.first { $0.id == "right-sidebar.tab.changes" })
+
+        // Reopening the right sidebar returns to the Inspector tabs.
+        try recorder.perform(.press, on: "right-sidebar.toggle")
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let reopenedSnapshot = recorder.snapshot()
+        XCTAssertNotNil(reopenedSnapshot.nodes.first { $0.id == "right-sidebar.tab.history" })
+        XCTAssertNotNil(reopenedSnapshot.nodes.first { $0.id == "inspector.surface.history" })
+        XCTAssertNil(reopenedSnapshot.nodes.first { $0.id == "embedded-editor.surface" })
     }
     func testTitleBarDoubleClickFollowsTheSystemPreference() {
         XCTAssertEqual(WarrenDesktopTitleBarDoubleClick.action(for: "Minimize"), .minimize)

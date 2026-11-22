@@ -255,15 +255,7 @@ struct WarrenDesktopWorkspaceRow: View {
             taskLinkButton
                 .opacity(isHovered || isFocused || forceHover ? 1 : 0)
             if isNewSessionTarget, leafDisclosure != nil {
-                Text("⌘T")
-                    .font(WarrenDesktopTreeTypography.keyHint)
-                    .foregroundStyle(tokens.treeFaintText)
-                    .padding(.horizontal, 4)
-                    .frame(height: 14)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .strokeBorder(tokens.cardBorder, lineWidth: 1)
-                    )
+                WarrenKeycap("⌘T")
                     .warrenTooltip("New Sessions open here")
                     .accessibilityLabel("New Sessions open here")
             }

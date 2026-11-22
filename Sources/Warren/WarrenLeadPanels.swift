@@ -24,16 +24,16 @@ struct WarrenLeadDecisionPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             WarrenLeadEyebrow(text: "Lead needs a decision")
             Text(question)
-                .font(WarrenTypography.dialogTitle)
+                .font(WarrenTypography.readingSubheading)
                 .foregroundStyle(palette.ink)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
             if let reason, !reason.isEmpty {
                 Text(reason)
-                    .font(WarrenTypography.popoverMeta)
+                    .font(WarrenTypography.caption)
                     .foregroundStyle(palette.ink3)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 2)
+                    .padding(.top, 3)
             }
             VStack(spacing: 1) {
                 ForEach(Array(options.enumerated()), id: \.offset) { index, option in
@@ -59,7 +59,7 @@ struct WarrenLeadDecisionPanel: View {
                     .foregroundStyle(palette.ink4)
                     .frame(width: 14)
                 Text(option)
-                    .font(WarrenTypography.popoverItem)
+                    .font(highlight == index ? WarrenTypography.bodyEmphasis : WarrenTypography.body)
                     .foregroundStyle(highlight == index ? palette.ink : palette.ink2)
                     .lineLimit(1)
                 Spacer(minLength: 8)
@@ -122,7 +122,7 @@ struct WarrenLeadChecksPanel: View {
             .padding(.top, 8)
             HStack(spacing: 6) {
                 Text("\(resolved) of \(checks.count) checked")
-                    .font(WarrenTypography.popoverMeta)
+                    .font(WarrenTypography.caption)
                     .monospacedDigit()
                     .foregroundStyle(palette.ink4)
                 Spacer(minLength: 6)
@@ -176,13 +176,20 @@ struct WarrenLeadChecksPanel: View {
                         }
                     }
                     .frame(width: 16, height: 16)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .padding(-6)
             .padding(.top, 1)
-            .accessibilityLabel("Mark passed")
-            VStack(alignment: .leading, spacing: 1) {
+            .accessibilityLabel(
+                isProblem
+                    ? "Problem: \(check.what)"
+                    : (outcome == .passed ? "Passed: \(check.what)" : "Mark passed: \(check.what)")
+            )
+            VStack(alignment: .leading, spacing: 2) {
                 Text(check.what)
-                    .font(WarrenTypography.popoverItem)
+                    .font(WarrenTypography.body)
                     .foregroundStyle(outcome == .passed ? palette.ink3 : palette.ink)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(check.at)
@@ -192,7 +199,7 @@ struct WarrenLeadChecksPanel: View {
                     .truncationMode(.tail)
                 if isProblem, !note.isEmpty {
                     Text(note)
-                        .font(WarrenTypography.popoverMeta)
+                        .font(WarrenTypography.caption)
                         .foregroundStyle(palette.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -386,12 +393,13 @@ struct WarrenLeadCrewStrip: View {
                     }
                 }
             Text(member.title)
-                .font(WarrenTypography.popoverItem)
+                .font(WarrenTypography.bodyEmphasis)
                 .foregroundStyle(closed ? palette.ink3 : palette.ink2)
                 .lineLimit(1)
-                .fixedSize()
+                .truncationMode(.tail)
+                .layoutPriority(1)
             Text(member.result ?? "")
-                .font(WarrenTypography.popoverMeta)
+                .font(WarrenTypography.caption)
                 .foregroundStyle(closed ? palette.ink4 : palette.ink3)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -506,7 +514,7 @@ struct WarrenLeadEyebrow: View {
                 .fill(palette.accent)
                 .frame(width: 6, height: 6)
             Text(text)
-                .font(WarrenTypography.popoverMeta)
+                .font(WarrenTypography.captionEmphasis)
                 .foregroundStyle(palette.ink3)
                 .lineLimit(1)
             if let trailing {

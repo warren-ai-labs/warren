@@ -349,6 +349,11 @@ struct WarrenCompositionRoot: View {
             embeddedEditorAvailable: selectedEndpointCapabilities.canUseEmbeddedEditor,
             editorHasKeyboardFocus: embeddedEditorModel.hasKeyboardFocus,
             browserHasKeyboardFocus: browserFocusModel.hasKeyboardFocus,
+            externalModalPresented: hasBlockingAppModal,
+            onRelinquishTerminalFocus: {
+                surfaceManager.noteTerminalFocusSurrendered()
+                remoteModel.relinquishTerminalFocus()
+            },
             editorSurface: { workspace in
                 AnyView(WarrenEmbeddedEditorSurface(
                     workspace: workspace,
@@ -661,6 +666,18 @@ struct WarrenCompositionRoot: View {
             glassEnabled: liquidGlassEnabled,
             reduceTransparency: reduceTransparency
         )
+    }
+
+    /// True while an app-level modal overlay owns the window and should block
+    /// terminal focus and background shortcuts.
+    private var hasBlockingAppModal: Bool {
+        diskImagePrompt.pending != nil
+            || supersetImportPreview != nil
+            || isSupersetImporting
+            || (workspaceCreatorContext != nil && workspaceCreatorContext?.endpointID == selectedEndpointID)
+            || (setupScriptProjectID != nil && setupScriptEndpointID == selectedEndpointID)
+            || (worktreeImportProjectID != nil && worktreeImportEndpointID == selectedEndpointID)
+            || terminalSearchPresented
     }
 
     @ViewBuilder

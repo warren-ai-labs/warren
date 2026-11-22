@@ -216,6 +216,5 @@ private struct WarrenDesktopNoticeToast: View {
             border: notice.kind == .error ? tokens.destructive.opacity(0.45) : nil
         ))
         .accessibilityElement(children: .contain)
-        .accessibilityAddTraits(.isStaticText)
     }
 }

@@ -4,6 +4,127 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-11-22
+
+A release that gives the Embedded Editor its own mode in the right sidebar,
+brings the Web client a light appearance and a broad polish pass, and fixes the
+interaction details that got in the way on Desktop and iPhone. The right
+sidebar keeps the Inspector's Changes, History and Files tabs, and the
+Embedded Editor now opens from a trailing control beside the external IDE icon;
+in Editor mode its header carries a switch back to the Inspector and a close
+button that closes the sidebar and clears the Workspace's editor marker. The
+Web client gains an Appearance setting (System, Light or Dark) that applies
+before the first paint and carries through the terminal palette, the search
+decorations and the diff highlighter, and its phone layout gains jump to
+latest, control requests from the composer, roving focus on option groups, and
+overlays that lift above the keyboard. The Desktop stops letting a background
+shortcut, a blocking dialog or an Inspector field fight the terminal for the
+keyboard, and its Conversation reading surface is reset on a calmer type scale.
+Terminals on macOS 13 get ⌘C and ⌘V back while an input method is active, and a
+remapped modifier no longer leaks a phantom right-side modifier into Ghostty.
+The JSON control protocol remains at 4.0: no method was added or changed, and
+this release migrates no state.
+
+### Added
+
+- Open the Embedded Editor as its own right-sidebar mode. The Inspector's three
+  tabs stay grouped on the leading side of the header, and a trailing control
+  beside the external IDE icon switches the sidebar into Editor mode instead of
+  adding a fourth tab beside Changes, History and Files. Editor mode has its own
+  minimal header with a switch back to the Inspector, the external IDE control
+  and a close button; closing the Editor closes the right sidebar and clears the
+  Workspace's editor marker, while switching back to the Inspector keeps the
+  editor running. The tab bar keeps one right-sidebar toggle, and `DESIGN.md`'s
+  Inspector section now describes the two modes.
+- Choose an appearance in the Web client. Settings gains Appearance with
+  System, Light and Dark, remembered per browser. The choice is applied by an
+  inline script before the first paint, so a light reader never sees a dark
+  flash, and it follows through to the terminal's light ember-paper palette,
+  its search highlights, the diff highlighter, the browser theme colour and the
+  light-theme contrast of the conversation surface.
+- Pick the Workspace in the Web session sheet. The sheet that starts a Session
+  now names its target and can change it, and choosing a preset from a
+  Workspace's own menu starts the Session in that Workspace rather than the one
+  that happened to be active.
+
+### Changed
+
+- Focus belongs to one surface at a time on the Desktop. A blocking dialog, an
+  update overlay, the command palette, a menu and the Inspector's own fields now
+  each take the keyboard and make the terminal relinquish it, and the global
+  shortcuts that a modal owns are ignored while it is up. The commit box and the
+  pull-request composer report focus to the Inspector, so the terminal stops
+  wearing focused chrome underneath a field that is being typed into, and the
+  commit box says whether it stages and commits every file or only the staged
+  ones. Plain Return inserts a newline in the commit message and ⌘Return
+  commits, the branch refresh moved onto the branch card, and a collapsed
+  sidebar no longer keeps its width in the window's minimum.
+- Read the Conversation on its own scale. The answer is set at 14/21 with
+  headings, lists, tables and code aligned to that grid, each turn carries its
+  own footer row, and the pending panels stack as separate cards over the
+  composer instead of sharing one box. Disclosure chevrons keep a fixed leading
+  slot so the work trail and thought share one vertical axis, and every column
+  of a short table stays flexible so it lines up with full-width code and cards.
+- Polish the Web client's phone and desktop surfaces. The Agent view gains a
+  Jump to latest button when the reader is away from the bottom, a view-only
+  composer says so and takes control on tap, single-choice option groups use a
+  radio role with roving arrow keys, and tooltips name their shortcuts. The file
+  diff keeps its header while the code scrolls, follows the appearance for its
+  syntax theme, and uses arrow keys between its Diff and File tabs; the Inbox,
+  search and PWA badge also count a program's own status mark, not only an
+  Agent's. The soft keyboard's inset is published on `:root` so dialogs, sheets,
+  the search panel and the Git panel lift above it, and a negative viewport
+  offset from iOS rubber-band overscroll no longer invents a phantom inset.
+- Keep the iPhone readable and reachable. Status colours now come from one table,
+  the composer keeps `+` leading and Send trailing at every text size with the
+  middle chips scrolling instead of pushing them off-screen, a single-line draft
+  is never clipped by its own fade, and the diff header stays pinned above
+  horizontally scrolled code. The Inbox names its filters with a status dot and
+  count, the pairing scanner centres its reticle between the labels, and the
+  terminal opens only explicit `http` or `https` links.
+- Keep the embedded editor's own controls mounted. The code-server sidebar
+  controls are re-injected when the action bar re-renders, from startup
+  hydration, a sash narrowing or a resize, instead of disappearing until the
+  editor is reopened; the whole workbench is watched only until the sidebar and
+  its header attach. Markdown preview detection falls back to the editor's
+  `data-uri` when the status bar has not mounted `status.editor.mode`, so an
+  extensionless or untitled Markdown document still offers the preview.
+
+### Fixed
+
+- Restore ⌘C and ⌘V in terminals on macOS 13. When an input method was active,
+  `NSEvent.characters(byApplyingModifiers: [])` could return nothing, and the
+  command chord reached Ghostty without the unshifted codepoint its keybind
+  matching needs, so copying and pasting in a terminal did nothing. The
+  unshifted codepoint is now read from the active keyboard layout before the
+  lookup falls back, and an unbound command chord no longer emits literal text
+  into the PTY.
+- Stop leaking right-side modifier bits. A right-side or remapped modifier
+  (Caps Lock mapped to Right Control, for example) kept its device-dependent
+  bit after `.control` or `.command` was stripped for `consumed_mods`, so
+  Ghostty saw a modifier the person was not holding. Each right-side bit is now
+  gated on its aggregate logical flag.
+- Stop flashing the Welcome screen while a relay token rotates. An
+  `unauthorized` socket now shows a reconnecting state and waits for the
+  refresh to fail before it reports the error and drops the client back to the
+  welcome chrome.
+
+### Release notes
+
+- The JSON control protocol remains at 4.0, no method was added or changed, and
+  this release migrates no state.
+- Nothing persisted on the Host changes shape. The Web client stores its
+  appearance under a new `warren.theme` key in the browser's local storage; a
+  browser that never opened Settings keeps following the system appearance, as
+  before.
+- The right-sidebar change is a Desktop interaction change only: the Inspector's
+  tabs, their methods and the Workspace editor marker are the same, and a
+  session that had the editor open still has it running when the Inspector is
+  shown.
+- Local packaging uses the available Apple Development signing identity and is
+  not notarized; the archive is suitable for internal or temporary testing, not
+  general public distribution.
+
 ## [0.43.0] - 2026-11-21
 
 A release that adds a free hosted model for session titles, lets Antigravity

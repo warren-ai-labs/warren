@@ -137,6 +137,15 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// terminal reconciliation pulls the keyboard straight back out of the
     /// browser pane (RFC 0022 §8.4).
     let browserHasKeyboardFocus: Bool
+    /// True while the Inspector holds keyboard focus (commit box, PR composer,
+    /// files filter, or file editor).
+    let inspectorHasKeyboardFocus: Bool
+    /// True while an app-level blocking modal owned outside `WarrenDesktopRoot`
+    /// (such as Workspace creator, Setup script, or Superset import) is visible.
+    let externalModalPresented: Bool
+    /// Notifies the host when a blocking modal or Inspector field takes keyboard
+    /// ownership so the terminal relinquishes focus cleanly.
+    let onRelinquishTerminalFocus: () -> Void
     let editorSurface: @MainActor (Workspace) -> AnyView
     /// The Inspector beside the terminal; nil where the host offers none. It is
     /// resolved per page, because the right sidebar's tab row owns which page is
@@ -312,6 +321,30 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         updateStatus == .updating || hostMaintenanceMessage != nil
     }
 
+    /// True while a blocking modal dialog or update overlay owns the window.
+    var hasBlockingModal: Bool {
+        pendingRename != nil
+            || pendingDeletion != nil
+            || pendingHostDeletion != nil
+            || isTaskCreatorPresented
+            || externalModalPresented
+            || isUpdating
+    }
+
+    /// True when the active terminal pane should own keyboard focus and wear
+    /// focused-card chrome.
+    var wantsTerminalFocus: Bool {
+        !commandPalettePresented
+            && !hasBlockingModal
+            && chromePopover == nil
+            && menuCenter.request == nil
+            && !isNoticePopoverPresented
+            && !editorHasKeyboardFocus
+            && !browserHasKeyboardFocus
+            && !inspectorHasKeyboardFocus
+            && !inspectorActivity.hasKeyboardFocus
+    }
+
     /// The Host's own wording when it gives more than the generic notice.
     var updateHUDDetail: String? {
         guard updateStatus != .updating,
@@ -413,6 +446,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
         embeddedEditorAvailable: Bool = false,
         editorHasKeyboardFocus: Bool = false,
         browserHasKeyboardFocus: Bool = false,
+        inspectorHasKeyboardFocus: Bool = false,
+        externalModalPresented: Bool = false,
+        onRelinquishTerminalFocus: @escaping () -> Void = {},
         editorSurface: @escaping @MainActor (Workspace) -> AnyView = { _ in AnyView(EmptyView()) },
         onOpenEditorDocument: @escaping @MainActor (Workspace, WarrenDesktopEditorDocument) -> Void = { _, _ in },
         inspectorSurface: (@MainActor (Workspace, WarrenDesktopInspectorTab, WarrenDesktopInspectorActivity) -> AnyView)? = nil,
@@ -513,6 +549,9 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             && resolvedEndpointCapabilities.canUseEmbeddedEditor
         self.editorHasKeyboardFocus = editorHasKeyboardFocus
         self.browserHasKeyboardFocus = browserHasKeyboardFocus
+        self.inspectorHasKeyboardFocus = inspectorHasKeyboardFocus
+        self.externalModalPresented = externalModalPresented
+        self.onRelinquishTerminalFocus = onRelinquishTerminalFocus
         self.editorSurface = editorSurface
         self.onOpenEditorDocument = onOpenEditorDocument
         self.inspectorSurface = inspectorSurface
@@ -716,24 +755,6 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     .accessibilityHidden(true)
                 }
             }
-
-            // An in-app update replaces the application bundle and restarts
-            // Warren; a Host update restarts the Host under it. Neither
-            // navigates the window anywhere: the shell stays exactly as it is
-            // behind a slight dim and one card says why it has stopped taking
-            // input. There is one per window, never one per terminal. A failed
-            // install fades it back out, leaving the window as it was.
-            Group {
-                if isUpdating {
-                    WarrenDesktopUpdateHUD(detail: updateHUDDetail)
-                        .transition(.opacity)
-                        .zIndex(WarrenPresentationLayer.modal)
-                }
-            }
-            .animation(
-                WarrenDesktopLoadingReveal.animation(reduceMotion: reduceMotion),
-                value: isUpdating
-            )
         }
         .animation(sidebarPeekAnimation, value: sidebarPeek.isPeeking)
         .frame(
@@ -742,9 +763,12 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             // plus its Explorer — would be met by squeezing the Terminal to
             // nothing, and RFC 0021's open question about narrow windows would
             // become a state users could sit in.
-            minWidth: WarrenLayoutMetrics.sidebarExpandedWidth
+            // Collapsing the sidebar removes its column from the floor so
+            // smaller displays actually regain that horizontal space.
+            minWidth: (sidebarState.isCollapsed
+                    ? 0
+                    : WarrenLayoutMetrics.sidebarExpandedWidth + WarrenLayoutMetrics.cardGap)
                 + WarrenLayoutMetrics.windowInset * 2
-                + WarrenLayoutMetrics.cardGap
                 + currentTree.windowMinimumPaneWidth
                 + (rightSidebarTab?.inspectorTab != nil
                     ? WarrenLayoutMetrics.inspectorMinimumWidth
@@ -806,36 +830,57 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             isTaskCreatorPresented = false
             taskCreatorEndpointID = nil
         }
+        .onChange(of: inspectorActivity.hasKeyboardFocus) { hasFocus in
+            if hasFocus {
+                onRelinquishTerminalFocus()
+            }
+        }
+        .onChange(of: hasBlockingModal) { blocked in
+            if blocked {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                onRelinquishTerminalFocus()
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.commandPalette)) { _ in
+            guard !hasBlockingModal else { return }
             presentCommandPalette()
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.newSession)) { _ in
+            guard !hasBlockingModal else { return }
             handleNewSession(in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.nextTab)) { _ in
+            guard !hasBlockingModal else { return }
             handleTabMove(forward: true, in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.previousTab)) { _ in
+            guard !hasBlockingModal else { return }
             handleTabMove(forward: false, in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.selectTab)) { note in
+            guard !hasBlockingModal else { return }
             handleSelectTab(note, in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.toggleSidebar)) { _ in
+            guard !hasBlockingModal else { return }
             toggleSidebar()
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.peekSidebar)) { _ in
+            guard !hasBlockingModal else { return }
             sidebarPeek.show()
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.toggleInspector)) { _ in
+            guard !hasBlockingModal else { return }
             toggleRightSidebar(in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.openSettings)) { note in
+            guard !isUpdating else { return }
             // A deep link names a section; the app menu's Settings item
             // posts none and opens the first one.
             openSettings(note.object as? WarrenDesktopSettingsDeepLink)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.openEmbeddedEditor)) { note in
+            guard !isUpdating else { return }
             let request = note.object as? WarrenDesktopEmbeddedEditorRequest
             let targetWorkspace = request.flatMap { request in
                 projection.groups.flatMap(\.workspaces).first {
@@ -854,28 +899,36 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             )
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.reviewFile)) { note in
+            guard !isUpdating else { return }
             guard let request = note.object as? WarrenDesktopReviewFileRequest else { return }
             revealReviewFile(request, in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.splitBelow)) { _ in
+            guard !hasBlockingModal else { return }
             handleSplitBelow(in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.splitRight)) { _ in
+            guard !hasBlockingModal else { return }
             handleSplitRight(in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.closePane)) { _ in
+            guard !hasBlockingModal else { return }
             handleCloseTab(nil, in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.maximizePane)) { _ in
+            guard !hasBlockingModal else { return }
             handleMaximizePane(in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.otherPane)) { _ in
+            guard !hasBlockingModal else { return }
             handleOtherPane(in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.nextPaneGroup)) { _ in
+            guard !hasBlockingModal else { return }
             selectPaneGroup(id: nil, step: 1, in: presentation)
         }
         .onReceive(NotificationCenter.default.publisher(for: WarrenDesktopCommand.previousPaneGroup)) { _ in
+            guard !hasBlockingModal else { return }
             selectPaneGroup(id: nil, step: -1, in: presentation)
         }
         .onChange(of: activeVisibleSessions) { sessions in
@@ -978,57 +1031,69 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             EmacsSplitChordMonitor.shared.stop()
         }
         .overlay {
-            renameDialog
-        }
-        .overlay {
-            taskCreatorDialog
-        }
-        .overlay {
-            deletionDialog
-        }
-        .overlay {
-            hostDeletionDialog
-        }
-        .overlay {
-            if commandPalettePresented {
-                GeometryReader { proxy in
-                    let panelWidth = min(
-                        WarrenLayoutMetrics.commandPaletteWidth,
-                        max(0, proxy.size.width - WarrenSpacing.standard * 2)
-                    )
-                    let resultsMaxHeight = max(
-                        0,
-                        proxy.size.height * 0.8
-                            - WarrenLayoutMetrics.commandInputHeight
-                            - WarrenLayoutMetrics.commandPaletteFooterHeight
-                            - WarrenSpacing.hairline * 2
-                    )
-                    ZStack(alignment: .top) {
-                        WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).modalScrim
-                            .ignoresSafeArea()
-                            .onTapGesture { setCommandPalettePresented(false) }
-
-                        WarrenDesktopCommandPalette(
-                            projection: projection,
-                            onAction: dispatch,
-                            onDismiss: { setCommandPalettePresented(false) },
-                            width: panelWidth,
-                            resultsMaxHeight: resultsMaxHeight
-                        )
-                        .padding(.top, max(WarrenSpacing.standard, proxy.size.height * 0.5 - 278))
-                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .transition(.opacity)
-                .zIndex(WarrenPresentationLayer.commandSurface)
-            }
-        }
-        .overlay {
             chromePopoverLayer(
                 presentation: presentation,
                 externalIDEOptions: externalIDEOptions
             )
+        }
+        .overlay {
+            // Command palette, blocking modals, and the update HUD share one
+            // ZStack so `WarrenPresentationLayer` z-indices govern stacking
+            // order: blocking modals always sit above the command palette.
+            ZStack {
+                if commandPalettePresented {
+                    GeometryReader { proxy in
+                        let panelWidth = min(
+                            WarrenLayoutMetrics.commandPaletteWidth,
+                            max(0, proxy.size.width - WarrenSpacing.standard * 2)
+                        )
+                        let resultsMaxHeight = max(
+                            0,
+                            proxy.size.height * 0.8
+                                - WarrenLayoutMetrics.commandInputHeight
+                                - WarrenLayoutMetrics.commandPaletteFooterHeight
+                                - WarrenSpacing.hairline * 2
+                        )
+                        ZStack(alignment: .top) {
+                            WarrenColorTokens.resolved(for: colorScheme, material: windowMaterial).modalScrim
+                                .ignoresSafeArea()
+                                .onTapGesture { setCommandPalettePresented(false) }
+
+                            WarrenDesktopCommandPalette(
+                                projection: projection,
+                                onAction: dispatch,
+                                onDismiss: { setCommandPalettePresented(false) },
+                                width: panelWidth,
+                                resultsMaxHeight: resultsMaxHeight
+                            )
+                            .padding(.top, max(WarrenSpacing.standard, proxy.size.height * 0.5 - 278))
+                            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .transition(.opacity)
+                    .zIndex(WarrenPresentationLayer.commandSurface)
+                }
+
+                renameDialog
+                taskCreatorDialog
+                deletionDialog
+                hostDeletionDialog
+
+                // An in-app update replaces the application bundle and restarts
+                // Warren; a Host update restarts the Host under it.
+                Group {
+                    if isUpdating {
+                        WarrenDesktopUpdateHUD(detail: updateHUDDetail)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(
+                    WarrenDesktopLoadingReveal.animation(reduceMotion: reduceMotion),
+                    value: isUpdating
+                )
+                .zIndex(WarrenPresentationLayer.modal)
+            }
         }
         .overlay(alignment: .bottomTrailing) {
             if emacsChordActive {
@@ -1045,7 +1110,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                     .allowsHitTesting(false)
             }
         }
-        .overlay(alignment: .bottomLeading) {
+        .overlay(alignment: sidebarState.isCollapsed ? .bottomTrailing : .bottomLeading) {
             noticeToasts
         }
         .overlay(alignment: .bottom) {
@@ -1060,7 +1125,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     }
 
     /// New notices rise over the sidebar's foot, at the sidebar's width; with
-    /// the sidebar hidden they take the same corner of the window.
+    /// the sidebar hidden they anchor bottom-trailing so they stay clear of
+    /// the terminal prompt in the bottom-left corner.
     var noticeToasts: some View {
         let inset = WarrenLayoutMetrics.windowInset + WarrenDesktopSidebarMetrics.contentHorizontalInset
         let width = sidebarState.isCollapsed
@@ -1078,8 +1144,8 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             }
         )
         .frame(width: width)
-        .padding(.leading, inset)
-        .padding(.bottom, inset + WarrenDesktopSidebarMetrics.footerHeight)
+        .padding(sidebarState.isCollapsed ? .trailing : .leading, inset)
+        .padding(.bottom, sidebarState.isCollapsed ? inset : inset + WarrenDesktopSidebarMetrics.footerHeight)
     }
 
     static func scopedSidebarSelection(
@@ -1869,7 +1935,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
             },
             editorContent: { AnyView(editorSurface(workspace)) },
             onSelectTab: { selectRightSidebarTab($0, in: presentation) },
-            onCloseEditor: { closeEditorRegion(for: workspace) },
+            onOpenInspector: {
+                let target = lastInspectorTabs[workspace.id] ?? .changes
+                selectRightSidebarTab(.inspector(target), in: presentation)
+            },
+            onCloseEditor: { closeEditorRegion(for: workspace, closeSidebar: true) },
             externalIDE: externalIDE
         ))
     }
@@ -1979,9 +2049,7 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 // too. Reconciliation claims focus for the selected pane
                 // whenever this is true, so leaving it set let a later layout
                 // pass pull the keyboard back out of the editor mid-edit.
-                wantsTerminalFocus: !commandPalettePresented
-                    && !editorHasKeyboardFocus
-                    && !browserHasKeyboardFocus,
+                wantsTerminalFocus: wantsTerminalFocus,
                 splitTree: currentTree,
                 activePaneID: currentPaneID,
                 zoomedPaneID: zoomedPaneID(in: currentTree, presentation: presentation),
@@ -2114,7 +2182,11 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
     /// identify a marker. A deletion confirmation is already gated on the two
     /// agreeing; passing the captured Endpoint keeps that from being the only
     /// thing standing between this and another Host's record.
-    func closeEditorRegion(for workspace: Workspace, hostId: String? = nil) {
+    func closeEditorRegion(
+        for workspace: Workspace,
+        hostId: String? = nil,
+        closeSidebar: Bool = false
+    ) {
         editorRegionWorkspaceIDs.remove(workspace.id)
         workspaceEditorStates.removeValue(
             forKey: WarrenDesktopWorkspaceEditorKey(
@@ -2122,12 +2194,16 @@ public struct WarrenDesktopRoot<TerminalSurface: View>: View {
                 workspaceId: workspace.id
             )
         )
-        // Closing the region keeps the sidebar up; the Editor page falls back to
-        // the Inspector page it came from.
+        // Reset the Workspace's remembered right-sidebar mode back to the
+        // Inspector so reopening the sidebar lands on Changes/History/Files
+        // instead of a closed Editor.
         if rightSidebarTabs[workspace.id]?.isEditor == true {
             rightSidebarTabs[workspace.id] = .inspector(
                 lastInspectorTabs[workspace.id] ?? .changes
             )
+        }
+        if closeSidebar {
+            inspectorOpen = false
         }
     }
 

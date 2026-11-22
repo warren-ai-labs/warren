@@ -74,6 +74,7 @@ enum WarrenWorkspaceFiles {
 
 struct WarrenInspectorFiles: View {
     @ObservedObject var inspector: WarrenInspectorModel
+    var activity: WarrenDesktopInspectorActivity? = nil
     @State private var paths: [String] = []
     @State private var tree: [WarrenFileNode] = []
     /// The filter's haystack, lowercased and ordered shortest name first once
@@ -82,6 +83,7 @@ struct WarrenInspectorFiles: View {
     @State private var loaded = false
     @State private var filter = ""
     @State private var open: Set<String> = []
+    @FocusState private var isFilterFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
@@ -96,7 +98,12 @@ struct WarrenInspectorFiles: View {
         let changed = changed
         Group {
             if let file = inspector.openFile {
-                WarrenFileEditor(root: inspector.path, relativePath: file, status: changed[file]) {
+                WarrenFileEditor(
+                    root: inspector.path,
+                    relativePath: file,
+                    status: changed[file],
+                    onFocusChange: { activity?.setKeyboardFocus($0, source: "files-editor") }
+                ) {
                     inspector.openFile = nil
                 }
                 .id(file)
@@ -109,17 +116,23 @@ struct WarrenInspectorFiles: View {
                         TextField("Filter files", text: $filter)
                             .textFieldStyle(.plain)
                             .font(WarrenTypography.dialogInput)
+                            .focused($isFilterFocused)
                         if !filter.isEmpty {
                             Button { filter = "" } label: {
                                 Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(tokens.mutedForeground)
                             }
                             .buttonStyle(.plain)
+                            .warrenTooltip("Clear filter")
+                            .accessibilityLabel("Clear")
                         }
                     }
                     .padding(.horizontal, WarrenSpacing.compact)
                     .frame(height: 28)
                     .background(tokens.inputSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(tokens.border, lineWidth: WarrenSpacing.hairline))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(isFilterFocused ? tokens.focusRing : tokens.border, lineWidth: WarrenSpacing.hairline)
+                    )
                     .padding(WarrenSpacing.compact)
                     if !loaded {
                         WarrenSkeletonRows(count: 10, shape: .file)
@@ -140,6 +153,13 @@ struct WarrenInspectorFiles: View {
                     }
                 }
             }
+        }
+        .onChange(of: isFilterFocused) { focused in
+            activity?.setKeyboardFocus(focused, source: "files-filter")
+        }
+        .onDisappear {
+            activity?.setKeyboardFocus(false, source: "files-filter")
+            activity?.setKeyboardFocus(false, source: "files-editor")
         }
         .task(id: inspector.path) {
             let listed = await WarrenWorkspaceFiles.list(at: inspector.path)
@@ -220,39 +240,65 @@ struct WarrenInspectorFiles: View {
         ])
     }
 
-    private func filtered(tokens: WarrenColorTokens) -> some View {
-        let needle = filter.lowercased()
-        // The index is already shortest name first, so the first 300 hits are
-        // the ones the sort would have kept.
+    private func filteredMatches(for query: String, limit: Int = 300) -> (matches: [String], truncated: Bool) {
+        let needle = query.lowercased()
+        // The index is already shortest name first, so the first `limit` hits
+        // are the ones the sort would have kept. Check one extra to detect truncation.
         var matches: [String] = []
+        matches.reserveCapacity(min(limit, searchIndex.count))
         for entry in searchIndex where entry.lowercased.contains(needle) {
+            if matches.count == limit {
+                return (matches, true)
+            }
             matches.append(entry.path)
-            if matches.count == 300 { break }
         }
-        return ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(matches, id: \.self) { path in
-                    Button {
-                        inspector.openFile = path
-                    } label: {
-                        HStack(spacing: 6) {
-                            WarrenFileIcon(name: (path as NSString).lastPathComponent, isDirectory: false)
-                            Text((path as NSString).lastPathComponent)
-                                .font(WarrenTypography.navigationItem)
-                                .foregroundStyle(tokens.foreground)
-                                .lineLimit(1)
-                            Text((path as NSString).deletingLastPathComponent)
-                                .font(WarrenTypography.navigationMeta)
-                                .foregroundStyle(tokens.mutedForeground)
-                                .lineLimit(1)
-                                .truncationMode(.head)
-                            Spacer(minLength: 0)
+        return (matches, false)
+    }
+
+    @ViewBuilder
+    private func filtered(tokens: WarrenColorTokens) -> some View {
+        let result = filteredMatches(for: filter)
+        let matches = result.matches
+        let truncated = result.truncated
+        if matches.isEmpty {
+            WarrenInspectorEmpty(
+                symbol: "magnifyingglass",
+                title: "No matching files",
+                detail: "No files in this checkout match \"\(filter)\"."
+            )
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(matches, id: \.self) { path in
+                        Button {
+                            inspector.openFile = path
+                        } label: {
+                            HStack(spacing: 6) {
+                                WarrenFileIcon(name: (path as NSString).lastPathComponent, isDirectory: false)
+                                Text((path as NSString).lastPathComponent)
+                                    .font(WarrenTypography.navigationItem)
+                                    .foregroundStyle(tokens.foreground)
+                                    .lineLimit(1)
+                                Text((path as NSString).deletingLastPathComponent)
+                                    .font(WarrenTypography.navigationMeta)
+                                    .foregroundStyle(tokens.mutedForeground)
+                                    .lineLimit(1)
+                                    .truncationMode(.head)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, WarrenSpacing.medium)
+                            .frame(height: 26)
+                            .contentShape(Rectangle())
                         }
-                        .padding(.horizontal, WarrenSpacing.medium)
-                        .frame(height: 26)
-                        .contentShape(Rectangle())
+                        .buttonStyle(WarrenInspectorRowStyle(cornerRadius: WarrenRadius.row, inset: WarrenSpacing.xs))
                     }
-                    .buttonStyle(WarrenInspectorRowStyle(cornerRadius: WarrenRadius.row, inset: WarrenSpacing.xs))
+                    if truncated {
+                        Text("Showing first 300 matches")
+                            .font(WarrenTypography.footnote)
+                            .foregroundStyle(tokens.mutedForeground)
+                            .padding(.horizontal, WarrenSpacing.medium)
+                            .padding(.vertical, WarrenSpacing.compact)
+                    }
                 }
             }
         }
@@ -267,6 +313,7 @@ struct WarrenFileEditor: View {
     let root: String
     let relativePath: String
     let status: String?
+    var onFocusChange: ((Bool) -> Void)? = nil
     let onClose: () -> Void
 
     @State private var text = ""
@@ -277,6 +324,8 @@ struct WarrenFileEditor: View {
     @State private var loaded = false
     /// Back was pressed with unsaved edits: the header asks before leaving.
     @State private var confirmingClose = false
+    /// Revert was pressed with unsaved edits: ask before replacing the buffer.
+    @State private var confirmingRevert = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.warrenWindowMaterial) private var windowMaterial
 
@@ -298,6 +347,7 @@ struct WarrenFileEditor: View {
                 }
                 .buttonStyle(.plain)
                 .warrenTooltip("Back to files")
+                .accessibilityLabel("Back")
                 WarrenFileIcon(name: (relativePath as NSString).lastPathComponent, isDirectory: false)
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 5) {
@@ -322,7 +372,10 @@ struct WarrenFileEditor: View {
                     }
                 }
                 Spacer(minLength: 0)
-                Button("Revert") { text = saved }
+                Button("Revert") {
+                    confirmingClose = false
+                    confirmingRevert = true
+                }
                     .buttonStyle(.plain)
                     .font(WarrenTypography.caption)
                     .foregroundStyle(dirty ? tokens.mutedForeground : .clear)
@@ -346,6 +399,8 @@ struct WarrenFileEditor: View {
             .frame(height: 44)
             if confirmingClose {
                 unsavedChangesBar(tokens: tokens)
+            } else if confirmingRevert {
+                revertConfirmationBar(tokens: tokens)
             }
             if let saveError {
                 Text(saveError)
@@ -363,7 +418,8 @@ struct WarrenFileEditor: View {
                     text: $text,
                     language: WarrenCodeHighlighter.language(for: relativePath),
                     editable: !readOnly,
-                    dark: colorScheme == .dark
+                    dark: colorScheme == .dark,
+                    onFocusChange: onFocusChange
                 )
             } else {
                 WarrenSkeletonRows(count: 12, shape: .init(showsDot: false, showsMeta: false, rowHeight: 20))
@@ -372,16 +428,42 @@ struct WarrenFileEditor: View {
             }
         }
         .task { await load() }
+        .onDisappear { onFocusChange?(false) }
     }
 
     /// Leaving the editor drops its buffer, so unsaved edits are asked about
     /// first rather than silently discarded.
     private func requestClose() {
         if dirty {
+            confirmingRevert = false
             confirmingClose = true
         } else {
             onClose()
         }
+    }
+
+    private func revertConfirmationBar(tokens: WarrenColorTokens) -> some View {
+        HStack(spacing: WarrenSpacing.small) {
+            Text("Revert unsaved changes?")
+                .font(WarrenTypography.caption)
+                .foregroundStyle(tokens.foreground)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Button("Cancel") { confirmingRevert = false }
+                .buttonStyle(.plain)
+                .font(WarrenTypography.caption)
+                .foregroundStyle(tokens.mutedForeground)
+                .keyboardShortcut(.cancelAction)
+            Button("Revert") {
+                confirmingRevert = false
+                text = saved
+            }
+                .buttonStyle(.plain)
+                .font(WarrenTypography.captionEmphasis)
+                .foregroundStyle(tokens.destructive)
+        }
+        .padding(.horizontal, WarrenSpacing.medium)
+        .padding(.bottom, WarrenSpacing.xs)
     }
 
     private func unsavedChangesBar(tokens: WarrenColorTokens) -> some View {
@@ -475,21 +557,48 @@ private enum WarrenFileEditorLoad: Sendable {
 
 // MARK: - Code text view
 
+private final class WarrenCodeNSTextView: NSTextView {
+    var onFocusChange: ((Bool) -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            onFocusChange?(true)
+        }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            onFocusChange?(false)
+        }
+        return resigned
+    }
+}
+
 struct WarrenCodeTextView: NSViewRepresentable {
     @Binding var text: String
     let language: WarrenCodeHighlighter.Language
     let editable: Bool
     let dark: Bool
+    var onFocusChange: ((Bool) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
+        let scrollView = NSScrollView()
         scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
-        guard let textView = scrollView.documentView as? NSTextView else { return scrollView }
+        let textView = WarrenCodeNSTextView()
+        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
         textView.delegate = context.coordinator
+        textView.onFocusChange = { [weak coordinator = context.coordinator] focused in
+            coordinator?.parent.onFocusChange?(focused)
+        }
         textView.isRichText = false
         textView.allowsUndo = true
         textView.drawsBackground = false
@@ -512,11 +621,13 @@ struct WarrenCodeTextView: NSViewRepresentable {
         textView.typingAttributes = [.font: WarrenCodeHighlighter.font, .paragraphStyle: paragraph]
         textView.string = text
         textView.isEditable = editable
+        scrollView.documentView = textView
         let ruler = WarrenLineNumberRuler(textView: textView)
         ruler.dark = dark
         scrollView.verticalRulerView = ruler
         scrollView.hasVerticalRuler = true
         scrollView.rulersVisible = true
+        ruler.updateThicknessIfNeeded()
         context.coordinator.highlight(textView)
         return scrollView
     }
@@ -524,12 +635,24 @@ struct WarrenCodeTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        if let codeTextView = textView as? WarrenCodeNSTextView {
+            codeTextView.onFocusChange = { [weak coordinator = context.coordinator] focused in
+                coordinator?.parent.onFocusChange?(focused)
+            }
+        }
         textView.isEditable = editable
         if let ruler = scrollView.verticalRulerView as? WarrenLineNumberRuler, ruler.dark != dark {
             ruler.dark = dark
         }
         if textView.string != text {
-            textView.string = text
+            let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+            if textView.isEditable, textView.shouldChangeText(in: fullRange, replacementString: text) {
+                textView.replaceCharacters(in: fullRange, with: text)
+                textView.didChangeText()
+            } else {
+                textView.string = text
+            }
+            (scrollView.verticalRulerView as? WarrenLineNumberRuler)?.updateThicknessIfNeeded()
             context.coordinator.highlight(textView)
         }
         if context.coordinator.dark != dark {
@@ -551,6 +674,7 @@ struct WarrenCodeTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+            (textView.enclosingScrollView?.verticalRulerView as? WarrenLineNumberRuler)?.updateThicknessIfNeeded()
             textView.enclosingScrollView?.verticalRulerView?.needsDisplay = true
             pending?.cancel()
             let work = DispatchWorkItem { [weak self, weak textView] in
@@ -581,6 +705,8 @@ final class WarrenLineNumberRuler: NSRulerView {
         didSet { needsDisplay = true }
     }
 
+    private static let labelFont = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
+
     init(textView: NSTextView) {
         codeView = textView
         super.init(scrollView: textView.enclosingScrollView, orientation: .verticalRuler)
@@ -598,6 +724,7 @@ final class WarrenLineNumberRuler: NSRulerView {
             name: NSText.didChangeNotification,
             object: textView
         )
+        updateThicknessIfNeeded()
     }
 
     required init(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -606,7 +733,26 @@ final class WarrenLineNumberRuler: NSRulerView {
 
     @objc private func textChanged() {
         lineStarts = nil
+        updateThicknessIfNeeded()
         needsDisplay = true
+    }
+
+    /// Computes the gutter width from the current line count so large files
+    /// never clip 5-digit line numbers.
+    func updateThicknessIfNeeded() {
+        guard let textView = codeView else { return }
+        let lineCount = starts(of: textView.string as NSString).count
+        let desired = Self.thickness(forLineCount: lineCount)
+        if abs(ruleThickness - desired) >= 1 {
+            ruleThickness = desired
+        }
+    }
+
+    static func thickness(forLineCount lineCount: Int) -> CGFloat {
+        let digits = max(2, String(max(1, lineCount)).count)
+        let sample = String(repeating: "8", count: digits) as NSString
+        let width = sample.size(withAttributes: [.font: labelFont]).width
+        return ceil(max(36, width + 18))
     }
 
     /// Numbers on the editor's own ground: the default ruler paints a light

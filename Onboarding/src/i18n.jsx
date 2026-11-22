@@ -114,6 +114,50 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.44.0",
+        dateISO: "2026-11-22",
+        date: "November 22, 2026",
+        title: "Warren gives the editor its own sidebar mode and the Web client an appearance.",
+        summary:
+          "A release that gives the Embedded Editor its own mode in the right sidebar, brings the Web client a light appearance and a broad polish pass, and fixes the interaction details that got in the way on Desktop and iPhone. The right sidebar keeps the Inspector's Changes, History and Files tabs, and the Embedded Editor now opens from a trailing control beside the external IDE icon; in Editor mode its header carries a switch back to the Inspector and a close button that closes the sidebar and clears the Workspace's editor marker. The Web client gains an Appearance setting (System, Light or Dark) that applies before the first paint and carries through the terminal palette, the search decorations and the diff highlighter, and its phone layout gains jump to latest, control requests from the composer, roving focus on option groups, and overlays that lift above the keyboard. The Desktop stops letting a background shortcut, a blocking dialog or an Inspector field fight the terminal for the keyboard, and its Conversation reading surface is reset on a calmer type scale. Terminals on macOS 13 get Cmd+C and Cmd+V back while an input method is active, and a remapped modifier no longer leaks a phantom right-side modifier into Ghostty. The JSON control protocol remains at 4.0: no method was added or changed, and this release migrates no state.",
+        sections: [
+          {
+            title: "Added",
+            items: [
+              "Open the Embedded Editor as its own right-sidebar mode. The Inspector's three tabs stay grouped on the leading side of the header, and a trailing control beside the external IDE icon switches the sidebar into Editor mode instead of adding a fourth tab beside Changes, History and Files. Editor mode has its own minimal header with a switch back to the Inspector, the external IDE control and a close button; closing the Editor closes the right sidebar and clears the Workspace's editor marker, while switching back to the Inspector keeps the editor running. The tab bar keeps one right-sidebar toggle, and DESIGN.md's Inspector section now describes the two modes.",
+              "Choose an appearance in the Web client. Settings gains Appearance with System, Light and Dark, remembered per browser. The choice is applied by an inline script before the first paint, so a light reader never sees a dark flash, and it follows through to the terminal's light ember-paper palette, its search highlights, the diff highlighter, the browser theme colour and the light-theme contrast of the conversation surface.",
+              "Pick the Workspace in the Web session sheet. The sheet that starts a Session now names its target and can change it, and choosing a preset from a Workspace's own menu starts the Session in that Workspace rather than the one that happened to be active.",
+            ],
+          },
+          {
+            title: "Changed",
+            items: [
+              "Focus belongs to one surface at a time on the Desktop. A blocking dialog, an update overlay, the command palette, a menu and the Inspector's own fields now each take the keyboard and make the terminal relinquish it, and the global shortcuts that a modal owns are ignored while it is up. The commit box and the pull-request composer report focus to the Inspector, so the terminal stops wearing focused chrome underneath a field that is being typed into, and the commit box says whether it stages and commits every file or only the staged ones. Plain Return inserts a newline in the commit message and Cmd+Return commits, the branch refresh moved onto the branch card, and a collapsed sidebar no longer keeps its width in the window's minimum.",
+              "Read the Conversation on its own scale. The answer is set at 14/21 with headings, lists, tables and code aligned to that grid, each turn carries its own footer row, and the pending panels stack as separate cards over the composer instead of sharing one box. Disclosure chevrons keep a fixed leading slot so the work trail and thought share one vertical axis, and every column of a short table stays flexible so it lines up with full-width code and cards.",
+              "Polish the Web client's phone and desktop surfaces. The Agent view gains a Jump to latest button when the reader is away from the bottom, a view-only composer says so and takes control on tap, single-choice option groups use a radio role with roving arrow keys, and tooltips name their shortcuts. The file diff keeps its header while the code scrolls, follows the appearance for its syntax theme, and uses arrow keys between its Diff and File tabs; the Inbox, search and PWA badge also count a program's own status mark, not only an Agent's. The soft keyboard's inset is published on :root so dialogs, sheets, the search panel and the Git panel lift above it, and a negative viewport offset from iOS rubber-band overscroll no longer invents a phantom inset.",
+              "Keep the iPhone readable and reachable. Status colours now come from one table, the composer keeps + leading and Send trailing at every text size with the middle chips scrolling instead of pushing them off-screen, a single-line draft is never clipped by its own fade, and the diff header stays pinned above horizontally scrolled code. The Inbox names its filters with a status dot and count, the pairing scanner centres its reticle between the labels, and the terminal opens only explicit http or https links. The embedded editor's own controls are re-injected when the code-server action bar re-renders, from startup hydration, a sash narrowing or a resize, and Markdown preview detection falls back to the editor's data-uri when the status bar has not mounted status.editor.mode.",
+            ],
+          },
+          {
+            title: "Fixed",
+            items: [
+              "Restore Cmd+C and Cmd+V in terminals on macOS 13. When an input method was active, NSEvent.characters(byApplyingModifiers: []) could return nothing, and the command chord reached Ghostty without the unshifted codepoint its keybind matching needs, so copying and pasting in a terminal did nothing. The unshifted codepoint is now read from the active keyboard layout before the lookup falls back, and an unbound command chord no longer emits literal text into the PTY.",
+              "Stop leaking right-side modifier bits. A right-side or remapped modifier (Caps Lock mapped to Right Control, for example) kept its device-dependent bit after .control or .command was stripped for consumed_mods, so Ghostty saw a modifier the person was not holding. Each right-side bit is now gated on its aggregate logical flag.",
+              "Stop flashing the Welcome screen while a relay token rotates. An unauthorized socket now shows a reconnecting state and waits for the refresh to fail before it reports the error and drops the client back to the welcome chrome.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state.",
+              "Nothing persisted on the Host changes shape. The Web client stores its appearance under a new warren.theme key in the browser's local storage; a browser that never opened Settings keeps following the system appearance, as before.",
+              "The right-sidebar change is a Desktop interaction change only: the Inspector's tabs, their methods and the Workspace editor marker are the same, and a session that had the editor open still has it running when the Inspector is shown.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.43.0",
         dateISO: "2026-11-21",
         date: "November 21, 2026",
@@ -2289,6 +2333,50 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.44.0",
+        dateISO: "2026-11-22",
+        date: "2026 年 11 月 22 日",
+        title: "Warren 把编辑器变成右侧栏的一种独立模式，Web 客户端有了外观设置。",
+        summary:
+          "这个版本把内嵌编辑器变成右侧栏的一种独立模式，给 Web 客户端加了浅色外观和一轮整体打磨，并修掉了 Desktop 和 iPhone 上碍手碍脚的交互细节。右侧栏仍然保留 Inspector 的 Changes、History 与 Files 三个标签，内嵌编辑器现在从外部 IDE 图标旁边的尾端按钮打开；进入 Editor 模式后，它的头部带有回到 Inspector 的切换和关闭按钮，关闭会一并关掉右侧栏并清掉 Workspace 的编辑器标记。Web 客户端新增外观设置（System、Light、Dark），在首次绘制前生效，并贯穿终端调色板、搜索高亮与 diff 高亮；手机布局新增跳到最新、在输入区请求控制、单选组的方向键漫游，以及会随键盘抬起的浮层。Desktop 不再让后台快捷键、阻塞对话框或 Inspector 里的输入框和终端抢键盘，对话阅读面也换回了更安静的排版尺度。macOS 13 上开着输入法时终端恢复了 ⌘C 与 ⌘V，被重映射的修饰键也不再往 Ghostty 里漏一个并不存在的右侧修饰位。JSON 控制协议仍为 4.0：没有新增或改动任何方法，本版本不迁移任何状态。",
+        sections: [
+          {
+            title: "新增",
+            items: [
+              "内嵌编辑器成为右侧栏的一种独立模式。Inspector 的三个标签仍然靠左排在头部，外部 IDE 图标旁边的尾端按钮把侧栏切到 Editor 模式，而不是在 Changes、History 与 Files 旁边再塞一个第四个标签。Editor 模式有自己的精简头部，带回到 Inspector 的切换、外部 IDE 控件和关闭按钮；关闭编辑器会一并关掉右侧栏并清掉 Workspace 的编辑器标记，切回 Inspector 则让编辑器继续运行。标签栏仍然只有一个右侧栏开关，DESIGN.md 的 Inspector 一节也改成了两种模式的描述。",
+              "在 Web 客户端选择外观。设置里多了 Appearance，可选 System、Light 与 Dark，按浏览器记住。这个选择由一段内联脚本在首次绘制前应用，所以浅色读者不会先看到一瞬黑底；它也贯穿到终端的 ember-paper 浅色调色板、它的搜索高亮、diff 高亮器、浏览器主题色以及对话面的浅色对比度。",
+              "在 Web 的新建 Session 面板里选择 Workspace。启动 Session 的面板现在会写明目标并允许改选；从某个 Workspace 自己的菜单选 preset 时，Session 会在那个 Workspace 里启动，而不是碰巧处于激活状态的那个。",
+            ],
+          },
+          {
+            title: "调整",
+            items: [
+              "Desktop 上键盘焦点一次只属于一个面。阻塞对话框、更新浮层、命令面板、菜单与 Inspector 自己的输入框现在都会接着键盘并让终端交出去，模态持有的全局快捷键在它弹着时不再被响应。commit 输入框与 PR 编辑器会把焦点报给 Inspector，于是终端不会在一片正在输入的字段下面继续穿着聚焦时的外观；commit 框会说明它是暂存并提交全部文件还是只提交已暂存的。普通 Return 在 commit 消息里换行、⌘Return 提交，分支刷新移到了分支卡片上，折叠的侧栏也不再占着窗口的最小宽度。",
+              "对话改用自己的一套阅读尺度。回答正文是 14/21，标题、列表、表格与代码都对齐到这个网格，每一轮带有自己的页脚行，待处理面板在输入区上方堆成独立的卡片而不是共用一个盒子。展开箭头保留固定的前置槽位，让 work trail 与 thought 共用一条竖向轴；短表格的每一列保持弹性，从而与整宽的代码块和卡片对齐。",
+              "打磨 Web 客户端的手机与桌面界面。读者不在底部时 Agent 视图会给出 Jump to latest；只读输入区会明说自己只读并在点击时取得控制权；单选选项组换成 radio 语义并支持方向键漫游，tooltip 会写出快捷键。文件 diff 在代码滚动时保留头部、跟随外观切换语法主题、Diff 与 File 标签之间支持方向键；Inbox、搜索与 PWA 睗标现在也会统计程序自己的状态标记，而不只是 Agent 的。软键盘的高度发布到 :root 上，于是对话框、面板、搜索与 Git 面板都能随键盘抬起，iOS 回弹产生的负 viewport offset 也不再伪造出一个并不存在的键盘高度。",
+              "让 iPhone 保持可读、可点。状态颜色统一到一张表，输入区在任何字号下都把 + 固定在左侧、Send 固定在右侧，中间的选择器改为横向滚动而不是把按钮挤掉；单行草稿不会再被自己的渐变遮住，diff 头部固定在被横向滚动的代码上方。Inbox 的筛选带上了状态点与计数，配对扫描器的准星在上下文字之间居中，终端只会打开明确的 http 或 https 链接。code-server 的动作栏因启动注水、掠拉变窄或缩放而重渲染时，侧栏控件会被重新注入；状态栏还没挂上 status.editor.mode 时，Markdown 预览的判断会回退到编辑器的 data-uri。",
+            ],
+          },
+          {
+            title: "修正",
+            items: [
+              "macOS 13 终端恢复 ⌘C 与 ⌘V。输入法开着时 NSEvent.characters(byApplyingModifiers: []) 可能什么都拿不到，于是这个 command 快捷键到达 Ghostty 时缺了它做键位匹配需要的无修饰码点，在终端里复制粘贴就没反应。现在会先从当前键盘布局读出那个码点，读不到再回退；没绑定任何键的 command 组合也不再往 PTY 里输出字面文本。",
+              "不再泄露右侧修饰键的位。为 consumed_mods 去掉 .control 或 .command 之后，右侧或重映射的修饰键（比如把 Caps Lock 映射成 Right Control）仍然带着那个与设备位相关的位，于是 Ghostty 以为用户按着一个实际并不存在的修饰键。现在每个右侧位都会由它对应的聚合逻辑位把关。",
+              "relay token 轮换时不再闪出欢迎页。现在 unauthorized 的套接字会先显示重连中，等刷新真的失败才报错并把客户端退回欢迎界面。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，没有新增或改动任何方法，本版本不迁移任何状态。",
+              "Host 上没有任何持久化的形状改变。Web 客户端把外观存在浏览器本地存储的新 warren.theme 键里；从没打开过设置的浏览器仍然像以前一样跟随系统外观。",
+              "右侧栏的变化只是 Desktop 的交互变化：Inspector 的标签、它们的方法与 Workspace 的编辑器标记都没有变，原本开着编辑器的 Session 在切回 Inspector 时它仍然在运行。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.43.0",
         dateISO: "2026-11-21",

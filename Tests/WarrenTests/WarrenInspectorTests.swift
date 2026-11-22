@@ -38,6 +38,14 @@ final class WarrenInspectorTests: XCTestCase {
         XCTAssertEqual(tree[0].children[0].children.map(\.id), ["a/b/c.go"])
     }
 
+    @MainActor
+    func testLineNumberRulerThicknessExpandsForLargeFiles() {
+        let small = WarrenLineNumberRuler.thickness(forLineCount: 99)
+        let large = WarrenLineNumberRuler.thickness(forLineCount: 10_000)
+        XCTAssertGreaterThanOrEqual(small, 36)
+        XCTAssertGreaterThan(large, small)
+    }
+
     /// Opt-in acceptance against a running Host: renders the production
     /// Inspector for one Workspace through each tab, with a diff open.
     @MainActor

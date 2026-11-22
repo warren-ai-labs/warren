@@ -798,7 +798,7 @@ public struct WarrenDesktopUsagePanel: View {
             }
 
             Text(value)
-                .font(.system(size: emphasize ? 30 : 24, weight: .light))
+                .font(.system(size: emphasize ? 30 : 24, weight: .regular))
                 .foregroundStyle(tinted ? accent : tokens.foreground)
                 .monospacedDigit()
                 .warrenNumericTransition(value: value)
@@ -1315,7 +1315,7 @@ public struct WarrenDesktopUsagePanel: View {
     private func placeholder(_ text: String) -> some View {
         HStack(spacing: WarrenSpacing.compact) {
             Image(systemName: "chart.bar.xaxis")
-                .font(.system(size: 14, weight: .light))
+                .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(tokens.mutedForeground)
                 .accessibilityHidden(true)
             Text(text)

@@ -45,13 +45,16 @@ export function enableTerminalTouchScroll(terminal, host) {
   if (typeof window === "undefined") return () => {};
   if (!("ontouchstart" in window) && !(navigator.maxTouchPoints > 0)) return () => {};
 
+  let startX = 0;
   let startY = 0;
   let lastY = 0;
   let lastTime = 0;
   let velocity = 0;
   let dragging = false;
+  let ignored = false;
   let frame = null;
   let cachedStep = 0;
+  const EDGE_SWIPE_GUARD_PX = 20;
   const measureStep = () => {
     const rows = terminal.element?.querySelector(".xterm-rows");
     const rowHeight = rows?.clientHeight;
@@ -73,17 +76,20 @@ export function enableTerminalTouchScroll(terminal, host) {
   const onTouchStart = event => {
     if (event.touches.length !== 1) return;
     const touch = event.touches[0];
+    startX = touch.clientX;
     startY = lastY = touch.clientY;
     lastTime = Date.now();
     velocity = 0;
     dragging = false;
+    // Leave left-edge touches to browser back-swipe navigation.
+    ignored = startX <= EDGE_SWIPE_GUARD_PX;
     cachedStep = measureStep();
     accumulator.reset();
     cancelMomentum();
   };
 
   const onTouchMove = event => {
-    if (event.touches.length !== 1) return;
+    if (event.touches.length !== 1 || ignored) return;
     const touch = event.touches[0];
     const now = Date.now();
     const delta = lastY - touch.clientY;
@@ -92,7 +98,14 @@ export function enableTerminalTouchScroll(terminal, host) {
     lastY = touch.clientY;
     lastTime = now;
     if (!dragging) {
-      if (Math.abs(touch.clientY - startY) < DRAG_THRESHOLD_PX) return;
+      const dx = Math.abs(touch.clientX - startX);
+      const dy = Math.abs(touch.clientY - startY);
+      if (dx < DRAG_THRESHOLD_PX && dy < DRAG_THRESHOLD_PX) return;
+      if (dy <= dx) {
+        // Horizontal gesture: let browser navigation / horizontal pan handle it.
+        ignored = true;
+        return;
+      }
       dragging = true;
     }
     // Keep the browser from panning the page/visual viewport while the
@@ -131,10 +144,10 @@ export function enableTerminalTouchScroll(terminal, host) {
   host.addEventListener("touchmove", onTouchMove, { passive: false });
   host.addEventListener("touchend", onTouchEnd);
   host.addEventListener("touchcancel", cancelMomentum);
-  // Let the gesture handler own vertical panning so iOS Safari cannot
-  // preempt touchmove with its own scroll/zoom behavior.
+  // Allow horizontal / edge-back swipes while the gesture handler owns vertical
+  // scrollback panning.
   const previousTouchAction = host.style.touchAction;
-  host.style.touchAction = "none";
+  host.style.touchAction = "pan-x";
 
   return () => {
     cancelMomentum();

@@ -100,6 +100,8 @@ public struct WarrenCopyFeedbackHUD: View {
                     )
             }
         }
+        .frame(maxWidth: 380)
+        .padding(.horizontal, 16)
         .animation(
             WarrenMotion.animation(.overlay, reduceMotion: reduceMotion)
                 ?? .easeOut(duration: WarrenMotion.stateChangeDuration),
@@ -117,6 +119,22 @@ private struct WarrenCopyReceiptChip: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var drawn = false
 
+    private var labelFont: Font {
+        #if os(iOS)
+        .caption.weight(.medium)
+        #else
+        WarrenTypography.captionEmphasis
+        #endif
+    }
+
+    private var previewFont: Font {
+        #if os(iOS)
+        .caption2.monospaced()
+        #else
+        WarrenTypography.monoSmall
+        #endif
+    }
+
     var body: some View {
         let tokens = WarrenColorTokens.resolved(for: colorScheme)
         HStack(spacing: 8) {
@@ -125,21 +143,22 @@ private struct WarrenCopyReceiptChip: View {
                 .stroke(tokens.success, style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
                 .frame(width: 12, height: 12)
             Text(label)
-                .font(WarrenTypography.captionEmphasis)
+                .font(labelFont)
                 .foregroundStyle(tokens.hudForeground)
+                .lineLimit(1)
+                .layoutPriority(1)
             Text(Self.preview(of: value))
-                .font(WarrenTypography.monoSmall)
+                .font(previewFont)
                 .foregroundStyle(tokens.hudForeground.opacity(0.55))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(maxWidth: 240, alignment: .leading)
         }
         .padding(.leading, 10)
         .padding(.trailing, 12)
         .padding(.vertical, 7)
         .background(tokens.hudSurface, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
-        .fixedSize()
+        .fixedSize(horizontal: false, vertical: true)
         .onAppear {
             guard !reduceMotion else {
                 drawn = true

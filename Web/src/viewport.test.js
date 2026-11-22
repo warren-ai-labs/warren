@@ -32,3 +32,8 @@ test("keyboardInset ignores sub-pixel float noise", () => {
   assert.equal(keyboardInset(800, 450, 348), 0);
   assert.equal(keyboardInset(800, 450, 347.5), 2.5);
 });
+
+test("keyboardInset clamps negative overscroll offsetTop", () => {
+  assert.equal(keyboardInset(800, 800, -24), 0);
+  assert.equal(keyboardInset(800, 450, -10), 350);
+});

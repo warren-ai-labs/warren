@@ -493,7 +493,9 @@ public extension WarrenColorTokens {
 
     /// The hairline around the card that holds the keyboard. Brighter rather
     /// than tinted: a hue here would be read as Agent state.
-    var cardBorderFocused: Color { fade(foreground, 0.16) }
+    var cardBorderFocused: Color {
+        material == .glass ? foreground.opacity(0.18) : fade(foreground, 0.16)
+    }
 
     /// Higher-contrast rule used to separate adjacent desktop chrome regions.
     /// The regular border token is intentionally softer for cards and fields.
