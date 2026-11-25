@@ -4,6 +4,29 @@ All notable changes to Warren are documented here.
 
 ## [Unreleased]
 
+## [0.44.1] - 2026-11-25
+
+A patch release for the terminal. When the Host kept producing output for the
+grid it already had, the pane re-asked for its viewport size on every layout;
+each request re-pinned the terminal to the other width, so long rows reflowed
+between two layouts and a single row could flicker between its full text and a
+prefix of it. The size request now goes out once per Host grid with a capped
+backoff, and a regression test reproduces the reflow artifact from a captured
+byte stream without an app or a screen. The JSON control protocol remains at
+4.0: no method was added or changed, and this release migrates no state.
+
+### Fixed
+
+- Stop a terminal pane from reflowing between two widths. A surface pinned to
+  the Host's grid reports the grid its pane fits so the PTY can follow the
+  pane; when the Host kept producing for the grid it already had, the same
+  request went out on every relayout, and each one moved Ghostty's grid back to
+  the other width. Long rows rewrapped once per frame, which read as one row
+  flickering between its full text and a truncated prefix of itself. The same
+  Host grid is now requested once, retries back off from 500ms to a cap of 8s,
+  and the first suppressed request is recorded as
+  `viewport_grid_request_suppressed` so the loop stays observable.
+
 ## [0.44.0] - 2026-11-22
 
 A release that gives the Embedded Editor its own mode in the right sidebar,

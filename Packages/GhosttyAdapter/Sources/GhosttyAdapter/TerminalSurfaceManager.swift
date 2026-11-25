@@ -211,6 +211,16 @@ public final class TerminalSurfaceManager {
         /// The grid this pane's host fits, last reported through
         /// `onViewportGridChanged`.
         var reportedViewportGrid: TerminalSize?
+        /// The host-reported grid that was in force when the last viewport
+        /// request went out. Used to stop a resize ping-pong: a host that
+        /// cannot honor the request keeps reporting the same grid, and asking
+        /// again on every relayout makes Ghostty reflow between the two widths
+        /// once per frame (long rows then render as a prefix of themselves).
+        var viewportRequestBaseline: TerminalSize?
+        var viewportRequestInFlight: TerminalSize?
+        var viewportRequestAt: ContinuousClock.Instant?
+        var viewportRequestAttempts = 0
+        var viewportRequestSuppressions = 0
         var displayVisible = false
         /// Set when a displayed surface is parked and needs the bounded
         /// post-reveal draw after its next warm promotion.
@@ -2422,11 +2432,51 @@ public final class TerminalSurfaceManager {
     }
 
     private func reportViewportGrid(for entry: Entry, sessionID: TerminalSessionID, hostSize: CGSize) {
-        guard entry.surface.outputWriter.reportedGrid != nil,
+        guard let reported = entry.surface.outputWriter.reportedGrid,
               let grid = entry.view.grid(fitting: hostSize) else { return }
         guard let size = TerminalSize(columns: grid.columns, rows: grid.rows),
               size != entry.reportedViewportGrid else { return }
+        // One request per host grid. Without this guard a host that keeps
+        // producing for the grid it already has (because it ignores or cannot
+        // apply the request) is asked again on every relayout, and each ask
+        // re-pins Ghostty's grid to the other width, reflowing the screen
+        // between two layouts. The visible result is a single long row
+        // flickering between its full text and a prefix of it.
+        if entry.viewportRequestInFlight == size,
+           entry.viewportRequestBaseline == reported
+        {
+            // Same target, and the host has not moved since. Re-ask with a
+            // capped backoff instead of once per relayout, so a host that
+            // needs a moment still converges while one that cannot honor the
+            // request cannot drive a per-frame reflow.
+            let cap = Duration.seconds(8)
+            var wait = Duration.milliseconds(500)
+            for _ in 0..<min(entry.viewportRequestAttempts, 5) { wait = wait * 2 }
+            if wait > cap { wait = cap }
+            if let at = entry.viewportRequestAt,
+               ContinuousClock.now - at < wait
+            {
+                entry.viewportRequestSuppressions += 1
+                if entry.viewportRequestSuppressions == 1 {
+                    TerminalDiagnostics.log("viewport_grid_request_suppressed", [
+                        "session": sessionID.description,
+                        "columns": String(size.columns),
+                        "rows": String(size.rows),
+                        "reportedColumns": String(reported.columns),
+                        "reportedRows": String(reported.rows),
+                    ])
+                }
+                return
+            }
+            entry.viewportRequestAttempts += 1
+        } else {
+            entry.viewportRequestAttempts = 0
+            entry.viewportRequestSuppressions = 0
+        }
         entry.reportedViewportGrid = size
+        entry.viewportRequestInFlight = size
+        entry.viewportRequestBaseline = reported
+        entry.viewportRequestAt = ContinuousClock.now
         onViewportGridChanged?(sessionID, size)
     }
 

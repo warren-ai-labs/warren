@@ -114,6 +114,22 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
+        version: "0.44.1",
+        dateISO: "2026-11-25",
+        date: "November 25, 2026",
+        title: "Warren stops a terminal pane from reflowing between two widths.",
+        summary:
+          "A patch release for the terminal. When the Host kept producing output for the grid it already had, the pane re-asked for its viewport size on every layout; each request re-pinned the terminal to the other width, so long rows reflowed between two layouts and a single row could flicker between its full text and a prefix of it. The size request now goes out once per Host grid with a capped backoff, and a regression test reproduces the reflow artifact from a captured byte stream without an app or a screen.",
+        sections: [
+          {
+            title: "Fixed",
+            items: [
+              "Stop a terminal pane from reflowing between two widths. A surface pinned to the Host's grid reports the grid its pane fits so the PTY can follow the pane; when the Host kept producing for the grid it already had, the same request went out on every relayout and each one moved Ghostty's grid back to the other width. Long rows rewrapped once per frame, which read as a single row flickering between its full text and a truncated prefix of itself. The same Host grid is now requested once, retries back off from 500ms to a cap of 8s, and the first suppressed request is recorded as viewport_grid_request_suppressed so the loop stays observable.",
+            ],
+          },
+        ],
+      },
+      {
         version: "0.44.0",
         dateISO: "2026-11-22",
         date: "November 22, 2026",
@@ -2333,6 +2349,22 @@ const messages = {
     "changelog.error": "更新日志暂时不可用，可以先查看仓库。",
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
+      {
+        version: "0.44.1",
+        dateISO: "2026-11-25",
+        date: "2026 年 11 月 25 日",
+        title: "Warren 不再让终端面板在两个宽度之间来回重排。",
+        summary:
+          "这是一个只动终端的修补版本。当 Host 继续按它已有的 grid 产出时，面板每次布局都会重新申请同一个视口尺寸，而每次申请都会把终端重新钉回另一个宽度，长行因此每帧重排，单独一行会在完整文本和它的前半截之间闪烁。现在同一个 Host grid 只申请一次，重试用 500ms 到 8s 的封顶退避；另外加了一个不依赖任何 app、也不依赖屏幕就能复现该重排形态的回归测试。",
+        sections: [
+          {
+            title: "修复",
+            items: [
+              "终端面板不再在两个宽度之间来回重排。钉在 Host grid 上的终端会把面板能容纳的 grid 报回去，好让 PTY 跟着面板走；当 Host 继续按它已有的 grid 产出时，同一个申请会在每次布局时重发，每发一次就把 Ghostty 的 grid 拽回另一个宽度。长行于是每帧重排一次，看起来就是单独一行在完整文本和它被截断的前半截之间闪烁。现在同一个 Host grid 只申请一次，重试从 500ms 起、封顶 8s，并会把第一次被抑制的申请记为 viewport_grid_request_suppressed，让这条回路仍然可观测。",
+            ],
+          },
+        ],
+      },
       {
         version: "0.44.0",
         dateISO: "2026-11-22",
