@@ -149,9 +149,11 @@ func (s *Service) learnAgentHomes(workspacePath string) []string {
 	// Only processes that name an engine are candidates, so the cwd of a
 	// handful is checked instead of walking the workspace's tree, which is what
 	// lsof would do on macOS.
-	for _, pid := range engineProcesses() {
-		cwd, err := processCwd(pid)
-		if err != nil || cwd == "" || !samePath(cwd, workspacePath) {
+	pids := engineProcesses()
+	cwds := engineCwds(pids)
+	for _, pid := range pids {
+		cwd := cwds[pid]
+		if cwd == "" || !samePath(cwd, workspacePath) {
 			continue
 		}
 		kind, home, ok := engineHomeOf(pid)
@@ -201,6 +203,60 @@ func engineProcesses() []int {
 		}
 	}
 	return pids
+}
+
+// engineCwds resolves the working directory of each candidate process. On macOS
+// one lsof invocation answers for all of them: a shell Session runs this scan
+// while it is created, and a dozen engines asked one at a time added close to a
+// second to the request.
+func engineCwds(pids []int) map[int]string {
+	cwds := make(map[int]string, len(pids))
+	if len(pids) == 0 {
+		return cwds
+	}
+	if runtime.GOOS == "darwin" && darwinCwdsForPids(pids, cwds) {
+		return cwds
+	}
+	for _, pid := range pids {
+		if cwd, err := processCwd(pid); err == nil && cwd != "" {
+			cwds[pid] = cwd
+		}
+	}
+	return cwds
+}
+
+// darwinCwdsForPids fills cwds from one lsof call and reports whether lsof ran
+// at all. A pid that has already exited is skipped rather than treated as a
+// failure, because lsof lists the rest of the set anyway.
+func darwinCwdsForPids(pids []int, cwds map[int]string) bool {
+	list := make([]string, 0, len(pids))
+	for _, pid := range pids {
+		list = append(list, strconv.Itoa(pid))
+	}
+	output, err := exec.Command("lsof", "-a", "-d", "cwd", "-Fpn", "-p", strings.Join(list, ",")).Output()
+	if err != nil && len(output) == 0 {
+		return false
+	}
+	current := 0
+	for _, line := range strings.Split(string(output), "\n") {
+		if len(line) < 2 {
+			continue
+		}
+		switch line[0] {
+		case 'p':
+			pid, parseErr := strconv.Atoi(line[1:])
+			if parseErr != nil {
+				current = 0
+				continue
+			}
+			current = pid
+		case 'n':
+			if current > 0 {
+				cwds[current] = line[1:]
+			}
+		}
+	}
+	return true
 }
 
 // namesEngine reports whether a command line runs one of the engines Warren

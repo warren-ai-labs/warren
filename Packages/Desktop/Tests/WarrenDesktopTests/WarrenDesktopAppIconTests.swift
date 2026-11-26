@@ -26,6 +26,38 @@ final class WarrenDesktopAppIconTests: XCTestCase {
         XCTAssertEqual(WarrenDesktopProgram.resolve(process: "node", commandLine: "npm run dev"), .npm)
         XCTAssertEqual(WarrenDesktopProgram.resolve(process: "node", commandLine: "node server.js"), .node)
         XCTAssertEqual(WarrenDesktopProgram.resolve(process: "python3", commandLine: "uv run pytest"), .uv)
+        XCTAssertEqual(WarrenDesktopProgram.resolve(process: "kip", commandLine: "kip"), .kip)
+        XCTAssertEqual(
+            WarrenDesktopProgram.resolve(
+                process: "bun",
+                commandLine: "/Applications/Kip.app/Contents/MacOS/bun /Applications/Kip.app/Contents/Resources/app/cli/kip-cli.js"
+            ),
+            .kip
+        )
+    }
+
+    func testAShellRunningKipDisplaysKipAsItsTitle() {
+        let session = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: WorkspaceID(),
+            title: "fish",
+            kind: .shell,
+            runtimeProcess: "kip",
+            runtimeCommandLine: "kip /Applications/Kip.app/Contents/Resources/app/cli/kip-cli.js"
+        )
+        XCTAssertEqual(WarrenDesktopAppIcon.resolve(session), .program(.kip))
+        XCTAssertEqual(WarrenDesktopTabTitle.sessionTitle(for: session, worktreeRoot: "/work/kip").title, "Kip")
+
+        let renamed = WarrenDesktopSession(
+            id: TerminalSessionID(),
+            workspaceID: WorkspaceID(),
+            title: "fish",
+            customTitle: "My Kip",
+            kind: .shell,
+            runtimeProcess: "kip",
+            runtimeCommandLine: "kip"
+        )
+        XCTAssertEqual(WarrenDesktopTabTitle.sessionTitle(for: renamed, worktreeRoot: "/work/kip").title, "My Kip")
     }
 
     func testUnknownProcessesHaveNoProgram() {

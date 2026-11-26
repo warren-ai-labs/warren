@@ -227,10 +227,16 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     private var shutdownCompletion: (@MainActor @Sendable () -> Void)?
     private var shutdownWaitingGeneration: UInt64?
     private var shutdownCompletionDelivered = false
-    // Synchronized-output depth: >0 means Ghostty is inside ESC[?2026h ... ESC[?2026l.
-    // Foreground should draw at frame boundary (depth==0), not at queue-empty.
-    private var syncDepth: Int = 0
+    // Synchronized-output state: true while Ghostty is inside
+    // ESC[?2026h ... ESC[?2026l. Foreground should draw at frame boundary
+    // (false), not at queue-empty. `syncScanTail` carries up to 7 trailing
+    // bytes across slice boundaries under `terminalFeedLock` so split escape
+    // sequences are never missed.
+    private var inSynchronizedOutput = false
+    private var syncScanTail: [UInt8] = []
     private var syncEnteredAt: ContinuousClock.Instant?
+    /// Last time a byte of the open synchronized-output block arrived.
+    private var syncLastByteAt: ContinuousClock.Instant?
     /// The grid the Host produced the output now being written for, when the
     /// Host reports one. While it is set, Ghostty's grid follows the Host's
     /// marks instead of the view.
@@ -321,19 +327,33 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     }
 
     /// Whether Ghostty is currently inside a synchronized-output block.
-    /// Foreground draws should wait for depth==0, not for pending==0.
+    /// Foreground draws should wait for the block to close, not for pending==0.
     public var isInSynchronizedOutput: Bool {
-        lock.withLock { syncDepth > 0 }
+        lock.withLock { inSynchronizedOutput }
     }
 
-    /// Whether a synchronized block has been pending longer than the
-    /// presentation timeout (50ms). Foreground should force a draw after
-    /// this window to avoid a permanently black warm promotion when the
-    /// closing `ESC[?2026l` is split across Data boundaries or never arrives.
+    /// Whether a synchronized-output block has stopped making progress.
+    ///
+    /// A block that is still receiving bytes is a frame in flight, and drawing
+    /// it means presenting half of a repaint: rows already rewritten next to
+    /// rows that were just erased. Whole-block repaints are routinely 10-20 KB
+    /// and take ~70ms to drain, so any window measured from the block's start
+    /// fires on ordinary frames. Only silence counts as a stall, with a hard
+    /// ceiling for a block that keeps dribbling bytes without ever closing.
     public var isSyncStalled: Bool {
+        isSyncStalled(window: .milliseconds(250), ceiling: .seconds(2))
+    }
+
+    public func isSyncStalled(
+        window: Duration,
+        ceiling: Duration
+    ) -> Bool {
         lock.withLock {
-            guard syncDepth > 0, let entered = syncEnteredAt else { return false }
-            return ContinuousClock.now - entered >= .milliseconds(50)
+            guard inSynchronizedOutput, let entered = syncEnteredAt else { return false }
+            let now = ContinuousClock.now
+            if now - entered >= ceiling { return true }
+            guard let last = syncLastByteAt else { return false }
+            return now - last >= window
         }
     }
 
@@ -394,8 +414,10 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             lock.withLock {
                 guard !isShutdown else { return }
                 buffer.reset(epoch: epoch, sequence: sequence)
-                syncDepth = 0
+                inSynchronizedOutput = false
+                syncScanTail.removeAll(keepingCapacity: true)
                 syncEnteredAt = nil
+                syncLastByteAt = nil
             }
         }
     }
@@ -462,8 +484,10 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             buffer.reset(epoch: epoch, sequence: sequence)
             latestRenderedEpoch = epoch
             latestRenderedSequence = sequence
-            syncDepth = 0
+            inSynchronizedOutput = false
+            syncScanTail.removeAll(keepingCapacity: true)
             syncEnteredAt = nil
+            syncLastByteAt = nil
         }
     }
 
@@ -507,7 +531,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
     public func receive(_ payload: Data) {
 		terminalFeedLock.withLock {
 			ansiObserver?.receive(payload)
-			updateSyncDepth(with: payload)
+			updateSyncState(with: payload)
 			if inMemory.receive(payload) {
 				onOutputReceived?()
 			}
@@ -516,46 +540,112 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
 
     // MARK: - Synchronized output tracking
 
-    private func updateSyncDepth(with payload: Data) {
-        // Scan for ESC[?2026h / ESC[?2026l without copying payload into a heap array.
-        guard payload.count >= 8 else { return }
-        let delta = payload.withUnsafeBytes { rawBuffer -> Int in
+    /// Tracks DEC mode 2026 (`ESC[?2026h` / `ESC[?2026l`) as a boolean state
+    /// across arbitrary slice boundaries without copying the payload.
+    /// Must be called while holding `terminalFeedLock`.
+    private func updateSyncState(with payload: Data) {
+        guard !payload.isEmpty else { return }
+        let initialInSync = lock.withLock { inSynchronizedOutput }
+        var inSync = initialInSync
+        var openedNewBlock = false
+
+        func applyMatch(_ finalByte: UInt8) {
+            if finalByte == 0x68 { // h
+                if !inSync {
+                    openedNewBlock = true
+                }
+                inSync = true
+            } else if finalByte == 0x6C { // l
+                inSync = false
+            }
+        }
+
+        func matchSyncSequence(_ bytes: UnsafeBufferPointer<UInt8>, at index: Int) -> UInt8? {
+            // ESC [ ? 2 0 2 6 h/l -> 0x1B 0x5B 0x3F 0x32 0x30 0x32 0x36 0x68/0x6C
+            guard bytes[index] == 0x1B,
+                  bytes[index + 1] == 0x5B,
+                  bytes[index + 2] == 0x3F,
+                  bytes[index + 3] == 0x32,
+                  bytes[index + 4] == 0x30,
+                  bytes[index + 5] == 0x32,
+                  bytes[index + 6] == 0x36
+            else { return nil }
+            let finalByte = bytes[index + 7]
+            return (finalByte == 0x68 || finalByte == 0x6C) ? finalByte : nil
+        }
+
+        payload.withUnsafeBytes { rawBuffer in
             let bytes = rawBuffer.bindMemory(to: UInt8.self)
-            var delta = 0
-            var i = 0
-            let limit = bytes.count - 7
-            while i < limit {
-                // ESC [ ? 2 0 2 6 h/l  -> 0x1B 0x5B 0x3F 0x32 0x30 0x32 0x36 0x68/0x6C
-                if bytes[i] == 0x1B, bytes[i + 1] == 0x5B, bytes[i + 2] == 0x3F,
-                   bytes[i + 3] == 0x32, bytes[i + 4] == 0x30, bytes[i + 5] == 0x32, bytes[i + 6] == 0x36 {
-                    if bytes[i + 7] == 0x68 { // h
-                        delta += 1
-                        i += 8
-                        continue
-                    } else if bytes[i + 7] == 0x6C { // l
-                        delta -= 1
-                        i += 8
-                        continue
+            let count = bytes.count
+            var payloadStart = 0
+
+            if !syncScanTail.isEmpty {
+                let tailCount = syncScanTail.count
+                let headCount = min(7, count)
+                var boundary = syncScanTail
+                boundary.append(contentsOf: bytes[0..<headCount])
+                let boundaryCount = boundary.count
+                var lastConsumedInBoundary = 0
+
+                boundary.withUnsafeBufferPointer { buf in
+                    var i = 0
+                    while i < tailCount, i + 8 <= boundaryCount {
+                        if let finalByte = matchSyncSequence(buf, at: i) {
+                            applyMatch(finalByte)
+                            i += 8
+                            lastConsumedInBoundary = i
+                            continue
+                        }
+                        i += 1
                     }
                 }
-                i += 1
+
+                if count < 7 {
+                    let keepStart = max(boundaryCount - 7, lastConsumedInBoundary)
+                    if keepStart < boundaryCount {
+                        syncScanTail = Array(boundary[keepStart..<boundaryCount])
+                    } else {
+                        syncScanTail.removeAll(keepingCapacity: true)
+                    }
+                    return
+                }
+                payloadStart = max(0, lastConsumedInBoundary - tailCount)
             }
-            return delta
+
+            var i = payloadStart
+            var lastConsumed = payloadStart
+            if count >= 8 {
+                let limit = count - 7
+                while i < limit {
+                    if let finalByte = matchSyncSequence(bytes, at: i) {
+                        applyMatch(finalByte)
+                        i += 8
+                        lastConsumed = i
+                        continue
+                    }
+                    i += 1
+                }
+            }
+
+            let tailStart = max(count - 7, lastConsumed)
+            if tailStart < count {
+                syncScanTail = Array(bytes[tailStart..<count])
+            } else {
+                syncScanTail.removeAll(keepingCapacity: true)
+            }
         }
-        guard delta != 0 else { return }
+
+        let now = ContinuousClock.now
         lock.withLock {
-            let wasInSync = syncDepth > 0
-            syncDepth = max(0, syncDepth + delta)
-            if syncDepth > 0 {
-                // `presentNow()` refuses to draw while a synchronized-output
-                // block is open, unless `isSyncStalled` says the block has
-                // been pending longer than its window. That escape compares
-                // against this timestamp, which had never been recorded, so a
-                // promotion that landed inside a block deferred until the
-                // block closed and the pane stayed black for seconds.
-                if !wasInSync { syncEnteredAt = ContinuousClock.now }
+            inSynchronizedOutput = inSync
+            if inSync {
+                if !initialInSync || openedNewBlock || syncEnteredAt == nil {
+                    syncEnteredAt = now
+                }
+                syncLastByteAt = now
             } else {
                 syncEnteredAt = nil
+                syncLastByteAt = nil
             }
         }
     }
@@ -660,7 +750,7 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
                     return (false, false)
                 }
                 ansiObserver?.receive(slice.payload)
-                updateSyncDepth(with: slice.payload)
+                updateSyncState(with: slice.payload)
 				let received = inMemory.receive(slice.payload)
 				if received {
 					onOutputReceived?()
@@ -706,7 +796,11 @@ public final class WarrenGhosttyOutputWriter: @unchecked Sendable {
             // Yield only when there is more work; the 200µs quantum keeps a
             // 14MB hidden backlog drain within ~4ms instead of seconds, while
             // still yielding to the main thread for input and scroll.
-            if hasMore {
+            // Inside a synchronized-output block the rest of the frame is
+            // already on its way, and a present cannot happen until the block
+            // closes, so draining it back-to-back both shortens the block and
+            // keeps the block from ever looking stalled.
+            if hasMore, !lock.withLock({ inSynchronizedOutput }) {
                 do {
                     try await Task.sleep(for: yield)
                 } catch {

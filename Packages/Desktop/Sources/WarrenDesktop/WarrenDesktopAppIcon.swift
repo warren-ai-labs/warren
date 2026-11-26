@@ -171,7 +171,7 @@ enum WarrenDesktopAppIcon: Hashable, Sendable {
 enum WarrenDesktopProgram: String, CaseIterable, Hashable, Sendable {
     case node, bun, deno, npm, pnpm, yarn
     case go, rust, gradle, kotlin, swift, python, uv, ruby
-    case docker, make, git, neovim, vim
+    case docker, make, git, neovim, vim, kip
     case zsh, bash, fish
     case postgres, redis
 
@@ -179,22 +179,37 @@ enum WarrenDesktopProgram: String, CaseIterable, Hashable, Sendable {
     ///
     /// Several tools have no mark of their own and borrow their ecosystem's:
     /// `npx` is npm, `cargo` is Rust, `gradlew` is Gradle. Interpreters that
-    /// run a package manager's script (`node …/npm-cli.js`) are read from the
-    /// command line's first word when the process name alone is the runtime.
+    /// run a package manager's script (`node …/npm-cli.js`) or a bundled CLI
+    /// (`bun …/kip-cli.js`) are read from the command line when the process name
+    /// alone is the runtime.
     static func resolve(process: String, commandLine: String) -> Self? {
         let name = Self.executableName(process)
         if let program = Self.byExecutable[name] {
-            if program == .node || program == .python,
-               let launcher = Self.executableName(
-                   commandLine.split(separator: " ").first.map(String.init) ?? ""
-               ).nilIfEmpty,
-               let refined = Self.byExecutable[launcher] {
-                return refined
+            if Self.interpreterNames.contains(name) {
+                let words = commandLine.split(separator: " ").map(String.init)
+                if let launcher = words.first.map(Self.executableName)?.nilIfEmpty,
+                   let refined = Self.byExecutable[launcher],
+                   refined != program {
+                    return refined
+                }
+                if words.count > 1,
+                   let script = Self.scriptName(words[1]).nilIfEmpty,
+                   let refined = Self.byExecutable[script] {
+                    return refined
+                }
             }
             return program
         }
         if name.hasPrefix("python") { return .python }
         return nil
+    }
+
+    private static func scriptName(_ raw: String) -> String {
+        let name = Self.executableName(raw)
+        for suffix in [".js", ".mjs", ".cjs"] where name.hasSuffix(suffix) {
+            return String(name.dropLast(suffix.count))
+        }
+        return name
     }
 
     /// The shell a Session runs, read from its launch title; zsh, the macOS
@@ -237,6 +252,7 @@ enum WarrenDesktopProgram: String, CaseIterable, Hashable, Sendable {
         "make": .make, "gmake": .make,
         "git": .git, "lazygit": .git, "tig": .git,
         "nvim": .neovim, "vim": .vim, "vi": .vim,
+        "kip": .kip, "kip-cli": .kip,
         "zsh": .zsh, "bash": .bash, "sh": .bash, "fish": .fish,
         "psql": .postgres, "postgres": .postgres,
         "redis-cli": .redis, "redis-server": .redis,
@@ -263,6 +279,7 @@ enum WarrenDesktopProgram: String, CaseIterable, Hashable, Sendable {
         case .git: "program-git"
         case .neovim: "program-neovim"
         case .vim: "program-vim"
+        case .kip: "program-kip"
         case .zsh: "program-zsh"
         case .bash: "program-gnubash"
         case .fish: "program-fishshell"
@@ -276,7 +293,7 @@ enum WarrenDesktopProgram: String, CaseIterable, Hashable, Sendable {
     var tileColor: Color {
         switch self {
         case .node: Color(warrenHex: 0x5FA04E)
-        case .bun, .deno, .rust: Color(warrenHex: 0x1F1B1A)
+        case .bun, .deno, .rust, .kip: Color(warrenHex: 0x1F1B1A)
         case .npm: Color(warrenHex: 0xCB3837)
         case .pnpm: Color(warrenHex: 0xF69220)
         case .yarn: Color(warrenHex: 0x2C8EBB)
@@ -321,6 +338,7 @@ enum WarrenDesktopProgram: String, CaseIterable, Hashable, Sendable {
         case .git: "Git"
         case .neovim: "Neovim"
         case .vim: "Vim"
+        case .kip: "Kip"
         case .zsh: "zsh"
         case .bash: "bash"
         case .fish: "fish"

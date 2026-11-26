@@ -82,3 +82,30 @@ func TestServiceDoesNotAnswerColorQueryWhenSessionAttached(t *testing.T) {
 		t.Fatalf("attached session runtime input = %q; want no server reply", got)
 	}
 }
+
+func TestServiceAnswersSyncOutputDECRQMAsResetWhenDetached(t *testing.T) {
+	runtime := &memoryRuntime{sessions: map[string][]byte{"runtime": nil}}
+	service := &Service{
+		Runtime: runtime,
+		outputs: map[string]*outputSession{
+			"session": {
+				sessionID:   "session",
+				runtimeName: "runtime",
+				ring:        output.NewRing(0, 1, 1024, 0),
+			},
+		},
+		peers: map[string]map[*wsPeer]struct{}{},
+	}
+	service.outputs["session"].responder = service.newQueryResponder()
+
+	service.recordOutput("session", []byte("\x1b[?2026$p\x1b[?2027$p"))
+
+	got, err := runtime.Capture(context.Background(), "runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "\x1b[?2026;2$y\x1b[?2027;2$y"
+	if string(got) != want {
+		t.Fatalf("detached session DECRQM reply = %q; want %q", got, want)
+	}
+}

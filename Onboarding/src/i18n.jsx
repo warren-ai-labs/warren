@@ -114,17 +114,35 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
-        version: "0.44.1",
-        dateISO: "2026-11-25",
-        date: "November 25, 2026",
-        title: "Warren stops a terminal pane from reflowing between two widths.",
+        version: "0.45.0",
+        dateISO: "2026-11-26",
+        date: "November 26, 2026",
+        title: "Warren fixes what a terminal draws mid-repaint and what it answers about a mode.",
         summary:
-          "A patch release for the terminal. When the Host kept producing output for the grid it already had, the pane re-asked for its viewport size on every layout; each request re-pinned the terminal to the other width, so long rows reflowed between two layouts and a single row could flicker between its full text and a prefix of it. The size request now goes out once per Host grid with a capped backoff, and a regression test reproduces the reflow artifact from a captured byte stream without an app or a screen.",
+          "A release that fixes what a terminal draws while a program is halfway through a repaint, and what it answers when a TUI asks whether a mode is already on. A synchronized-output block is now tracked as a state that survives a chunk boundary, so a ESC[?2026h or ESC[?2026l split across two payloads is no longer missed, and a block counts as stalled only after it has been silent, not because a whole-block repaint takes longer than the old window; ordinary 10–20 KB frames no longer present half-painted grids. The Host answers a DECRQM query for a private mode as reset unless the mode defaults to set, so a TUI that turns synchronized output on is not told the terminal already had it on and stops using it for the rest of the session. The Desktop also recognises the kip CLI: it draws Kip's mark, including when bun launches it as bun …/kip-cli.js, and a shell Session running Kip is titled Kip instead of after the shell. The JSON control protocol remains at 4.0: no method was added or changed, and this release migrates no state.",
         sections: [
+          {
+            title: "Added",
+            items: [
+              "Recognise Kip. The Desktop's program marks gain Kip, so kip and kip-cli resolve to its icon, including when a bundled launcher hides it behind bun as bun …/kip-cli.js. A Session started as a shell and running Kip is titled Kip rather than after the shell, and a title the conversation earned still outranks it.",
+            ],
+          },
           {
             title: "Fixed",
             items: [
-              "Stop a terminal pane from reflowing between two widths. A surface pinned to the Host's grid reports the grid its pane fits so the PTY can follow the pane; when the Host kept producing for the grid it already had, the same request went out on every relayout and each one moved Ghostty's grid back to the other width. Long rows rewrapped once per frame, which read as a single row flickering between its full text and a truncated prefix of itself. The same Host grid is now requested once, retries back off from 500ms to a cap of 8s, and the first suppressed request is recorded as viewport_grid_request_suppressed so the loop stays observable.",
+              "Track synchronized output across chunk boundaries. The scan looked for ESC[?2026h and ESC[?2026l only within one payload, so a sequence split across two chunks of the same frame was never seen: a missed open drew a frame early, and a missed close left the writer waiting for a block that had already ended. The last seven bytes of a payload are now carried into the next one and the block is a boolean, so a nested open no longer counts up and a close always ends it.",
+              "Treat a silent synchronized block as stalled, not a slow one. The old window was measured from the block's first byte, so a whole-block repaint of 10–20 KB that drains in about 70 ms was declared stalled while it was still arriving, and the pane presented a half-painted grid. A block now counts as stalled only after 250 ms without a byte (2 s in total), and chunks that belong to an open block drain back to back, so the block closes sooner instead of waiting the yield quantum between slices.",
+              "Answer DECRQM for a private mode as reset by default. The Host answered that every queried mode was already set, which told Bubble Tea v2 and Ultraviolet TUIs that synchronized output (mode 2026) was on before they turned it on, so they disabled it for the lifetime of the session. A recognised mode now reports reset, except modes that do default to set: 7 (auto-wrap) and 25 (cursor visible). The replies come from ghostline v1.6.2, which is now a tagged dependency rather than a local module override.",
+            ],
+          },
+          {
+            title: "Release notes",
+            items: [
+              "The JSON control protocol remains at 4.0, no method was added or changed, and this release migrates no state.",
+              "v0.44.1 was tagged but no build was published, and its terminal change (a viewport-size request suppression) was reverted before this release: the reflow it was meant to stop came from the stall window above, not from repeating the request. 0.45.0 is the first published build with the fixes that replaced it, so its notes cover everything since 0.44.0.",
+              "The Host now depends on the tagged github.com/abcdlsj/ghostline v1.6.2, so a fresh checkout and the Linux build resolve it from the Go module proxy; the local module override is gone.",
+              "Nothing persisted changes shape.",
+              "Local packaging uses the available Apple Development signing identity and is not notarized; the archive is suitable for internal or temporary testing, not general public distribution.",
             ],
           },
         ],
@@ -2350,17 +2368,35 @@ const messages = {
     // Offline fallback; live entries come from the repository changelog API.
     "changelog.entries": [
       {
-        version: "0.44.1",
-        dateISO: "2026-11-25",
-        date: "2026 年 11 月 25 日",
-        title: "Warren 不再让终端面板在两个宽度之间来回重排。",
+        version: "0.45.0",
+        dateISO: "2026-11-26",
+        date: "2026 年 11 月 26 日",
+        title: "Warren 修正了终端在重绘中途画出的东西，以及它对一个模式的回答。",
         summary:
-          "这是一个只动终端的修补版本。当 Host 继续按它已有的 grid 产出时，面板每次布局都会重新申请同一个视口尺寸，而每次申请都会把终端重新钉回另一个宽度，长行因此每帧重排，单独一行会在完整文本和它的前半截之间闪烁。现在同一个 Host grid 只申请一次，重试用 500ms 到 8s 的封顶退避；另外加了一个不依赖任何 app、也不依赖屏幕就能复现该重排形态的回归测试。",
+          "这个版本修正了终端在程序重绘到一半时画出的东西，以及 TUI 问某个模式是否已经打开时它给出的回答。同步输出块现在是一种能跨 chunk 边界保留的状态，所以被拆到两个 payload 里的 ESC[?2026h 或 ESC[?2026l 不会再被漏掉；一个块只有真的沉默了才算卡住，而不是因为整块重绘比旧窗口慢；普通的 10–20 KB 帧不会再呈现出画了一半的 grid。Host 对私有模式的 DECRQM 查询现在默认回答 reset，于是打开同步输出的 TUI 不会被告知终端早就开着它、然后整个会话都不再用它。Desktop 也认识 kip CLI：会画 Kip 的图标（包括 bun 通过 bun …/kip-cli.js 启动它的时候），以 shell 启动、实际在跑 Kip 的 Session 也以 Kip 为标题，而不是跟着 shell 叫。JSON 控制协议仍为 4.0：没有新增或改动任何方法，本版本不迁移任何状态。",
         sections: [
           {
-            title: "修复",
+            title: "新增",
             items: [
-              "终端面板不再在两个宽度之间来回重排。钉在 Host grid 上的终端会把面板能容纳的 grid 报回去，好让 PTY 跟着面板走；当 Host 继续按它已有的 grid 产出时，同一个申请会在每次布局时重发，每发一次就把 Ghostty 的 grid 拽回另一个宽度。长行于是每帧重排一次，看起来就是单独一行在完整文本和它被截断的前半截之间闪烁。现在同一个 Host grid 只申请一次，重试从 500ms 起、封顶 8s，并会把第一次被抑制的申请记为 viewport_grid_request_suppressed，让这条回路仍然可观测。",
+              "认识 Kip。Desktop 的程序图标多了 Kip，kip 与 kip-cli 都会解析到它的图标，包括打包的启动器把它藏在 bun 后面、命令是 bun …/kip-cli.js 的时候。以 shell 启动而在跑 Kip 的 Session 标题显示为 Kip，而不是跟着 shell 叫；对话自己挣来的名字仍然优先。",
+            ],
+          },
+          {
+            title: "修正",
+            items: [
+              "同步输出现在能跨 chunk 边界追踪。原先只在一个 payload 内部查找 ESC[?2026h 与 ESC[?2026l，所以被拆到同一帧的两个 chunk 里的序列从来没被看到：漏掉 open 会提前画出一帧，漏掉 close 则会让写入方一直等一个其实已经结束的块。现在一个 payload 的最后七个字节会带入下一个，块也改成一个布尔值，于是嵌套的 open 不会累加，而 close 总是能结束它。",
+              "只有真正沉默的同步块才算卡住，而不是慢的块。旧窗口从块的第一个字节开始算，于是一个 10–20 KB、约 70ms 才能排完的整块重绘在还在到达时就被判为卡住，面板于是呈现出画了一半的 grid。现在只有连续 250ms 没有字节（总共 2s）才算卡住，属于一个已打开块的那些 chunk 会背靠背排完，于是块能更早闭合，而不是在切片之间等那个让出周期。",
+              "私有模式的 DECRQM 默认回答 reset。Host 原先回答每个被查询的模式都已经打开，于是 Bubble Tea v2 与 Ultraviolet 这类 TUI 会以为同步输出（模式 2026）在它们打开之前就已经开着，从此整个会话都不再使用它。现在被识别的模式会回答 reset，只除了本来就默认打开的两个：7（自动换行）与 25（光标可见）。这些回答来自 ghostline v1.6.2，它现在是打了 tag 的依赖，而不是本地模块覆盖。",
+            ],
+          },
+          {
+            title: "版本说明",
+            items: [
+              "JSON 控制协议仍为 4.0，没有新增或改动任何方法，本版本不迁移任何状态。",
+              "v0.44.1 打了 tag，但没有发布任何构建，而且它那个终端改动（抑制重复的视口尺寸请求）在本次发布前已经 revert：它想要止住的重排，真正原因是上面那个卡住窗口，而不是重复请求。0.45.0 是第一个带有替代修复的已发布构建，所以它的说明覆盖了自 0.44.0 以来的全部改动。",
+              "Host 现在依赖打了 tag 的 github.com/abcdlsj/ghostline v1.6.2，于是全新 checkout 和 Linux 构建都能从 Go module proxy 解析它；本地模块覆盖已经删除。",
+              "没有任何持久化的形状改变。",
+              "本地打包使用可用的 Apple Development 签名身份，未做公证；该归档适合内部或临时测试，不适合面向公众分发。",
             ],
           },
         ],

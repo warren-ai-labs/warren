@@ -8,7 +8,7 @@ require github.com/openai/openai-go v1.12.0
 
 require (
 	github.com/abcdlsj/bolthole v0.0.0-20261102072911-82c03ffc384d
-	github.com/abcdlsj/ghostline v1.6.1
+	github.com/abcdlsj/ghostline v1.6.2
 	github.com/hashicorp/mdns v1.0.7
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/miekg/dns v1.1.72

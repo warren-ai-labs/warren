@@ -23,6 +23,12 @@ enum WarrenDesktopTabTitle {
         for session: WarrenDesktopSession,
         worktreeRoot: String
     ) -> SessionTitle {
+        let custom = session.customTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if custom.isEmpty,
+           (session.presentedKind == .shell || session.presentedKind == .custom),
+           WarrenDesktopAppIcon.resolve(session) == .program(.kip) {
+            return SessionTitle(title: "Kip")
+        }
         let resolved = SessionTitle.resolve(
             customTitle: session.customTitle,
             title: session.title,

@@ -1005,6 +1005,41 @@ final class GhosttyAdapterTests: XCTestCase {
     }
 
     @MainActor
+    func testSynchronizedOutputTracksSplitSequencesAndBooleanSemantics() {
+        let surface = GhosttySurface(
+            id: TerminalSessionID(),
+            attachmentID: TerminalAttachmentID(),
+            workingDirectory: "/tmp",
+            onInput: { _ in },
+            onResize: { _, _ in }
+        )
+        defer { surface.outputWriter.shutdown() }
+
+        // Split open and close across arbitrary slice boundaries (including < 8 bytes).
+        surface.outputWriter.receive(Data("prefix\u{1b}[?20".utf8))
+        XCTAssertFalse(surface.outputWriter.isInSynchronizedOutput)
+        surface.outputWriter.receive(Data("26hbody".utf8))
+        XCTAssertTrue(surface.outputWriter.isInSynchronizedOutput)
+
+        // DEC mode 2026 is boolean: a repeated open must still close on a single close.
+        surface.outputWriter.receive(Data("\u{1b}[?2026h".utf8))
+        XCTAssertTrue(surface.outputWriter.isInSynchronizedOutput)
+
+        // Close split byte-by-byte across tiny chunks must not leak sync state.
+        for byte in Data("\u{1b}[?2026l".utf8) {
+            surface.outputWriter.receive(Data([byte]))
+        }
+        XCTAssertFalse(surface.outputWriter.isInSynchronizedOutput)
+
+        // Close + open in one slice ends in sync without carrying stale state.
+        surface.outputWriter.receive(Data("\u{1b}[?2026h".utf8))
+        surface.outputWriter.receive(Data("\u{1b}[?2026l\u{1b}[?2026h".utf8))
+        XCTAssertTrue(surface.outputWriter.isInSynchronizedOutput)
+        surface.outputWriter.receive(Data("\u{1b}[?2026l".utf8))
+        XCTAssertFalse(surface.outputWriter.isInSynchronizedOutput)
+    }
+
+    @MainActor
     func testNativeSnapshotRestoreReplacesViewportAndContinuesAtCursor() async throws {
         let recorder = LockedInputRecorder()
         let (surface, view, window) = try await makeMountedTerminal(recorder: recorder)

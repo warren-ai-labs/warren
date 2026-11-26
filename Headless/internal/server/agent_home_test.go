@@ -124,6 +124,23 @@ func TestEngineHomeOfIgnoresOtherProcesses(t *testing.T) {
 	}
 }
 
+// Creating a shell Session scans the process table, so the cwds of the
+// candidates are resolved together: one pid that has already exited must not
+// cost a subprocess, nor lose the directories of the rest.
+func TestEngineCwdsResolveEveryPidInOneScan(t *testing.T) {
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwds := engineCwds([]int{os.Getpid(), 999999})
+	if got, ok := cwds[os.Getpid()]; !ok || !samePath(got, want) {
+		t.Fatalf("engine cwd = %q, want %q", got, want)
+	}
+	if cwd, ok := cwds[999999]; ok {
+		t.Fatalf("exited process reported cwd %q", cwd)
+	}
+}
+
 // Learning arms the hook where the engine keeps its files, which is what makes
 // the next turn bind exactly instead of falling back to cwd and mtime.
 func TestLearnAgentHomesArmsTheHook(t *testing.T) {

@@ -258,24 +258,31 @@ public final class GhosttySurface: Identifiable {
         // signal for animation — white flash frames are tiny and would be
         // collapsed if we waited for pending==0. Defer only while inside
         // ESC[?2026h ... ESC[?2026l; large warm-promotion backlogs have no
-        // pending sync and present immediately. Force after 50ms to avoid
-        // a permanently black warm promotion when the closing sequence is
-        // split across Data boundaries or never arrives.
+        // pending sync and present immediately. Escape after the silence window
+        // or ceiling so an unclosed block never leaves a promotion black.
         // A view that is already presentable and a grid that is already
         // current are missing only a draw. Forcing one beats leaving the pane
         // black while a synchronized-output block stays open: the block's bytes
         // are already applied to the grid this would draw.
-        if !forceDraw, outputWriter.isInSynchronizedOutput, !outputWriter.isSyncStalled {
-            state.controller.tick()
-            if TerminalDiagnostics.isVerbose {
-                TerminalDiagnostics.logVerbose("present_now_deferred", [
+        if !forceDraw, outputWriter.isInSynchronizedOutput {
+            if outputWriter.isSyncStalled {
+                TerminalDiagnostics.log("present_now_sync_stalled", [
                     "session": id.description,
                     "enqueued": String(outputWriter.enqueuedSequence),
                     "rendered": String(outputWriter.renderedSequence),
-                    "reason": "sync-pending",
                 ])
+            } else {
+                state.controller.tick()
+                if TerminalDiagnostics.isVerbose {
+                    TerminalDiagnostics.logVerbose("present_now_deferred", [
+                        "session": id.description,
+                        "enqueued": String(outputWriter.enqueuedSequence),
+                        "rendered": String(outputWriter.renderedSequence),
+                        "reason": "sync-pending",
+                    ])
+                }
+                return false
             }
-            return false
         }
         if forceDraw, outputWriter.isInSynchronizedOutput, TerminalDiagnostics.isVerbose {
             TerminalDiagnostics.logVerbose("present_now_forced", [
